@@ -1,0 +1,341 @@
+/* ============================================================
+   Nia Core — theme layer
+   Extracted verbatim from designs/*.html (Bundled Page exports).
+   Do not hand-edit values by eye — re-extract from the source
+   design file if a value needs to change.
+   ============================================================ */
+
+/* ------------------------------------------------------------
+   Satoshi @font-face
+   The design's own Satoshi woff2/woff/ttf binaries are unrecoverable
+   from the exported HTML bundles (referenced only by internal asset
+   UUID, not embedded). These are the official Satoshi files instead,
+   supplied directly from Indian Type Foundry's Fontshare distribution
+   (see apps/web/public/fonts/satoshi/Satoshi_Complete/License/FFL.txt —
+   free for self-hosted use), copied from
+   Satoshi_Complete/Fonts/WEB/fonts/Satoshi-{Regular,Medium,Bold,Black}.woff2
+   to apps/web/public/fonts/satoshi/satoshi-{400,500,700,900}.woff2.
+   ------------------------------------------------------------ */
+@font-face {
+  font-family: 'Satoshi';
+  src: url('/fonts/satoshi/satoshi-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Satoshi';
+  src: url('/fonts/satoshi/satoshi-500.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Satoshi';
+  src: url('/fonts/satoshi/satoshi-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Satoshi';
+  src: url('/fonts/satoshi/satoshi-900.woff2') format('woff2');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ------------------------------------------------------------
+   Nia Core Landing.html — :root tokens
+   ------------------------------------------------------------ */
+:root {
+  --bg: #F8FAFC;
+  --surface: #FFFFFF;
+  --subtle: #F1F5F9;
+
+  --text: #0F172A;
+  --secondary: #475569;
+  --muted: #94A3B8;
+
+  --primary: #4F46E5;
+  --primary-hover: #4338CA;
+  --primary-soft: #EEF2FF;
+
+  --line: #E2E8F0;
+  --line-strong: #CBD5E1;
+
+  --success: #10B981;
+  --success-deep: #047857;
+  --warning: #F59E0B;
+  --warning-deep: #B45309;
+  --error: #EF4444;
+  --error-deep: #B91C1C;
+
+  --c-trigger: #4F46E5;
+  --c-action: #2563EB;
+  --c-condition: #7C3AED;
+  --c-data: #0891B2;
+  --c-ai: #6366F1;
+
+  /* Nia Core App.html — login/signup screen only (`T` override string,
+     matches Landing's palette exactly; verified no collision) */
+  --flow: #C7D2FE;
+  --packet: #6366F1;
+}
+
+/* ------------------------------------------------------------
+   Nia Core App.html — app-shell theme (Midnight Navy dark default /
+   Warm White light), extracted verbatim from the design's bare
+   `:root` and `:root[data-om-theme="light"]` blocks.
+   Scoped under [data-app-theme] instead of bare :root so it never
+   collides with Landing's :root tokens above — pages that want the
+   app shell's palette (auth, and later the app itself) opt in by
+   setting data-app-theme on a wrapper element. Toggle light/dark by
+   setting data-om-theme="light" on that same element (absent/any
+   other value = dark, matching the design's dark-default).
+   ------------------------------------------------------------ */
+[data-app-theme] {
+  --bg: #131A26;
+  --surface: #18202F;
+  --surface2: #1E2735;
+  --line: #2A3444;
+  --line-strong: #39455A;
+  --text: #FAF7F2;
+  --text-2: #B9C2CE;
+  --text-3: #68748A;
+  --ign: #C98757;
+  --ign-bg: rgba(184, 115, 79, .16);
+  --ign-text: #D89A6E;
+  --onacc: #221610;
+  --bad: #E06A5E;
+  --bad-bg: rgba(224, 106, 94, .13);
+  --bad-bd: rgba(224, 106, 94, .34);
+  /* Home dashboard: 4th muted-text tier + workflow run status dots,
+     extracted verbatim from App.html's dark :root alongside --ign/--bad
+     above (--live and --ign share the same copper value by design). */
+  --text-4: #4B5768;
+  --live: #C98757;
+  --live-dim: rgba(184, 115, 79, .16);
+  --live-fill: #C98757;
+  --ok: #4CAF82;
+  --ok-bg: rgba(76, 175, 130, .14);
+  --warn: #D9A03F;
+  --warn-bg: rgba(217, 160, 63, .14);
+  --warn-bd: rgba(217, 160, 63, .32);
+  --font-display: 'Bricolage Grotesque', system-ui, sans-serif;
+  --font-ui: 'Schibsted Grotesk', system-ui, sans-serif;
+  --font-data: 'JetBrains Mono', ui-monospace, monospace;
+  --shadow: 0 32px 80px rgba(5, 9, 16, .62);
+  --drop: 0 18px 40px rgba(5, 9, 16, .5);
+  --amb: 0 8px 24px rgba(5, 9, 16, .4);
+}
+
+/* Corrected 2026-09-11: the block above was extracted from the design's
+   bare `:root[data-om-theme="light"]` ("Warm White" world), but the actual
+   app pages (home/projects/automation/connections/billing/members/settings)
+   never render that block — App.html's `v.appRootStyle` inline-overrides
+   every one of those pages with a *different*, Satoshi-font Slate/Indigo
+   palette whenever `s.theme==='light'` (identical accent family to the
+   Landing/auth screens). Re-extracted verbatim from that inline override
+   string below — this is the actual light theme for [data-app-theme]. */
+[data-app-theme][data-om-theme='light'] {
+  --bg: #F8FAFC;
+  --surface: #FFFFFF;
+  --surface2: #F1F5F9;
+  --line: #E2E8F0;
+  --line-strong: #CBD5E1;
+  --text: #0F172A;
+  --text-2: #475569;
+  --text-3: #64748B;
+  --text-4: #94A3B8;
+  --ign: #4F46E5;
+  --ign-bg: #EEF2FF;
+  --ign-text: #4338CA;
+  --onacc: #FFFFFF;
+  --bad: #EF4444;
+  --bad-bg: rgba(239, 68, 68, .08);
+  --bad-bd: rgba(239, 68, 68, .28);
+  --live: #4F46E5;
+  --live-dim: #EEF2FF;
+  --live-fill: #4F46E5;
+  --ok: #10B981;
+  --ok-bg: rgba(16, 185, 129, .10);
+  --warn: #F59E0B;
+  --warn-bg: rgba(245, 158, 11, .08);
+  --warn-bd: rgba(245, 158, 11, .28);
+  --info: #0EA5E9;
+  --font-display: 'Satoshi', system-ui, -apple-system, sans-serif;
+  --font-ui: 'Satoshi', system-ui, -apple-system, sans-serif;
+  --shadow: 0 20px 48px rgba(15, 23, 42, .12);
+  --drop: 0 12px 28px rgba(15, 23, 42, .10);
+  --amb: 0 1px 2px rgba(15, 23, 42, .04);
+
+  /* Workflow canvas (builder) — aliases onto this same light scale rather
+     than a parallel token system; --ink* mirrors --text*, --line2 mirrors
+     --line-strong, --acc mirrors --live-fill, per the design's ink/canvas
+     naming reverse-engineered from Nia Core App.html's builder screen.
+     --canvas/--dot re-extracted 2026-09-12 from the design's real
+     `v.appRootStyle` inline-override string (App.html script block) —
+     the values below are verbatim, not a guess. */
+  --ink: var(--text);
+  --ink2: var(--text-2);
+  --ink3: var(--text-3);
+  --ink4: var(--text-4);
+  --line2: var(--line-strong);
+  --acc: var(--live-fill);
+  --canvas: #F8FAFC;
+  --dot: #CBD5E1;
+}
+
+/* ------------------------------------------------------------
+   Nia Core App.html — auth screen theme (login/signup/forgot/reset/
+   onboarding), extracted verbatim from the `const T = "..."` override
+   string used only by those screens. This is a light-only, indigo-
+   accented palette that is DIFFERENT from the app-shell's Midnight
+   Navy/rust [data-app-theme] above — T's values are identical to
+   Landing's :root palette (see the --flow/--packet comment there),
+   so this block simply re-exposes them under the token *names* the
+   app-shell components use (--ign, --bad, --surface2, etc.) so the
+   same styles.ts can serve both scopes correctly.
+   Scoped under [data-auth-theme] so it never collides with
+   [data-app-theme]. Toggle via data-om-theme like the app shell;
+   T has no dark variant in the source, so the dark values here are
+   an extrapolation (app-shell's navy surfaces + an indigo accent).
+   Fonts: T's own signinRootStyle specifies font-family:'Satoshi'
+   directly (not Bricolage/Schibsted, which are app-shell-only
+   substitutes) — now that real Satoshi files are self-hosted above,
+   use Satoshi here to match the design.
+   ------------------------------------------------------------ */
+[data-auth-theme] {
+  --bg: #F8FAFC;
+  --surface: #FFFFFF;
+  --surface2: #F1F5F9;
+  --line: #E2E8F0;
+  --line-strong: #CBD5E1;
+  --text: #0F172A;
+  --text-2: #475569;
+  --text-3: #94A3B8;
+  --ign: #4F46E5;
+  --ign-bg: #EEF2FF;
+  --ign-text: #4338CA;
+  --onacc: #FFFFFF;
+  --bad: #EF4444;
+  --bad-bg: rgba(239, 68, 68, .08);
+  --bad-bd: rgba(239, 68, 68, .28);
+  --font-display: 'Satoshi', system-ui, -apple-system, sans-serif;
+  --font-ui: 'Satoshi', system-ui, -apple-system, sans-serif;
+  --font-data: 'JetBrains Mono', ui-monospace, monospace;
+  --shadow: 0 12px 32px -12px rgba(15, 23, 42, .10);
+  --drop: 0 1px 2px rgba(15, 23, 42, .04), 0 12px 32px -12px rgba(15, 23, 42, .10);
+  --amb: 0 1px 2px rgba(79, 70, 229, .35);
+  --flow: #C7D2FE;
+  --packet: #6366F1;
+}
+
+[data-auth-theme][data-om-theme='dark'] {
+  --bg: #131A26;
+  --surface: #18202F;
+  --surface2: #1E2735;
+  --line: #2A3444;
+  --line-strong: #39455A;
+  --text: #FAF7F2;
+  --text-2: #B9C2CE;
+  --text-3: #68748A;
+  --ign: #6366F1;
+  --ign-bg: rgba(99, 102, 241, .16);
+  --ign-text: #818CF8;
+  --onacc: #FFFFFF;
+  --bad: #E06A5E;
+  --bad-bg: rgba(224, 106, 94, .13);
+  --bad-bd: rgba(224, 106, 94, .34);
+  --shadow: 0 32px 80px rgba(5, 9, 16, .62);
+  --drop: 0 18px 40px rgba(5, 9, 16, .5);
+  --amb: 0 8px 24px rgba(5, 9, 16, .4);
+  --flow: #2A3444;
+  --packet: #6366F1;
+}
+
+/* ------------------------------------------------------------
+   Nia Core Landing.html — base element styles
+   ------------------------------------------------------------ */
+html, body {
+  margin: 0;
+  overflow-x: clip;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Satoshi', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+[hidden] { display: none !important; }
+a { color: inherit; text-decoration: none; }
+button, a { font-family: inherit; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* ------------------------------------------------------------
+   Nia Core Landing.html — keyframes
+   ------------------------------------------------------------ */
+@keyframes popIn { 0% { opacity: 0; transform: translateY(14px) scale(.96); } 100% { opacity: 1; transform: none; } }
+@keyframes riseIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes floatA { 0%, 100% { transform: translateY(-7px) rotate(-1.1deg); } 50% { transform: translateY(7px) rotate(-1.1deg); } }
+@keyframes floatB { 0%, 100% { transform: translateY(6px) rotate(1.3deg); } 50% { transform: translateY(-6px) rotate(1.3deg); } }
+@keyframes floatC { 0%, 100% { transform: translateY(-5px) rotate(.8deg); } 50% { transform: translateY(8px) rotate(.8deg); } }
+@keyframes floatD { 0%, 100% { transform: translateY(8px) rotate(-.7deg); } 50% { transform: translateY(-6px) rotate(-.7deg); } }
+@keyframes edgeFlow { to { stroke-dashoffset: -64; } }
+@keyframes orbitk {
+  from { transform: rotate(var(--a)) translateY(var(--r)) rotate(calc(-1 * var(--a))); }
+  to { transform: rotate(calc(var(--a) + 360deg)) translateY(var(--r)) rotate(calc(-1 * (var(--a) + 360deg))); }
+}
+
+/* ------------------------------------------------------------
+   Nia Core App.html — keyframes used by the login/signup screen
+   (App.html also defines its own separate `riseIn` with different
+   values than Landing's — not pulled in here since it's unused by
+   this screen; only the auth-specific keyframes below are needed)
+   ------------------------------------------------------------ */
+@keyframes authRise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes pipeFlow { to { stroke-dashoffset: -96; } }
+@keyframes packetRun { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+@keyframes nodePulse { 0%, 78%, 100% { fill: var(--line-strong); } 86% { fill: #818CF8; } }
+
+/* ------------------------------------------------------------
+   Nia Core App.html — home dashboard: running-workflow status dot
+   ------------------------------------------------------------ */
+@keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* ------------------------------------------------------------
+   Nia Core Landing.html — component base styles
+   ------------------------------------------------------------ */
+.otile {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  margin: -29px 0 0 -29px;
+  width: 58px;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 24px -16px rgba(15, 23, 42, .5);
+  font-size: 12px;
+  font-weight: 700;
+  transform: rotate(var(--a)) translateY(var(--r)) rotate(calc(-1 * var(--a)));
+  animation: orbitk var(--dur) linear infinite;
+}
+
+.reveal { transition: opacity .6s cubic-bezier(.2, .7, .2, 1), transform .6s cubic-bezier(.2, .7, .2, 1); }
+body.armed .reveal { opacity: 0; transform: translateY(18px); }
+body.armed .reveal.in { opacity: 1; transform: none; }
+
+@media (max-width: 1200px) { .orings { transform: scale(.82); } }
+@media (max-width: 960px) { .orings { transform: scale(.62); } }
+@media (max-width: 1100px) { .floatcard { display: none !important; } }
+@media (max-width: 660px) { .orings { display: none; } }
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .reveal { opacity: 1 !important; transform: none !important; }
+}

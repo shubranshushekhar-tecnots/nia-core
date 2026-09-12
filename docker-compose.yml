@@ -1,0 +1,95 @@
+# Local dev spine — doubles as the seed of your self-host artifact later.
+# The web app (apps/web) runs via `pnpm dev` on the host during development;
+# add it here (output: 'standalone' image) when you cut the self-host bundle.
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  connector-mysql:
+    build:
+      context: .
+      dockerfile: services/connector-mysql/Dockerfile
+    environment:
+      PORT: 4010
+      # Vault read-only, via the single resolve_connector_secret RPC —
+      # see 0008_connector_secret_rpc.sql. This service never touches any
+      # other table with this key.
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+    ports:
+      - "4010:4010"   # exposed for local curl; internal-network-only in prod
+    networks:
+      - nia-internal
+      - default
+
+  connector-mongodb:
+    build:
+      context: .
+      dockerfile: services/connector-mongodb/Dockerfile
+    environment:
+      PORT: 4020
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+    ports:
+      - "4020:4020"   # exposed for local curl; internal-network-only in prod
+    networks:
+      - nia-internal
+      - default
+
+  connector-supabase:
+    build:
+      context: .
+      dockerfile: services/connector-supabase/Dockerfile
+    environment:
+      PORT: 4030
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+    ports:
+      - "4030:4030"   # exposed for local curl; internal-network-only in prod
+    networks:
+      - nia-internal
+      - default
+
+  # --- scratch databases to develop connectors against ---
+  dev-mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: devroot
+      MYSQL_DATABASE: sandbox
+      MYSQL_USER: nia_ro          # practice the read-only-role discipline from day one
+      MYSQL_PASSWORD: nia_ro_pw
+    ports:
+      - "3306:3306"
+    volumes:
+      # Narrows nia_ro from the image's default ALL PRIVILEGES down to
+      # actual SELECT-only, and seeds sandbox_items — see the script for why.
+      - ./docker/dev-mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  dev-mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+
+  dev-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: devroot
+      POSTGRES_DB: sandbox
+    ports:
+      - "5432:5432"
+    volumes:
+      # Provisions the nia_ro read-only role (postgres:16-alpine has no
+      # env-var equivalent of mysql's MYSQL_USER for this) and seeds
+      # sandbox_items — see the script for details.
+      - ./docker/dev-postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+networks:
+  nia-internal:
+    internal: true   # connector services talk to Vault/worker here, never the public net
+
+volumes:
+  redis-data:

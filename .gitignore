@@ -1,0 +1,24 @@
+# nia-ide: managed by Nia IDE
+.nia/
+.claude/
+
+# os
+.DS_Store
+
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+.next/
+.turbo/
+
+# env
+.env
+.env.local
+
+# supabase CLI local state
+supabase/.temp
+supabase/.branches
+
+.nia/NIA.local.md
