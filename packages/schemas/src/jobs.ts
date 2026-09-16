@@ -10,14 +10,36 @@ import { z } from "zod";
 export const QUEUE_INTERACTIVE = "interactive" as const;
 export const QUEUE_HEAVY = "heavy" as const;
 
+/**
+ * Mirrors apps/api's and apps/worker's WorkspaceScope TS type exactly (org-
+ * scoped XOR personal/owner-scoped) — chat is the first job payload that
+ * needs it, since chat now supports org-less "individual" actors (see
+ * supabase/migrations/0013_chat_personal_workspace.sql). EtlRunJob/
+ * CheckRunJob stay plain orgId: they remain org-only by design.
+ */
+export const WorkspaceScope = z.union([
+  z.object({ orgId: z.string().uuid() }),
+  z.object({ ownerId: z.string().uuid() }),
+]);
+export type WorkspaceScope = z.infer<typeof WorkspaceScope>;
+
 export const ChatQueryJob = z.object({
   kind: z.literal("chat_query"),
-  orgId: z.string().uuid(),
+  scope: WorkspaceScope,
   userId: z.string().uuid(),
   conversationId: z.string().uuid(),
   message: z.string(),
-  /** Compiled from canvas context scope, or resolved from @mentions. */
-  connectionIds: z.array(z.string().uuid()),
+  /**
+   * Compiled from canvas context scope, or resolved from @mentions.
+   * Deduplicated here (source of truth), not just at the worker's dispatch
+   * site — a repeated connectionId would otherwise launch two identical
+   * per-source pipelines for the same source in the multi-source graph,
+   * silently double-counting its contribution to SUM/COUNT. Every caller
+   * that parses through this schema (currently: apps/worker/src/index.ts's
+   * `InteractiveJob.parse`) inherits the dedup automatically; nothing
+   * downstream needs to remember to do it itself.
+   */
+  connectionIds: z.array(z.string().uuid()).transform((ids) => [...new Set(ids)]),
 });
 export type ChatQueryJob = z.infer<typeof ChatQueryJob>;
 
@@ -43,6 +65,23 @@ export const EtlRunJob = z.object({
   triggeredByUserId: z.string().uuid(),
 });
 export type EtlRunJob = z.infer<typeof EtlRunJob>;
+
+/**
+ * Runs the full golden-set regression suite (apps/worker/fixtures/golden/
+ * chat-v1.jsonl) through the real chat pipeline — one HEAVY job, not one
+ * job per question (see apps/worker/src/lib/eval/runGoldenSuite.ts's header
+ * comment for why per-question fan-out isn't worth the aggregation
+ * complexity). No payload fields: it always runs the current fixture file
+ * against the current pipeline. Enqueued nightly by a BullMQ repeatable job
+ * scheduler (index.ts) and on-demand via `pnpm eval:golden`.
+ */
+export const EvalRunJob = z.object({
+  kind: z.literal("eval_run"),
+});
+export type EvalRunJob = z.infer<typeof EvalRunJob>;
+
+export const HeavyJob = z.discriminatedUnion("kind", [EtlRunJob, EvalRunJob]);
+export type HeavyJob = z.infer<typeof HeavyJob>;
 
 export const CheckRunJob = z.object({
   kind: z.literal("check_run"),

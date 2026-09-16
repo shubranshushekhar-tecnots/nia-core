@@ -1598,3 +1598,463 @@ export const connectionsUnavailableGraphicStyle: CSSProperties = {
   maskImage: 'radial-gradient(circle at 70% 70%, black 0%, transparent 70%)',
   WebkitMaskImage: 'radial-gradient(circle at 70% 70%, black 0%, transparent 70%)',
 };
+
+// Chat surface (/app/chat). Style values are ported from the exact CSS
+// strings in designs/Nia Core App.html's `// ---------- chat ----------`
+// view-model block — that block is otherwise orphaned (no JSX template in
+// the design ever renders it, no nav entry ever sets page:'chat'), so
+// there's no pixel-accurate screenshot reference; these are its extracted
+// literal values (colors/radii/spacing), re-expressed as CSSProperties
+// against this app's own token names (--text*/--line*/--acc* etc, not the
+// design's raw --ink*/--acc* — see theme.css's [data-app-theme] alias
+// block, both names resolve identically). Layout structure (composer row,
+// mention dropdown, right-hand scope rail) is original, following this
+// file's existing page conventions since no design layout exists to copy.
+
+export const chatScrollStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  overflow: 'hidden',
+};
+
+export const chatMainColStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: 0,
+};
+
+export const chatMessageListStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  padding: '40px 56px 24px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 22,
+};
+
+export function chatMessageWrapStyle(isUser: boolean): CSSProperties {
+  return {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 9,
+    maxWidth: 660,
+    alignSelf: isUser ? 'flex-end' : 'flex-start',
+  };
+}
+
+export function chatMessageTextStyle(isUser: boolean): CSSProperties {
+  return {
+    fontSize: 13,
+    lineHeight: 1.7,
+    color: 'var(--text)',
+    padding: isUser ? '12px 14px' : 0,
+    borderRadius: isUser ? 12 : 0,
+    background: isUser ? 'var(--surface)' : 'transparent',
+    border: isUser ? '1px solid var(--line)' : 'none',
+    whiteSpace: 'pre-wrap',
+  };
+}
+
+export const chatCitationsRowStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+};
+
+export function chatCitationChipStyle(expanded: boolean): CSSProperties {
+  return {
+    height: 26,
+    boxSizing: 'border-box',
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '0 10px',
+    borderRadius: 8,
+    fontSize: 12,
+    fontFamily: 'var(--font-data)',
+    background: 'transparent',
+    border: `1px solid ${expanded ? 'var(--acc-bd)' : 'var(--line2)'}`,
+    color: expanded ? 'var(--acc)' : 'var(--text-3)',
+    cursor: 'pointer',
+  };
+}
+
+export const chatCitationExpandedStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '12px 14px',
+  borderRadius: 10,
+  background: 'var(--surface2)',
+  border: '1px solid var(--line)',
+};
+
+export const chatCitationExpandedTitleStyle: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 600,
+  color: 'var(--text-2)',
+};
+
+export const chatCitationExpandedSqlStyle: CSSProperties = {
+  margin: 0,
+  fontFamily: 'var(--font-data)',
+  fontSize: 12,
+  lineHeight: 1.6,
+  color: 'var(--text)',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
+};
+
+export const chatCitationExpandedMetaStyle: CSSProperties = {
+  fontSize: 11.5,
+  color: 'var(--text-3)',
+};
+
+export const chatCitationCopyBtnStyle: CSSProperties = {
+  alignSelf: 'flex-start',
+  padding: 0,
+  fontFamily: 'inherit',
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: 'var(--live)',
+  background: 'transparent',
+  border: 'none',
+  cursor: 'pointer',
+};
+
+// Pre-token stage-progress line (status events before the first token
+// arrives) — pulses via the existing `livePulse` keyframe (theme.css).
+export const chatStatusRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  fontSize: 12.5,
+  color: 'var(--text-3)',
+};
+
+export const chatStatusDotStyle: CSSProperties = {
+  width: 6,
+  height: 6,
+  flex: 'none',
+  borderRadius: '50%',
+  background: 'var(--live)',
+  animation: 'livePulse 1.4s ease-in-out infinite',
+};
+
+function chatBannerStyle(color: string, bg: string, bd: string): CSSProperties {
+  return {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    padding: '10px 14px',
+    borderRadius: 10,
+    fontSize: 13,
+    lineHeight: 1.6,
+    color,
+    background: bg,
+    border: `1px solid ${bd}`,
+  };
+}
+
+// error: var(--bad); refused: var(--bad) (request-shape rejection, same
+// treatment as a hard error); conflict: var(--warn) (sources disagreed,
+// not a failure) — matches the ChatStreamEvent kind semantics in
+// packages/schemas/src/chat.ts, not the design's mocked states.
+export const chatErrorBannerStyle: CSSProperties = chatBannerStyle('var(--bad)', 'var(--bad-bg)', 'var(--bad-bd)');
+export const chatRefusedBannerStyle: CSSProperties = chatBannerStyle('var(--bad)', 'var(--bad-bg)', 'var(--bad-bd)');
+export const chatConflictBannerStyle: CSSProperties = chatBannerStyle('var(--warn)', 'var(--warn-bg)', 'var(--warn-bd)');
+
+export const chatUnfaithfulNoteStyle: CSSProperties = {
+  fontSize: 11.5,
+  color: 'var(--warn)',
+};
+
+export const chatEmptyStateStyle: CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  padding: '40px 24px',
+  textAlign: 'center',
+};
+
+export const chatEmptyTitleStyle: CSSProperties = {
+  fontFamily: 'var(--font-display)',
+  fontSize: '1.6rem',
+  fontWeight: 700,
+  letterSpacing: '-.03em',
+  color: 'var(--text)',
+};
+
+export const chatEmptySubStyle: CSSProperties = {
+  fontSize: 13,
+  color: 'var(--text-3)',
+  maxWidth: 420,
+};
+
+// Composer + @mention dropdown.
+export const chatComposerWrapStyle: CSSProperties = {
+  position: 'relative',
+  flex: 'none',
+  padding: '16px 56px 24px',
+};
+
+export function chatComposerStyle(focused: boolean): CSSProperties {
+  return {
+    height: 52,
+    boxSizing: 'border-box',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: '0 14px',
+    borderRadius: 12,
+    background: 'var(--surface)',
+    border: `1px solid ${focused ? 'var(--acc-bd)' : 'var(--line)'}`,
+    boxShadow: 'var(--amb)',
+  };
+}
+
+export const chatComposerInputStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  height: '100%',
+  fontFamily: 'inherit',
+  fontSize: 13.5,
+  color: 'var(--text)',
+  background: 'transparent',
+  border: 'none',
+  outline: 'none',
+};
+
+export function chatSendBtnStyle(disabled: boolean): CSSProperties {
+  return {
+    flex: 'none',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 32,
+    boxSizing: 'border-box',
+    padding: '0 14px',
+    fontFamily: 'inherit',
+    fontSize: 12.5,
+    fontWeight: 500,
+    borderRadius: 9,
+    border: 'none',
+    background: disabled ? 'var(--surface2)' : 'var(--live-fill)',
+    color: disabled ? 'var(--text-4)' : 'var(--onacc)',
+    cursor: disabled ? 'default' : 'pointer',
+  };
+}
+
+export const chatMentionDropdownStyle: CSSProperties = {
+  position: 'absolute',
+  left: 56,
+  right: 56,
+  bottom: '100%',
+  marginBottom: 8,
+  maxHeight: 240,
+  overflowY: 'auto',
+  boxSizing: 'border-box',
+  padding: 6,
+  borderRadius: 12,
+  background: 'var(--surface)',
+  border: '1px solid var(--line)',
+  boxShadow: 'var(--amb)',
+  zIndex: 5,
+};
+
+export function chatMentionRowStyle(hovered: boolean): CSSProperties {
+  return {
+    width: '100%',
+    boxSizing: 'border-box',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '8px 10px',
+    borderRadius: 8,
+    background: hovered ? 'var(--surface2)' : 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    textAlign: 'left',
+  };
+}
+
+export const chatMentionDotStyle: CSSProperties = {
+  width: 6,
+  height: 6,
+  flex: 'none',
+  borderRadius: '50%',
+  background: 'var(--ok)',
+};
+
+export const chatMentionHandleStyle: CSSProperties = {
+  fontFamily: 'var(--font-data)',
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: 'var(--text)',
+};
+
+export const chatMentionToolStyle: CSSProperties = {
+  fontSize: 11.5,
+  color: 'var(--text-3)',
+};
+
+export const chatMentionEmptyStyle: CSSProperties = {
+  padding: '10px 10px',
+  fontSize: 12.5,
+  color: 'var(--text-3)',
+};
+
+// Right-hand scope rail. Single-select only — apps/api's POST /chat
+// currently rejects anything but exactly one connectionId (mirrors the
+// worker's chat_query handler), so unlike the design's mocked
+// `scope:{handle:true, ...}` multi-toggle object, only one row can be on
+// at a time here (picking a new one turns the previous one off).
+export const chatScopeRailStyle: CSSProperties = {
+  flex: 'none',
+  width: 260,
+  boxSizing: 'border-box',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+  padding: '40px 24px',
+  borderLeft: '1px solid var(--line)',
+  overflowY: 'auto',
+};
+
+export const chatScopeHeaderStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  color: 'var(--text)',
+};
+
+export const chatScopeHintStyle: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--text-3)',
+};
+
+export const chatScopeListStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+};
+
+export const chatScopeRowStyle: CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 11,
+  padding: '10px 8px',
+  borderRadius: 9,
+  background: 'transparent',
+  border: 'none',
+  cursor: 'pointer',
+  textAlign: 'left',
+};
+
+export function chatScopeSwitchStyle(on: boolean): CSSProperties {
+  return {
+    flex: 'none',
+    width: 30,
+    height: 18,
+    boxSizing: 'border-box',
+    display: 'flex',
+    alignItems: 'center',
+    padding: 2,
+    borderRadius: 9,
+    background: on ? 'var(--acc-solid)' : 'var(--surface2)',
+    border: `1px solid ${on ? 'var(--acc-bd)' : 'var(--line2)'}`,
+    transition: 'background .16s ease',
+  };
+}
+
+export function chatScopeKnobStyle(on: boolean): CSSProperties {
+  return {
+    width: 12,
+    height: 12,
+    borderRadius: '50%',
+    background: on ? 'var(--onacc)' : 'var(--text-4)',
+    transform: `translateX(${on ? 12 : 0}px)`,
+    transition: 'transform .16s ease',
+  };
+}
+
+export const chatScopeTextColStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 1,
+};
+
+export const chatScopeToolStyle: CSSProperties = {
+  fontSize: 11.5,
+  color: 'var(--text-3)',
+};
+
+export const chatScopeEmptyStyle: CSSProperties = {
+  fontSize: 12.5,
+  color: 'var(--text-3)',
+};
+
+// History list (left of the composer column, or a simple top strip — kept
+// as a plain vertical list, following projectListStyle's convention).
+export const chatHistoryListStyle: CSSProperties = {
+  flex: 'none',
+  width: 240,
+  boxSizing: 'border-box',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  padding: '40px 12px',
+  borderRight: '1px solid var(--line)',
+  overflowY: 'auto',
+};
+
+export function chatHistoryRowStyle(active: boolean): CSSProperties {
+  return {
+    display: 'block',
+    boxSizing: 'border-box',
+    padding: '9px 12px',
+    borderRadius: 9,
+    fontSize: 12.5,
+    color: active ? 'var(--text)' : 'var(--text-3)',
+    background: active ? 'var(--surface2)' : 'transparent',
+    textDecoration: 'none',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  };
+}
+
+export const chatHistoryHeaderStyle: CSSProperties = {
+  padding: '0 12px 8px',
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: '.04em',
+  textTransform: 'uppercase',
+  color: 'var(--text-4)',
+};
+
+export const chatNewBtnStyle: CSSProperties = {
+  margin: '0 12px 12px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  height: 30,
+  fontFamily: 'inherit',
+  fontSize: 12.5,
+  fontWeight: 500,
+  borderRadius: 8,
+  border: '1px solid var(--line)',
+  background: 'var(--surface)',
+  color: 'var(--text)',
+  cursor: 'pointer',
+  textDecoration: 'none',
+};

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { CONNECTOR_MANIFESTS, getConnectorManifest } from "@nia/schemas";
+import { CONNECTOR_MANIFESTS, getConnectorManifest, type Operation, type Capability } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 
@@ -8,6 +8,14 @@ export type ConnectorCatalogEntry = {
   name: string;
   category: string;
   version: string;
+  // Added for the builder canvas node palette (0012_workflow_graphs.sql
+  // era): the palette needs to know what a manifest can DO to classify it
+  // as a source/destination candidate and to know which control verbs need
+  // a write-grant lock badge, without ever hardcoding a per-tool list
+  // client-side. Kept off the wire for every other existing caller
+  // (connections settings UI etc.) that only reads id/name/category/version.
+  operations: Operation[];
+  capabilities: Capability[];
 };
 
 /** Static — manifests are files, not rows (0007_connectors.sql's header comment). */
@@ -17,6 +25,8 @@ export function getConnectorCatalog(): ConnectorCatalogEntry[] {
     name: m.name,
     category: m.category,
     version: m.version,
+    operations: m.operations,
+    capabilities: m.capabilities,
   }));
 }
 

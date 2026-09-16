@@ -9,6 +9,20 @@ function isPublicPath(pathname: string): boolean {
 }
 
 /**
+ * `/api/*` (currently just the `/api/backend/:path*` rewrite to apps/api,
+ * see next.config.mjs) is a fetch()/EventSource surface, never a browser
+ * navigation — a 3xx redirect to /login is useless to those callers and
+ * previously masked apps/api's own clean 401 JSON body behind a redirect
+ * response the caller couldn't sensibly follow (fix-pass Step 2's bug #2).
+ * Treated as its own category, not folded into PUBLIC_PREFIXES: those are
+ * pages a signed-out user should be allowed to land on; this is the
+ * opposite (still gets rejected, just with the redirect suppressed).
+ */
+function isApiPath(pathname: string): boolean {
+  return pathname === "/api" || pathname.startsWith("/api/");
+}
+
+/**
  * Refreshes the Supabase session cookie on every request and enforces the
  * auth boundary. This is the single session owner: Server Components
  * (lib/supabase/server.ts) can't persist cookies themselves (a Next.js
@@ -49,7 +63,7 @@ export async function updateSession(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const publicPath = isPublicPath(pathname);
 
-  if (!user && !publicPath) {
+  if (!user && !publicPath && !isApiPath(pathname)) {
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = "/login";
     redirectUrl.search = `?next=${encodeURIComponent(pathname + search)}`;

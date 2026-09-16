@@ -1,11 +1,15 @@
-import { Worker, type Job } from "bullmq";
+import { Worker, Queue, type Job } from "bullmq";
 import { Redis } from "ioredis";
 import {
   QUEUE_INTERACTIVE,
   QUEUE_HEAVY,
   InteractiveJob,
-  EtlRunJob,
+  HeavyJob,
 } from "@nia/schemas";
+import { runChatQuery } from "./lib/chat/runChatQuery.js";
+import { runGoldenSuite } from "./lib/eval/runGoldenSuite.js";
+import { registerNightlyEvalSchedule } from "./lib/eval/schedule.js";
+import { shutdownLangfuse } from "./lib/observability/langfuse.js";
 
 /**
  * Nia worker — the execution spine.
@@ -27,7 +31,10 @@ import {
  *
  * Two queues:
  *  - interactive: chat pipeline (LangGraph), previews, checks
- *  - heavy: ETL / backfills — chunked, checkpointed, resumable
+ *  - heavy: ETL / backfills (chunked, checkpointed, resumable), and the
+ *    nightly golden-set eval run (lib/eval/runGoldenSuite.ts) — it's a
+ *    real-pipeline batch job like ETL, not latency-sensitive, so it belongs
+ *    on this queue rather than interactive.
  */
 
 const connection = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379", {
@@ -39,19 +46,26 @@ const interactive = new Worker(
   async (job: Job) => {
     const payload = InteractiveJob.parse(job.data);
     switch (payload.kind) {
-      case "chat_query":
-        // TODO: LangGraph pipeline — rewrite → resolve → generate →
-        // guardrails → pooled /execute → cite → faithfulness check
-        // TODO: before dispatching the generated query to any connector
-        // service, this MUST call @nia/guardrails's validateBeforeDispatch
-        // (manifestId, query, connectionScope) and use its sanitizedQuery —
-        // no query reaches a connector /execute endpoint unvalidated.
-        console.log(`[interactive] chat_query for org ${payload.orgId}`);
-        return { status: "stub" };
+      case "chat_query": {
+        console.log(
+          `[interactive] chat_query for ${"orgId" in payload.scope ? `org ${payload.scope.orgId}` : `owner ${payload.scope.ownerId}`}`,
+        );
+        // job.id is always set here — apps/api's enqueueChatQuery always
+        // passes an explicit jobId at queue.add() time (never BullMQ's
+        // auto-generated default), so this is never undefined in practice.
+        return runChatQuery(payload, job.id!);
+      }
       case "check_run":
-        // TODO: config / credential / grant / mapping / DAG checks
-        // TODO: any check that dry-runs a connector query must also route
-        // through @nia/guardrails's validateBeforeDispatch first.
+        // NOT wired to lib/dispatch.ts: CheckRunJob (@nia/schemas jobs.ts)
+        // carries no connectionIds at all, and there is no workflowId ->
+        // connectionId mapping anywhere in the codebase — workflow
+        // definitions store canvas nodes as opaque, untyped jsonb (see the
+        // comment on deleteConnection in
+        // apps/api/src/services/connections.ts). The "credentials" check in
+        // particular needs a real connectionId to dispatch a probe against,
+        // and there's no way to derive one from a workflowId today. This is
+        // a genuine schema gap (a canvas node schema has to exist first),
+        // flagged rather than worked around with a fabricated connectionId.
         console.log(`[interactive] check_run for workflow ${payload.workflowId}`);
         return { status: "stub" };
     }
@@ -59,23 +73,42 @@ const interactive = new Worker(
   { connection, concurrency: 10 },
 );
 
+const heavyQueue = new Queue(QUEUE_HEAVY, { connection });
+
 const heavy = new Worker(
   QUEUE_HEAVY,
   async (job: Job) => {
-    const payload = EtlRunJob.parse(job.data);
-    // TODO: read chunk from source via connector service, apply in-stream
-    // transforms not compiled into the dialect, upsert into sink (idempotent),
-    // persist checkpoint cursor to Postgres, enqueue next chunk.
-    // TODO: the source-side read query must go through @nia/guardrails's
-    // validateBeforeDispatch (manifestId, query, connectionScope) before
-    // it's sent to the source connector service's /execute endpoint.
-    console.log(
-      `[heavy] etl_run ${payload.runId} node ${payload.nodeId} cursor=${payload.cursor}`,
-    );
-    return { status: "stub" };
+    const payload = HeavyJob.parse(job.data);
+    switch (payload.kind) {
+      case "etl_run":
+        // TODO: read chunk from source via connector service, apply in-stream
+        // transforms not compiled into the dialect, upsert into sink (idempotent),
+        // persist checkpoint cursor to Postgres, enqueue next chunk.
+        // TODO: the source-side read query must go through @nia/guardrails's
+        // validateBeforeDispatch (manifestId, query, connectionScope) before
+        // it's sent to the source connector service's /execute endpoint.
+        console.log(
+          `[heavy] etl_run ${payload.runId} node ${payload.nodeId} cursor=${payload.cursor}`,
+        );
+        return { status: "stub" };
+      case "eval_run": {
+        console.log("[heavy] eval_run: running golden-set suite");
+        const report = await runGoldenSuite();
+        console.log(
+          `[heavy] eval_run: ${report.summary.passed}/${report.summary.total} passed, ` +
+            `${report.summary.citationFailures} citation failure(s), ${report.summary.mustRefuseFailures} must-refuse failure(s)`,
+        );
+        return { status: "ok", summary: report.summary };
+      }
+    }
   },
   { connection, concurrency: 3 },
 );
+
+// Registered once at boot — upsertJobScheduler is idempotent (keyed by
+// schedulerId), so restarting the worker never creates duplicate repeatable
+// jobs. See lib/eval/schedule.ts.
+await registerNightlyEvalSchedule(heavyQueue);
 
 for (const w of [interactive, heavy]) {
   w.on("failed", (job, err) =>
@@ -86,6 +119,8 @@ for (const w of [interactive, heavy]) {
 async function shutdown() {
   console.log("shutting down workers…");
   await Promise.all([interactive.close(), heavy.close()]);
+  await heavyQueue.close();
+  await shutdownLangfuse();
   await connection.quit();
   process.exit(0);
 }

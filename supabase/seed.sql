@@ -22,13 +22,34 @@ declare
   v_wf_campaign  uuid;
   v_wf_attribution uuid;
 begin
+  -- GoTrue's Go structs scan confirmation_token/recovery_token/etc as
+  -- plain strings, not nullable ones — a NULL here (the column default)
+  -- makes every auth request against this user 500 with "Database error
+  -- querying schema". Real signups never hit this because GoTrue's own
+  -- insert path always writes '', not NULL; a raw SQL insert must match
+  -- that explicitly.
   insert into auth.users
-    (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
+    (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at,
+     raw_app_meta_data, raw_user_meta_data, confirmation_token, recovery_token, email_change_token_new,
+     email_change, email_change_token_current, phone_change, phone_change_token)
   values
     ('00000000-0000-0000-0000-000000000000', v_demo_user, 'authenticated', 'authenticated', 'demo@nia.dev',
      crypt('password', gen_salt('bf')), now(), now(), now(),
-     '{"provider":"email","providers":["email"]}', '{"full_name":"Demo User"}')
+     '{"provider":"email","providers":["email"]}', '{"full_name":"Demo User"}',
+     '', '', '', '', '', '', '')
   on conflict (id) do nothing;
+
+  -- password-grant login also requires a matching auth.identities row
+  -- (GoTrue resolves the user through the identity, not auth.users
+  -- directly) — a real /auth/v1/signup always creates one, a raw insert
+  -- must add it explicitly too.
+  insert into auth.identities (provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+  values (
+    v_demo_user::text, v_demo_user,
+    jsonb_build_object('sub', v_demo_user::text, 'email', 'demo@nia.dev', 'email_verified', true),
+    'email', now(), now(), now()
+  )
+  on conflict (provider_id, provider) do nothing;
 
   insert into public.organizations (name, slug, created_by)
   values ('Ice Cream Co', 'icecream-co', v_demo_user)
@@ -72,4 +93,123 @@ begin
     (v_wf_tickets,      v_org, 'failed',    1200,   3000,    now() - interval '6 days', now() - interval '6 days' + interval '3 seconds'),
     (v_wf_campaign,     v_org, 'succeeded', 9840,   22000,   now() - interval '7 days', now() - interval '7 days' + interval '22 seconds'),
     (v_wf_pipeline,     v_org, 'succeeded', 798300, 138000,  now() - interval '8 days', now() - interval '8 days' + interval '138 seconds');
+end $$;
+
+-- =========================================================================
+-- Canvas E2E fixtures (Task 3/4) — 3 personas exercising every workspace
+-- shape the new React Flow canvas + its Playwright suite need: an org
+-- member (deliberately NOT owner — proves can.ts's "member does all work
+-- actions" rule, see CLAUDE.md's DECISION-C), a second org's owner (the
+-- cross-org 403/empty negative fixture, shares nothing with the first org),
+-- and a personal/individual-workspace user (org_id null, owner_id set, per
+-- 0005_individual_workspace.sql). Password is a fixed, documented,
+-- non-secret local-fixture value, same spirit as demo@nia.dev/password
+-- above — duplicated as a literal constant in
+-- apps/web/e2e/fixtures/personas.ts; keep the two in sync if it ever
+-- changes.
+-- =========================================================================
+do $$
+declare
+  v_password_hash text := crypt('password', gen_salt('bf'));
+  v_user_a uuid := '00000000-0000-0000-0000-0000000000e1'; -- canvas-e2e-a@nia.dev — member of canvas-e2e org
+  v_user_b uuid := '00000000-0000-0000-0000-0000000000e2'; -- canvas-e2e-b@nia.dev — owner of canvas-e2e-b org
+  v_user_c uuid := '00000000-0000-0000-0000-0000000000e3'; -- canvas-e2e-c@nia.dev — personal workspace
+  v_org_a uuid;
+  v_org_b uuid;
+  v_proj_a uuid;
+  v_proj_c uuid;
+  v_wf_unknown uuid;
+begin
+  insert into auth.users
+    (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at,
+     raw_app_meta_data, raw_user_meta_data, confirmation_token, recovery_token, email_change_token_new,
+     email_change, email_change_token_current, phone_change, phone_change_token)
+  values
+    ('00000000-0000-0000-0000-000000000000', v_user_a, 'authenticated', 'authenticated', 'canvas-e2e-a@nia.dev',
+     v_password_hash, now(), now(), now(),
+     '{"provider":"email","providers":["email"]}', '{"full_name":"Canvas E2E A"}',
+     '', '', '', '', '', '', ''),
+    ('00000000-0000-0000-0000-000000000000', v_user_b, 'authenticated', 'authenticated', 'canvas-e2e-b@nia.dev',
+     v_password_hash, now(), now(), now(),
+     '{"provider":"email","providers":["email"]}', '{"full_name":"Canvas E2E B"}',
+     '', '', '', '', '', '', ''),
+    ('00000000-0000-0000-0000-000000000000', v_user_c, 'authenticated', 'authenticated', 'canvas-e2e-c@nia.dev',
+     v_password_hash, now(), now(), now(),
+     '{"provider":"email","providers":["email"]}', '{"full_name":"Canvas E2E C"}',
+     '', '', '', '', '', '', '')
+  on conflict (id) do nothing;
+
+  insert into auth.identities (provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+  values
+    (v_user_a::text, v_user_a,
+     jsonb_build_object('sub', v_user_a::text, 'email', 'canvas-e2e-a@nia.dev', 'email_verified', true),
+     'email', now(), now(), now()),
+    (v_user_b::text, v_user_b,
+     jsonb_build_object('sub', v_user_b::text, 'email', 'canvas-e2e-b@nia.dev', 'email_verified', true),
+     'email', now(), now(), now()),
+    (v_user_c::text, v_user_c,
+     jsonb_build_object('sub', v_user_c::text, 'email', 'canvas-e2e-c@nia.dev', 'email_verified', true),
+     'email', now(), now(), now())
+  on conflict (provider_id, provider) do nothing;
+
+  insert into public.organizations (name, slug, created_by)
+  values ('Canvas E2E Org', 'canvas-e2e', v_user_a)
+  returning id into v_org_a;
+
+  insert into public.organizations (name, slug, created_by)
+  values ('Canvas E2E Org B', 'canvas-e2e-b', v_user_b)
+  returning id into v_org_b;
+
+  insert into public.organization_members (org_id, user_id, role)
+  values (v_org_a, v_user_a, 'member');
+
+  insert into public.organization_members (org_id, user_id, role)
+  values (v_org_b, v_user_b, 'owner');
+
+  insert into public.projects (id, org_id, name, created_by, created_at, updated_at)
+  values (gen_random_uuid(), v_org_a, 'Canvas E2E Project', v_user_a, now(), now())
+  returning id into v_proj_a;
+
+  -- 'Canvas E2E Workflow' deliberately gets no workflow_graphs row — the
+  -- e2e suite's beforeEach fetches the (absent -> default) version and PUTs
+  -- an empty graph before each run. This is the drag/connect/reload and
+  -- two-tab-conflict fixture, always reset to a known starting state.
+  --
+  -- 'Canvas E2E Unknown Tool' is pre-seeded below with a node whose
+  -- manifestId doesn't exist in the connector registry — the
+  -- crash-proof/unknown-tool render fixture. Never touched by any other
+  -- test.
+  insert into public.workflows (id, project_id, org_id, name, status, created_by, created_at, updated_at)
+  values
+    (gen_random_uuid(), v_proj_a, v_org_a, 'Canvas E2E Workflow', 'draft', v_user_a, now(), now()),
+    (gen_random_uuid(), v_proj_a, v_org_a, 'Canvas E2E Unknown Tool', 'draft', v_user_a, now(), now());
+
+  select id into v_wf_unknown from public.workflows where project_id = v_proj_a and name = 'Canvas E2E Unknown Tool';
+
+  insert into public.workflow_graphs (workflow_id, graph, version)
+  values (
+    v_wf_unknown,
+    jsonb_build_object(
+      'nodes', jsonb_build_array(
+        jsonb_build_object(
+          'id', 'n1',
+          'type', 'source',
+          'manifestId', 'not-a-real-connector',
+          'position', jsonb_build_object('x', 120, 'y', 120),
+          'config', '{}'::jsonb
+        )
+      ),
+      'edges', '[]'::jsonb
+    ),
+    1
+  );
+
+  -- Personal/individual workspace (org_id null, owner_id set) — proves the
+  -- WorkspaceScope/individual-role path end-to-end.
+  insert into public.projects (id, owner_id, name, created_by, created_at, updated_at)
+  values (gen_random_uuid(), v_user_c, 'Canvas E2E Personal Project', v_user_c, now(), now())
+  returning id into v_proj_c;
+
+  insert into public.workflows (id, project_id, owner_id, name, status, created_by, created_at, updated_at)
+  values (gen_random_uuid(), v_proj_c, v_user_c, 'Canvas E2E Personal Workflow', 'draft', v_user_c, now(), now());
 end $$;

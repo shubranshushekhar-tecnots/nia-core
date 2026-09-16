@@ -702,6 +702,371 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 18 — member can create a conversation + own user message; another
+-- org member can read both (org-wide visibility, same as projects/workflows)
+-- =========================================================================
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_conv uuid;
+  n_admin_sees_conv int;
+  n_admin_sees_msg int;
+begin
+  perform pg_temp.act_as(v_member);
+  insert into public.conversations (org_id, created_by, title)
+  values (v_org, v_member, 'Probe conversation')
+  returning id into v_conv;
+  insert into public.messages (conversation_id, org_id, role, content)
+  values (v_conv, v_org, 'user', 'how many rows?');
+  reset role;
+
+  perform pg_temp.act_as(v_admin);
+  select count(*) into n_admin_sees_conv from public.conversations where id = v_conv;
+  select count(*) into n_admin_sees_msg from public.messages where conversation_id = v_conv;
+  reset role;
+
+  if n_admin_sees_conv = 1 and n_admin_sees_msg = 1 then
+    insert into probe_results values (18, 'org member sees another member''s conversation + message', true);
+  else
+    insert into probe_results values (18, 'org member sees another member''s conversation + message', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (18, 'conversation/message visibility probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 19 — outsider (non-member) cannot see the conversation or message
+-- =========================================================================
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_conv uuid := (select id from public.conversations where org_id = v_org and title = 'Probe conversation' limit 1);
+  n_conv int;
+  n_msg int;
+begin
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_conv from public.conversations where id = v_conv;
+  select count(*) into n_msg from public.messages where conversation_id = v_conv;
+  reset role;
+
+  if n_conv = 0 and n_msg = 0 then
+    insert into probe_results values (19, 'non-member cannot see conversation/message', true);
+  else
+    insert into probe_results values (19, 'non-member cannot see conversation/message', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (19, 'non-member conversation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 20 — client cannot insert a role='assistant' message (worker-only,
+-- service_role bypasses RLS; an authenticated client must never be able to
+-- forge an assistant-authored row directly)
+-- =========================================================================
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_conv uuid := (select id from public.conversations where org_id = v_org and title = 'Probe conversation' limit 1);
+  denied boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+  begin
+    insert into public.messages (conversation_id, org_id, role, content)
+    values (v_conv, v_org, 'assistant', 'forged answer');
+    denied := false; -- insert succeeded — FAIL (client forged an assistant row)
+  exception when insufficient_privilege or others then
+    denied := true; -- WITH CHECK rejected it — expected
+  end;
+  reset role;
+
+  insert into probe_results values (20, 'client cannot insert role=assistant message', denied);
+exception when others then
+  reset role;
+  insert into probe_results values (20, 'client assistant-message probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 21 — member cannot insert a user message into a conversation they
+-- didn't create (even within their own org)
+-- =========================================================================
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_conv uuid := (select id from public.conversations where org_id = v_org and title = 'Probe conversation' limit 1);
+  denied boolean := false;
+begin
+  perform pg_temp.act_as(v_admin);
+  begin
+    insert into public.messages (conversation_id, org_id, role, content)
+    values (v_conv, v_org, 'user', 'not my conversation');
+    denied := false; -- insert succeeded — FAIL
+  exception when insufficient_privilege or others then
+    denied := true; -- expected
+  end;
+  reset role;
+
+  insert into probe_results values (21, 'member cannot insert user message into another member''s conversation', denied);
+exception when others then
+  reset role;
+  insert into probe_results values (21, 'foreign-conversation message probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 22 — cross-org: org B member cannot see org A's conversation
+-- =========================================================================
+do $$
+declare
+  v_org_b_owner uuid := (select id from test_ids where key = 'org_b_owner');
+  v_conv uuid := (select id from public.conversations where title = 'Probe conversation' limit 1);
+  n_conv int;
+begin
+  perform pg_temp.act_as(v_org_b_owner);
+  select count(*) into n_conv from public.conversations where id = v_conv;
+  reset role;
+
+  if n_conv = 0 then
+    insert into probe_results values (22, 'cross-org member cannot see another org''s conversation', true);
+  else
+    insert into probe_results values (22, 'cross-org member cannot see another org''s conversation', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (22, 'cross-org conversation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Fixture for probes 23-26 — 0012_workflow_graphs.sql: a personal
+-- (org-less) workflow for 'individual', reusing their personal_project
+-- from probe 7
+-- =========================================================================
+do $$
+declare
+  v_individual uuid := (select id from test_ids where key = 'individual');
+  v_personal_project uuid := (select id from test_ids where key = 'personal_project');
+  v_personal_workflow uuid;
+begin
+  insert into public.workflows (project_id, owner_id, name, created_by)
+  values (v_personal_project, v_individual, 'Personal workflow', v_individual)
+  returning id into v_personal_workflow;
+
+  insert into test_ids values ('personal_workflow', v_personal_workflow);
+end $$;
+
+-- =========================================================================
+-- Probe 23 — org member can create and read their workflow's graph
+-- (private.can_access_workflow's org branch)
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_workflow_a uuid := (select id from test_ids where key = 'workflow_a');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_member);
+  insert into public.workflow_graphs (workflow_id, graph)
+  values (v_workflow_a, '{"nodes":[{"id":"n1","type":"source","position":{"x":0,"y":0},"config":{}}],"edges":[]}'::jsonb);
+  select count(*) into n_visible from public.workflow_graphs where workflow_id = v_workflow_a;
+  reset role;
+
+  if n_visible = 1 then
+    insert into probe_results values (23, 'org member can create/read their workflow''s graph', true);
+  else
+    insert into probe_results values (23, 'org member can create/read their workflow''s graph', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (23, 'workflow_graphs org create/read probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 24 — cross-org: org B member cannot see or update org A's
+-- workflow_graphs row (direct PostgREST-shaped update, not just select)
+-- =========================================================================
+do $$
+declare
+  v_org_b_owner uuid := (select id from test_ids where key = 'org_b_owner');
+  v_workflow_a uuid := (select id from test_ids where key = 'workflow_a');
+  n_visible int;
+  n_updated int;
+begin
+  perform pg_temp.act_as(v_org_b_owner);
+  select count(*) into n_visible from public.workflow_graphs where workflow_id = v_workflow_a;
+  update public.workflow_graphs set graph = '{"nodes":[],"edges":[]}'::jsonb, version = version + 1 where workflow_id = v_workflow_a;
+  get diagnostics n_updated = row_count;
+  reset role;
+
+  if n_visible = 0 and n_updated = 0 then
+    insert into probe_results values (24, 'cross-org member cannot see or update another org''s workflow_graphs row', true);
+  else
+    insert into probe_results values (24, 'cross-org member cannot see or update another org''s workflow_graphs row', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (24, 'cross-org workflow_graphs probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 25 — individual (personal-workspace) user can create/update their
+-- own workflow's graph (private.can_access_workflow's owner_id branch),
+-- with optimistic-concurrency version bump
+-- =========================================================================
+do $$
+declare
+  v_individual uuid := (select id from test_ids where key = 'individual');
+  v_personal_workflow uuid := (select id from test_ids where key = 'personal_workflow');
+  n_updated int;
+  v_version int;
+begin
+  perform pg_temp.act_as(v_individual);
+  insert into public.workflow_graphs (workflow_id, graph)
+  values (v_personal_workflow, '{"nodes":[],"edges":[]}'::jsonb);
+  update public.workflow_graphs set graph = '{"nodes":[{"id":"n1","type":"transform","position":{"x":10,"y":10},"config":{}}],"edges":[]}'::jsonb, version = version + 1
+  where workflow_id = v_personal_workflow and version = 1;
+  get diagnostics n_updated = row_count;
+  select version into v_version from public.workflow_graphs where workflow_id = v_personal_workflow;
+  reset role;
+
+  if n_updated = 1 and v_version = 2 then
+    insert into probe_results values (25, 'individual can create/update their own workflow''s graph, version increments', true);
+  else
+    insert into probe_results values (25, 'individual can create/update their own workflow''s graph, version increments', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (25, 'personal workflow_graphs probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 26 — another individual cannot see or update someone else's
+-- personal workflow_graphs row
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_personal_workflow uuid := (select id from test_ids where key = 'personal_workflow');
+  n_visible int;
+  n_updated int;
+begin
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_visible from public.workflow_graphs where workflow_id = v_personal_workflow;
+  update public.workflow_graphs set graph = '{"nodes":[],"edges":[]}'::jsonb, version = version + 1 where workflow_id = v_personal_workflow;
+  get diagnostics n_updated = row_count;
+  reset role;
+
+  if n_visible = 0 and n_updated = 0 then
+    insert into probe_results values (26, 'other individual cannot see or update someone else''s personal workflow_graphs row', true);
+  else
+    insert into probe_results values (26, 'other individual cannot see or update someone else''s personal workflow_graphs row', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (26, 'personal workflow_graphs isolation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 27 — direct PostgREST update supplying an arbitrary version is
+-- overridden by the server-side trigger: a client setting version = 999
+-- alongside a graph change must end at old_version + 1, never 999
+-- (private.bump_workflow_graph_version, added on review of 0012)
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_workflow_a uuid := (select id from test_ids where key = 'workflow_a');
+  v_before int;
+  v_after int;
+begin
+  perform pg_temp.act_as(v_member);
+  select version into v_before from public.workflow_graphs where workflow_id = v_workflow_a;
+  update public.workflow_graphs
+  set graph = '{"nodes":[{"id":"n2","type":"destination","position":{"x":5,"y":5},"config":{}}],"edges":[]}'::jsonb,
+      version = 999
+  where workflow_id = v_workflow_a;
+  select version into v_after from public.workflow_graphs where workflow_id = v_workflow_a;
+  reset role;
+
+  if v_after = v_before + 1 then
+    insert into probe_results values (27, 'trigger overrides client-supplied version, forces old_version + 1', true);
+  else
+    insert into probe_results values (27, 'trigger overrides client-supplied version, forces old_version + 1', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (27, 'version-override trigger probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 28 — individual (personal-workspace) user can create a conversation
+-- + own user message in their personal workspace (0013's owner_id branch)
+-- =========================================================================
+do $$
+declare
+  v_individual uuid := (select id from test_ids where key = 'individual');
+  v_conv uuid;
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_individual);
+  insert into public.conversations (owner_id, created_by, title)
+  values (v_individual, v_individual, 'Personal probe conversation')
+  returning id into v_conv;
+  insert into public.messages (conversation_id, owner_id, role, content)
+  values (v_conv, v_individual, 'user', 'how many rows?');
+  select count(*) into n_visible from public.messages where conversation_id = v_conv;
+  reset role;
+
+  if n_visible = 1 then
+    insert into probe_results values (28, 'individual can create/read their own personal conversation + message', true);
+  else
+    insert into probe_results values (28, 'individual can create/read their own personal conversation + message', false);
+  end if;
+  insert into test_ids values ('personal_conversation', v_conv);
+exception when others then
+  reset role;
+  insert into probe_results values (28, 'personal conversation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 29 — another individual (outsider) cannot see or insert into
+-- someone else's personal conversation
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_conv uuid := (select id from test_ids where key = 'personal_conversation');
+  n_conv int;
+  n_msg int;
+  denied boolean := false;
+begin
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_conv from public.conversations where id = v_conv;
+  select count(*) into n_msg from public.messages where conversation_id = v_conv;
+  begin
+    insert into public.messages (conversation_id, owner_id, role, content)
+    values (v_conv, v_outsider, 'user', 'not my conversation');
+    denied := false; -- insert succeeded — FAIL
+  exception when insufficient_privilege or others then
+    denied := true; -- expected
+  end;
+  reset role;
+
+  if n_conv = 0 and n_msg = 0 and denied then
+    insert into probe_results values (29, 'other individual cannot see or insert into someone else''s personal conversation', true);
+  else
+    insert into probe_results values (29, 'other individual cannot see or insert into someone else''s personal conversation', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (29, 'personal conversation isolation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

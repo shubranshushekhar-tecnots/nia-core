@@ -9,6 +9,7 @@ import { workflowsRouter } from "./routes/workflows.js";
 import { connectorsRouter } from "./routes/connectors.js";
 import { connectionsRouter } from "./routes/connections.js";
 import { grantsRouter } from "./routes/grants.js";
+import { chatRouter } from "./routes/chat.js";
 
 const app = express();
 
@@ -38,6 +39,11 @@ app.use("/workflows", workflowsRouter);
 app.use("/connectors", connectorsRouter);
 app.use("/connections", connectionsRouter);
 app.use("/connections/:connectionId/grants", grantsRouter);
+
+// POST /chat, GET /chat/stream — cookie-authenticated (not Bearer, unlike
+// everything above), reached same-origin through apps/web's
+// /api/backend/:path* rewrite. See routes/chat.ts for the full rationale.
+app.use("/", chatRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

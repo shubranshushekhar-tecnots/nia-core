@@ -19,6 +19,18 @@ const EnvSchema = z.object({
    * runs inside the compose network and the manifest host resolves directly.
    */
   CONNECTOR_DEV_HOST: z.string().optional(),
+  /** BullMQ producer + chat-event pub/sub subscriber, same as apps/worker. */
+  REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
+  /**
+   * Upper bound on a single /chat/stream connection. Past this, the SSE
+   * lifecycle force-emits a terminal `error` event and closes rather than
+   * holding the connection (and its Redis subscriber) open forever — the
+   * client-side guarantee that pairs with the worker-side try/finally in
+   * apps/worker/src/index.ts's chat_query handler.
+   */
+  CHAT_SSE_MAX_DURATION_MS: z.coerce.number().int().positive().default(120_000),
+  /** Comment-only keep-alive so intermediary proxies don't time out an idle SSE connection. */
+  CHAT_SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(15_000),
 });
 
 export const env = EnvSchema.parse(process.env);

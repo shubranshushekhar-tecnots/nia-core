@@ -7,15 +7,30 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "smoke": "tsx scripts/dispatch-smoke.ts",
+    "smoke:chat": "tsx scripts/chat-smoke.ts",
+    "diagnose:count": "tsx scripts/chat-count-diagnose.ts",
+    "bootstrap": "tsx scripts/dev-bootstrap.ts",
+    "eval:golden": "tsx scripts/run-golden-eval.ts"
   },
   "dependencies": {
+    "@langchain/core": "^0.3.40",
+    "@langchain/langgraph": "^0.2.44",
+    "@nia/guardrails": "workspace:*",
     "@nia/schemas": "workspace:*",
+    "@supabase/supabase-js": "^2.46.1",
     "bullmq": "^5.28.0",
-    "ioredis": "^5.4.1"
+    "dotenv": "^16.4.5",
+    "ioredis": "^5.4.1",
+    "langfuse": "^3.39.2",
+    "openai": "^4.77.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^5.0.0"
   }
 }
