@@ -2,11 +2,15 @@
 // response shapes 1:1 — this is the BFF read contract, not a re-derivation
 // of the DB schema (which stays behind Express/RLS).
 
+import type { Operation, Capability } from '@nia/schemas';
+
 export type ConnectorCatalogEntry = {
   id: string;
   name: string;
   category: string;
   version: string;
+  operations: Operation[];
+  capabilities: Capability[];
 };
 
 export type ConnectorInstall = {

@@ -13,7 +13,13 @@ export default defineConfig({
     baseURL: BASE_URL,
     trace: 'on-first-retry',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    // fullyParallel: false — all 4 persona logins live in one file
+    // (auth.setup.ts) and hit local Supabase GoTrue's sign-in rate limit
+    // when run concurrently; this keeps them sequential within that file.
+    { name: 'setup', testMatch: /.*\.setup\.ts/, fullyParallel: false },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, dependencies: ['setup'] },
+  ],
   webServer: {
     command: `next dev -p ${PORT}`,
     url: BASE_URL,

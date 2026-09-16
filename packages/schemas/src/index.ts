@@ -2,6 +2,8 @@ export * from "./manifest.js";
 export * from "./tabular.js";
 export * from "./contract.js";
 export * from "./jobs.js";
+export * from "./chat.js";
+export * from "./graph.js";
 export * from "./can.js";
 export * from "./audit.js";
 export * from "./connectors/mysql.js";
