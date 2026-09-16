@@ -180,8 +180,19 @@ function CanvasInner({
     setSaveState('idle');
   }, [workflow.id, queryClient, queryKey, ctx, setNodes, setEdges, setVersion, setSaveState]);
 
+  const disabledRunBtnStyle = {
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: 'var(--ink4)',
+    background: 'var(--surface2)',
+    border: '1px solid var(--line2)',
+    borderRadius: 6,
+    padding: '6px 12px',
+    cursor: 'not-allowed',
+  } as const;
+
   return (
-    <div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--canvas)' }}>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--canvas)' }}>
       <header
         style={{
           height: 52,
@@ -199,9 +210,17 @@ function CanvasInner({
         </a>
         <span style={breadcrumbSepStyle}>/</span>
         <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink)' }}>{workflow.name}</span>
+        {saveState !== 'conflict' && saveState !== 'idle' && (
+          <>
+            <span style={breadcrumbSepStyle}>·</span>
+            <span style={{ fontSize: 12, color: 'var(--ink4)' }}>
+              {saveState === 'saving' ? 'Saving…' : 'Saved'}
+            </span>
+          </>
+        )}
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
-          {saveState === 'conflict' ? (
+          {saveState === 'conflict' && (
             <button
               type="button"
               onClick={reloadAfterConflict}
@@ -218,11 +237,14 @@ function CanvasInner({
             >
               Saved elsewhere — reload
             </button>
-          ) : (
-            <span style={{ fontSize: 12, color: 'var(--ink4)' }}>
-              {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : ''}
-            </span>
           )}
+          {/* Non-functional stubs this session — checks/execution arrive in Session 3. */}
+          <button type="button" disabled title="Checks arrive in Session 3" style={disabledRunBtnStyle}>
+            Run checks
+          </button>
+          <button type="button" disabled title="Checks arrive in Session 3" style={disabledRunBtnStyle}>
+            Run
+          </button>
           <button
             type="button"
             onClick={() => setPaletteOpen(true)}

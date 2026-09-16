@@ -23,6 +23,7 @@ type AppShellState = {
   toggleNavProjectsOpen: () => void;
   openProject: string | null;
   toggleOpenProject: (projectId: string) => void;
+  setOpenProject: (projectId: string) => void;
 };
 
 export const useAppShellStore = create<AppShellState>((set) => ({
@@ -36,4 +37,9 @@ export const useAppShellStore = create<AppShellState>((set) => ({
   openProject: null,
   toggleOpenProject: (projectId) =>
     set((s) => ({ openProject: s.openProject === projectId ? null : projectId })),
+  // Unconditional set (unlike toggleOpenProject) — used to auto-expand the
+  // project tree around the currently-open workflow on landing directly on
+  // a /app/workflows/:id URL (e.g. via a bookmark or reload), where there's
+  // no prior click to have already opened it.
+  setOpenProject: (projectId) => set({ openProject: projectId }),
 }));

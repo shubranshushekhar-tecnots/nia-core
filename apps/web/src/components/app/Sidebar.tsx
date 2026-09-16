@@ -76,6 +76,7 @@ export default function Sidebar({
   const toggleNavProjectsOpen = useAppShellStore((s) => s.toggleNavProjectsOpen);
   const openProject = useAppShellStore((s) => s.openProject);
   const toggleOpenProject = useAppShellStore((s) => s.toggleOpenProject);
+  const setOpenProject = useAppShellStore((s) => s.setOpenProject);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [showCreateWorkflow, setShowCreateWorkflow] = useState(false);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
@@ -88,6 +89,18 @@ export default function Sidebar({
   // below that threshold the rail shows icon-only rows, same visual result
   // as the old boolean `collapsed` state but now driven by a live width.
   const wide = railW >= RAIL_MIN_WIDTH;
+
+  // Auto-expand the project tree around the workflow whose canvas is
+  // currently open, so landing directly on /app/workflows/:id (bookmark,
+  // reload, or the workflow page's own render) highlights it without
+  // requiring the user to have clicked through the tree first.
+  useEffect(() => {
+    const match = pathname.match(/^\/app\/workflows\/([^/]+)$/);
+    if (!match) return;
+    const workflowId = match[1];
+    const owner = projects.find((p) => p.workflows.some((w) => w.id === workflowId));
+    if (owner) setOpenProject(owner.id);
+  }, [pathname, projects, setOpenProject]);
 
   useEffect(() => {
     function onMove(e: PointerEvent) {
@@ -214,6 +227,21 @@ export default function Sidebar({
           <span aria-hidden>{'\u2302'}</span>
           {wide && <span>Home</span>}
         </a>
+
+        {process.env.NODE_ENV !== 'production' && (
+          <a
+            href="/app/chat"
+            style={{
+              ...navItemStyle(pathname === '/app/chat' || pathname.startsWith('/app/chat/'), wide),
+              textDecoration: 'none',
+              display: 'flex',
+            }}
+            title={wide ? undefined : 'Chat (dev only \u2014 superseded by the command bar)'}
+          >
+            <span aria-hidden style={{ fontSize: 13, color: 'var(--text-3)' }}>{'\u25AC'}</span>
+            {wide && <span>Chat</span>}
+          </a>
+        )}
 
         {wide && <div style={navGroupLabelStyle}>Projects</div>}
 
