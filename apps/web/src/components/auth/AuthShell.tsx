@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import AuthBackground from './AuthBackground';
-import { authCardStyle, authFooterStyle, brandMarkStyle, brandRowStyle, signinRootStyle, themeToggleStyle } from './styles';
+import { authCardStyle, authFooterStyle, brandRowStyle, signinRootStyle, themeToggleStyle } from './styles';
 
 const STORAGE_KEY = 'nia-om-theme';
 type OmTheme = 'dark' | 'light';
@@ -68,10 +68,8 @@ export default function AuthShell({
         }}
       >
         <div style={brandRowStyle}>
-          <span style={brandMarkStyle}>N</span>
-          <span style={{ fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 700, letterSpacing: '-.01em', color: 'var(--text)' }}>
-            Nia Core
-          </span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="Nia Core" style={{ height: 28, width: 'auto' }} />
         </div>
 
         <div style={authCardStyle(narrow)}>{children}</div>

@@ -41,8 +41,14 @@ app.post("/test", async (req) => {
 app.post("/introspect", async (req) => {
   const { credential, config } = IntrospectRequest.parse(req.body);
   const pool = await getPool(credential, config);
+  // information_schema.columns is implemented as a view with uppercase
+  // column definitions — MySQL returns TABLE_SCHEMA/TABLE_NAME/etc.
+  // regardless of the case used in this query text, so explicit lowercase
+  // aliases are required (not just style) to make the destructuring below
+  // actually populate instead of silently reading `undefined`.
   const [rows] = await pool.query(
-    `SELECT table_schema, table_name, column_name, data_type
+    `SELECT table_schema AS table_schema, table_name AS table_name,
+            column_name AS column_name, data_type AS data_type
      FROM information_schema.columns
      WHERE table_schema NOT IN ('information_schema','mysql','performance_schema','sys')
      ORDER BY table_schema, table_name, ordinal_position`,

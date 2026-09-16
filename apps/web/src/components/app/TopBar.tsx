@@ -3,8 +3,6 @@
 import { useState } from 'react';
 import { logout } from '@/lib/auth/actions';
 import {
-  brandMarkStyle,
-  brandTextStyle,
   breadcrumbSepStyle,
   dropdownItemStyle,
   dropdownStyle,
@@ -25,8 +23,8 @@ export default function TopBar({ orgName, email }: { orgName: string | null; ema
 
   return (
     <header style={topBarStyle}>
-      <span style={brandMarkStyle}>N</span>
-      <span style={brandTextStyle}>Nia Core</span>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/logo.svg" alt="Nia Core" style={{ height: 20, width: 'auto' }} />
       <span style={breadcrumbSepStyle}>/</span>
 
       <div style={{ position: 'relative' }}>

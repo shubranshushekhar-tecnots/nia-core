@@ -1,10 +1,6 @@
 import { test, expect } from '@playwright/test';
-
-// Mirrors auth.spec.ts's stance: no service-role key is available to apps/web
-// by design, so a real, email-confirmed session can't be minted ad hoc by this
-// suite. These tests cover everything reachable without one — the /app* route
-// group's auth boundary — and document what's intentionally out of scope
-// (see bottom of file).
+import { personas } from './fixtures/personas';
+import { greetingForHour } from '../src/lib/time';
 
 test.describe('/app route group redirect boundary', () => {
   for (const path of ['/app', '/app/connections', '/app/billing']) {
@@ -16,24 +12,30 @@ test.describe('/app route group redirect boundary', () => {
   }
 });
 
+test.describe('authenticated /app dashboard', () => {
+  test.use({ storageState: personas.demo.storageStatePath });
+
+  test('login -> /app shows the hour-based greeting', async ({ page }) => {
+    await page.goto('/app');
+    const greeting = greetingForHour(new Date().getHours());
+    await expect(page.getByText(new RegExp(`^${greeting}`))).toBeVisible();
+  });
+
+  test('sidebar "New workflow" -> "New project" creates a project visible in the tree', async ({ page }) => {
+    await page.goto('/app');
+
+    const projectName = `E2E Project ${Date.now()}`;
+    await page.getByRole('button', { name: 'New workflow' }).first().click();
+    await page.getByRole('button', { name: 'New project', exact: true }).click();
+
+    await page.locator('#project-name').fill(projectName);
+    await page.getByRole('button', { name: 'Create project' }).click();
+
+    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
+  });
+});
+
 // Not covered here, and why:
-//
-// - "login -> /app greeting" and "sidebar create-project flow": both require
-//   a real, email-confirmed Supabase auth session. Creating one from this
-//   suite would mean inserting a persistent test user directly into the
-//   shared remote auth.users table (the same technique rls_probes.sql uses,
-//   but that script runs inside begin/rollback so nothing persists — a
-//   Playwright storageState fixture needs the opposite, a session that
-//   outlives the setup step). Doing that against the live project's
-//   database is a call for whoever owns that database, not something to do
-//   silently from a test file. Once a seeded, email-confirmed test account
-//   is provisioned out-of-band (same precondition auth.spec.ts already
-//   documents), both flows are straightforward Playwright additions:
-//     * greeting: `expect(page.getByText(greetingForHour(new Date().getHours()))).toBeVisible()`
-//       against HomeContent's `greetingStyle` span.
-//     * create-project: open the sidebar's "New workflow" split button ->
-//       "New project" -> fill CreateProjectDialog's name field -> submit ->
-//       assert the new project row appears under the sidebar's Projects tree.
 //
 // - "theme toggle persistence": AppShell.tsx (the /app shell) is light-only
 //   by design (`data-om-theme="light"`, no toggle control) — there is no

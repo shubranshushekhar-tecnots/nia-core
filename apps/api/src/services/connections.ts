@@ -1,9 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getConnectorManifest, type ConfigField, type CredentialRef } from "@nia/schemas";
+import { getConnectorManifest, type ConfigField, type CredentialRef, type IntrospectResponse } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
-import { dispatchInvalidate, dispatchTest } from "../lib/connectorDispatch.js";
+import { dispatchInvalidate, dispatchIntrospect, dispatchTest } from "../lib/connectorDispatch.js";
 import { logExecutionAudit } from "../lib/executionAudit.js";
+import { getCachedSchema, setCachedSchema } from "../lib/schemaCache.js";
 
 export type Connection = {
   id: string;
@@ -290,4 +291,49 @@ export async function testConnection(
     .eq("id", id);
 
   return result;
+}
+
+/**
+ * Serves the connector's introspected schema (entities/fields), used by the
+ * canvas transform editor's field pickers (drop_fields multi-select,
+ * computed_field/filter field references). RLS-scoped like every other
+ * connections.ts function; cached (schemaCache.ts) so opening the editor
+ * repeatedly doesn't re-hit the connector service on every drawer open.
+ */
+export async function getConnectionSchema(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  id: string,
+): Promise<IntrospectResponse> {
+  let query = supabase
+    .from("connections")
+    .select("id, connector_id, config, vault_secret_ref, cred_version")
+    .eq("id", id);
+  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
+  const { data } = await query.maybeSingle<{
+    id: string;
+    connector_id: string;
+    config: Record<string, unknown>;
+    vault_secret_ref: string;
+    cred_version: number;
+  }>();
+  if (!data) throw new AppError(404, "NOT_FOUND", "Connection not found.");
+
+  const manifest = getConnectorManifest(data.connector_id);
+  if (!manifest) throw new AppError(500, "UNKNOWN_CONNECTOR", `No manifest for connector "${data.connector_id}".`);
+
+  const credential: CredentialRef = {
+    connectionId: data.id,
+    credVersion: data.cred_version,
+    vaultRef: data.vault_secret_ref,
+  };
+
+  const cached = getCachedSchema(credential);
+  if (cached) return cached;
+
+  const result = await dispatchIntrospect(manifest, credential, data.config);
+  if (!result.ok) throw new AppError(502, "INTROSPECT_FAILED", result.error);
+
+  setCachedSchema(credential, result.value);
+  return result.value;
 }

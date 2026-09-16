@@ -30,9 +30,14 @@ export default function LandingPage() {
     const onScroll = () => {
       const nav = navRef.current;
       if (!nav) return;
-      const on = window.scrollY > 8;
-      nav.style.borderBottomColor = on ? 'var(--line)' : 'transparent';
-      nav.style.boxShadow = on ? '0 10px 30px -24px rgba(15,23,42,.5)' : 'none';
+
+      const heroEl = heroRef.current;
+      const heroHeight = heroEl?.getBoundingClientRect().height || 0;
+      const pastHero = window.scrollY > Math.max(heroHeight - 74, 0) * 0.7;
+      nav.style.setProperty('--nav-bg', pastHero ? 'rgba(248,250,252,.82)' : 'transparent');
+      nav.style.setProperty('--nav-blur', pastHero ? 'blur(12px)' : 'none');
+      nav.style.borderBottomColor = pastHero ? 'var(--line)' : 'transparent';
+      nav.style.boxShadow = pastHero ? '0 10px 30px -24px rgba(15,23,42,.5)' : 'none';
       if (reduce) return;
 
       const hero = heroRef.current;

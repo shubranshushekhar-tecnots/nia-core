@@ -14,14 +14,15 @@ async function gotoWorkflow(page: Page, projectName: string, workflowName: strin
 }
 
 /**
- * PaletteDock items are draggable divs using the HTML5 DnD API
+ * NodesRail items are draggable divs using the HTML5 DnD API
  * (dataTransfer.setData), which Playwright's mouse-based dragTo() can't
  * drive reliably — this is the standard Playwright recipe for HTML5 DnD:
  * a real DataTransfer created in-page, dispatched through the same
- * dragstart/dragover/drop sequence the browser would fire natively.
+ * dragstart/dragover/drop sequence the browser would fire natively. The
+ * rail (NodesRail.tsx) is persistent/always-visible now (Task 1 replaced
+ * the old PaletteDock modal), so there's no "Add node" button to open first.
  */
 async function dragPaletteItemOnto(page: Page, label: string, point: { x: number; y: number }) {
-  await page.getByRole('button', { name: 'Add node' }).click();
   const item = page.getByText(label, { exact: true });
   const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
   await item.dispatchEvent('dragstart', { dataTransfer });
@@ -91,8 +92,112 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     await page.reload();
     await expect(page.locator('.react-flow__node')).toHaveCount(3);
     await expect(page.locator('.react-flow__edge')).toHaveCount(2);
-    await expect(page.getByText('Dev sandbox (mysql)')).toBeVisible();
-    await expect(page.getByText('Dev sandbox (mongodb)')).toBeVisible();
+    // Scoped to canvas nodes, not the page as a whole — the persistent
+    // NodesRail (Task 1) also renders a "Dev sandbox (mysql/mongodb)" entry,
+    // which would otherwise make these a strict-mode-violating duplicate match.
+    await expect(page.locator('.react-flow__node').getByText('Dev sandbox (mysql)')).toBeVisible();
+    await expect(page.locator('.react-flow__node').getByText('Dev sandbox (mongodb)')).toBeVisible();
+  });
+
+  test('selecting a source node opens the drawer with an enabled read verb (no connector declares a write op yet, so "Locked" can\'t be exercised here)', async ({ page }) => {
+    // 1440px viewport for this test only (via setViewportSize, not a
+    // describe-level test.use, so it doesn't shift drop coordinates in the
+    // other tests in this .serial block) — this is also the shot used as the
+    // visual-diff baseline for the NodesRail + NodeDrawer pairing (Task 4).
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // Dropped clear of the 252px-wide NodesRail (Task 1) — a node dropped
+    // under the rail is still there, but a plain .click() on it (unlike the
+    // mouse-based drags the other tests use) fails Playwright's actionability
+    // check because the rail div intercepts the pointer event.
+    await dragPaletteItemOnto(page, 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await page.locator('.react-flow__node').first().click();
+    const drawer = page.getByTestId('node-drawer');
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByText('Verb')).toBeVisible();
+    const readRadio = drawer.getByRole('radio', { name: 'read' });
+    await expect(readRadio).toBeChecked();
+    await expect(readRadio).toBeEnabled();
+    // maxDiffPixels tolerates a few pixels of sub-pixel jitter from the
+    // canvas's SVG node/edge rendering (react-flow) between runs — not a
+    // real regression signal at this magnitude.
+    await expect(page).toHaveScreenshot('canvas-rail-drawer-1440.png', { maxDiffPixels: 50 });
+  });
+
+  test('transform drawer: build a filter step, autosave, reload keeps it, and shows the pushdown summary', async ({ page }) => {
+    await dragPaletteItemOnto(page, 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragPaletteItemOnto(page, 'Transform', { x: 800, y: 310 });
+    await connectNodes(page, 0, 1);
+
+    await page.locator('.react-flow__node').nth(1).click();
+    const drawer = page.getByTestId('node-drawer');
+    await drawer.getByRole('button', { name: '+ Filter' }).click();
+    // A new filter step starts with zero conditions (no <select> rendered
+    // yet) — "+ Condition" adds the first row.
+    await drawer.getByRole('button', { name: '+ Condition' }).click();
+    // Field suggestions come from the upstream connection's schema (GET
+    // /connections/:id/schema), fetched async — FieldSelect renders a plain
+    // <input placeholder="field name"> until that resolves, so .nth(0)
+    // isn't reliably the field <select> until this input is gone.
+    await expect(drawer.getByPlaceholder('field name')).toHaveCount(0, { timeout: 15_000 });
+    const fieldSelect = drawer.locator('select').nth(0);
+    await fieldSelect.selectOption('salary');
+    const operatorSelect = drawer.locator('select').nth(1);
+    await operatorSelect.selectOption('gt');
+    // Autosave is debounced 800ms off a single shared timer
+    // (FlowCanvas.tsx's AUTOSAVE_DELAY_MS) — the earlier "+ Filter"/
+    // "+ Condition" clicks may already have fired their own intermediate
+    // (incomplete) save while we were waiting for the field-select fetch
+    // above, so a bare `getByText('Saved')` check right after `fill()` can
+    // pass on a stale flash from that earlier save instead of the one
+    // carrying this filled-in condition. Wait for the actual graph PUT
+    // triggered by this edit before trusting "Saved" / reloading.
+    const saved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
+    await drawer.getByPlaceholder('value').fill('50000');
+
+    await expect(drawer.getByText(/Pushed down: \d+ · In-stream: \d+/)).toBeVisible();
+    await saved;
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 2_000 });
+
+    await page.reload();
+    await page.locator('.react-flow__node').nth(1).click();
+    const reopened = page.getByTestId('node-drawer');
+    // Same field-select async-schema race as above — wait for the plain
+    // input fallback to be gone before trusting select ordering/values.
+    await expect(reopened.getByPlaceholder('field name')).toHaveCount(0, { timeout: 15_000 });
+    await expect(reopened.locator('select').nth(0)).toHaveValue('salary');
+    await expect(reopened.locator('select').nth(1)).toHaveValue('gt');
+    await expect(reopened.getByPlaceholder('value')).toHaveValue('50000');
+  });
+
+  test('transform drawer: invalid computed-field expression is never autosaved', async ({ page }) => {
+    await dragPaletteItemOnto(page, 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragPaletteItemOnto(page, 'Transform', { x: 800, y: 310 });
+    await connectNodes(page, 0, 1);
+
+    await page.locator('.react-flow__node').nth(1).click();
+    const drawer = page.getByTestId('node-drawer');
+    // See the filter-step test above for why a bare "Saved" check is
+    // unreliable here — connectNodes's own autosave may still be flashing
+    // "Saved" when this click fires; wait for the PUT this click actually
+    // triggers.
+    const saved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
+    await drawer.getByRole('button', { name: '+ Computed field' }).click();
+    // Adding the step itself autosaves (it starts with a valid, empty literal expression).
+    await saved;
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 2_000 });
+
+    await drawer.getByTestId('computed-field-expr').fill('concat(');
+    await expect(drawer.getByTestId('computed-field-expr')).toHaveValue('concat(');
+
+    await page.reload();
+    await page.locator('.react-flow__node').nth(1).click();
+    const reopened = page.getByTestId('node-drawer');
+    // The invalid keystrokes never reached onChange (parseExpression rejected
+    // them, see TransformEditor.tsx's handleExpressionChange), so the
+    // persisted step still has its original { kind: 'literal', value: '' }
+    // expression, not "concat(" — stringifyExpression renders that as the
+    // quoted empty-string literal `""`, not an empty input.
+    await expect(reopened.getByTestId('computed-field-expr')).toHaveValue('""');
   });
 
   test('two tabs on the same workflow: second save gets a 409 conflict, reload recovers', async ({ browser }) => {
@@ -161,8 +266,16 @@ test.describe('canvas: personal workspace', () => {
 
   test('canvasC (no org) can open their personal workflow', async ({ page }) => {
     await gotoWorkflow(page, 'Canvas E2E Personal Project', 'Canvas E2E Personal Workflow');
-    await expect(page.getByRole('button', { name: 'Add node' })).toBeVisible();
+    const rail = page.getByTestId('nodes-rail');
+    await expect(rail).toBeVisible();
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
+
+    // Triggers is listed first but isn't backed by any manifest yet
+    // (NodesRail.tsx) — locked, non-draggable, "Soon" badge, not a real node.
+    const trigger = rail.getByText('Trigger', { exact: true });
+    await expect(trigger).toBeVisible();
+    await expect(rail.getByText('Soon', { exact: true })).toBeVisible();
+    await expect(trigger.locator('..')).not.toHaveAttribute('draggable', 'true');
   });
 });
 

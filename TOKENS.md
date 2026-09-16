@@ -250,3 +250,87 @@ successful insert. Also fixed a cosmetic bug in `CreateWorkflowDialog.tsx` where
 empty-state em dash was a literal `\u2014` string instead of an escape (`{'\u2014'}`).
 No route currently exists for opening a project (`/app/projects/[id]`) or an ETL canvas
 inside one — that's unbuilt Step 3 scope, not a regression.
+
+## Phase 5 Session 1 close-out — visual-diff known deltas
+
+Recorded once here (rather than only in chat) so they don't need
+re-litigating each session. Live app = `/app/workflows/:id` post-chrome-wrap;
+design ref = `designs/Nia Core App.html`'s builder view.
+
+- **Dark mode / `data-om-theme` provenance (resolved, not new debt).** This
+  *is* a real, traceable decision — not undocumented. It was raised as an
+  open question right here at lines 87–90 ("Needs your input: … do you
+  still want this 'Midnight Navy' theme built as a real dark-mode toggle,
+  or should I leave it out of scope…") and resolved at lines 212–214
+  ("Theme toggle removed … per 'skip it for now'"), which directly quotes
+  your answer. `AppShell.tsx`'s own comment (`// App shell is light-only…`)
+  reflects that resolution and has been present since the repo's first
+  commit (`b5e4f66`) — i.e. the decision predates git history for this
+  repo; this file is the only artifact that records the Q&A itself (no
+  separate commit message or config documents it). Conclusion: keep
+  treating `/app` as light-only; this is settled scope, not a gap.
+- No persistent left "Nodes" library panel yet — canvas still uses the
+  modal Add-node `PaletteDock`. Pulled forward into Session 2 Task 1 (lands
+  with the node-properties-drawer work since both touch canvas layout).
+- Node cards lack the design's icon avatars / DATA-ACTION badges / pass-
+  status rows — Session 2+ scope, not yet scheduled.
+- No zoom controls, no canvas-level Execute/+ buttons, no bottom status
+  bar, no floating "Ask or command" bar — none of these were requested for
+  Session 1; the "Ask or command" bar is Session 4 (chat-on-canvas) scope.
+- Design mock's Run/Run checks buttons render enabled (it's a static mock);
+  ours correctly render disabled with a "Checks arrive in Session 3"
+  tooltip.
+- **Chore (not scheduled this session):** `apps/web/e2e/visual.spec.ts`'s
+  `/login` and `/signup` snapshots are pre-existing, unrelated ~1% pixel
+  diffs (confirmed via `git log`/`git status` on that spec + its baseline
+  snapshots — neither touched by Session 1's canvas work). File a ticket to
+  regenerate those two baselines; do not fold into canvas work.
+
+## Phase 5 Session 2 close-out — Task 4 (node drawer / transform editor) verification
+
+Unrelated chat-personal-workspace fix (see `docs/decisions.md`'s test-run
+standing rule) landed first and was independently verified end-to-end
+(schemas/api/worker/web typecheck+test, RLS probes) before this Task 4
+work resumed, per that plan's own "resumes after this fix lands" note.
+
+- **Dark mode:** no change since Session 1 — still settled, light-only
+  scope; not revisited this session.
+- **`NodeConfigPanel.tsx` / `PaletteDock.tsx`:** both deleted. Superseded
+  by `NodeDrawer.tsx` (per-node config panel) and the persistent
+  `NodesRail.tsx` (replaces the old modal Add-node dock flagged as
+  Session-2-pending in the note above) — confirmed dead via `git log`
+  (neither file referenced by any remaining import) before removal, not a
+  regression.
+- **All 3 shipped connector manifests (mysql/mongodb/supabase) declare
+  `operations: ["read"]` only** — confirmed via grep across
+  `packages/schemas/src/manifest.ts`/`connectors/*.ts`. The drawer's
+  "Locked" write-verb UI has no real fixture to exercise it against; this
+  is a genuine coverage gap (not skipped work) until a write-capable
+  connector ships.
+- **Two real application bugs found and fixed** (not test-authoring
+  artifacts): `FilterCondition.field` and `ComputedFieldStep.name` in
+  `packages/schemas/src/nodeConfig.ts` were `z.string().min(1)`. Since the
+  drawer autosaves on every keystroke, a freshly-added filter condition or
+  computed-field step (whose default value is `''` before the user fills
+  it in, or before the upstream schema fetch resolves) failed validation
+  immediately and silently flipped the node into `unrecognized: true`
+  read-only mode — a real, confusing UX bug for any user, not just this
+  test suite. Relaxed both to `z.string()`; confirmed via grep neither
+  field's `.min(1)` was asserted on in `nodeConfig.test.ts`, and this
+  schema isn't wired into any execution path yet (Session 2 is
+  editor-only), so there's no runtime-safety regression from relaxing it.
+- **Ground-truth/test-race discovery:** the 800ms-debounced single-timer
+  autosave (`FlowCanvas.tsx`'s `AUTOSAVE_DELAY_MS`) means a bare
+  `getByText('Saved')` check after a rapid sequence of edits can pass on a
+  stale flash from an *earlier* save, not the one carrying the latest
+  edit — caught via a reload-and-reread assertion that came back with the
+  wrong persisted value. Fixed in the two affected tests by waiting on the
+  actual graph `PUT` response (`page.waitForResponse`) instead of the
+  transient "Saved" text.
+- `canvas.spec.ts`: 8/8 passing, confirmed stable across two consecutive
+  full runs (`--workers=1`, no flakes).
+- New 1440px visual-diff baseline captured:
+  `e2e/canvas.spec.ts-snapshots/canvas-rail-drawer-1440-chromium-darwin.png`
+  (rail + open node drawer, read-verb state), with a `maxDiffPixels: 50`
+  tolerance for the canvas/SVG edge-rendering's normal sub-pixel jitter
+  (33px / 0.01% observed between identical back-to-back runs).

@@ -27,9 +27,9 @@ export default function Footer({ footRef }: { footRef: RefObject<HTMLElement> })
       }}
     >
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 9, background: 'linear-gradient(145deg,#6366F1,#4338CA)', color: '#FFFFFF', fontSize: 13, fontWeight: 700 }}>N</span>
-          <span style={{ fontSize: 15, fontWeight: 700 }}>Nia Core</span>
+        <span style={{ display: 'flex', alignItems: 'center' }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="Nia Core" style={{ height: 22, width: 'auto' }} />
         </span>
         <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>© 2026 Nia Core. Rows moved responsibly.</span>
       </div>

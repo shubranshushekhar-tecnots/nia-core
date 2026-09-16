@@ -1,11 +1,12 @@
-import type { ConnectorManifest, ConnectorConfig, CredentialRef } from "@nia/schemas";
-import { TestResponse } from "@nia/schemas";
+import type { ConnectorManifest, ConnectorConfig, CredentialRef, IntrospectResponse } from "@nia/schemas";
+import { TestResponse, IntrospectResponse as IntrospectResponseSchema } from "@nia/schemas";
 
 /**
  * Thin HTTP client for the uniform connector-service contract
- * (packages/schemas/src/contract.ts). Only /test is wired for Step 4 — no
- * /execute route exists yet; that dispatch belongs to the workflow runner
- * (see the connections service's comment on why).
+ * (packages/schemas/src/contract.ts). /test and /introspect are wired here
+ * (Step 4 + Session 2's schema endpoint) — no /execute route exists yet;
+ * that dispatch belongs to the workflow runner (see the connections
+ * service's comment on why).
  *
  * Credentials never pass through here: only a CredentialRef (connectionId +
  * credVersion + vaultRef) crosses this boundary. The service resolves the
@@ -36,6 +37,22 @@ export async function dispatchTest(
     return { ok: false, error: `connector service responded ${res.status}` };
   }
   return TestResponse.parse(await res.json());
+}
+
+export async function dispatchIntrospect(
+  manifest: ConnectorManifest,
+  credential: CredentialRef,
+  config: ConnectorConfig,
+): Promise<{ ok: true; value: IntrospectResponse } | { ok: false; error: string }> {
+  const res = await fetch(`${baseUrl(manifest)}/introspect`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ credential, config }),
+  });
+  if (!res.ok) {
+    return { ok: false, error: `connector service responded ${res.status}` };
+  }
+  return { ok: true, value: IntrospectResponseSchema.parse(await res.json()) };
 }
 
 /**

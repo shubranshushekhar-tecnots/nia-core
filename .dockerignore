@@ -1,0 +1,17 @@
+# Every COPY in services/*/Dockerfile copies whole source directories
+# (packages/schemas, services/<name>) into the build context. Without this,
+# each host workspace package's own node_modules/ — full of symlinks
+# relative to the HOST's node_modules/.pnpm store — gets copied on top of
+# whatever `pnpm install` just resolved inside the image, clobbering it
+# with dangling symlinks pointing at versions that don't exist in the
+# image. Never let node_modules cross the build-context boundary; let
+# each Dockerfile's own `pnpm install` be the only source of truth.
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+.turbo
+**/.turbo
+.git

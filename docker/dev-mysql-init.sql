@@ -13,6 +13,19 @@ CREATE TABLE IF NOT EXISTS sandbox_items (
 
 INSERT IGNORE INTO sandbox_items (id, name) VALUES (1, 'seed-1'), (2, 'seed-2');
 
+-- Gives the chat pipeline's live smoke test (apps/worker/scripts/chat-smoke.ts)
+-- something concrete to query and cite ("who has the highest salary?").
+CREATE TABLE IF NOT EXISTS employees (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  salary INT NOT NULL
+);
+
+INSERT IGNORE INTO employees (id, name, salary) VALUES
+  (1, 'Ada Lovelace', 145000),
+  (2, 'Grace Hopper', 162000),
+  (3, 'Alan Turing', 158000);
+
 REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'nia_ro'@'%';
 GRANT SELECT ON sandbox.* TO 'nia_ro'@'%';
 FLUSH PRIVILEGES;

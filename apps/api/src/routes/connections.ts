@@ -14,6 +14,7 @@ import {
   updateConnection,
   deleteConnection,
   testConnection,
+  getConnectionSchema,
 } from "../services/connections.js";
 
 export const connectionsRouter: ExpressRouter = Router();
@@ -93,6 +94,16 @@ connectionsRouter.post(
   asyncHandler(async (req, res) => {
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await testConnection(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId);
+    res.json(data);
+  }),
+);
+
+connectionsRouter.get(
+  "/:id/schema",
+  validate({ params: connectionParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getConnectionSchema(req.supabase, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
   }),
 );

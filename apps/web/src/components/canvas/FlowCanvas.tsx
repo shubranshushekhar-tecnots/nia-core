@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -12,6 +12,7 @@ import {
   useReactFlow,
   type Connection as RFConnection,
   type OnConnect,
+  type NodeMouseHandler,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -26,10 +27,12 @@ import {
   type CanvasEdge,
   type MappingContext,
 } from '@/lib/canvas/mapping';
+import { findUpstreamSource } from '@/lib/canvas/upstream';
 import { getWorkflowGraph, putWorkflowGraph, GraphApiError, type WorkflowGraphResult } from '@/lib/api/graphClient';
 import { useCanvasStore } from '@/lib/canvas/store';
 import GraphFlowNode from './GraphFlowNode';
-import PaletteDock, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './PaletteDock';
+import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRail';
+import NodeDrawer from './NodeDrawer';
 import { brandTextStyle, breadcrumbSepStyle } from '@/components/app/styles';
 
 const nodeTypes = { source: GraphFlowNode, transform: GraphFlowNode, destination: GraphFlowNode };
@@ -69,13 +72,14 @@ function CanvasInner({
   const initial = useMemo(() => graphToFlow(data!.graph, ctx), [data, ctx]);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdge>(initial.edges);
-  const [paletteOpen, setPaletteOpen] = useState(false);
   const parkedLegacyTriggers = useRef(data!.graph.parkedLegacyTriggers);
 
   const saveState = useCanvasStore((s) => s.saveState);
   const setSaveState = useCanvasStore((s) => s.setSaveState);
   const version = useCanvasStore((s) => s.version);
   const setVersion = useCanvasStore((s) => s.setVersion);
+  const selectedNodeId = useCanvasStore((s) => s.selectedNodeId);
+  const setSelectedNodeId = useCanvasStore((s) => s.setSelectedNodeId);
   const versionInitialized = useRef(false);
   if (!versionInitialized.current) {
     setVersion(data!.version);
@@ -164,10 +168,44 @@ function CanvasInner({
         scheduleSave(next, edges);
         return next;
       });
-      setPaletteOpen(false);
     },
     [screenToFlowPosition, ctx, setNodes, edges, scheduleSave],
   );
+
+  const onNodeClick: NodeMouseHandler = useCallback(
+    (_, node) => setSelectedNodeId(node.id),
+    [setSelectedNodeId],
+  );
+  const onPaneClick = useCallback(() => setSelectedNodeId(null), [setSelectedNodeId]);
+
+  const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : undefined;
+  const upstreamSource = selectedNode ? findUpstreamSource(selectedNode.id, nodes, edges) : undefined;
+
+  const updateSelectedNodeConfig = useCallback(
+    (config: Record<string, unknown>) => {
+      if (!selectedNodeId) return;
+      setNodes((current) => {
+        const next = current.map((n) => (n.id === selectedNodeId ? { ...n, data: { ...n.data, config } } : n));
+        scheduleSave(next, edges);
+        return next;
+      });
+    },
+    [selectedNodeId, setNodes, edges, scheduleSave],
+  );
+
+  const deleteSelectedNode = useCallback(() => {
+    if (!selectedNodeId) return;
+    setSelectedNodeId(null);
+    setNodes((current) => {
+      const next = current.filter((n) => n.id !== selectedNodeId);
+      setEdges((currentEdges) => {
+        const nextEdges = currentEdges.filter((e) => e.source !== selectedNodeId && e.target !== selectedNodeId);
+        scheduleSave(next, nextEdges);
+        return nextEdges;
+      });
+      return next;
+    });
+  }, [selectedNodeId, setSelectedNodeId, setNodes, setEdges, scheduleSave]);
 
   const reloadAfterConflict = useCallback(async () => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -245,22 +283,6 @@ function CanvasInner({
           <button type="button" disabled title="Checks arrive in Session 3" style={disabledRunBtnStyle}>
             Run
           </button>
-          <button
-            type="button"
-            onClick={() => setPaletteOpen(true)}
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: '#fff',
-              background: 'var(--acc)',
-              border: 'none',
-              borderRadius: 6,
-              padding: '7px 14px',
-              cursor: 'pointer',
-            }}
-          >
-            Add node
-          </button>
         </div>
       </header>
 
@@ -277,13 +299,26 @@ function CanvasInner({
           onNodesChange={handleNodesChange}
           onEdgesChange={handleEdgesChange}
           onConnect={onConnect}
+          onNodeClick={onNodeClick}
+          onPaneClick={onPaneClick}
           fitView
         >
           <Background variant={BackgroundVariant.Dots} gap={20} color="var(--dot)" />
         </ReactFlow>
-      </div>
 
-      {paletteOpen && <PaletteDock connections={connections} onClose={() => setPaletteOpen(false)} />}
+        <NodesRail connections={connections} />
+
+        {selectedNode && (
+          <NodeDrawer
+            key={selectedNode.id}
+            node={selectedNode}
+            upstreamSource={upstreamSource}
+            onConfigChange={updateSelectedNodeConfig}
+            onDelete={deleteSelectedNode}
+            onClose={onPaneClick}
+          />
+        )}
+      </div>
     </div>
   );
 }

@@ -5,10 +5,10 @@ RUN corepack enable
 WORKDIR /repo
 
 FROM base AS build
-COPY pnpm-workspace.yaml package.json ./
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/schemas/package.json packages/schemas/
 COPY services/connector-supabase/package.json services/connector-supabase/
-RUN pnpm install --frozen-lockfile=false
+RUN pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
 COPY packages/schemas packages/schemas
 COPY services/connector-supabase services/connector-supabase

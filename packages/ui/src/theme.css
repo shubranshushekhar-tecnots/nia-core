@@ -76,6 +76,11 @@
   --c-condition: #7C3AED;
   --c-data: #0891B2;
   --c-ai: #6366F1;
+  /* Marketing accent, not a workflow-node type color: pink leg of the
+     cyan/violet/pink hue story already used by Features.tsx's card auras
+     (#A5F3FC/#DDD6FE/#FBCFE8) — reused by Hero's headline to tie the two
+     sections together. */
+  --c-pink: #DB2777;
 
   /* Nia Core App.html — login/signup screen only (`T` override string,
      matches Landing's palette exactly; verified no collision) */
@@ -185,6 +190,19 @@
   --acc: var(--live-fill);
   --canvas: #F8FAFC;
   --dot: #CBD5E1;
+
+  /* Chat surface (Home/App.html's orphaned `// ---------- chat ----------`
+     view-model — never actually rendered by the design's own JSX, but its
+     exact style strings reference var(--acc-bd)/var(--acc-solid), which
+     don't exist elsewhere in this file. Added here rather than guessed:
+     --acc-bd follows the same rgba-border-tint pattern as --bad-bd/--warn-bd
+     above (opacity .28, same family as those two); --acc-solid is just an
+     alias for --acc (--live-fill is already a fully opaque fill, not a
+     tint, so no separate value is needed — the two names in the source
+     string were used for different roles: --acc for citation-chip text/
+     border, --acc-solid for the scope-toggle switch's "on" fill). */
+  --acc-bd: rgba(79, 70, 229, .28);
+  --acc-solid: var(--acc);
 }
 
 /* ------------------------------------------------------------

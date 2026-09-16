@@ -34,6 +34,40 @@ pnpm --filter @nia/schemas build       # build shared package once
 pnpm dev                               # turbo runs all dev tasks
 ```
 
+## Observability (Langfuse)
+
+Self-hosted Langfuse (v2 single-container server + its own Postgres) traces
+`apps/worker`'s chat pipeline — one trace per chat job, one span per
+LangGraph node, one generation per LLM call. See
+`apps/worker/src/lib/observability/langfuse.ts` for the tracing model.
+
+**One-time setup:**
+```bash
+docker compose up -d langfuse-server langfuse-db
+# wait for it to report healthy, then open http://localhost:3005
+```
+That's it — `docker-compose.yml`'s `LANGFUSE_INIT_*` vars auto-provision a
+dev org, project, user, and the project's public/secret SDK keypair on
+first boot (idempotent; skipped on subsequent `up`s). The provisioned
+keypair is already the value committed in `.env.example` /
+`apps/worker/.env.example` (`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`),
+so `cp .env.example .env` (both root and `apps/worker/`) is all that's
+needed to point the worker at it — nothing to copy out of the UI for local
+dev. Sign in to the UI at `http://localhost:3005` with
+`LANGFUSE_INIT_USER_EMAIL` / `LANGFUSE_INIT_USER_PASSWORD` (see
+`docker-compose.yml`) to browse traces.
+
+For any non-local deployment: regenerate `NEXTAUTH_SECRET`/`SALT`/
+`ENCRYPTION_KEY` and every `LANGFUSE_INIT_*` value in `docker-compose.yml`
+(or run the hosted/managed Langfuse and skip this compose block entirely),
+and set the real keypair via `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` —
+never commit real values.
+
+Tracing degrades to a no-op (worker runs fine, falls back to
+`console.warn` for the one structured event it emits) when
+`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are unset — Langfuse is
+optional infrastructure, not a hard dependency.
+
 ## Rules the code already encodes
 
 - **Secrets never cross worker → service.** Services resolve Vault refs themselves

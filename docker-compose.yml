@@ -63,7 +63,7 @@ services:
       MYSQL_USER: nia_ro          # practice the read-only-role discipline from day one
       MYSQL_PASSWORD: nia_ro_pw
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       # Narrows nia_ro from the image's default ALL PRIVILEGES down to
       # actual SELECT-only, and seeds sandbox_items — see the script for why.
@@ -71,8 +71,19 @@ services:
 
   dev-mongo:
     image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: devroot
     ports:
-      - "27017:27017"
+      # 27018, not the default 27017 — this dev machine already has a
+      # native mongod bound to localhost:27017 (same class of conflict as
+      # dev-mysql/dev-postgres below); host clients must target 27018.
+      - "27018:27017"
+    volumes:
+      # Provisions the nia_ro read-only role (the plain mongo:7 image has no
+      # MYSQL_USER-equivalent env var, and ships with auth disabled unless a
+      # root user is set) and seeds sandbox_items — see the script for why.
+      - ./docker/dev-mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
 
   dev-postgres:
     image: postgres:16-alpine
@@ -80,12 +91,78 @@ services:
       POSTGRES_PASSWORD: devroot
       POSTGRES_DB: sandbox
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       # Provisions the nia_ro read-only role (postgres:16-alpine has no
       # env-var equivalent of mysql's MYSQL_USER for this) and seeds
       # sandbox_items — see the script for details.
       - ./docker/dev-postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  # --- Observability: self-hosted Langfuse (v2 single-container server, not
+  # the newer ClickHouse/MinIO-backed v3 stack — overkill for local dev).
+  # apps/worker (host process, not containerized in dev) talks to it via
+  # localhost:3005; connector services never see it.
+  #
+  # LANGFUSE_INIT_* headless-init vars auto-provision one org/project/user
+  # and — critically — the project's public/secret SDK keypair on first
+  # boot (idempotent: skipped if that org id already exists), so there's no
+  # manual "click Create Project" step. These fixed values ARE the ones
+  # documented in README's one-time setup step and root .env.example's
+  # LANGFUSE_PUBLIC_KEY/SECRET_KEY comments — copy them in verbatim for
+  # local dev. Distinct from NEXTAUTH_SECRET/SALT/ENCRYPTION_KEY below,
+  # which are this container's own server secrets (dev-only fixed values,
+  # same convention as dev-mysql/dev-postgres's hardcoded "devroot"
+  # password) — all of these, init keys included, must be regenerated for
+  # any non-local deployment.
+  langfuse-server:
+    image: langfuse/langfuse:2
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    ports:
+      - "3005:3000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@langfuse-db:5432/postgres
+      NEXTAUTH_SECRET: "2ed015db5ca96876d12562269c91ece8"
+      SALT: "92b93efcba3002def72f06350519895b"
+      ENCRYPTION_KEY: "d585144571a1e9f422c576fd38fa034cd3a57fc078c7e924d35470c194486430"
+      NEXTAUTH_URL: http://localhost:3005
+      TELEMETRY_ENABLED: "false"
+      # Next.js standalone's server.js binds to $HOSTNAME if set, and Docker
+      # auto-sets HOSTNAME to the container id — without this override the
+      # server only listens on the container's internal bridge IP, and the
+      # 3005:3000 port publish above silently can't reach it.
+      HOSTNAME: "0.0.0.0"
+      LANGFUSE_INIT_ORG_ID: nia-dev-org
+      LANGFUSE_INIT_ORG_NAME: Nia (dev)
+      LANGFUSE_INIT_PROJECT_ID: nia-dev-project
+      LANGFUSE_INIT_PROJECT_NAME: nia-core
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-9a67c1df-8846-47fc-a4ec-a7382a36f6c4
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-fbd4b45f-f0fb-47e6-80f7-56a8327e1c0f
+      LANGFUSE_INIT_USER_EMAIL: dev@nia.local
+      LANGFUSE_INIT_USER_NAME: Nia Dev
+      LANGFUSE_INIT_USER_PASSWORD: nia-dev-password
+    networks:
+      - nia-internal
+      - default
+
+  langfuse-db:
+    image: postgres:17-alpine
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - langfuse-data:/var/lib/postgresql/data
+    networks:
+      - nia-internal
 
 networks:
   nia-internal:
@@ -93,3 +170,4 @@ networks:
 
 volumes:
   redis-data:
+  langfuse-data:
