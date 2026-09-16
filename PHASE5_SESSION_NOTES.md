@@ -221,3 +221,56 @@ delivered in chat; summary of the two real gaps found and fixed:
   concern, and the "no flakes" line above should be read as superseded by
   this note. If it recurs, re-open and check for the cold-compile pattern
   specifically (first canvas.spec.ts test after a dev-server restart).
+
+## Session 2 close-out — final items (this session)
+
+- **Palette purity (NodesRail moat invariant) — real Playwright coverage
+  added.** Three new tests in `canvas.spec.ts`, each its own
+  `test.describe` (a persona/connection-shape apart, so each needs its own
+  `test.use`): (1) Triggers section renders locked — "Soon" badge present,
+  no `onDragStart` wired to it at all, and a real HTML5-DnD drag attempt
+  onto the canvas lands zero nodes; (2) `canvasA`'s rail lists exactly its
+  2 real connections (mysql/mongodb) + the generic Transform node —
+  `supabase` (a registered, `etl_source`-capable connector `canvasA` has
+  no connection for) is absent, and `Destinations` never renders as a
+  section (no connector in the registry declares `etl_sink` yet); (3) a
+  fresh `canvasB` workspace with zero seeded connections — project and
+  workflow created live via the real UI, not seed data — sees exactly one
+  draggable entry in the whole rail (the generic Transform node) plus the
+  locked Trigger; no hardcoded tool fills the gap. All 3 confirmed passing
+  individually and as part of 4 consecutive clean full-suite runs (see
+  below).
+- **Cross-workspace schema coverage — substitution accepted, noted here
+  per direction.** The `GET /connections/:id/schema` cross-workspace
+  invariant (see the completion-audit addendum above) is covered by the
+  service-level `apps/api/src/services/connections.schema.test.ts` 4-case
+  suite instead of a Playwright e2e. That substitution is accepted as
+  sufficient coverage for this invariant — not tracked as an open e2e gap.
+- **Historical correction.** Session 1 close-out was reported (in that
+  session's chat, not written into this file) as `canvas.spec.ts` 9/9.
+  Verified via `git show 1cb22ed:apps/web/e2e/canvas.spec.ts | grep -nE
+  "^\s*test\("` — commit `1cb22ed` ("Phase 5 Session 1 close-out: delete
+  superseded pre-React-Flow canvas files") is the actual Session 1
+  close-out commit, and the suite had **5** tests at that commit, not 9:
+  `drag 2 sources + 1 transform...`, `two tabs on the same workflow...`,
+  `canvasB cannot list or open canvasA's workflow`, `canvasC (no org) can
+  open their personal workflow`, `workflow with an unrecognized
+  manifestId...`. (This supersedes the "no 9/9 → 8/8 transition exists"
+  line in the completion-audit addendum above, which was checking for the
+  wrong transition — the real discrepancy is 9-reported vs. 5-actual at
+  Session 1, not a 9-to-8 drop.) At the last commit before this session
+  (`384c2f8`), the suite actually had **8** tests
+  (`git show 384c2f8:apps/web/e2e/canvas.spec.ts | grep -cE "^\s*test\("`
+  → 8) — matching the "8/8" line above, not the "12-test suite" the
+  completion-audit addendum above describes running; that "12" wasn't
+  re-verified this session and is flagged here as a further discrepancy
+  in this file's own count history, separate from the 9-vs-5 correction
+  this item was asked to make. Current suite, after this session's 3
+  palette-purity additions, is **11**
+  (`grep -nE "^\s*test\(" apps/web/e2e/canvas.spec.ts | wc -l` → 11).
+  Verified **11/11 across 4 consecutive full runs**
+  (`PORT=3100 npx playwright test e2e/canvas.spec.ts`, `apps/web/`,
+  4 back-to-back clean runs, no retries, no flakes).
+- **Dark mode:** verbatim Q&A quoted for the human's confirmation in this
+  session's chat response, per explicit instruction not to act on it
+  either way — not reproduced here since no code/decision change resulted.

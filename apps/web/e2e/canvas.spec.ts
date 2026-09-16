@@ -9,7 +9,11 @@ import { personas } from './fixtures/personas';
 async function gotoWorkflow(page: Page, projectName: string, workflowName: string) {
   await page.goto('/app/projects');
   await page.getByRole('link', { name: projectName, exact: true }).click();
-  await page.getByRole('link', { name: workflowName }).click();
+  // .first(): the sidebar's project tree can already be expanded around this
+  // project (persisted openProject UI state) at the same time the project
+  // detail page's own workflow list renders it too — both links share the
+  // same href, so either is a valid click target.
+  await page.getByRole('link', { name: workflowName }).first().click();
   await expect(page).toHaveURL(/\/app\/workflows\/[0-9a-f-]{36}/);
 }
 
@@ -290,5 +294,112 @@ test.describe('canvas: unknown tool renders without crashing', () => {
     await expect(page.getByText('Unknown tool "not-a-real-connector"')).toBeVisible();
     // Still selectable/deletable — no special-casing in delete/select handlers.
     await expect(page.getByRole('button', { name: 'Delete node' })).toBeVisible();
+  });
+});
+
+/**
+ * The "moat" invariant: NodesRail (Task 1) never lists a tool the actor
+ * doesn't actually have. No test above asserted this directly — closing
+ * that gap here, one assertion per sub-claim, against real seeded/created
+ * workspaces (no mocked connections list). Each sub-claim needs a
+ * different persona/connection-shape, so each gets its own describe block
+ * (test.use only applies at describe scope, not inside a test body).
+ */
+test.describe('canvas: palette purity — Triggers moat', () => {
+  test.use({ storageState: personas.canvasC.storageStatePath });
+
+  test('Triggers is locked: "Soon" badge, and a drag attempt lands no node on the canvas', async ({ page }) => {
+    await gotoWorkflow(page, 'Canvas E2E Personal Project', 'Canvas E2E Personal Workflow');
+    const rail = page.getByTestId('nodes-rail');
+    const trigger = rail.getByText('Trigger', { exact: true });
+    await expect(trigger).toBeVisible();
+    await expect(rail.getByText('Soon', { exact: true })).toBeVisible();
+    await expect(trigger.locator('..')).not.toHaveAttribute('draggable', 'true');
+
+    // dragPaletteItemOnto dispatches real dragstart/dragover/drop DOM events
+    // regardless of the `draggable` attribute — the real invariant under
+    // test is that the Triggers entry has no onDragStart handler at all
+    // (NodesRail.tsx), so no dataTransfer payload ever reaches the
+    // canvas's onDrop, which bails out on an empty payload (FlowCanvas.tsx)
+    // and creates nothing.
+    await dragPaletteItemOnto(page, 'Trigger', { x: 450, y: 300 });
+    await expect(page.locator('.react-flow__node')).toHaveCount(0);
+  });
+});
+
+test.describe('canvas: palette purity — connection-driven sections', () => {
+  test.use({ storageState: personas.canvasA.storageStatePath });
+
+  test('connection-driven sections list only the workspace\'s real connections, never an unconnected tool', async ({ page }) => {
+    // Read-only rail inspection — no node create/delete, safe to run
+    // independent of the serial drag/connect/reload block above even
+    // though it shares the same seeded workflow.
+    await gotoWorkflow(page, 'Canvas E2E Project', 'Canvas E2E Workflow');
+    const rail = page.getByTestId('nodes-rail');
+
+    await expect(rail.getByText('Sources', { exact: true })).toBeVisible();
+    await expect(rail.getByText('Dev sandbox (mysql)', { exact: true })).toBeVisible();
+    await expect(rail.getByText('Dev sandbox (mongodb)', { exact: true })).toBeVisible();
+
+    // canvasA (canvas-e2e org) has mysql + mongodb connections only — no
+    // supabase connection, even though the supabase connector manifest is
+    // registered and etl_source-capable (packages/schemas/src/connectors/
+    // supabase.ts). It must not appear anywhere in the rail.
+    await expect(rail.getByText(/supabase/i)).toHaveCount(0);
+    // No connector in the registry declares "etl_sink" yet (all 3 are
+    // etl_source-only) — Destinations must not render as a section at all,
+    // not even an empty "None available yet" one.
+    await expect(rail.getByText('Destinations', { exact: true })).toHaveCount(0);
+
+    // Exactly 3 draggable entries total: the 2 real connections + the one
+    // generic (non-tool) Transform node — nothing invented, nothing extra.
+    await expect(rail.locator('[draggable="true"]')).toHaveCount(3);
+  });
+});
+
+test.describe('canvas: palette purity — zero-connection persona', () => {
+  test.use({ storageState: personas.canvasB.storageStatePath });
+
+  test('a fresh persona with zero connections sees only the locked Trigger and the generic Transform node', async ({ page }) => {
+    // canvas-e2e-b has no connections seeded at all (dev-bootstrap.ts only
+    // seeds canvas-e2e/canvas-e2e-c) and no project/workflow either — built
+    // live via the real UI so this stays a workspace-scoped assertion, not
+    // a seed-data special case.
+    const projectName = `Palette Purity ${Date.now()}`;
+    const workflowName = 'Palette Purity Check';
+
+    await page.goto('/app');
+    await page.getByRole('button', { name: 'New workflow' }).first().click();
+    await page.getByRole('button', { name: 'New project', exact: true }).click();
+    await page.locator('#project-name').fill(projectName);
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
+
+    await page.getByRole('button', { name: 'New workflow' }).first().click();
+    await page.getByRole('button', { name: 'New workflow', exact: true }).nth(1).click();
+    // Explicit select: the dialog's project dropdown defaults to
+    // projects[0] (CreateWorkflowDialog.tsx) whenever it's opened without a
+    // defaultProjectId, which is NOT necessarily the project just created
+    // above once this persona already has other projects (e.g. leftover
+    // from a prior run of this same test) — picking by label keeps this
+    // deterministic regardless of workspace history.
+    await page.locator('#workflow-project').selectOption({ label: projectName });
+    await page.locator('#workflow-name').fill(workflowName);
+    await page.getByRole('button', { name: 'Create workflow' }).click();
+
+    await gotoWorkflow(page, projectName, workflowName);
+    const rail = page.getByTestId('nodes-rail');
+    await expect(rail).toBeVisible();
+
+    await expect(rail.getByText('Trigger', { exact: true })).toBeVisible();
+    await expect(rail.getByText('Soon', { exact: true })).toBeVisible();
+    await expect(rail.getByText('Sources', { exact: true })).toHaveCount(0);
+    await expect(rail.getByText('Destinations', { exact: true })).toHaveCount(0);
+    await expect(rail.getByText('Transforms', { exact: true })).toBeVisible();
+    await expect(rail.getByText('Transform', { exact: true })).toBeVisible();
+
+    // Only one draggable entry in the whole rail — the generic Transform
+    // node. No hardcoded tool fills the gap left by zero connections.
+    await expect(rail.locator('[draggable="true"]')).toHaveCount(1);
   });
 });
