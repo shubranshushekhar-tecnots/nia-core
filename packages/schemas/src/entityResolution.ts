@@ -92,5 +92,17 @@ export function fieldNamesForSource(schema: IntrospectResponse, entity?: EntityR
     const resolved = findPersistedEntity(schema, entity);
     if (resolved) return resolved.fields.map((f) => f.name);
   }
+  // Phase 6 Block 1 ledger item: this fallback (no persisted entity, or a
+  // persisted ref that no longer resolves against the live schema) is the
+  // pre-Block-0 flat-union behavior — correct for backward compatibility,
+  // but it means the caller is reading a legacy (pre-entity-picker) node,
+  // or one whose picked table drifted upstream. Logged, not thrown: this
+  // function must stay non-fatal (checkConfig's own `warn`, not this call
+  // site, is the user-facing nudge) — this is dev/ops visibility only.
+  console.warn(
+    entity
+      ? `fieldNamesForSource: persisted entity ${entity.namespace}.${entity.name} does not resolve against the live schema — falling back to the flat field union.`
+      : "fieldNamesForSource: no persisted entity — falling back to the flat field union (legacy pre-Block-0 node).",
+  );
   return Array.from(new Set(schema.entities.flatMap((e) => e.fields.map((f) => f.name))));
 }

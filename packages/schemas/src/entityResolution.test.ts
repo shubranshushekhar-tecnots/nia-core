@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveSourceEntity, findPersistedEntity, fieldNamesForSource } from "./entityResolution.js";
 import type { IntrospectResponse } from "./contract.js";
 
@@ -125,5 +125,18 @@ describe("fieldNamesForSource", () => {
   it("falls back to the flat union when the persisted entity has drifted (no longer resolves)", () => {
     const result = fieldNamesForSource(TWO_TABLES, { namespace: "public", name: "deleted_table" });
     expect(result.sort()).toEqual(["id", "name", "total"]);
+  });
+
+  it("Phase 6 Block 1: logs a warning when it takes the flat-union fallback, both no-entity and drifted-entity cases", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    fieldNamesForSource(TWO_TABLES);
+    fieldNamesForSource(TWO_TABLES, { namespace: "public", name: "deleted_table" });
+    fieldNamesForSource(TWO_TABLES, { namespace: "public", name: "customers" });
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0]![0]).toContain("no persisted entity");
+    expect(warn.mock.calls[1]![0]).toContain("deleted_table");
+    warn.mockRestore();
   });
 });

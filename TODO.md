@@ -61,3 +61,15 @@
   still degrades to residual — both explicit Phase 5 Session 5 decisions,
   not gaps to revisit. See `PHASE5_SESSION_NOTES.md`'s Session 5 Block 1
   entry and `af00263`'s commit message for the full writeup.
+- **Decision (Phase 6 Block 1 ledger item 1a-1):** `checkConfig`'s
+  unset-entity result (`checks.ts`) is a non-blocking `warn` today (Block 0,
+  `af00263`) — deliberately, so pre-Block-0 graphs don't flip red the
+  instant the check shipped. That `warn` becomes a **hard `fail` at the
+  run-gate** once the ETL runner exists: the runner has no flat-union
+  fallback to fall back to the way preview/mappings do (`entityResolution.ts`'s
+  header comment — "the ETL runner cannot infer what to read the way this
+  preview-only bridge does"), so an unset source entity must block Run, not
+  just nudge the drawer. This is a decision to implement in Phase 6 Block 4's
+  run-gating work (the `checks` requested set the Run button already
+  evaluates), not a code change yet — recorded here so Block 4 doesn't
+  relitigate it.

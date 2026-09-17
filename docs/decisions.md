@@ -246,6 +246,14 @@ total from the raw row dump rather than use SQL `SUM`. It produced a
 byte-perfect running-total table (239, matching exactly) and added
 correctly-derived extra facts (correct min/max by name) — still `ok`.
 
+**Sidecar ledger entry (Phase 6 Block 1, not this block's work):** BYOK
+credential rejected (`"API key not valid"`) forces the Vertex fallback +
+its ~100-150 reasoning-token tax described above under "Lever 1" — this is
+carried forward as a to-do, not re-investigated here: fix the underlying
+BYOK credential, then re-run latency lever 1's direct-gateway probe to see
+if a real (non-Vertex-fallback) `google/gemini-3.5-flash` measurement
+changes the query-gen latency picture. Out of scope for Block 1 itself.
+
 **Conclusion:** with the current gateway model, this pipeline's
 defense-in-depth (deterministic `reduce.ts` for multi-source removing
 LLM arithmetic entirely; a classifier that refuses any question needing
@@ -264,3 +272,52 @@ single-source rows) were reverted live and never landed in
 in place for if/when a real trigger (e.g. a future weaker/cheaper model
 tier, or a genuine product bug) is found — at that point a case can be
 added directly, no further infra work needed.
+
+## Phase 6 Block 1: aggregate-transform vocabulary — mandatory reference digest, standing directive
+
+Recorded verbatim per the Phase 6 kickoff: "Standing directive: before
+designing the aggregate-transform vocabulary or any DAX/PowerBI semantics,
+read every row of every sheet under Reference/, then produce a digest
+proving comprehension — (a) the reference's category taxonomy, (b) which
+patterns map cleanly to SQL/Mongo pushdown, (c) which are
+filter-context-specific (CALCULATE/ALL/ALLEXCEPT family) and their
+semantic equivalent in our transform model, (d) which apply only to a
+future DAX-emitting PowerBI path. The digest is reviewed before
+implementation. The reference is a coverage checklist and semantic guide,
+not literal DAX transplantation."
+
+(Repo path is `reference/`, lowercase, not `Reference/` — same directory
+the directive refers to; `reference/DAX_Reference_Guide.xlsx` +
+`reference/README.md` are committed as of Phase 6 Block 1. Per the
+kickoff's item 1c: CSV exports of both sheets — `dax-reference.csv`,
+`combined-formula-patterns.csv` — are NOT present on disk yet; per the
+kickoff's own instruction ("if the files aren't present on disk at all,
+STOP and tell the user to add them before continuing") this is flagged
+back to the user rather than silently skipped or fabricated. This does not
+block Block 1's other items — the digest/vocabulary work itself is
+explicitly a later Phase 6 session, not this block's work.)
+
+## Phase 6 Block 1: write-grant RBAC — kept all-role, matching DECISION-C
+
+The Phase 6 kickoff's original migration spec (item 1e) called for
+`create_write_grant`/`confirm_write_grant`/`revoke_write_grant` to require
+org admin/owner (or the personal-workspace owner), on the reasoning that
+minting a write grant is materially higher-stakes than the other
+"work" actions `can.ts`'s DECISION-C already made all-role (individual/
+member/admin/owner). Raised back to the user as a real conflict before
+drafting the migration (write_grants already shipped in
+`0007_connectors.sql`, client-writable by any member via RLS — this isn't
+a fresh design choice, it's an existing precedent). Ruling: **keep
+`grants.create`/`grants.revoke` all-role**, consistent with the already-
+shipped `write_grants` RLS and `can.ts`'s existing DECISION-C — no change
+to `can.ts`'s matrix. The RPC-only lockdown (no direct client
+INSERT/UPDATE on `write_grants`, all mutation through the three
+`SECURITY DEFINER` RPCs) still applies regardless of role, and the RPCs
+still re-derive workspace access the same way the table's own RLS did
+(`private.is_member`/`owner_id = auth.uid()`) — only the "does this
+specific action additionally require admin/owner" question was decided
+against. Role restriction on write-grant minting was considered and
+deliberately deferred, not rejected outright — revisit before an
+enterprise/org GA if a real incident or compliance requirement surfaces
+that DECISION-C's blanket work/governance split doesn't cover for this one
+credential-minting action specifically.

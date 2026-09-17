@@ -642,7 +642,9 @@ end $$;
 
 -- Probe 16 — write_grants inherit scope from the parent connection (no
 -- org_id/owner_id of their own): an org member can grant/see one on the
--- org's connection; an outsider cannot see it.
+-- org's connection (via create_write_grant() — Phase 6 Block 1 locked
+-- direct client INSERT down to RPC-only, see probes 35-40 below); an
+-- outsider cannot see it.
 do $$
 declare
   v_member   uuid := (select id from test_ids where key = 'member');
@@ -652,9 +654,7 @@ declare
   n_outsider_sees int;
 begin
   perform pg_temp.act_as(v_member);
-  insert into public.write_grants (connection_id, granted_by_user_id, scope)
-  values (v_conn, v_member, '{"schemas":["sales"]}'::jsonb)
-  returning id into v_grant;
+  select id into v_grant from public.create_write_grant(v_conn, '{"schemas":["sales"]}'::jsonb);
   reset role;
 
   perform pg_temp.act_as(v_outsider);
@@ -1220,6 +1220,240 @@ begin
 exception when others then
   reset role;
   insert into probe_results values (34, 'cross-org workflow-linked conversation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probes 35-40 — 0016_write_grants.sql (Phase 6 Block 1: write_grants
+-- hardened to RPC-only writes; create/confirm/revoke stay all-role per
+-- the DECISION-C ruling in docs/decisions.md)
+-- =========================================================================
+
+-- Probe 35 — direct client INSERT/UPDATE on write_grants is denied for
+-- every role, including admin/owner — the RPCs are the only write path.
+do $$
+declare
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_conn  uuid := (select id from test_ids where key = 'connection_org');
+  v_grant uuid := (select id from public.write_grants where connection_id = (select id from test_ids where key = 'connection_org') limit 1);
+  insert_denied boolean := false;
+  update_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_admin);
+  begin
+    insert into public.write_grants (connection_id, granted_by_user_id, scope)
+    values (v_conn, v_admin, '{"schemas":["direct-insert-attempt"]}'::jsonb);
+  exception when others then
+    insert_denied := true;
+  end;
+  reset role;
+
+  perform pg_temp.act_as(v_owner);
+  begin
+    update public.write_grants set scope = '{"hijacked":true}'::jsonb where id = v_grant;
+  exception when others then
+    update_denied := true;
+  end;
+  reset role;
+
+  if insert_denied and update_denied then
+    insert into probe_results values (35, 'direct client INSERT/UPDATE on write_grants denied for every role, RPC-only', true);
+  else
+    insert into probe_results values (35, 'direct client INSERT/UPDATE on write_grants denied for every role, RPC-only', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (35, 'write_grants direct-write-denied probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 36 — full create -> confirm -> revoke lifecycle as a plain member
+-- (all-role per the DECISION-C ruling, not admin/owner-gated) works
+-- end-to-end, and each step is audit-logged.
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org    uuid := (select id from test_ids where key = 'org');
+  v_conn   uuid := (select id from test_ids where key = 'connection_org');
+  v_grant  public.write_grants;
+  n_audit_events int;
+  lifecycle_ok boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+
+  select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["reporting"]}'::jsonb);
+  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-36');
+  select * into v_grant from public.revoke_write_grant(v_grant.id);
+
+  reset role;
+
+  -- audit_log's own RLS (audit_log_select_admins_or_self, 0007) only
+  -- exposes org-scoped rows to admins — a plain member correctly can't
+  -- SELECT them. That's a *different* assertion than "did the RPC log the
+  -- event," which is what this probe checks, so the count runs after
+  -- reset role (superuser, bypasses RLS) rather than while still
+  -- act_as(v_member) — matching how other probes in this file separate
+  -- "data exists" checks from RLS-visibility checks.
+  select count(*) into n_audit_events
+  from public.audit_log
+  where org_id = v_org
+    and action in ('write_grant.created', 'write_grant.confirmed', 'write_grant.revoked')
+    and detail->>'grantId' = v_grant.id::text;
+
+  lifecycle_ok := v_grant.confirmed_at is not null
+    and v_grant.revoked_at is not null
+    and v_grant.write_credential_vault_ref = 'vault:write-cred-probe-36'
+    and v_grant.cred_version = 1
+    and n_audit_events = 3;
+
+  if lifecycle_ok then
+    insert into probe_results values (36, 'plain member: create/confirm/revoke write-grant lifecycle works, audit-logged 3x', true);
+  else
+    insert into probe_results values (36, 'plain member: create/confirm/revoke write-grant lifecycle works, audit-logged 3x', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (36, 'write-grant lifecycle probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 37 — an outsider (no access to the connection's org) cannot call
+-- create_write_grant against it.
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_conn     uuid := (select id from test_ids where key = 'connection_org');
+  denied boolean := false;
+begin
+  perform pg_temp.act_as(v_outsider);
+  begin
+    perform public.create_write_grant(v_conn, '{"schemas":["sales"]}'::jsonb);
+  exception when others then
+    denied := true;
+  end;
+  reset role;
+
+  if denied then
+    insert into probe_results values (37, 'create_write_grant denied for a user with no access to the connection', true);
+  else
+    insert into probe_results values (37, 'create_write_grant denied for a user with no access to the connection', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (37, 'create_write_grant outsider-denied probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 38 — confirm_write_grant raises on an already-confirmed or
+-- already-revoked grant; revoke_write_grant raises on an already-revoked
+-- grant. No silent double-confirm/double-revoke.
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_conn   uuid := (select id from test_ids where key = 'connection_org');
+  v_grant  public.write_grants;
+  double_confirm_denied boolean := false;
+  double_revoke_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+
+  select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["ops"]}'::jsonb);
+  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-38');
+
+  begin
+    perform public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-38-again');
+  exception when others then
+    double_confirm_denied := true;
+  end;
+
+  perform public.revoke_write_grant(v_grant.id);
+
+  begin
+    perform public.revoke_write_grant(v_grant.id);
+  exception when others then
+    double_revoke_denied := true;
+  end;
+
+  reset role;
+
+  if double_confirm_denied and double_revoke_denied then
+    insert into probe_results values (38, 'confirm/revoke are not idempotent — re-confirm and re-revoke both raise', true);
+  else
+    insert into probe_results values (38, 'confirm/revoke are not idempotent — re-confirm and re-revoke both raise', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (38, 'confirm/revoke non-idempotency probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 39 — a revoked grant fails an active-grant lookup (the shape
+-- Block 2's checkGrants/connector write path will filter on).
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_conn   uuid := (select id from test_ids where key = 'connection_org');
+  v_grant  public.write_grants;
+  n_active int;
+begin
+  perform pg_temp.act_as(v_member);
+
+  select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["finance"]}'::jsonb);
+  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-39');
+  select * into v_grant from public.revoke_write_grant(v_grant.id);
+
+  select count(*) into n_active
+  from public.write_grants
+  where id = v_grant.id and confirmed_at is not null and revoked_at is null;
+
+  reset role;
+
+  if n_active = 0 then
+    insert into probe_results values (39, 'revoked grant fails an active-grant (confirmed, not revoked) lookup', true);
+  else
+    insert into probe_results values (39, 'revoked grant fails an active-grant (confirmed, not revoked) lookup', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (39, 'revoked-grant active-lookup probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 40 — personal-workspace owner can run the full lifecycle on their
+-- own connection; another individual (no access to that connection) is
+-- denied by create_write_grant the same way an org outsider is (probe 37).
+do $$
+declare
+  v_individual uuid := (select id from test_ids where key = 'individual');
+  v_outsider   uuid := (select id from test_ids where key = 'outsider');
+  v_conn       uuid;
+  v_grant      public.write_grants;
+  other_denied boolean := false;
+  lifecycle_ok boolean := false;
+begin
+  perform pg_temp.act_as(v_individual);
+  insert into public.connections (owner_id, connector_id, handle, display_name, owner_user_id, vault_secret_ref)
+  values (v_individual, 'mysql', '@mysql-personal-probe', 'Personal Probe DB', v_individual, 'vault:personal-probe-ref')
+  returning id into v_conn;
+
+  select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["personal"]}'::jsonb);
+  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-40');
+  select * into v_grant from public.revoke_write_grant(v_grant.id);
+  reset role;
+
+  lifecycle_ok := v_grant.confirmed_at is not null and v_grant.revoked_at is not null;
+
+  perform pg_temp.act_as(v_outsider);
+  begin
+    perform public.create_write_grant(v_conn, '{"schemas":["personal"]}'::jsonb);
+  exception when others then
+    other_denied := true;
+  end;
+  reset role;
+
+  if lifecycle_ok and other_denied then
+    insert into probe_results values (40, 'personal-workspace owner: full write-grant lifecycle works, isolated from other individuals', true);
+  else
+    insert into probe_results values (40, 'personal-workspace owner: full write-grant lifecycle works, isolated from other individuals', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (40, 'personal write-grant lifecycle probe (errored: ' || sqlerrm || ')', false);
 end $$;
 
 -- =========================================================================
