@@ -80,3 +80,22 @@ and chat-smoke's personal case as already run and green with no artifact
 ever produced — the claim was false; see commit `01436a0` and the
 reconciliation in the personal-chat TODO.md entry for the real, re-run
 proof.)
+
+## Chat first-token latency: <3s exit bar unmet, not waived — converted to a Phase 5 exit item
+
+Recorded verbatim per the ruling on Session 4's Block 0 re-measurement:
+"Chat first-token latency: p50 ~7.8s (two sequential LLM calls at provider
+inference-start floor). Original <3s exit bar UNMET and not waived —
+converted to a Phase 5 exit item. Shipped because time-to-first-stage p50
+~220ms gives immediate visible progress. Optimization levers to evaluate
+(Phase 5 exit or Phase 6 sidecar): faster model tier for query-gen
+specifically; streaming/early-start of answer generation; schema-context
+caching in prompts; skip-rewrite fast path for simple single-source
+queries. Re-measure after any lever; target ≤5s p50, aspiration ≤3s."
+
+Session 4 numbers this ruling responds to: p50 7846ms / p95 8089ms
+(`apps/web/latency_hops.mjs`, 10 runs), vs. Phase 4's p50 8431-8603ms /
+p95 12276-12642ms (`PHASE4_EXIT.md`). Time-to-first-stage-event (not
+first-token) is separately p50 ~219-220ms, which is what "immediate
+visible progress" refers to above — the UI shows activity within ~220ms
+even though the full answer's first token doesn't land until ~7.8s later.

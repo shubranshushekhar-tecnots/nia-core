@@ -502,3 +502,242 @@ debt before Session 4 (command bar + Logs) starts.
     verification runs (on unrelated, untouched tests) and resolved on
     retry once load settled — noted again here per the carry-forward
     instruction, not re-investigated as a code bug.
+
+## Phase 5 Session 4 — floating command bar + Logs tab
+
+### Block 0 — latency re-measurement
+
+Re-ran `apps/web/latency_hops.mjs` (10 runs, real `@mysql-dev` connection,
+real Gemini calls, full stack up: web:3100, api:4001, worker, docker
+sandbox DBs/redis) before building anything, per the plan's blocking
+condition.
+
+```
+                                     Phase 4 baseline (§4.2)   Session 4 re-measurement
+POST send -> BullMQ enqueue         p50=124-130ms p95=155-180ms   p50=251ms  p95=292ms
+Enqueue -> worker picks up job       p50=1ms      p95=3ms         p50=2ms    p95=12ms
+Pickup -> first stage event          p50=4ms      p95=14-15ms     p50=11ms   p95=22ms
+First stage -> first token (worker)  p50=8295-8482ms p95=12173-12498ms  p50=7595ms p95=7806ms
+Worker publish -> client receipt     p50=3ms      p95=5-33ms      p50=4ms    p95=11ms
+TOTAL: POST -> first stage (client)  p50=216-219ms p95=259-276ms  p50=383ms  p95=413ms
+TOTAL: POST -> first token (client)  p50=8431-8603ms p95=12276-12642ms  p50=7846ms p95=8089ms
+```
+
+Still fails the <3s exit bar, unchanged from Phase 4's conclusion — the
+~7.6-7.8s floor is the same two-sequential-LLM-calls bottleneck Phase 4
+already root-caused and exhausted every prompt/transport/config lever
+against (`PHASE4_EXIT.md` §4-5). The one real change: **p95 tightened
+substantially** (12.3-12.6s -> 8.1s) — tail variance is down, though a
+single 10-run sample on a shared dev machine isn't enough runs to call
+that a confirmed fix vs. noise; flagging it, not claiming it. Per the
+plan, built the bar regardless of this result — **STOP condition still
+applies**: not calling this "done" until the user rules on these
+numbers.
+
+### Block 1 — migration 0015
+
+`supabase/migrations/0015_conversation_workflow_link.sql`: added
+`conversations.workflow_id uuid references workflows(id) on delete set
+null` + a `(workflow_id, updated_at desc)` index. No RLS change — access
+still resolves via the existing org/owner XOR policies on
+`conversations`, same pattern as `workflow_check_runs.workflow_id`. Two
+probes added to `rls_probes.sql` (#33/#34: org member
+creates/reads a workflow-linked conversation and their org-mate sees it
+too; cross-org actor cannot see it). Pushed and confirmed via `supabase
+migration list`.
+
+### Block 2/3 — the command bar + answer thread
+
+- Lifted `apps/api/src/routes/chat.ts`'s single-source restriction
+  (`connectionIds.length !== 1` -> `=== 0` / `> MAX_SOURCES`).
+  `MAX_SOURCES` moved to `packages/schemas/src/chat.ts` so API and worker
+  import the same constant instead of the worker owning a local one the
+  API's comment claimed (falsely, by then) to mirror.
+- `ChatRequestBody` gained `workflowId` (create-only); `chat.ts` service
+  gained `createConversation(..., workflowId?)` and
+  `getLatestConversationForWorkflow`; new `GET /workflows/:id/conversation`
+  route, scope-checked the same way `assertWorkflowInScope` already does.
+- Extracted `ChatClient.tsx`'s SSE/event/retry mechanics into
+  `apps/web/src/lib/chat/useChatSession.ts`, parameterized by
+  `connectionIds: string[]` (was a single id) so both `ChatClient.tsx`
+  (`[selectedConnectionId]`) and the new `CommandBar.tsx` (the merged
+  scope set) share one implementation. `chat.spec.ts` stayed green
+  unchanged, confirming no regression from the extraction.
+- **Scope precedence, as implemented:** effective scope =
+  `dedupe(selectedNode?.connectionId, ...pinnedConnectionIds)`; empty ->
+  falls back to every connection wired into the canvas (source +
+  destination nodes' `connectionId`, deduped). `@`-pins are independent,
+  removable chips that persist across sends; node selection only swaps
+  the selection-derived member of the union. Verified end-to-end in
+  `command-bar.spec.ts`'s serial test (select -> pin -> ask with both in
+  scope -> unpin -> deselect -> fallback text).
+- **Known delta (design vs. build):** `designs/Nia Core App.html`'s
+  `copilotBarStyle`/`panelStyle` markup nests Checks/Logs under the bar
+  as one merged component; this build keeps `CommandBar` and
+  `ChecksDock` separate (Session 3 already shipped `ChecksDock`
+  independently) with z-index 35 sitting between the dock (30) and
+  modals (60). Visually verified both dock states don't overlap the bar.
+- **Multi-select decision (from the clarifying question, reconfirmed
+  here):** no canvas multi-select (shift-click/rubber-band) was built.
+  `@`-pins are the multi-scope mechanism per spec; single-select +
+  pins covers 100% of this session's chat-scope requirements. Ledger
+  entry added to `TODO.md` for future bulk-canvas-ops/Phase 7 revisit.
+
+### Block 4 — Logs tab
+
+`activityFeed.ts` (new) merges `WorkflowCheckRun[]` + a workflow's chat
+messages (reusing the same `getWorkflowConversation` fetch the command
+bar already does — no second fetch) into one newest-first
+`{ time, text, kind: 'check' | 'chat' }` feed. `ChecksDock.tsx`'s Logs
+tab is now live (`activeTab` lifted into `FlowCanvas.tsx`), empty state
+only shown when the merged feed itself is empty. Header comment notes
+where Phase 6's `kind: 'run'` source plugs in later.
+
+### Bugs found and fixed this session (all in test/e2e code, not
+### production logic, except where noted)
+
+1. **CommandBar thread-panel click-interception** — the floating thread
+   panel (z-index 35) could grow tall enough to overlap the node-drawer
+   (z-index 20) once a real answer landed, intercepting clicks meant for
+   the canvas underneath. Fixed with a `dismissThreadIfOpen` helper
+   (`canvas.spec.ts`) and an explicit `Dismiss` click
+   (`command-bar.spec.ts`) at every point a test's next action could
+   collide with it. This is the root cause behind the original "409
+   conflict" test flake investigated this session.
+2. **Dangling-timer race in `canvas.spec.ts`'s shared `beforeEach`** — a
+   node-deletion save's confirmation ("Saved") could still be in flight
+   when the hook returned, leaking into the next test. Fixed by waiting
+   for "Saved" to appear after any deletion before the hook returns.
+3. **Stale-"Saved"-text race (new this session)** — `FlowCanvas.tsx`
+   keeps "Saved" visible for 1.5s after a save completes (its own
+   idle-reset timer). The deletion-phase save in `beforeEach` could leave
+   that text visible long enough for a *later*, fast-running test body's
+   own `getByText('Saved')` check to pass on the stale flash instead of
+   its own save's real network round trip — observed as a ~50% flake
+   rate reproducing "0 nodes after reload" on the drag/connect/reload
+   test. Root-caused with network-response instrumentation (a temporary
+   diagnostic spec, since deleted) proving the only PUT before reload
+   was an empty-graph save in the failing runs. Fixed by also waiting for
+   "Saved" to disappear at the end of the same `beforeEach`, so any later
+   check in a test body is guaranteed fresh. This is the same class of
+   bug two other tests in this file already independently worked around
+   via `page.waitForResponse(...)` instead of a bare text check —
+   confirms the diagnosis, not a novel failure mode.
+4. **Visual-baseline drift from the bar's own existence** — 2 of
+   Session 3's `canvas.spec.ts` baselines (`checks-dock-all-pass-1440`,
+   `destination-mapping-editor-1440`) now include the floating
+   `CommandBar` in their capture region and needed re-baselining; not a
+   regression, an expected consequence of adding a new
+   always-mounted-on-canvas element.
+5. **Multi-source citation instability for visual baselines** — a
+   command-bar screenshot taken while scope included 2 connections
+   (mysql-dev + pinned mongodb-dev) diffs by ~3% every run: the real
+   answer's citation count/order isn't stable across identical questions
+   when multiple sources are in scope. Masking the prose text alone
+   doesn't fix it. Resolved by capturing the "thread open" and "Logs
+   populated" baselines in the single-connection personal-workspace test
+   instead (exactly one citation every run), plus pinning the thread
+   container's height for the screenshot only (it's
+   `maxHeight:380/overflowY:auto` and grows upward from a bottom anchor,
+   so real-answer length still shifts everything behind it even with the
+   text masked).
+
+### Incident: `apps/web/e2e/canvas.spec.ts` deleted from disk mid-session
+
+Discovered when a validation test run returned "Error: No tests found"
+and a filesystem check confirmed the file itself (not just a stale git
+snapshot) was gone — only its `-snapshots` sibling directory remained.
+Root cause unknown; not caused by any command run this session (no `rm`,
+no destructive git operation was issued against this file). Confirmed
+via `git status`/`git log` that HEAD (`24062ff`) was the last commit
+touching the file, meaning none of this session's edits to it were ever
+committed. No recovery artifacts existed (no worktree, no trace/report
+files). Reconstructed the full file from `git show HEAD:...` (the
+pre-session baseline) plus manual reapplication of every edit made to it
+this session, then re-verified the reconstruction end to end
+(typecheck, `--list`, full suite, targeted repeat-each runs on both
+fixed races) — all green, matching pre-incident state. Flagging this
+explicitly since a file was lost and rebuilt from memory rather than a
+diff; worth an independent look before trusting it long-term.
+
+**Follow-up verification (post-reconstruction), per explicit request:**
+
+1. **`git log --follow` + `git reflog`**: no recorded git operation
+   (`reset`, `checkout -- <path>`, `clean`, `rebase`, `stash`) appears
+   anywhere in the reflog for this session's window — every entry is a
+   plain `commit`. This doesn't fully clear git as a cause (working-tree
+   deletions via `rm`/an editor/a tool bug never touch the reflog at all,
+   since reflog only records ref/HEAD-changing operations), but it does
+   rule out any of the destructive git commands that would normally leave
+   a trace.
+2. **Other files in the same window**: no other tracked file showed an
+   equivalent unexplained deletion or corruption — only `canvas.spec.ts`
+   went missing; its own `-snapshots/` sibling directory (baseline PNGs)
+   survived untouched. The current working tree has no `.orig` files, no
+   stray 0-byte files, and no other files whose diff-vs-`24062ff` contains
+   anything beyond this session's documented, intentional edits (checked
+   directly — see point 2 below). If a shared root cause existed (a
+   process wiping a whole directory, a bad glob, a crashed test-runner
+   write), it did not visibly touch anything else.
+3. **Diff `canvas.spec.ts` against `24062ff`** (last committed version):
+   every delta is one of this session's own documented fixes, nothing
+   unexplained —
+   - `dismissThreadIfOpen()` helper + 4 call sites, and a "New chat" reset
+     in `beforeEach` — the CommandBar click-interception fix.
+   - Two `getByText('Saved')` visible/not-visible waits appended to
+     `beforeEach`'s node-cleanup block — the dangling-timer race and the
+     stale-"Saved"-text race fixes.
+   - Two timeout bumps (5s → 8s) in the "two tabs" conflict test, with an
+     inline comment explaining the reasoning (two independently-debounced
+     autosaves across two browser contexts is more load-sensitive than
+     this file's single-page tests).
+   No stray whitespace churn, no reverted assertions, no content that
+   doesn't map to a fix already written up above.
+4. **Dev-tooling suspects**: checked `apps/web/package.json`'s scripts
+   (`dev`, `build`, `start`, `typecheck`, `lint`, `test`, `test:e2e`) and
+   the root/other workspaces' scripts — none contain `rm`, `rimraf`,
+   `clean`, or any destructive glob touching `e2e/`.
+   `playwright.config.ts` sets `testDir: './e2e'` but no custom
+   `outputDir`/`snapshotDir` (Playwright's defaults are `test-results/`
+   and `<test-file>-snapshots/`, both outside `testDir` and non-colliding
+   with it) — no config-level path collision that could make a test run
+   overwrite or delete a spec file.
+
+**Verdict: cause unknown, but contained.** No destructive git command, no
+project script, and no config collision explains the deletion; nothing
+else in the repo shows collateral damage, and the reconstructed file's
+diff against the last commit contains exactly this session's known,
+documented edits and nothing more. Treat as an isolated, unreproduced
+environment/tooling event rather than a recurring risk to actively guard
+against — but if `canvas.spec.ts` (or any other e2e spec) goes missing
+again, treat it as the same class of incident and escalate rather than
+silently reconstructing a second time.
+
+### Full verification battery (final state)
+
+- Typecheck/build: `@nia/web`, `@nia/api`, `@nia/worker` typecheck clean;
+  `@nia/schemas` build clean.
+- Unit tests (`vitest run` per workspace): `@nia/api` 16 passed,
+  `@nia/worker` 65 passed, `@nia/web` 10 passed (scoped to `src/lib/**`),
+  `@nia/schemas` 146 passed, `@nia/guardrails` 43 passed + 1 expected
+  fail. 280 passing overall.
+- `supabase db query --linked --file supabase/tests/rls_probes.sql`: 35
+  probes, 0 failures (includes the 2 new migration-0015 probes).
+- `PORT=3100 npx playwright test e2e/canvas.spec.ts e2e/chat.spec.ts
+  e2e/command-bar.spec.ts --workers=1`: 26 passed, 1 skipped
+  (pre-existing `chat.spec.ts` skip, undocumented before this session —
+  not introduced by it), 0 failed. Targeted repeat-each runs (4-8x) on
+  every race fixed this session confirm they hold under repetition.
+- New visual baselines: `command-bar-resting-1440`,
+  `command-bar-thread-open-1440`, `checks-dock-logs-populated-1440`
+  (all under `e2e/command-bar.spec.ts-snapshots/`), plus 2 re-baselined
+  `canvas.spec.ts-snapshots/` entries for the bar's presence.
+- `node latency_hops.mjs`: Block 0's table above.
+
+Latency ruling received (see `docs/decisions.md`): <3s bar unmet, not
+waived, converted to a Phase 5 exit item (tracked in the new
+`PHASE5_EXIT.md` skeleton). Committed in 5 logical commits: `669123d`
+(migration 0015 + RLS probes), `34c6111` (backend: scope precedence,
+conversation restore, check-run history), `bb4ceb6` (frontend: CommandBar
++ Logs tab), `6dbb3c8` (e2e: command-bar.spec.ts + canvas.spec.ts fixes +
+baselines), plus this session-notes/decisions/TODO bookkeeping commit.

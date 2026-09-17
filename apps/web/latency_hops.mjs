@@ -40,7 +40,7 @@ import { chromium } from "@playwright/test";
 import { execSync } from "node:child_process";
 
 const RUNS = 10;
-const CONNECTION_ID = "584b5bfb-e087-433d-aafa-93537ceb7dc7"; // @mysql-dev
+const CONNECTION_ID = "d103a00c-9335-41d1-9d01-f22a4c654db2"; // @mysql-dev — re-resolved Session 4 Block 0, Phase 4's id is stale (seed data was recreated since)
 
 function percentile(sorted, p) {
   if (sorted.length === 0) return undefined;
