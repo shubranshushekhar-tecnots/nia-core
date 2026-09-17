@@ -899,16 +899,6 @@ isn't in the live set — this was pre-existing, correct code, not touched.
 The only missing pieces were the refresh mechanism (now built) and the
 UI surfacing (now built); the detection itself never needed a fix.
 
-**Schema-race UX bug (ledgered, not fixed).** The `driftedField()` guard
-above exists because of a real race, not a hypothetical one: if a user
-interacts with a mapping field (click + Enter) before its schema query
-resolves, the field list is still empty and the entry silently saves as
-an empty string rather than the intended value — no error, no visible
-feedback. This is shaped like a test-timing bug but isn't one; a fast
-human hits the same window a fast test does. Candidate fix is a loading
-guard (disable/spinner the field until its schema query settles); not
-fixed this session, left as a named UX bug for follow-up.
-
 New e2e (`canvas.spec.ts`, `.serial` block, last test — the only one that
 mutates the shared dev-mysql sandbox schema itself) proves the full
 chain live: builds a mysql->supabase graph, maps + approves
