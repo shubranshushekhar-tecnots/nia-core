@@ -26,6 +26,8 @@ export async function postChatMessage(params: {
   conversationId?: string;
   message: string;
   connectionIds: string[];
+  // Only consulted server-side when creating a brand-new conversation.
+  workflowId?: string;
 }): Promise<PostChatMessageResult> {
   const res = await fetch('/api/backend/chat', {
     method: 'POST',

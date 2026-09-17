@@ -1,16 +1,19 @@
 'use client';
 
 import type { CheckResult, CheckStatus } from '@nia/schemas';
+import type { ActivityItem } from '@/lib/canvas/activityFeed';
 
 /**
  * Full-width bottom dock for the canvas (Phase 5 Session 3 Task 2
  * completion pass) — replaces CheckResultsPanel.tsx's right-anchored
- * dropdown. Only "Checks" is live; "Logs" is rendered per the design but
- * stays disabled until Session 4 wires real execution logs (Phase 6).
+ * dropdown. "Logs" went live in Session 4 — merged check-run + chat-query
+ * feed from activityFeed.ts; a `kind: 'run'` source joins it once Phase 6's
+ * execution SSE-replay channel exists.
  *
  * Collapse/expand is driven entirely by the summary pill ("All checks
  * passed ⌄" / "N failing ⌄" / "Checks out of date ⌄"), which doubles as
  * the dock's only toggle control — there's no separate chevron button.
+ * Tab selection (Checks/Logs) is independent of that expand state.
  */
 
 const dockStyle = {
@@ -44,8 +47,17 @@ const tabStyle = (active: boolean) =>
     border: 'none',
     borderBottom: active ? '2px solid var(--acc)' : '2px solid transparent',
     padding: '10px 10px 8px',
-    cursor: active ? 'default' : 'not-allowed',
+    cursor: active ? 'default' : 'pointer',
   }) as const;
+
+const logRowStyle = {
+  display: 'flex',
+  gap: 10,
+  padding: '5px 0',
+  borderBottom: '1px solid var(--line)',
+  fontFamily: 'var(--font-data)',
+  fontSize: 12,
+} as const;
 
 const bodyStyle = {
   maxHeight: 260,
@@ -119,6 +131,9 @@ export default function ChecksDock({
   expanded,
   onToggleExpanded,
   onSelectNode,
+  activeTab,
+  onTabChange,
+  logs,
 }: {
   running: boolean;
   error: string | null;
@@ -129,6 +144,9 @@ export default function ChecksDock({
   expanded: boolean;
   onToggleExpanded: () => void;
   onSelectNode: (nodeId: string) => void;
+  activeTab: 'checks' | 'logs';
+  onTabChange: (tab: 'checks' | 'logs') => void;
+  logs: ActivityItem[];
 }) {
   const failingChecks = results?.filter((r) => r.status === 'fail').length ?? 0;
 
@@ -157,7 +175,7 @@ export default function ChecksDock({
 
   return (
     <div style={dockStyle} data-testid="checks-dock">
-      {expanded && (
+      {expanded && activeTab === 'checks' && (
         <div style={bodyStyle} data-testid="checks-dock-body">
           {running && <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>Running checks…</div>}
           {!running && error && <div style={{ fontSize: 12.5, color: 'var(--bad)' }}>{error}</div>}
@@ -182,12 +200,41 @@ export default function ChecksDock({
         </div>
       )}
 
+      {expanded && activeTab === 'logs' && (
+        <div style={bodyStyle} data-testid="checks-dock-logs">
+          {logs.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>Run logs arrive with execution (Phase 6)</div>
+          ) : (
+            logs.map((l, i) => (
+              <div key={`${l.kind}-${l.time}-${i}`} style={logRowStyle}>
+                <span style={{ flex: 'none', color: 'var(--ink4)' }}>{new Date(l.time).toLocaleString()}</span>
+                <span style={{ color: 'var(--ink2)' }}>{l.text}</span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       <div style={barStyle}>
-        <button type="button" style={tabStyle(true)} disabled>
+        <button
+          type="button"
+          style={tabStyle(activeTab === 'checks')}
+          onClick={() => {
+            onTabChange('checks');
+            if (!expanded) onToggleExpanded();
+          }}
+        >
           Checks
         </button>
-        <button type="button" style={tabStyle(false)} disabled title="Execution logs arrive in Session 4">
-          Logs · Session 4
+        <button
+          type="button"
+          style={tabStyle(activeTab === 'logs')}
+          onClick={() => {
+            onTabChange('logs');
+            if (!expanded) onToggleExpanded();
+          }}
+        >
+          Logs
         </button>
 
         <button

@@ -2,9 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Connection } from '@/lib/connections/types';
-import type { ChatCitation, ChatMessage, Conversation } from '@/lib/api/chatServer';
-import { ChatApiError, postChatMessage, streamChat } from '@/lib/api/chatClient';
-import type { ChatStreamEvent } from '@nia/schemas';
+import type { ChatMessage, Conversation } from '@/lib/api/chatServer';
+import { STAGE_LABEL, useChatSession } from '@/lib/chat/useChatSession';
 import {
   chatComposerInputStyle,
   chatComposerStyle,
@@ -52,38 +51,6 @@ import {
   chatUnfaithfulNoteStyle,
 } from './styles';
 
-type LocalStatus = 'streaming' | 'complete' | 'refused' | 'error' | 'conflict';
-
-type LocalMessage = {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  citations: ChatCitation[];
-  status: LocalStatus;
-  faithful?: boolean;
-};
-
-const STAGE_LABEL: Record<string, string> = {
-  rewriting: 'Reading your question',
-  planning_reduction: 'Planning',
-  resolving: 'Resolving sources',
-  introspecting: 'Inspecting schema',
-  generating_query: 'Writing query',
-  executing: 'Running query',
-  generating_answer: 'Generating answer',
-  checking_faithfulness: 'Checking answer',
-};
-
-function toLocalMessage(m: ChatMessage): LocalMessage {
-  return {
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    citations: m.citations,
-    status: m.status,
-  };
-}
-
 export default function ChatClient({
   connections,
   conversations,
@@ -96,9 +63,7 @@ export default function ChatClient({
   conversationId?: string;
   initialMessages: ChatMessage[];
 }) {
-  const [messages, setMessages] = useState<LocalMessage[]>(() => initialMessages.map(toLocalMessage));
   const [historyList, setHistoryList] = useState<Conversation[]>(conversations);
-  const [activeConversationId, setActiveConversationId] = useState<string | undefined>(conversationId);
   const [draft, setDraft] = useState('');
   const [composerFocus, setComposerFocus] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -106,23 +71,20 @@ export default function ChatClient({
     connections.length === 1 ? connections[0]?.id ?? null : null,
   );
   const [expandedCitation, setExpandedCitation] = useState<string | null>(null);
-  const [streamStage, setStreamStage] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
-  const [transportError, setTransportError] = useState(false);
 
   const listEndRef = useRef<HTMLDivElement | null>(null);
-  const teardownRef = useRef<(() => void) | null>(null);
-  const lastJobIdRef = useRef<string | null>(null);
-  const activeAssistantIdRef = useRef<string | null>(null);
-  // Highest seq seen on the current job's stream — undefined until the first
-  // event arrives. Reset on every new handleSend() (a fresh job has its own
-  // independent seq space). Fed to retry()'s openStream() as afterSeq so a
-  // manual reconnect resumes instead of re-replaying from the start.
-  const lastSeqRef = useRef<number | undefined>(undefined);
 
-  useEffect(() => {
-    return () => teardownRef.current?.();
-  }, []);
+  const { messages, activeConversationId, streamStage, sending, transportError, send, retry } = useChatSession({
+    conversationId,
+    initialMessages,
+    onConversationCreated: (resolvedId, firstMessage) => {
+      window.history.replaceState(null, '', `/app/chat/${resolvedId}`);
+      setHistoryList((h) => [
+        { id: resolvedId, title: firstMessage.slice(0, 60), createdBy: '', workflowId: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+        ...h,
+      ]);
+    },
+  });
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ block: 'end' });
@@ -132,74 +94,6 @@ export default function ChatClient({
     () => connections.find((c) => c.id === selectedConnectionId) ?? null,
     [connections, selectedConnectionId],
   );
-
-  function applyEvent(assistantId: string, event: ChatStreamEvent) {
-    if (event.type === 'status') {
-      setStreamStage(event.stage);
-      return;
-    }
-    if (event.type === 'token') {
-      setStreamStage(null);
-      setMessages((m) => m.map((msg) => (msg.id === assistantId ? { ...msg, content: msg.content + event.text } : msg)));
-      return;
-    }
-    if (event.type === 'citation') {
-      setMessages((m) =>
-        m.map((msg) =>
-          msg.id === assistantId
-            ? {
-                ...msg,
-                citations: [
-                  ...msg.citations,
-                  {
-                    connectionId: event.connectionId,
-                    executedQuery: event.executedQuery,
-                    rowCount: event.rowCount,
-                    truncated: event.truncated,
-                  },
-                ],
-              }
-            : msg,
-        ),
-      );
-      return;
-    }
-    setStreamStage(null);
-    setSending(false);
-    if (event.type === 'done') {
-      setMessages((m) => m.map((msg) => (msg.id === assistantId ? { ...msg, status: 'complete', faithful: event.faithful } : msg)));
-    } else if (event.type === 'error') {
-      setMessages((m) => m.map((msg) => (msg.id === assistantId ? { ...msg, content: event.message, status: 'error' } : msg)));
-    } else if (event.type === 'refused') {
-      setMessages((m) => m.map((msg) => (msg.id === assistantId ? { ...msg, content: event.message, status: 'refused' } : msg)));
-    } else if (event.type === 'conflict') {
-      setMessages((m) => m.map((msg) => (msg.id === assistantId ? { ...msg, content: event.message, status: 'conflict' } : msg)));
-    }
-  }
-
-  function openStream(jobId: string, assistantId: string, afterSeq?: number) {
-    lastJobIdRef.current = jobId;
-    activeAssistantIdRef.current = assistantId;
-    teardownRef.current?.();
-    teardownRef.current = streamChat(
-      jobId,
-      {
-        onEvent: (event, seq) => {
-          lastSeqRef.current = seq;
-          applyEvent(assistantId, event);
-        },
-        onTransportError: () => setTransportError(true),
-      },
-      { afterSeq },
-    );
-  }
-
-  function retry() {
-    if (!lastJobIdRef.current || !activeAssistantIdRef.current) return;
-    setTransportError(false);
-    setSending(true);
-    openStream(lastJobIdRef.current, activeAssistantIdRef.current, lastSeqRef.current);
-  }
 
   function pickConnection(id: string) {
     setSelectedConnectionId((cur) => (cur === id ? null : id));
@@ -214,42 +108,9 @@ export default function ChatClient({
   async function handleSend() {
     const trimmed = draft.trim();
     if (!trimmed || !selectedConnectionId || sending) return;
-
-    setSending(true);
-    setTransportError(false);
     setDraft('');
     setMentionOpen(false);
-
-    const userMsg: LocalMessage = { id: crypto.randomUUID(), role: 'user', content: trimmed, citations: [], status: 'complete' };
-    setMessages((m) => [...m, userMsg]);
-
-    try {
-      const { jobId, conversationId: resolvedId } = await postChatMessage({
-        conversationId: activeConversationId,
-        message: trimmed,
-        connectionIds: [selectedConnectionId],
-      });
-
-      if (!activeConversationId) {
-        setActiveConversationId(resolvedId);
-        window.history.replaceState(null, '', `/app/chat/${resolvedId}`);
-        setHistoryList((h) => [
-          { id: resolvedId, title: trimmed.slice(0, 60), createdBy: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-          ...h,
-        ]);
-      }
-
-      const assistantId = crypto.randomUUID();
-      setMessages((m) => [...m, { id: assistantId, role: 'assistant', content: '', citations: [], status: 'streaming' }]);
-      setStreamStage('rewriting');
-      lastSeqRef.current = undefined; // fresh job — its own independent seq space
-      openStream(jobId, assistantId);
-    } catch (err) {
-      setSending(false);
-      setStreamStage(null);
-      const message = err instanceof ChatApiError ? err.message : 'Something went wrong sending your message.';
-      setMessages((m) => [...m, { id: crypto.randomUUID(), role: 'assistant', content: message, citations: [], status: 'error' }]);
-    }
+    await send([selectedConnectionId], trimmed);
   }
 
   const scopeHint = selectedConnection

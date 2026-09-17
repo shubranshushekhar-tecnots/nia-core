@@ -19,6 +19,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CONNECTOR_MANIFESTS } from '@nia/schemas';
 import type { WorkflowDetail } from '@/lib/dashboard/types';
 import type { Connection } from '@/lib/connections/types';
+import type { ChatMessage, Conversation } from '@/lib/api/chatServer';
 import {
   buildCanvasNode,
   graphToFlow,
@@ -29,12 +30,15 @@ import {
 } from '@/lib/canvas/mapping';
 import { findUpstreamSource } from '@/lib/canvas/upstream';
 import { getWorkflowGraph, putWorkflowGraph, GraphApiError, type WorkflowGraphResult } from '@/lib/api/graphClient';
-import { runWorkflowChecks, getLatestCheckRun, ChecksApiError } from '@/lib/api/checksClient';
+import { runWorkflowChecks, getLatestCheckRun, listCheckRuns, ChecksApiError } from '@/lib/api/checksClient';
 import { useCanvasStore } from '@/lib/canvas/store';
+import { useChatSession } from '@/lib/chat/useChatSession';
+import { buildActivityFeed } from '@/lib/canvas/activityFeed';
 import GraphFlowNode from './GraphFlowNode';
 import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRail';
 import NodeDrawer from './NodeDrawer';
 import ChecksDock from './ChecksDock';
+import CommandBar from './CommandBar';
 import {
   brandTextStyle,
   breadcrumbSepStyle,
@@ -62,10 +66,14 @@ function CanvasInner({
   workflow,
   connections,
   initialGraph,
+  initialConversation,
+  initialMessages,
 }: {
   workflow: WorkflowDetail;
   connections: Connection[];
   initialGraph: WorkflowGraphResult;
+  initialConversation: Conversation | null;
+  initialMessages: ChatMessage[];
 }) {
   const ctx = useMappingContext(connections);
   const { screenToFlowPosition, setCenter, getNode } = useReactFlow();
@@ -191,6 +199,14 @@ function CanvasInner({
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : undefined;
   const upstreamSource = selectedNode ? findUpstreamSource(selectedNode.id, nodes, edges) : undefined;
 
+  // Every connectionId currently wired into the canvas (source + destination
+  // nodes' data.connectionId) — the command bar's scope fallback when
+  // nothing is selected and nothing is @-pinned.
+  const wiredConnectionIds = useMemo(
+    () => Array.from(new Set(nodes.map((n) => n.data.connectionId).filter((id): id is string => !!id))),
+    [nodes],
+  );
+
   const updateSelectedNodeConfig = useCallback(
     (config: Record<string, unknown>) => {
       if (!selectedNodeId) return;
@@ -241,7 +257,31 @@ function CanvasInner({
   const [checksRunning, setChecksRunning] = useState(false);
   const [checksError, setChecksError] = useState<string | null>(null);
   const [checksDockExpanded, setChecksDockExpanded] = useState(false);
+  const [checksDockTab, setChecksDockTab] = useState<'checks' | 'logs'>('checks');
   const [showPhase6Stub, setShowPhase6Stub] = useState(false);
+
+  // Command bar's chat session (Phase 5 Session 4) — lifted up from
+  // CommandBar.tsx itself so its live `messages` can also feed the Logs
+  // tab's merged activity feed below, rather than a second fetch/duplicate
+  // session state.
+  const chatSession = useChatSession({
+    conversationId: initialConversation?.id,
+    initialMessages,
+    workflowId: workflow.id,
+  });
+
+  // Logs tab (Phase 5 Session 4) — full check-run history, merged with the
+  // chat thread's user questions into a single newest-first feed.
+  const checkRunsQueryKey = useMemo(() => ['workflow-checks-history', workflow.id], [workflow.id]);
+  const { data: checkRunsHistory } = useQuery({
+    queryKey: checkRunsQueryKey,
+    queryFn: () => listCheckRuns(workflow.id),
+    staleTime: Infinity,
+  });
+  const activityFeed = useMemo(
+    () => buildActivityFeed(checkRunsHistory ?? [], chatSession.messages),
+    [checkRunsHistory, chatSession.messages],
+  );
 
   const handleRunChecks = useCallback(async () => {
     setChecksDockExpanded(true);
@@ -250,12 +290,16 @@ function CanvasInner({
     try {
       const result = await runWorkflowChecks(workflow.id);
       queryClient.setQueryData(checksQueryKey, result);
+      // Fresh run should show up in the Logs tab immediately, not just on
+      // next reload — re-fetch the history rather than hand-merge a single
+      // row into the cache (listCheckRuns is cheap, capped at 20 rows).
+      queryClient.invalidateQueries({ queryKey: checkRunsQueryKey });
     } catch (error) {
       setChecksError(error instanceof ChecksApiError ? error.message : 'Checks failed to run.');
     } finally {
       setChecksRunning(false);
     }
-  }, [workflow.id, queryClient, checksQueryKey]);
+  }, [workflow.id, queryClient, checksQueryKey, checkRunsQueryKey]);
 
   const handleSelectCheckNode = useCallback(
     (nodeId: string) => {
@@ -425,6 +469,20 @@ function CanvasInner({
 
         <NodesRail connections={connections} />
 
+        <CommandBar
+          connections={connections}
+          wiredConnectionIds={wiredConnectionIds}
+          selectedConnectionId={selectedNode?.data.connectionId ?? null}
+          messages={chatSession.messages}
+          streamStage={chatSession.streamStage}
+          sending={chatSession.sending}
+          transportError={chatSession.transportError}
+          send={chatSession.send}
+          retry={chatSession.retry}
+          resetConversation={chatSession.resetConversation}
+          checksDockExpanded={checksDockExpanded}
+        />
+
         <ChecksDock
           running={checksRunning}
           error={checksError}
@@ -434,6 +492,9 @@ function CanvasInner({
           expanded={checksDockExpanded}
           onToggleExpanded={() => setChecksDockExpanded((v) => !v)}
           onSelectNode={handleSelectCheckNode}
+          activeTab={checksDockTab}
+          onTabChange={setChecksDockTab}
+          logs={activityFeed}
         />
 
         {selectedNode && (
@@ -473,6 +534,8 @@ export default function FlowCanvas(props: {
   workflow: WorkflowDetail;
   connections: Connection[];
   initialGraph: WorkflowGraphResult;
+  initialConversation: Conversation | null;
+  initialMessages: ChatMessage[];
 }) {
   return (
     <ReactFlowProvider>

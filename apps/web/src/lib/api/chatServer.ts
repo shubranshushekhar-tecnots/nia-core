@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers';
-import { ApiError } from './server';
+import { ApiError, apiFetchServer } from './server';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL!;
 
@@ -7,6 +7,7 @@ export type Conversation = {
   id: string;
   title: string | null;
   createdBy: string;
+  workflowId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -64,4 +65,21 @@ export async function getConversations(): Promise<Conversation[]> {
 
 export async function getConversationMessages(id: string): Promise<ChatMessage[]> {
   return apiFetchServerCookie<ChatMessage[]>(`/chat/conversations/${id}/messages`);
+}
+
+/**
+ * Restores a workflow's chat thread on load (canvas command bar, Phase 5
+ * Session 4) — `null` when no conversation has ever been linked to this
+ * workflow. Unlike the two functions above, this hits `workflowsRouter`
+ * (`GET /workflows/:id/conversation`), which is Bearer-only (`requireAuth`),
+ * not cookie-auth — so it goes through `apiFetchServer` (session-derived
+ * bearer token), the same helper `workflowGraphServer.ts` uses for that
+ * router, not `apiFetchServerCookie`.
+ */
+export async function getWorkflowConversation(
+  workflowId: string,
+): Promise<{ conversation: Conversation; messages: ChatMessage[] } | null> {
+  return apiFetchServer<{ conversation: Conversation; messages: ChatMessage[] } | null>(
+    `/workflows/${workflowId}/conversation`,
+  );
 }
