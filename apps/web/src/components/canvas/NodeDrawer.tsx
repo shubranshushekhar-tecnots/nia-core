@@ -1,6 +1,6 @@
 'use client';
 
-import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, parseNodeConfig, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, parseNodeConfig, type CheckResult, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
 import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
@@ -86,6 +86,7 @@ export default function NodeDrawer({
   node,
   workflowId,
   upstreamSource,
+  checkResults,
   onConfigChange,
   onDelete,
   onClose,
@@ -93,6 +94,8 @@ export default function NodeDrawer({
   node: CanvasNode;
   workflowId: string;
   upstreamSource?: { connectionId?: string; manifestId?: string };
+  /** Latest persisted check-run results, forwarded to MappingEditor to gate Preview. See MappingEditor.tsx's prop comment. */
+  checkResults?: CheckResult[] | null;
   onConfigChange: (config: Record<string, unknown>) => void;
   onDelete: () => void;
   onClose: () => void;
@@ -138,6 +141,7 @@ export default function NodeDrawer({
             destNodeId={node.id}
             destConnectionId={data.connectionId}
             sourceConnectionId={upstreamSource?.connectionId}
+            checkResults={checkResults}
             onChange={(next) => onConfigChange(next)}
           />
         </div>

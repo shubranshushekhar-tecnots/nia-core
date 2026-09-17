@@ -125,9 +125,27 @@ export const ProposeMappingJob = z.object({
 });
 export type ProposeMappingJob = z.infer<typeof ProposeMappingJob>;
 
+/**
+ * Phase 5 Session 5 — destination-node read preview. Carries only
+ * `destNodeId`, same reasoning as ProposeMappingJob: the worker re-derives
+ * the upstream source (and any transform nodes on the path) from the
+ * workflow's own GraphDoc via resolveGraph(), never from client-supplied
+ * connection ids. Read-only by construction (see apps/worker/src/lib/
+ * preview/runPreview.ts) — never touches a write path.
+ */
+export const PreviewJob = z.object({
+  kind: z.literal("preview_run"),
+  scope: WorkspaceScope,
+  workflowId: z.string().uuid(),
+  destNodeId: z.string(),
+  triggeredByUserId: z.string().uuid(),
+});
+export type PreviewJob = z.infer<typeof PreviewJob>;
+
 export const InteractiveJob = z.discriminatedUnion("kind", [
   ChatQueryJob,
   CheckRunJob,
   ProposeMappingJob,
+  PreviewJob,
 ]);
 export type InteractiveJob = z.infer<typeof InteractiveJob>;

@@ -503,6 +503,7 @@ function CanvasInner({
             node={selectedNode}
             workflowId={workflow.id}
             upstreamSource={upstreamSource}
+            checkResults={latestCheckRun?.results ?? null}
             onConfigChange={updateSelectedNodeConfig}
             onDelete={deleteSelectedNode}
             onClose={onPaneClick}

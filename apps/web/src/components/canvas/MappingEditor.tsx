@@ -2,9 +2,11 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { FieldMapping, MappingEntry, SourceDestConfig } from '@nia/schemas';
+import type { CheckResult, FieldMapping, MappingEntry, PreviewValue, SourceDestConfig } from '@nia/schemas';
 import { getConnectionSchema } from '@/lib/api/connectionsClient';
 import { proposeMapping, MappingsApiError } from '@/lib/api/mappingsClient';
+import { previewDestination, PreviewApiError } from '@/lib/api/previewClient';
+import PreviewTable from './PreviewTable';
 
 /**
  * Task 3, item 3 — destination-node field mapping editor. No mapping UI
@@ -106,6 +108,7 @@ export default function MappingEditor({
   destNodeId,
   destConnectionId,
   sourceConnectionId,
+  checkResults,
   onChange,
 }: {
   config: SourceDestConfig;
@@ -113,6 +116,8 @@ export default function MappingEditor({
   destNodeId: string;
   destConnectionId?: string;
   sourceConnectionId?: string;
+  /** Latest persisted check-run results (FlowCanvas's latestCheckRun.results), or null if none has run yet. Reused as-is to gate Preview — no new validation logic, see runPreview.ts's header comment. */
+  checkResults?: CheckResult[] | null;
   onChange: (next: SourceDestConfig) => void;
 }) {
   const mapping = config.mapping ?? emptyMapping;
@@ -121,6 +126,9 @@ export default function MappingEditor({
 
   const [proposing, setProposing] = useState(false);
   const [proposeError, setProposeError] = useState<string | undefined>(undefined);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | undefined>(undefined);
+  const [preview, setPreview] = useState<PreviewValue | undefined>(undefined);
 
   /** Any edit to entries clears approvedAt — drift honesty, per FieldMapping's header comment in nodeConfig.ts. */
   function updateEntries(entries: MappingEntry[]) {
@@ -158,9 +166,33 @@ export default function MappingEditor({
     }
   }
 
+  async function handlePreview() {
+    setPreviewing(true);
+    setPreviewError(undefined);
+    try {
+      setPreview(await previewDestination(workflowId, destNodeId));
+    } catch (err) {
+      setPreviewError(err instanceof PreviewApiError ? err.message : 'Failed to run preview.');
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
   const mappedDestFields = new Set(mapping.entries.map((e) => e.to));
   const unmappedDestFields = destFields.filter((f) => !mappedDestFields.has(f));
   const isApproved = !!mapping.approvedAt;
+  // Preview requires an approved mapping + a passing config check for this
+  // path — reuses the same persisted check-run results the ChecksDock
+  // already shows, no new validation logic (runPreview.ts's worker-side
+  // handler re-derives this itself too, so this is a UI-gating convenience
+  // only, not the enforcement — same convention as can.ts).
+  const failingCheckForThisNode = (checkResults ?? []).find((r) => r.nodeId === destNodeId && r.status === 'fail');
+  const previewDisabled = previewing || !isApproved || !!failingCheckForThisNode;
+  const previewDisabledReason = !isApproved
+    ? 'Approve the mapping before previewing.'
+    : failingCheckForThisNode
+      ? failingCheckForThisNode.message
+      : undefined;
   // Entries may legitimately sit at "" mid-edit (nodeConfig.ts's MappingEntry
   // comment — e.g. a freshly-added entry before a field is picked, or while
   // the other side's schema is still loading), but approving an incomplete
@@ -255,6 +287,47 @@ export default function MappingEditor({
       >
         Approve
       </button>
+
+      <div style={{ borderTop: '1px solid var(--line2)', marginTop: 16, paddingTop: 16 }}>
+        <button
+          type="button"
+          onClick={handlePreview}
+          disabled={previewDisabled}
+          title={previewDisabledReason}
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            border: '1px solid var(--line2)',
+            background: 'var(--surface2)',
+            borderRadius: 6,
+            padding: '5px 10px',
+            cursor: previewDisabled ? 'not-allowed' : 'pointer',
+            color: previewDisabled ? 'var(--ink4)' : 'var(--ink)',
+            marginBottom: 10,
+          }}
+        >
+          {previewing ? 'Previewing…' : 'Preview'}
+        </button>
+
+        {previewDisabledReason && !previewing && (
+          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 10 }}>{previewDisabledReason}</div>
+        )}
+
+        {previewError && (
+          <div style={{ fontSize: 11.5, color: 'var(--bad)', marginBottom: 10 }}>
+            {previewError}{' '}
+            <button
+              type="button"
+              onClick={handlePreview}
+              style={{ border: 'none', background: 'none', color: 'var(--bad)', textDecoration: 'underline', cursor: 'pointer', fontSize: 11.5, padding: 0 }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {preview && <PreviewTable preview={preview} />}
+      </div>
     </div>
   );
 }

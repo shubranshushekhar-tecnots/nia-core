@@ -19,3 +19,30 @@ as the template.
   generation, schema-context caching, skip-rewrite fast path for simple
   single-source queries). Re-measure after any lever; target ≤5s p50,
   aspiration ≤3s.
+
+- **No explicit source entity/table selection (Phase 6 BLOCK-0
+  PREREQUISITE).** Source nodes persist no entity selection today —
+  `SourceDestConfig` has no `entity` field, and the mapping/pushdown
+  stack operates on a flat, deduplicated union of every entity's field
+  names for a connection (`proposeMapping.ts`'s `uniqueFieldNames`). That
+  was harmless while nothing executed a read against the source. Session
+  5's destination-node preview (Block 1) is the first thing that does,
+  and bridges the gap with `packages/schemas/src/entityResolution.ts`'s
+  `resolveSourceEntity()`: it infers the single source table by finding
+  the entity whose field set is a superset of the approved mapping's
+  `from` fields, failing closed (`entity-unresolved`) on zero or multiple
+  matches rather than guessing. **This inference bridge is preview-only
+  and is explicitly NOT sufficient for Phase 6's ETL runner** — a real
+  run cannot infer its source table by name-matching against whatever
+  fields happen to be mapped; it needs an explicit, persisted selection.
+  Required before Phase 6 execution work starts: a persisted `entity`
+  field on `SourceDestConfig`, a drawer picker for it, and migrating
+  `checkMappings`/`proposeMapping`/`pushdown.ts` off the flat union onto
+  that explicit selection. Relatedly, `compilePushdown()` has never
+  compiled a `FROM`/collection clause (by design — it's a pure fragment
+  compiler over one `TransformConfig`); preview's `buildPreviewQuery()`
+  supplies `FROM` itself using the resolved entity, without extending
+  `compilePushdown()`'s contract. Both gaps close together once explicit
+  entity selection lands. Full writeup: `PHASE5_SESSION_NOTES.md`'s
+  Session 5 entry; test coverage: `entityResolution.test.ts` (14 cases),
+  `runPreview.test.ts`'s two `entity-unresolved` cases.

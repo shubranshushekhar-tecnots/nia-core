@@ -741,3 +741,107 @@ waived, converted to a Phase 5 exit item (tracked in the new
 conversation restore, check-run history), `bb4ceb6` (frontend: CommandBar
 + Logs tab), `6dbb3c8` (e2e: command-bar.spec.ts + canvas.spec.ts fixes +
 baselines), plus this session-notes/decisions/TODO bookkeeping commit.
+
+## Phase 5 Session 5 — Block 1: destination-node read preview
+
+Adds a Preview action to the destination node's drawer: compiles the
+path's pushdown plan, dispatches the READ side against the source
+connection (rowCap 50, same guardrail-validated `dispatch()` path as
+everything else), applies the approved mapping's field projection, and
+renders the result as a table in the drawer. Never touches a write path —
+`isReadShaped()` asserts the compiled query is `kind: "sql"` SELECT (no
+mysql DML) or `kind: "mongo-find"` before `runPreview.ts` ever calls
+`dispatch()`.
+
+**Entity-resolution gap, and the bridge built to cover it for preview
+only (read this before touching `GraphNode`/`pushdown.ts`/preview
+again):** source nodes carry no persisted entity/table selection —
+`GraphNode.config` for a source node is empty (see `nodeConfig.ts`'s
+`SourceDestConfig`, which has no `entity` field), and the entire
+mapping/pushdown stack today operates on a flat, deduplicated union of
+every entity's field names for a connection (`proposeMapping.ts`'s
+`uniqueFieldNames`, mirrored in `MappingEditor.tsx`'s
+`useEntityFields`). An approved mapping's `entries[].from` values are
+just field *names* — never qualified by entity/table. That was fine when
+nothing actually executed a read against the source; Block 1 does, and a
+read needs exactly one table/collection to select `FROM`.
+
+The bridge built for this session is `packages/schemas/src/
+entityResolution.ts`'s `resolveSourceEntity(schema, mappingFromFields)`:
+given the introspected schema and the approved mapping's `from` field
+names, it finds the entity whose field set is a superset of every mapped
+field. If that's not **exactly one** entity — zero matches, or more than
+one candidate table shares the same field names — preview fails closed
+with `entity-unresolved` rather than guessing (see its unit tests,
+`entityResolution.test.ts`, for the zero/ambiguous/unique cases, and
+`runPreview.test.ts`'s two `entity-unresolved` cases for the same
+behavior exercised through the full orchestration path). This is a
+**preview-only, inference-based bridge, not a real fix.** It is
+explicitly NOT sufficient for Phase 6's ETL runner: an actual run cannot
+infer its source table by name-matching against whatever fields happen
+to be mapped — it needs an explicit, persisted selection. Adding real
+entity/table selection (`SourceDestConfig.entity` + a drawer picker for
+it, then migrating `checkMappings`/`proposeMapping`/`pushdown.ts` to
+consume that instead of the flat union) is a **Phase 6 BLOCK-0
+PREREQUISITE**, not deferred polish. Tracked in `PHASE5_EXIT.md`'s open
+risks.
+
+**`pushdown.ts`'s FROM/collection gap (the other half of the same root
+cause, unchanged this session, documented honestly here rather than
+silently worked around):** `compilePushdown()` has never compiled a
+`FROM`/collection clause — it is a pure WHERE/computed-field/projection
+fragment compiler over a single `TransformConfig`, by design (see its
+own header comment). `runPreview.ts`'s `buildPreviewQuery()` supplies the
+`FROM "namespace"."entity"` (or Mongo collection) itself, using the
+entity `resolveSourceEntity()` just resolved — it does not extend or
+change `compilePushdown()`. This keeps `compilePushdown()`'s existing
+contract and test suite untouched, but it does mean the "which
+table/collection" decision now lives in two different places for two
+different reasons (pushdown fragments still assume the caller supplies
+FROM; preview additionally has to *infer* what that FROM is). Both gaps
+close together once Phase 6's explicit entity selection lands — a single
+persisted `entity` field removes the need for `resolveSourceEntity()`'s
+inference AND gives `compilePushdown()`'s callers (preview, and
+eventually the real runner) an unambiguous FROM to compile against.
+
+**Multi-transform-node pushdown chaining is architecturally undefined**
+(not new this session, but surfaced concretely for the first time by
+preview needing to actually execute something): `compilePushdown()`
+operates on exactly one `TransformConfig`. A path with 2+ transform
+nodes between source and destination has no defined way to chain their
+compiled fragments together. Rather than inventing chaining semantics
+under this session's scope, preview degrades honestly: 0 transform nodes
+on the path → trivial (no pushdown needed beyond the mapping's
+projection); exactly 1 → normal `compilePushdown()`; 2+ → the entire
+path's transforms are treated as residual (nothing pushed down, no
+`WHERE`), and `PreviewValue.residualCount` reports the true count so the
+drawer's "N in-stream transforms will apply at run time" notice is never
+misleading about what actually executed. See `runPreview.test.ts`'s
+"degrades to fully residual" case.
+
+**AI-suggested charts — explicitly deferred, not built this session:**
+the only chart rendered is the single "trivially derivable" case (one
+numeric column + one text label column → a plain CSS bar list, see
+`PreviewTable.tsx`'s `AutoChart`) — hand-rolled with no chart library,
+since none exists in `apps/web/package.json` (checked before writing
+it; not worth adding a dependency for one bar-chart shape). Full
+AI-suggested charting (LLM picks a chart type/columns from arbitrary
+preview shapes) is out of scope this session and ledgered in `TODO.md`.
+
+**Read-shape assertion:** `runPreview.ts`'s `isReadShaped()` runs
+immediately before the single `dispatch()` call and is the last line of
+defense that preview can never mutate anything, independent of anything
+upstream (mapping `operation`, node config) being read-only by
+construction.
+
+Full verification: `@nia/schemas`/`@nia/worker`/`@nia/api`/`@nia/web`
+typecheck clean (after rebuilding `@nia/schemas`'s `dist/` — its
+package.json resolves consumers against compiled output, not `src`, so
+any schema change needs a rebuild before sibling packages' typechecks
+see it). `entityResolution.test.ts` 14 passed. `runPreview.test.ts` 12
+passed (covers `findSourcePath`'s backward/forward path reconstruction,
+the trivial end-to-end dispatch shape including the `rowCap: 50` and
+mysql-dialect-quoted SQL, both `mapping-not-approved` variants,
+`no-upstream-source`, `checks-failing` reusing `checkMappings` with no
+new validation, both `entity-unresolved` variants, single- vs.
+multi-transform pushdown behavior, and `dispatch-failed` passthrough).

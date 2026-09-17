@@ -12,6 +12,7 @@ import { getWorkflowDetail } from "../services/workflows.js";
 import { getWorkflowGraph, putWorkflowGraph } from "../services/workflowGraphs.js";
 import { getLatestCheckRun, listCheckRuns, runAndRecordChecks } from "../services/checks.js";
 import { proposeMappingForWorkflow } from "../services/mappings.js";
+import { previewWorkflowDestination } from "../services/preview.js";
 import { getLatestConversationForWorkflow, listMessages } from "../services/chat.js";
 
 export const workflowsRouter: ExpressRouter = Router();
@@ -132,6 +133,31 @@ workflowsRouter.post(
   asyncHandler(async (req, res) => {
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await proposeMappingForWorkflow(
+      req.supabase,
+      scopeFromActor(req.actor),
+      req.params.id!,
+      req.body.destNodeId,
+      req.actor.userId,
+    );
+    res.status(201).json(data);
+  }),
+);
+
+const previewBodySchema = z.object({ destNodeId: z.string().min(1) });
+
+// Destination-node read preview (Block 1, Phase 5 Session 5). Gated the same
+// as mappings/propose (workflows.updateDefinition, not workflows.run) — a
+// preview is a config-editing assist for the drawer, not a workflow
+// execution. Read-only end to end: the worker asserts the compiled query is
+// read-shaped before it ever dispatches (runPreview.ts), and this route has
+// no persistence step of its own (services/preview.ts's header comment).
+workflowsRouter.post(
+  "/:id/preview",
+  requireCapability("workflows.updateDefinition"),
+  validate({ params: workflowParamsSchema, body: previewBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await previewWorkflowDestination(
       req.supabase,
       scopeFromActor(req.actor),
       req.params.id!,

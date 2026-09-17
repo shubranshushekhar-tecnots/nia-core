@@ -9,6 +9,7 @@ import {
 import { runChatQuery } from "./lib/chat/runChatQuery.js";
 import { runWorkflowChecks } from "./lib/checks/runWorkflowChecks.js";
 import { proposeMapping } from "./lib/mappings/proposeMapping.js";
+import { runPreview } from "./lib/preview/runPreview.js";
 import { runGoldenSuite } from "./lib/eval/runGoldenSuite.js";
 import { registerNightlyEvalSchedule } from "./lib/eval/schedule.js";
 import { shutdownLangfuse } from "./lib/observability/langfuse.js";
@@ -78,6 +79,14 @@ const interactive = new Worker(
         // comment — approval is a separate, explicit graph-save write).
         console.log(`[interactive] mappings_propose for workflow ${payload.workflowId} dest ${payload.destNodeId}`);
         return await proposeMapping(payload.workflowId, payload.destNodeId, payload.scope);
+      case "preview_run":
+        // Block 1 (Phase 5 Session 5) — runPreview.ts owns path-walking,
+        // entity resolution, check-result reuse, pushdown compilation, and
+        // the read-shape assertion before dispatch. This handler only
+        // computes the preview result, it never persists anything — same
+        // no-persistence shape as check_run/mappings_propose.
+        console.log(`[interactive] preview_run for workflow ${payload.workflowId} dest ${payload.destNodeId}`);
+        return await runPreview(payload);
     }
   },
   { connection, concurrency: 10 },

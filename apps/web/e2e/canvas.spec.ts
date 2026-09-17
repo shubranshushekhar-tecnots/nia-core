@@ -546,7 +546,12 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
 
     const approved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
     await drawer.getByRole('button', { name: 'Approve' }).click();
-    await expect(drawer.getByText('Approved')).toBeVisible();
+    // Exact match: Block 1 (Phase 5 Session 5) added a Preview section below
+    // Approve whose disabled-reason line, at this point, still shows the
+    // stale failing check's message ("...has no approved field mapping."),
+    // whose text contains "approved" and collides with a loose substring
+    // match (strict-mode violation).
+    await expect(drawer.getByText('Approved', { exact: true })).toBeVisible();
     await approved;
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
@@ -573,6 +578,96 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     await page.getByRole('button', { name: 'Run checks' }).click();
     await expect(pill).toContainText(/failing/, { timeout: 15_000 });
     await expect(page.getByTestId('checks-dock-body').getByText(/no approved field mapping/)).toBeVisible();
+  });
+
+  /**
+   * Phase 5 Session 5, Block 1 — destination-node read preview. Reuses the
+   * exact mysql->supabase heterogeneous pairing and `salary` mapping the
+   * manual-mapping test above already established is unambiguous (both dev
+   * sandboxes' `employees` table is the only table with a `salary` column,
+   * so resolveSourceEntity resolves to it uniquely — see
+   * entityResolution.ts). Requires a live apps/worker consuming the
+   * "interactive" BullMQ queue and a live connector-mysql/connector-supabase
+   * round trip (runPreview.ts's dispatch() call is real, not mocked) — same
+   * live-infra requirement as the checks-dock/mapping tests above.
+   */
+  test('destination drawer: preview is gated on approval + passing checks, then renders real rows from the source sandbox', async ({ page }) => {
+    await dragPaletteItemOnto(page, 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
+    await connectNodes(page, 0, 1);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    // Same settling step the manual-mapping test above relies on before
+    // opening the drawer: run checks (fails — no mapping yet) and collapse
+    // the dock. Without this round trip the graph/connection-id state isn't
+    // fully settled yet, and useEntityFields' schema queries can still be
+    // mid-flight when "+ Entry" is clicked, silently defaulting the new
+    // entry's `from` to "" instead of sourceFields[0] (observed as
+    // selectOption succeeding but the select staying on the placeholder,
+    // which left `hasIncompleteEntry` true and Approve stuck disabled).
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    const pill = page.getByTestId('checks-dock-pill');
+    await expect(pill).toContainText(/failing/, { timeout: 15_000 });
+    await pill.click();
+    await expect(page.getByTestId('checks-dock-body')).not.toBeVisible();
+
+    await page.locator('.react-flow__node').nth(1).click();
+    const drawer = page.getByTestId('node-drawer');
+    // Same async-schema-fetch race as the manual-mapping test above — wait
+    // for both sides' schema GETs before touching "+ Entry".
+    await Promise.all([
+      page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema')),
+      page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema')),
+    ]);
+
+    const previewBtn = drawer.getByRole('button', { name: 'Preview', exact: true });
+    // Not approved yet: disabled, with the reason surfaced as both a
+    // visible line and the button's title attribute (MappingEditor.tsx's
+    // previewDisabledReason).
+    await expect(previewBtn).toBeDisabled();
+    await expect(drawer.getByText('Approve the mapping before previewing.')).toBeVisible();
+
+    await drawer.getByRole('button', { name: '+ Entry' }).click();
+    const fromSelect = drawer.locator('select').nth(0);
+    const toSelect = drawer.locator('select').nth(1);
+    await fromSelect.selectOption('salary');
+    await toSelect.selectOption('salary');
+
+    const approved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
+    await drawer.getByRole('button', { name: 'Approve' }).click();
+    // Exact match: the stale failing check's message ("...has no approved
+    // field mapping.") is also rendered in the drawer as the Preview
+    // button's disabled-reason line at this point, and a loose substring
+    // match on "Approved" collides with it (strict-mode violation).
+    await expect(drawer.getByText('Approved', { exact: true })).toBeVisible();
+    await approved;
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    // Approved, but the stale check-run result from the failing run above
+    // (captured before the mapping existed) still gates Preview until
+    // checks are re-run — same "otherwise disabled with the reason"
+    // contract as the approval gate.
+    await expect(previewBtn).toBeDisabled();
+
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    await expect(pill).toContainText('All checks passed', { timeout: 15_000 });
+    await pill.click();
+    await expect(page.getByTestId('checks-dock-body')).not.toBeVisible();
+
+    await expect(previewBtn).toBeEnabled();
+    await previewBtn.click();
+    await expect(drawer.getByText('Previewing…')).toBeVisible();
+
+    // Real dispatch() round trip against the dev-mysql sandbox's `employees`
+    // table (docker/dev-mysql-init.sql) — asserting on an actual seeded
+    // salary value, not a mock, proves this executed a real read rather than
+    // rendering a stubbed shape. rowCap is 50, well above the 3 seed rows,
+    // so nothing here should be truncated.
+    await expect(drawer.getByText('162000')).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText('145000')).toBeVisible();
+    await expect(drawer.getByText('158000')).toBeVisible();
+    await expect(drawer.getByText('Preview capped at 50 rows.')).not.toBeVisible();
+    await expect(drawer.getByText(/in-stream transform/)).not.toBeVisible();
   });
 });
 
