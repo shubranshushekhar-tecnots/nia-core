@@ -880,6 +880,16 @@ the already-fetched `sourceFields`/`destFields` client-side rather than
 parsing `CheckResult.message` strings — `checks.ts` carries no
 structured field reference, only a message.
 
+**Schema-race UX bug (ledgered, not fixed):** the same in-flight window
+`driftedField()`'s `fields.length > 0` guard exists for is a real UX bug
+shaped like a test bug, not just a testing artifact — a fast human
+clicking a field picker and pressing Enter before the schema query
+resolves hits the exact same race a fast Playwright test does, and can
+commit a mapping entry as an empty string. Candidate fix: disable the
+field picker / mapping submission until the schema query resolves,
+rather than only guarding the drift-highlight display. See
+`PHASE5_EXIT.md`'s open risks for the carried-forward item.
+
 **No broken link found in the drift chain.** `packages/schemas/src/
 checks.ts`'s `checkMappings()` (lines 313-360) already correctly detects
 drift — looks up `currentFields` via `lookupFields(source.id)`, fails
@@ -888,6 +898,16 @@ with `${nodeLabel(source)} -> ${nodeLabel(dest)}: mapped source field
 isn't in the live set — this was pre-existing, correct code, not touched.
 The only missing pieces were the refresh mechanism (now built) and the
 UI surfacing (now built); the detection itself never needed a fix.
+
+**Schema-race UX bug (ledgered, not fixed).** The `driftedField()` guard
+above exists because of a real race, not a hypothetical one: if a user
+interacts with a mapping field (click + Enter) before its schema query
+resolves, the field list is still empty and the entry silently saves as
+an empty string rather than the intended value — no error, no visible
+feedback. This is shaped like a test-timing bug but isn't one; a fast
+human hits the same window a fast test does. Candidate fix is a loading
+guard (disable/spinner the field until its schema query settles); not
+fixed this session, left as a named UX bug for follow-up.
 
 New e2e (`canvas.spec.ts`, `.serial` block, last test — the only one that
 mutates the shared dev-mysql sandbox schema itself) proves the full
@@ -1063,3 +1083,53 @@ extra single-source rows) were reverted live and never landed in
 `docker/dev-*-init.sql`/`.js`; no fixture case was added to
 `chat-v1.jsonl`. The `expectFaithfulnessOutcome` plumbing is left in
 place for if/when a real trigger is found.
+
+## Phase 5 Session 5 — Block 5: exit report + full battery, close-out
+
+Wrote the full `PHASE5_EXIT.md` (replacing the Session-4 latency-only
+skeleton), mirroring `PHASE4_EXIT.md`'s structure: golden set results,
+citation reproduction, one section per Session-5 block (destination
+preview, schema drift, latency, semantic-conflict retry path), the full
+verification battery, and open risks carried to Phase 6. Every claim in
+it is backed by a cited, reproducible artifact — no test-run claim
+without a named run id/log/commit.
+
+**Rider B (compiler-completeness consolidation + schema-race UX bug):**
+done. `PHASE5_EXIT.md`'s open risks now carry one item, "Compiler
+completeness (Phase 6 Block-0 prerequisite)," with the three required
+bullets (entity-selection gap, pushdown FROM gap, multi-transform
+chaining) instead of the old two-gap item. The schema-race UX bug
+one-liner is now in this file's Block 2 entry above (was previously a
+dangling "noted below" cross-reference with no actual note).
+
+**Rider C (clean single-invocation full Playwright run):** done, with an
+honest result, not a fourth "documented flake" mention. Machine load
+never actually dropped under the requested `<2` bar (2.89-4.85 throughout
+— this IDE's own renderer/Docker-VM overhead is structurally
+unavoidable), reported as such rather than claimed. One run was
+discarded after a self-inflicted `EADDRINUSE` (a `pnpm -r build` run
+corrupted a still-running dev server's `.next` dev-mode chunks; fixed by
+killing the stale process and clearing `.next`). The clean rerun: 44
+tests, 40 passed, 3 failed, 1 skipped, 4.0m total. **The `gotoWorkflow`
+flake did not reproduce anywhere in the run** — first clean result across
+its three prior "pre-existing, load-related" mentions, including on both
+of this session's new, heaviest `canvas.spec.ts` additions (Block 1's
+preview test, Block 2's schema-drift test). All 3 failures were run down
+to known root causes: 2 are the pre-existing `/login`/`/signup` visual
+chore from Session 1; the 3rd (`command-bar-thread-open-1440.png`) is
+confirmed via `git log` to be the same pre-existing, unrelated-to-any-
+session class of ~1% pixel diff, not a regression — consolidated with the
+other two into one `TODO.md` chore. The 1 skip
+(`chat.spec.ts:56`) is a pre-existing empty stub, unchanged status.
+
+Full battery beyond Playwright: `pnpm -r typecheck`/`build` clean across
+all 9 workspaces; `vitest` 160+44+22+154+10 (schemas/guardrails/api/
+worker/web) all passing; RLS probes 35/35; golden eval 20/20 (run id
+`4a30801b-fbf3-45b7-b878-6ab0487dfa18`, 27/27 citations reproduced);
+`chat-smoke.ts` 44/44 assertions. See `PHASE5_EXIT.md` §7 for the full
+citation list.
+
+No code changed this block — documentation only (`PHASE5_EXIT.md` full
+rewrite, this close-out, the schema-race note above, `TODO.md`'s chore
+consolidation). Per the session plan, this report does not close Phase 5
+— left for user review.
