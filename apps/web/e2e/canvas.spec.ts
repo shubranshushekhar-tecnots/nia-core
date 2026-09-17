@@ -18,6 +18,23 @@ async function gotoWorkflow(page: Page, projectName: string, workflowName: strin
 }
 
 /**
+ * A workflow reload re-fetches its latest conversation server-side
+ * (Phase 5 Session 4, migration 0015) — if this shared fixture carries real
+ * chat history (e.g. from command-bar.spec.ts), the command bar's thread
+ * panel reopens automatically (CommandBar.tsx: threadOpen = messages.length
+ * > 0) and, growing upward from the bar, can overlap nodes dropped at this
+ * file's usual coordinates. Dismiss it (client-state only, harmless) before
+ * any post-reload node click so this file's own assertions never depend on
+ * whether a sibling test left chat history on this fixture.
+ */
+async function dismissThreadIfOpen(page: Page) {
+  const dismiss = page.getByRole('button', { name: 'Dismiss' });
+  if (await dismiss.isVisible().catch(() => false)) {
+    await dismiss.click();
+  }
+}
+
+/**
  * NodesRail items are draggable divs using the HTML5 DnD API
  * (dataTransfer.setData), which Playwright's mouse-based dragTo() can't
  * drive reliably — this is the standard Playwright recipe for HTML5 DnD:
@@ -89,14 +106,56 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
 
   test.beforeEach(async ({ page }) => {
     await gotoWorkflow(page, 'Canvas E2E Project', 'Canvas E2E Workflow');
+
+    // Reset the floating command bar's chat thread BEFORE touching nodes:
+    // the same shared fixture also carries its chat history (Phase 5
+    // Session 4, command-bar.spec.ts) — when that thread has messages it
+    // opens by default (CommandBar.tsx: threadOpen = messages.length > 0)
+    // and, growing upward from the bar, can overlap a node's own "Delete
+    // node" button, breaking the node self-heal below before it even
+    // starts. Must run first so the node-deletion loop's clicks always
+    // land on an unobstructed canvas, regardless of run order relative to
+    // command-bar.spec.ts.
+    const newChat = page.getByRole('button', { name: 'New chat' });
+    if (await newChat.isVisible().catch(() => false)) {
+      await newChat.click();
+    }
+
     // Self-healing reset: delete any nodes a previous run left behind, via
     // the real UI (no raw API poke — /workflows/:id/graph requires a Bearer
     // header the browser context can't manufacture out of band).
     const deleteButtons = page.getByRole('button', { name: 'Delete node' });
+    let deletedAny = false;
     while ((await deleteButtons.count()) > 0) {
+      deletedAny = true;
       await deleteButtons.first().click();
     }
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
+    if (deletedAny) {
+      // The last delete click above starts FlowCanvas's 800ms debounced
+      // autosave (AUTOSAVE_DELAY_MS). This hook's `page` fixture stays
+      // alive for the whole test case (Playwright shares fixtures across
+      // beforeEach/test/afterEach), so if this hook returned before that
+      // timer fires, the pending PUT could go off mid-test and race the
+      // test body's own graph saves on the same workflow row — root cause
+      // of an observed spurious 409/missing-"Saved" flake in "two tabs on
+      // the same workflow", whose setup page's own save could land right
+      // when this background timer fired. Wait for the real save so
+      // nothing is left pending once the hook returns.
+      await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+      // FlowCanvas.tsx holds "Saved" visible for another 1.5s after the PUT
+      // resolves (its own idle-reset setTimeout) before reverting saveState
+      // to 'idle'. If this hook returned right away, a fast-running test
+      // body (drop nodes, connect edges, then its own `getByText('Saved')`
+      // check) can race that fade-out window and be satisfied by THIS
+      // stale text instead of waiting for its own save's debounce+network
+      // round trip — root cause of an observed spurious 0-nodes-after-
+      // reload flake ("drag 2 sources..."), where the test proceeded to
+      // reload before its real save had actually fired. Wait for the
+      // stale text to clear so any later "Saved" check in the test body is
+      // guaranteed fresh.
+      await expect(page.getByText('Saved')).not.toBeVisible({ timeout: 3_000 });
+    }
   });
 
   test('drag 2 sources + 1 transform, connect them, autosave, and reload keeps the graph', async ({ page }) => {
@@ -196,6 +255,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 2_000 });
 
     await page.reload();
+    await dismissThreadIfOpen(page);
     await page.locator('.react-flow__node').nth(1).click();
     const reopened = page.getByTestId('node-drawer');
     // Same field-select async-schema race as above — wait for the plain
@@ -227,6 +287,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     await expect(drawer.getByTestId('computed-field-expr')).toHaveValue('concat(');
 
     await page.reload();
+    await dismissThreadIfOpen(page);
     await page.locator('.react-flow__node').nth(1).click();
     const reopened = page.getByTestId('node-drawer');
     // The invalid keystrokes never reached onChange (parseExpression rejected
@@ -243,6 +304,17 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     const setupCtx = await browser.newContext({ storageState: personas.canvasA.storageStatePath });
     const setupPage = await setupCtx.newPage();
     await gotoWorkflow(setupPage, 'Canvas E2E Project', 'Canvas E2E Workflow');
+    // See dismissThreadIfOpen's own doc comment: this fixture can carry real
+    // chat history left by a sibling spec file (command-bar.spec.ts), which
+    // auto-reopens the CommandBar thread on load. The thread's message rows
+    // are real (pointerEvents:auto) elements that grow upward from the
+    // bottom-center bar and can sit right over node 1's drop point (y:420,
+    // the closest of this test's two nodes to the bar) — left unguarded here,
+    // that silently swallows dragNodeBy's mousedown below (no
+    // onNodesChange fires, so no save, so the conflict banner never
+    // appears), which was the root cause of this test's genuinely-absent
+    // (not slow) failures on both pageA's and pageB's assertions.
+    await dismissThreadIfOpen(setupPage);
     // See the note on the first test in this block: x >= 450 keeps the
     // node's body clear of NodesRail's overlay, which dragNodeBy's
     // real-mouse click-and-drag (below) needs to actually land on the node.
@@ -258,18 +330,25 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
 
     await gotoWorkflow(pageA, 'Canvas E2E Project', 'Canvas E2E Workflow');
     await gotoWorkflow(pageB, 'Canvas E2E Project', 'Canvas E2E Workflow');
+    await dismissThreadIfOpen(pageA);
+    await dismissThreadIfOpen(pageB);
     await expect(pageA.locator('.react-flow__node')).toHaveCount(2);
     await expect(pageB.locator('.react-flow__node')).toHaveCount(2);
 
-    // A moves a node and wins the save race.
+    // A moves a node and wins the save race. Two independent browser
+    // contexts each doing their own 800ms-debounced save (FlowCanvas.tsx's
+    // AUTOSAVE_DELAY_MS) plus a real network round trip is more sensitive
+    // to transient system load than this file's single-page tests — bump
+    // 5s to 8s here specifically (same reasoning as the field-select async
+    // race elsewhere in this file bumping to 15s), not a behavior change.
     await dragNodeBy(pageA, 0, 60, 60);
-    await expect(pageA.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+    await expect(pageA.getByText('Saved')).toBeVisible({ timeout: 8_000 });
 
     // B is still holding the now-stale version; its own move loses the race
     // and must surface a conflict banner, never a silent overwrite.
     await dragNodeBy(pageB, 1, 60, 60);
     const reloadBanner = pageB.getByRole('button', { name: 'Saved elsewhere — reload' });
-    await expect(reloadBanner).toBeVisible({ timeout: 5_000 });
+    await expect(reloadBanner).toBeVisible({ timeout: 8_000 });
 
     await reloadBanner.click();
     await expect(reloadBanner).not.toBeVisible();
