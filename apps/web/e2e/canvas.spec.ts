@@ -290,6 +290,11 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
    * queue — "Run checks" blocks on a real check_run job round-trip.
    */
   test('checks dock: broken node fails, clicking the failing row highlights it, fixing + re-running passes, Run enables, and clicking it shows the Phase 6 stub', async ({ page }) => {
+    // 1440px for this test only (see the drawer test's own comment on why
+    // this is safe within a .serial block) — also the shot used for the
+    // Session 3 visual-diff baselines: dock-open/failing and dock-open/
+    // all-pass states.
+    await page.setViewportSize({ width: 1440, height: 900 });
     await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (supabase)', { x: 300, y: 200 });
     // The checks route reads the SERVER's persisted graph (not client state),
     // so the drag's autosave must flush before "Run checks" is clicked, or
@@ -312,14 +317,34 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
     await expect(page.getByTestId('node-drawer')).toBeVisible();
 
-    // handleSelectCheckNode just re-centered the viewport on node 0 — a
-    // fixed client-pixel drop point can no longer be trusted to land clear
-    // of it, so derive the drop point from node 0's live (post-pan) bounding
-    // box instead of a hardcoded screen coordinate. setCenter's pan is a
-    // 300ms animated transition, not instantaneous, so the box must be read
-    // after it settles or this captures a stale mid-animation position.
+    // Session 3 Task 4 visual-diff baseline: dock open, failing state, with
+    // the failing node highlighted + its drawer open. designs/Nia Core
+    // App.html has no failing-checks mock (its Run/Run checks buttons are
+    // statically enabled — see the Session 1 known-delta note), so there's
+    // no design state to diff this against; captured purely as a
+    // regression baseline for this feature going forward.
+    // maxDiffPixels set higher than the drawer-only baseline above (50):
+    // this shot's larger live canvas/SVG surface (multiple nodes + edges,
+    // freshly re-panned) produces more sub-pixel jitter between otherwise-
+    // identical runs (~1.4-2.5k px / ~0.01 ratio observed back-to-back) —
+    // not a real regression signal at that magnitude.
+    await expect(page).toHaveScreenshot('checks-dock-failing-1440.png', { maxDiffPixels: 3000 });
+
+    // handleSelectCheckNode just re-centered the viewport on node 0 —
+    // assert that pan actually happened (not just exploit it below): at
+    // zoom:1, the selected node's on-screen center should now coincide
+    // with the pane's own center. setCenter's pan is a 300ms animated
+    // transition, not instantaneous, so both boxes must be read after it
+    // settles or this captures a stale mid-animation position.
     await page.waitForTimeout(400);
+    const paneBox = (await page.locator('.react-flow__pane').boundingBox())!;
     const sourceBox = (await page.locator('.react-flow__node').first().boundingBox())!;
+    expect(Math.abs(sourceBox.x + sourceBox.width / 2 - (paneBox.x + paneBox.width / 2))).toBeLessThan(20);
+    expect(Math.abs(sourceBox.y + sourceBox.height / 2 - (paneBox.y + paneBox.height / 2))).toBeLessThan(20);
+
+    // A fixed client-pixel drop point can no longer be trusted to land
+    // clear of the now-centered node, so derive the drop point from node
+    // 0's live (post-pan) bounding box instead of a hardcoded coordinate.
     await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', {
       x: sourceBox.x + sourceBox.width + 150,
       y: sourceBox.y,
@@ -333,6 +358,11 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
 
     await page.getByRole('button', { name: 'Run checks' }).click();
     await expect(pill).toContainText('All checks passed', { timeout: 15_000 });
+
+    // Session 3 Task 4 visual-diff baseline: dock open, all-pass state,
+    // Run enabled. Same "no design mock for this state" caveat as the
+    // failing-state shot above.
+    await expect(page).toHaveScreenshot('checks-dock-all-pass-1440.png', { maxDiffPixels: 50 });
 
     const runBtn = page.getByRole('button', { name: 'Run', exact: true });
     await expect(runBtn).toBeEnabled();
@@ -379,6 +409,10 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
    * path is covered live by scripts/mapping-smoke.ts instead, per the plan).
    */
   test('destination drawer: manual field mapping — no approval fails checks, approving passes, editing clears approval and fails again', async ({ page }) => {
+    // 1440px for the Session 3 Task 4 visual-diff baseline this test also
+    // captures (mapping editor open) — see the NodeDrawer visual test's own
+    // comment on why this is safe within a .serial block.
+    await page.setViewportSize({ width: 1440, height: 900 });
     await dragPaletteItemOnto(page, 'Dev sandbox (mysql)', { x: 450, y: 200 });
     await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
     await connectNodes(page, 0, 1);
@@ -420,6 +454,16 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     const toSelect = drawer.locator('select').nth(1);
     await fromSelect.selectOption('salary');
     await toSelect.selectOption('salary');
+
+    // Session 3 Task 4 visual-diff baseline: destination drawer with the
+    // mapping editor open (one populated, not-yet-approved entry).
+    // designs/Nia Core App.html has no mapping-editor mock at all (Task 3
+    // is new scope since that static export was made) — no design state to
+    // diff against, captured as a fresh regression baseline only.
+    // Same canvas/SVG sub-pixel jitter tolerance rationale as the
+    // checks-dock-failing baseline above (~200-300px / ~0.01 ratio observed
+    // back-to-back here).
+    await expect(page).toHaveScreenshot('destination-mapping-editor-1440.png', { maxDiffPixels: 500 });
 
     const approved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
     await drawer.getByRole('button', { name: 'Approve' }).click();

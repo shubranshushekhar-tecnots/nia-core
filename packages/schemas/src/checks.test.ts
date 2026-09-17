@@ -91,6 +91,21 @@ describe("checkConfig", () => {
     expect(results.some((r) => r.status === "fail" && r.message.includes("no field selected"))).toBe(true);
   });
 
+  it("fails a computed-field step with no output name (permissive at the schema layer, not at check time)", () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "transform",
+          config: { steps: [{ kind: "computed_field", name: "", expression: { kind: "literal", value: 1 } }] },
+        }),
+      ],
+      edges: [],
+    };
+    const results = checkConfig(graph);
+    expect(results.some((r) => r.status === "fail" && r.message.includes("no output name"))).toBe(true);
+  });
+
   it("fails a source/destination node with no connection selected", () => {
     const graph: GraphDoc = { nodes: [node({ id: "n1", type: "source" })], edges: [] };
     const results = checkConfig(graph);

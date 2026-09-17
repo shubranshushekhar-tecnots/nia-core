@@ -315,3 +315,190 @@ delivered in chat; summary of the two real gaps found and fixed:
   Sources and Destinations, 5 draggable entries instead of 3); the
   zero-connection (canvasB) and Triggers-moat (canvasC) tests were
   confirmed unaffected and left untouched.
+
+## Phase 5 Session 3 — Task 2: checks dock + Run gating (`c4c8800`)
+
+- **`ChecksDock.tsx`** replaces `CheckResultsPanel`'s dropdown with a
+  full-width bottom dock: a summary pill ("All checks passed" / "N
+  failing" / "out of date") doubles as the collapse/expand control;
+  clicking a failing row selects + centers that node on the canvas via
+  `FlowCanvas.tsx`'s `handleSelectCheckNode` (`setCenter` at the node's
+  measured center, `zoom: 1`, 300ms animated pan). Checks tab is live;
+  Logs tab renders disabled ("Session 4") — the real placeholder for the
+  Session 4 scope named in this file's own STOP boundary.
+- **Run gating is real, not cosmetic:** `runEnabled = !checksStale &&
+  failingChecks === 0`, where `checksStale = !latestCheckRun ||
+  latestCheckRun.graphVersion !== version` — enabling requires the latest
+  *persisted* check run to both be all-pass and match the live graph's
+  version, so any edit after a run (even one that would objectively pass)
+  correctly re-stales the gate. Clicking Run while enabled shows an
+  "Execution arrives in Phase 6" stub modal; no run rows are created —
+  the gate itself is real even though execution doesn't exist yet.
+- **Ground-truth discovery: `auth.uid()`-under-service-role.**
+  `public.record_check_run` (0014) persists through
+  `private.can_access_workflow`, which relies on `auth.uid()` — populated
+  only for a request carrying the caller's own JWT, never for a
+  `service_role` call. This means `apps/worker` structurally **cannot**
+  call `record_check_run` itself (its Supabase client is `service_role`,
+  no `auth.uid()`, the RPC would always refuse it). The split enforced by
+  this finding: `runWorkflowChecks.ts` (worker) only *computes* results
+  and returns them over the BullMQ job payload; `apps/api/src/services/
+  checks.ts` (the Express route, using `req.supabase` — the caller's own
+  JWT) is the only thing that ever calls the RPC and persists. Documented
+  in both files' header comments and in `0014`'s own header comment; not
+  an incidental detail, a load-bearing trust-boundary requirement.
+- **`checksQueue.ts` timeout hardening:** the route's BullMQ
+  job-completion await now has an explicit, env-tunable timeout
+  (`CHECK_RUN_TIMEOUT_MS`, default 30s) returning `503` naming the worker
+  unavailable instead of hanging indefinitely if no worker is consuming
+  the queue. Covered by `checksQueue.timeout.test.ts`.
+- e2e: the two checks-dock/Run-gating Playwright tests landed this task;
+  see Task 4 below for the completeness audit performed on them this
+  session.
+
+## Phase 5 Session 3 — Task 3: AI-proposed field mappings (`22b7556`)
+
+- **Manual + LLM-assisted mapping approval flow.** `MappingEditor.tsx`
+  (destination-node drawer) lets a user hand-build `FieldMapping` entries
+  or call `POST .../propose-mapping` (BullMQ round-trip to
+  `apps/worker/src/lib/mappings/proposeMapping.ts`, real Gemini call) to
+  get a proposed mapping to review before approving. Approval is
+  click-gated, not automatic — proposing never auto-persists.
+  `checkMappings` (packages/schemas/src/checks.ts) is the enforcement
+  point: a heterogeneous source→destination path with no *approved*
+  mapping fails checks; approving clears the failure; editing an approved
+  entry clears `approvedAt` immediately client-side and re-fails on the
+  next run.
+- **Delivery mechanism: `QueueEvents.waitUntilFinished`, not SSE** — a
+  mapping proposal is a single request/response outcome, not a stream,
+  mirroring the exact pattern `checksQueue.ts` already established for
+  check runs. Rationale recorded inline in
+  `apps/api/src/lib/mappingsQueue.ts`. This decision is intended to be
+  reused as-is for Phase 7's copilot plan delivery — don't re-litigate
+  the SSE-vs-queue choice there without a genuinely different shape of
+  problem (e.g. an actual multi-event stream).
+- **Real product bug found and fixed: `MappingEntry` lockout.** Both
+  `MappingEntry.from`/`.to` in `packages/schemas/src/nodeConfig.ts` were
+  `z.string().min(1)`. Since `MappingEditor.tsx` autosaves on every
+  keystroke/select-change, a freshly-added entry (`from`/`to` default to
+  `''` until the user picks both) failed validation on the very next
+  render and permanently flipped the node into `NodeDrawer`'s read-only
+  "unrecognized config" fallback — a real UX lockout, not a test
+  artifact, matching the exact same class of bug Session 2 found and
+  fixed for `FilterCondition.field`/`ComputedFieldStep.name`. Relaxed
+  both to `z.string()`, same convention as that prior fix; check-time
+  emptiness validation added separately in `checkConfig()` (see Task 4
+  below — the `checkConfig` branch existed for filter/computed-field
+  already, this task's fix restores the same permissive-schema/
+  strict-check split for mapping entries). Confirmed no `.min(1)` is
+  asserted anywhere in `nodeConfig.test.ts` and this schema still isn't
+  wired into any execution path (editor-only), so no runtime-safety
+  regression from relaxing it.
+- **Ground-truth discovery: `packages/schemas` dist/ rebuild footgun.**
+  `apps/web`'s `next.config.mjs` only lists `@nia/ui` in
+  `transpilePackages` — `@nia/schemas` resolves via its own
+  `package.json`'s `main: "./dist/index.js"` (compiled output), not
+  transpiled from source by Next. Any edit to `packages/schemas/src/
+  *.ts` is invisible to a running `next dev` / Playwright run until
+  `pnpm --filter @nia/schemas build` is re-run. Root-caused after a
+  Playwright test kept failing against clearly-correct-looking source
+  during this task; costs real debugging time if forgotten — check this
+  first the next time a schemas-layer change "doesn't seem to take" in
+  the running app.
+- **`playwright.config.ts`: `workers: 1` pinned**, with a header comment
+  citing dev-server contention as the reason — this is config, not a
+  remembered convention, so it survives regardless of who's running the
+  suite.
+- e2e: one new heterogeneous-path (mysql→supabase) manual-mapping test;
+  full suite verified clean (18/18 at the time) under the `workers:1`
+  pin, after also discovering and fixing the dist/ rebuild issue above.
+
+## Phase 5 Session 3 — Task 4: closing battery (coverage + baselines, this session)
+
+No new features — closes out Session 3's coverage/baseline/bookkeeping
+debt before Session 4 (command bar + Logs) starts.
+
+- **`checks.test.ts` fixture-completeness audit.** Cross-referenced every
+  fixture in the Session 3 spec list against `checkConfig()`'s actual
+  code branches (not just the spec's bullet wording) — found one real,
+  untested branch: `ComputedFieldStep.name === ''` is a separate `case`
+  from the already-tested `FilterCondition.field === ''` branch, despite
+  both arguably falling under the same "empty-required-field" spec
+  bullet. Added `"fails a computed-field step with no output name..."`
+  to close it. Final per-fixture checklist (all in
+  `packages/schemas/src/checks.test.ts`):
+  - cyclic graph — `"fails on a cyclic graph"`
+  - orphan node — `"fails on an orphan node"`
+  - dangling edge — `"fails when an edge references a missing node"`
+  - missing source→destination path — `"fails when there is no source ->
+    destination path"`
+  - unrecognized config — `"fails an unrecognized config shape"`
+  - empty-required-field (filter) — `"fails a filter step with no field
+    selected"`
+  - empty-required-field (computed field) — `"fails a computed-field step
+    with no output name (permissive at the schema layer, not at check
+    time)"` (new this task)
+  - incomplete mapping entry — `"fails a destination mapping entry with
+    an unset field"`
+  - write-verb tripwire — `"fails loudly (tripwire) if a write verb
+    appears..."`
+  - credential dedup + failure — `"fails when the injected test function
+    reports failure"` + `"dedupes nodes sharing the same connection"`
+  - mapping approved — `"passes an approved mapping whose fields still
+    exist"`
+  - mapping drifted — `"fails on drift: a mapped source field no longer
+    exists upstream"`
+  - mapping missing — `"fails a heterogeneous path with no approved
+    mapping"`
+  - mapping unresolvable-introspection — `"skips drift verification (does
+    not fail) when introspection data is unavailable"`
+  145 passed, 10 test files (`pnpm --filter @nia/schemas exec vitest
+  run`).
+- **`canvas.spec.ts` gating-loop completeness audit.** The full
+  broken→fix→pass→Run→stub and pass→edit→stale→disabled loop was already
+  covered piecewise across Task 2's two tests. The one genuine gap: the
+  checks-dock row-click's re-centering (`setCenter`) was *exploited* by
+  the existing test (a 400ms wait + fresh bounding-box read for a
+  downstream drag target) but never independently *asserted*. Added an
+  explicit assertion — after the 300ms pan settles, the selected node's
+  on-screen bounding-box center must be within 20px of the
+  `.react-flow__pane`'s own center. The stale-after-edit transition
+  (user's other suggested gap) was already fully covered by the second
+  Task 2 test — confirmed via re-read, not re-added.
+- **Visual-diff baselines (1440×900, light-only, per the App-shell-is-
+  light-only decision in `docs/decisions.md`), 3 new snapshots under
+  `e2e/canvas.spec.ts-snapshots/`:**
+  `checks-dock-failing-1440-chromium-darwin.png` (dock open, 2 failing,
+  highlighted+centered node, drawer open),
+  `checks-dock-all-pass-1440-chromium-darwin.png` (dock open, all-pass,
+  Run enabled), `destination-mapping-editor-1440-chromium-darwin.png`
+  (destination drawer, mapping editor with one populated, not-yet-
+  approved entry). Checked `designs/Nia Core App.html` for a
+  corresponding mock state for each (`grep`'d for dock/mapping-editor
+  markup): none exists — the static export predates both the checks-dock
+  and mapping-editor features, only a generically-enabled "Run checks"
+  button text is present (already logged as a known delta in Session 1).
+  No new known-delta ledger entries added; nothing to diff against.
+  Sub-pixel jitter on these two shots (live canvas/SVG surface, freshly
+  re-panned) measured at ~200-2500px / ~0.01 ratio across identical
+  back-to-back runs — `maxDiffPixels` set to 3000 and 500 respectively
+  (vs. the drawer-only baseline's 50) to absorb it; documented inline at
+  each call site.
+- Full verification battery for the session's final state: see the
+  chat report for this task's exact counts/artifacts (schemas/api/worker
+  vitest, `canvas.spec.ts`, `chat.spec.ts`, `rls_probes.sql`).
+- **Open items carried forward into Session 4:**
+  - Logs tab (`ChecksDock`'s disabled "Session 4" tab) — real scope for
+    the command-bar + Logs session.
+  - LLM-assisted mapping proposal e2e intentionally stays smoke-only
+    (`apps/worker/scripts/mapping-smoke.ts` against real Gemini + live
+    infra) rather than becoming a Playwright test — not a coverage gap,
+    a deliberate boundary (Playwright shouldn't depend on a live LLM
+    call).
+  - Two pre-existing, environmental Playwright flakes (unrelated to any
+    Session 3 code): Supabase local GoTrue auth-setup rate-limiting on
+    `auth.setup.ts`, and `gotoWorkflow`'s navigation intermittently
+    timing out under high system load. Both recurred during this task's
+    verification runs (on unrelated, untouched tests) and resolved on
+    retry once load settled — noted again here per the carry-forward
+    instruction, not re-investigated as a code bug.
