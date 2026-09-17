@@ -33,6 +33,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-supabase",
   pools: poolCount(),
+  routes: ["test", "introspect", "execute", "invalidate", "write"],
 }));
 
 app.post("/test", async (req) => {

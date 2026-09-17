@@ -8,6 +8,7 @@ import {
 import type { ValidatedQuery } from "@nia/guardrails";
 import { env } from "../env.js";
 import type { DispatchResult } from "./errors.js";
+import { warnIfRouteMissing } from "./routeAwareness.js";
 
 const DEFAULT_ROW_CAP = 1000;
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -45,6 +46,7 @@ export async function sendToConnector(
   validated: ValidatedQuery,
   opts: { rowCap?: number; timeoutMs?: number } = {},
 ): Promise<DispatchResult<ExecuteResponse>> {
+  warnIfRouteMissing(manifest, "execute");
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -120,6 +122,7 @@ export async function sendIntrospectRequest(
   config: ConnectorConfig,
   opts: { timeoutMs?: number } = {},
 ): Promise<DispatchResult<IntrospectResponse>> {
+  warnIfRouteMissing(manifest, "introspect");
   const timeoutMs = opts.timeoutMs ?? DEFAULT_INTROSPECT_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -192,6 +195,7 @@ export async function sendTestRequest(
   config: ConnectorConfig,
   opts: { timeoutMs?: number } = {},
 ): Promise<DispatchResult<TestResponse>> {
+  warnIfRouteMissing(manifest, "test");
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TEST_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -262,6 +266,7 @@ export async function sendWriteRequest(
   request: WriteRequest,
   opts: { timeoutMs?: number } = {},
 ): Promise<DispatchResult<WriteResponse>> {
+  warnIfRouteMissing(manifest, "write");
   const timeoutMs = opts.timeoutMs ?? request.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);

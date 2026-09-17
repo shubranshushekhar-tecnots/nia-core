@@ -24,6 +24,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-mysql",
   pools: poolCount(),
+  routes: ["test", "introspect", "execute", "invalidate"],
 }));
 
 app.post("/test", async (req) => {

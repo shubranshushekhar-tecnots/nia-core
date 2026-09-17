@@ -36,6 +36,30 @@ function validQuery() {
   return result.sanitizedQuery;
 }
 
+/**
+ * connectorClient.ts's send* functions now fire an extra, non-awaited
+ * /health probe (routeAwareness.ts's warnIfRouteMissing) before the real
+ * dispatch call. A plain `vi.fn().mockResolvedValue(response)` returns the
+ * SAME Response instance for every call, so without this, the /health
+ * probe's `res.json()` would consume the one body the real assertion below
+ * needs — a test-mock artifact only (real fetch always returns an
+ * independent Response per call). Route /health to its own canned response
+ * and give every other URL a freshly-constructed Response per call.
+ */
+function healthResponse(): Response {
+  return new Response(
+    JSON.stringify({ status: "ok", service: "test-connector", pools: 0, routes: ["test", "introspect", "execute", "invalidate", "write"] }),
+    { status: 200 },
+  );
+}
+function mockFetch(mainImpl: () => Promise<Response>) {
+  global.fetch = vi.fn((url: string | URL | Request) => {
+    const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+    if (href.endsWith("/health")) return Promise.resolve(healthResponse());
+    return mainImpl();
+  }) as unknown as typeof fetch;
+}
+
 describe("sendToConnector", () => {
   const originalFetch = global.fetch;
   beforeEach(() => {
@@ -51,7 +75,7 @@ describe("sendToConnector", () => {
       rows: [[1]],
       meta: { executedQuery: "SELECT 1", connectionId: credential.connectionId, durationMs: 5, rowCount: 1, truncated: false },
     };
-    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify(tabularResult), { status: 200 }));
+    mockFetch(() => Promise.resolve(new Response(JSON.stringify(tabularResult), { status: 200 })));
 
     const result = await sendToConnector(manifest, credential, {}, validQuery());
     expect(result.ok).toBe(true);
@@ -59,14 +83,14 @@ describe("sendToConnector", () => {
   });
 
   it("normalizes a non-2xx response to service-error", async () => {
-    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ message: "boom" }), { status: 500 }));
+    mockFetch(() => Promise.resolve(new Response(JSON.stringify({ message: "boom" }), { status: 500 })));
 
     const result = await sendToConnector(manifest, credential, {}, validQuery());
     expect(result).toEqual({ ok: false, error: { kind: "service-error", message: "boom" } });
   });
 
   it("normalizes a network failure to service-unreachable", async () => {
-    vi.mocked(global.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
+    mockFetch(() => Promise.reject(new Error("ECONNREFUSED")));
 
     const result = await sendToConnector(manifest, credential, {}, validQuery());
     expect(result.ok).toBe(false);
@@ -74,7 +98,7 @@ describe("sendToConnector", () => {
   });
 
   it("normalizes an aborted request to query-timeout", async () => {
-    vi.mocked(global.fetch).mockImplementation(() => {
+    mockFetch(() => {
       const err = new Error("aborted");
       err.name = "AbortError";
       return Promise.reject(err);
@@ -88,7 +112,7 @@ describe("sendToConnector", () => {
   });
 
   it("normalizes a malformed success-status response to service-error", async () => {
-    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ not: "tabular" }), { status: 200 }));
+    mockFetch(() => Promise.resolve(new Response(JSON.stringify({ not: "tabular" }), { status: 200 })));
 
     const result = await sendToConnector(manifest, credential, {}, validQuery());
     expect(result.ok).toBe(false);
@@ -138,14 +162,14 @@ describe("sendWriteRequest", () => {
   });
 
   it("returns ok with the parsed WriteResponse on a successful response", async () => {
-    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ written: 3, durationMs: 12 }), { status: 200 }));
+    mockFetch(() => Promise.resolve(new Response(JSON.stringify({ written: 3, durationMs: 12 }), { status: 200 })));
 
     const result = await sendWriteRequest(supabaseManifest, writeRequest());
     expect(result).toEqual({ ok: true, value: { written: 3, durationMs: 12 } });
   });
 
   it("normalizes a non-2xx response to service-error", async () => {
-    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ message: "no confirmed, unrevoked write grant covers this entity" }), { status: 500 }));
+    mockFetch(() => Promise.resolve(new Response(JSON.stringify({ message: "no confirmed, unrevoked write grant covers this entity" }), { status: 500 })));
 
     const result = await sendWriteRequest(supabaseManifest, writeRequest());
     expect(result).toEqual({
@@ -155,7 +179,7 @@ describe("sendWriteRequest", () => {
   });
 
   it("normalizes a network failure to service-unreachable", async () => {
-    vi.mocked(global.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
+    mockFetch(() => Promise.reject(new Error("ECONNREFUSED")));
 
     const result = await sendWriteRequest(supabaseManifest, writeRequest());
     expect(result.ok).toBe(false);
@@ -163,7 +187,7 @@ describe("sendWriteRequest", () => {
   });
 
   it("normalizes an aborted request to query-timeout", async () => {
-    vi.mocked(global.fetch).mockImplementation(() => {
+    mockFetch(() => {
       const err = new Error("aborted");
       err.name = "AbortError";
       return Promise.reject(err);
@@ -177,7 +201,7 @@ describe("sendWriteRequest", () => {
   });
 
   it("normalizes a malformed success-status response to service-error", async () => {
-    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ not: "a write response" }), { status: 200 }));
+    mockFetch(() => Promise.resolve(new Response(JSON.stringify({ not: "a write response" }), { status: 200 })));
 
     const result = await sendWriteRequest(supabaseManifest, writeRequest());
     expect(result.ok).toBe(false);

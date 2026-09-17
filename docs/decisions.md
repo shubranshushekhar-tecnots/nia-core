@@ -321,3 +321,21 @@ deliberately deferred, not rejected outright — revisit before an
 enterprise/org GA if a real incident or compliance requirement surfaces
 that DECISION-C's blanket work/governance split doesn't cover for this one
 credential-minting action specifically.
+
+## Phase 6 Block 2 follow-up: route-skew guard is advisory-only; full version handshake deferred to Phase 9 hardening
+
+`HealthResponse` (`packages/schemas/src/contract.ts`) gained a `routes:
+string[]` field, populated literally by each connector service's `/health`
+handler (`services/connector-{mysql,mongodb,supabase}/src/index.ts`) with
+its actually-registered route names. `apps/worker/src/lib/routeAwareness.ts`
+probes this once per connector per worker process (cached for the process
+lifetime) and `console.warn`s if a connector is about to be dispatched to on
+a route it doesn't advertise (e.g. an older connector-mysql image predating
+a new route) — wired as a non-awaited, fire-and-forget call at the top of
+`connectorClient.ts`'s four `send*` functions. This is deliberately a cheap
+stopgap for one specific failure mode (stale service image), not real
+version negotiation: no semver compatibility check, no capability
+negotiation, no blocking/refusing dispatch when a route is missing (a raw
+404 still surfaces from the real call — the warning just makes the cause
+obvious in logs instead of leaving it a mystery). Full version handshake
+deferred to Phase 9 hardening.

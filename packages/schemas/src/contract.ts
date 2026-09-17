@@ -162,6 +162,15 @@ export const HealthResponse = z.object({
   status: z.literal("ok"),
   service: z.string(),
   pools: z.number().int().nonnegative(),
+  /**
+   * The connector-service's actually-registered route names (e.g.
+   * ["test","introspect","execute","invalidate","write"]) — lets a caller
+   * detect route skew (e.g. an older service image that predates /write)
+   * before dispatching, instead of hitting a raw 404 mid-job. See
+   * apps/worker/src/lib/routeAwareness.ts. Full version handshake deferred
+   * to Phase 9 hardening — this is a lightweight stopgap.
+   */
+  routes: z.array(z.string()),
 });
 
 export type TestRequest = z.infer<typeof TestRequest>;
