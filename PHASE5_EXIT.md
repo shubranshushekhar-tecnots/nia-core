@@ -1,5 +1,15 @@
 # Phase 5 Exit Report
 
+**Status: PHASE 5 CLOSED (2026-09-17).** Closed per user direction with
+one named exit-risk carried forward rather than silently dropped: §7.2/§8
+item 6, a clean single-invocation full-suite Playwright confirmation of
+the `canvas.spec.ts` fixes, was attempted three times and blocked each
+time by environment issues (self-inflicted concurrent test-runner
+contamination, then a mid-run machine reboot) — not by any evidence of a
+code regression. The underlying fixes are code-complete and committed.
+Punch items 1 (latency "none viable" evidence, §5) and 2 (Block 4 verdict,
+§6) are both complete below.
+
 Battery run date: 2026-09-17. Golden-suite run id
 `4a30801b-fbf3-45b7-b878-6ab0487dfa18`
 (`apps/worker/eval-reports/4a30801b-fbf3-45b7-b878-6ab0487dfa18.json`,
@@ -395,16 +405,49 @@ exercised end-to-end in one pass before now:
    delete-all-nodes-then-assert-0 self-heal used elsewhere in this file to
    both.
 
-**Verification status: partial, not re-confirmed clean end-to-end.** The
-2 fixed baselines were re-recorded and visually reviewed. A full-suite
-rerun to confirm all three fixes hold together was interrupted by
-`canvas-e2e-b@nia.dev`'s auth-setup step failing
-(`e2e/auth.setup.ts:22`, sign-in never redirected off `/login`) — almost
-certainly the same Supabase GoTrue sign-in rate-limit noted in
-`playwright.config.ts`'s `workers: 1` comment, from the volume of
-back-to-back full-suite invocations already run today. Per direction, not
-chased further this session — carried to §8 as an explicit open item
-rather than silently assumed fixed.
+**Verification status: partial, not re-confirmed clean end-to-end — root
+cause of the interruption identified, and it was not GoTrue rate-limiting.**
+The 2 fixed baselines were re-recorded and visually reviewed. Three
+separate follow-up attempts at a confirming full-suite rerun were made in
+a later session, all blocked by compounding *environment* instability
+rather than any evidence of a code regression:
+
+1. First attempt: `canvas-e2e-b@nia.dev`'s auth-setup step failed
+   (`e2e/auth.setup.ts:22`, never redirected off `/login`). Originally
+   assumed to be the Supabase GoTrue sign-in rate-limit noted in
+   `playwright.config.ts`'s `workers: 1` comment. On investigation this
+   was wrong: `ps aux` found **three separate, overlapping Playwright
+   invocations running concurrently** — a full-suite run plus two
+   narrower retries (a targeted multi-file run and a `-g`-filtered run) —
+   left resident from earlier retries in the same session and never
+   cleaned up, all hitting the same dev server and mutating the same
+   shared Supabase fixtures/personas at once. A direct `curl` to GoTrue's
+   `/auth/v1/token?grant_type=password` during the failure window
+   returned an instant, valid `200` — proving the auth backend itself was
+   healthy throughout; the contention was self-inflicted test-runner
+   overlap, not a backend limit.
+2. Second attempt (after killing the stray processes): all 4 persona
+   logins failed this time, timing out progressively slower
+   (7.2s → 26.8s). `sysctl vm.swapusage` showed 84% swap utilization
+   (~70MB free physical RAM) — consistent with item 5 below — but before
+   this could be conclusively separated from residual process contention,
+3. a third attempt was cut off mid-run by a **full system reboot** of the
+   dev machine (`uptime` showed a fresh boot, Docker daemon down,
+   `vm.swapusage` reset to 0) — an external interruption unrelated to the
+   suite or its fixtures.
+
+**Exit-risk, not closed.** A single clean, single-invocation, full-suite
+confirmation of the §7.2 fixes landing together was not obtained despite
+three attempts, entirely for environmental reasons (self-inflicted
+concurrent-invocation contamination, then an unrelated machine reboot) —
+not because any rerun surfaced a real failure in the fixed tests
+themselves. The fixes are code-complete, committed (`81e4d8c`), and were
+each independently verified via isolated targeted rerun/visual baseline
+review before landing (items 1-2 above). Named here as an explicit
+Phase 6 exit-risk rather than silently assumed clean: **run the full
+Playwright suite once, single invocation, on a quiet freshly-booted
+machine with no other Playwright process resident, and fold the result
+into this file.**
 
 ## 8. Open risks carried to Phase 6
 
@@ -496,11 +539,19 @@ rather than silently assumed fixed.
    `chrome-headless-shell`/`playwright test` processes from prior runs
    before assuming a regression.
 
-6. **`canvas.spec.ts`'s 3-failure fix (§7.2) needs one more clean
-   full-suite confirmation.** The `hideNextDevIndicator` + dual self-heal
-   fixes are applied and the affected baselines re-recorded, but the
-   confirming full-suite rerun was interrupted by a `canvas-e2e-b` auth-setup
-   flake before completing (see §7.2) — not yet re-confirmed together in
-   one clean pass. First action for whoever starts Phase 6: run the full
-   Playwright suite once, cleanly, and fold that result into this file
-   before treating Phase 5's e2e status as closed.
+6. **`canvas.spec.ts`'s 3-failure fix (§7.2) still needs one clean
+   full-suite confirmation — three attempts made, all blocked by
+   environment issues, not test failures.** The `hideNextDevIndicator` +
+   dual self-heal fixes are applied, committed (`81e4d8c`), and the
+   affected baselines re-recorded and individually verified. A confirming
+   full-suite rerun was attempted three times and blocked each time by an
+   environment problem rather than a real test failure: (1) three
+   overlapping concurrent Playwright invocations self-inflicted from
+   earlier retries, contaminating shared fixtures and masquerading as a
+   GoTrue rate-limit; (2) all-persona login timeouts under 84% swap
+   utilization; (3) a full machine reboot mid-run. See §7.2 for the full
+   trace. First action for whoever starts Phase 6: run the full
+   Playwright suite exactly once, single invocation, verify via `ps aux`
+   first that no other Playwright/chrome-headless-shell process is
+   resident, and fold that result into this file before treating Phase
+   5's e2e status as fully closed.
