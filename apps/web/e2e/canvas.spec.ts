@@ -61,6 +61,24 @@ async function dragNodeBy(page: Page, nodeIndex: number, dx: number, dy: number)
 }
 
 /**
+ * Same drag as dragPaletteItemOnto, but scoped to a specific rail section
+ * (Sources/Destinations) — needed for connectors like supabase that have
+ * both etl_source and etl_sink capabilities and so render the same label
+ * ("Dev sandbox (supabase)") once per section (NodesRail.tsx's buildEntries),
+ * which a bare page.getByText(label) would hit as a strict-mode violation.
+ */
+async function dragRailSectionItemOnto(page: Page, section: string, label: string, point: { x: number; y: number }) {
+  const rail = page.getByTestId('nodes-rail');
+  const sectionContainer = rail.getByText(section, { exact: true }).locator('..');
+  const item = sectionContainer.getByText(label, { exact: true });
+  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+  await item.dispatchEvent('dragstart', { dataTransfer });
+  const surface = page.getByTestId('canvas-surface');
+  await surface.dispatchEvent('dragover', { dataTransfer, clientX: point.x, clientY: point.y });
+  await surface.dispatchEvent('drop', { dataTransfer, clientX: point.x, clientY: point.y });
+}
+
+/**
  * 'Canvas E2E Workflow' (supabase/seed.sql) is shared, mutable fixture state
  * — every test below that touches it must run one-at-a-time, in this order,
  * hence `.serial` overriding the config's `fullyParallel`. Other describe
@@ -82,9 +100,16 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
   });
 
   test('drag 2 sources + 1 transform, connect them, autosave, and reload keeps the graph', async ({ page }) => {
-    await dragPaletteItemOnto(page, 'Dev sandbox (mysql)', { x: 250, y: 200 });
-    await dragPaletteItemOnto(page, 'Dev sandbox (mongodb)', { x: 250, y: 420 });
-    await dragPaletteItemOnto(page, 'Transform', { x: 600, y: 310 });
+    // x >= 450 keeps every dropped node's body/handles clear of NodesRail's
+    // page-space footprint (left:16/width:252 relative to the canvas
+    // wrapper, which itself starts ~240px in — i.e. rail spans roughly
+    // page-x 256-508). A drop at x=250 puts the node's right-edge source
+    // handle at ~x444, still under the rail's z-index:20 overlay, so real
+    // mouse-driven connectNodes()/dragNodeBy() clicks land on the rail
+    // instead of the node/handle.
+    await dragPaletteItemOnto(page, 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragPaletteItemOnto(page, 'Dev sandbox (mongodb)', { x: 450, y: 420 });
+    await dragPaletteItemOnto(page, 'Transform', { x: 800, y: 310 });
     await expect(page.locator('.react-flow__node')).toHaveCount(3);
 
     await connectNodes(page, 0, 2);
@@ -123,8 +148,16 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     await expect(readRadio).toBeEnabled();
     // maxDiffPixels tolerates a few pixels of sub-pixel jitter from the
     // canvas's SVG node/edge rendering (react-flow) between runs — not a
-    // real regression signal at this magnitude.
-    await expect(page).toHaveScreenshot('canvas-rail-drawer-1440.png', { maxDiffPixels: 50 });
+    // real regression signal at this magnitude. ChecksDock is masked: its
+    // pill text reflects whatever check-run row is currently persisted for
+    // this shared workflow fixture, which legitimately differs across
+    // separate full-suite invocations (e.g. after the checks-dock test
+    // below has run at least once) — this shot's actual subject is the
+    // NodesRail + NodeDrawer pairing, not the dock's state.
+    await expect(page).toHaveScreenshot('canvas-rail-drawer-1440.png', {
+      maxDiffPixels: 50,
+      mask: [page.getByTestId('checks-dock')],
+    });
   });
 
   test('transform drawer: build a filter step, autosave, reload keeps it, and shows the pushdown summary', async ({ page }) => {
@@ -210,8 +243,11 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     const setupCtx = await browser.newContext({ storageState: personas.canvasA.storageStatePath });
     const setupPage = await setupCtx.newPage();
     await gotoWorkflow(setupPage, 'Canvas E2E Project', 'Canvas E2E Workflow');
-    await dragPaletteItemOnto(setupPage, 'Dev sandbox (mysql)', { x: 250, y: 200 });
-    await dragPaletteItemOnto(setupPage, 'Dev sandbox (mongodb)', { x: 250, y: 420 });
+    // See the note on the first test in this block: x >= 450 keeps the
+    // node's body clear of NodesRail's overlay, which dragNodeBy's
+    // real-mouse click-and-drag (below) needs to actually land on the node.
+    await dragPaletteItemOnto(setupPage, 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragPaletteItemOnto(setupPage, 'Dev sandbox (mongodb)', { x: 450, y: 420 });
     await expect(setupPage.getByText('Saved')).toBeVisible({ timeout: 5_000 });
     await setupCtx.close();
 
@@ -241,6 +277,92 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
 
     await ctxA.close();
     await ctxB.close();
+  });
+
+  /**
+   * Checks dock + Run gating (Phase 5 Session 3 Task 2 completion pass).
+   * Uses "Dev sandbox (supabase)" for BOTH the source and destination node
+   * (same manifestId) deliberately — that keeps checkMappings' heterogeneous
+   * path un-triggered (Task 3's real mapping-approval flow hasn't landed
+   * yet), so an orphan-node dag failure is the only thing standing between
+   * "broken" and "all-pass" here, which is exactly what this test needs to
+   * isolate. Requires a live apps/worker consuming the "interactive" BullMQ
+   * queue — "Run checks" blocks on a real check_run job round-trip.
+   */
+  test('checks dock: broken node fails, clicking the failing row highlights it, fixing + re-running passes, Run enables, and clicking it shows the Phase 6 stub', async ({ page }) => {
+    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (supabase)', { x: 300, y: 200 });
+    // The checks route reads the SERVER's persisted graph (not client state),
+    // so the drag's autosave must flush before "Run checks" is clicked, or
+    // the run executes against whatever graph was last persisted.
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    const pill = page.getByTestId('checks-dock-pill');
+    await expect(pill).toContainText(/failing/, { timeout: 15_000 });
+
+    const dockBody = page.getByTestId('checks-dock-body');
+    const orphanRow = dockBody.getByText(/isn't connected to anything/);
+    await expect(orphanRow).toBeVisible();
+    await orphanRow.click();
+
+    // "highlighted" = React Flow's own selected-node styling (GraphFlowNode
+    // reads the `selected` prop it's passed), driven by the same
+    // useCanvasStore.setSelectedNodeId the canvas's own node-click uses —
+    // and the drawer opening for that node confirms it's the right one.
+    await expect(page.locator('.react-flow__node.selected')).toHaveCount(1);
+    await expect(page.getByTestId('node-drawer')).toBeVisible();
+
+    // handleSelectCheckNode just re-centered the viewport on node 0 — a
+    // fixed client-pixel drop point can no longer be trusted to land clear
+    // of it, so derive the drop point from node 0's live (post-pan) bounding
+    // box instead of a hardcoded screen coordinate. setCenter's pan is a
+    // 300ms animated transition, not instantaneous, so the box must be read
+    // after it settles or this captures a stale mid-animation position.
+    await page.waitForTimeout(400);
+    const sourceBox = (await page.locator('.react-flow__node').first().boundingBox())!;
+    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', {
+      x: sourceBox.x + sourceBox.width + 150,
+      y: sourceBox.y,
+    });
+    await connectNodes(page, 0, 1);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    // Editing the graph after a check run makes the pill visibly stale,
+    // even though the fix itself would make the *next* run pass.
+    await expect(pill).toContainText(/out of date/i);
+
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    await expect(pill).toContainText('All checks passed', { timeout: 15_000 });
+
+    const runBtn = page.getByRole('button', { name: 'Run', exact: true });
+    await expect(runBtn).toBeEnabled();
+    await runBtn.click();
+
+    await expect(page.getByText('Execution arrives in Phase 6')).toBeVisible();
+    await page.getByRole('button', { name: 'Got it' }).click();
+    await expect(page.getByText('Execution arrives in Phase 6')).not.toBeVisible();
+  });
+
+  test('editing the graph after an all-pass check run flips the pill back to stale and disables Run', async ({ page }) => {
+    // x >= 450 for the source: connectNodes below reads its handle position
+    // immediately (no re-centering step in this test), so it must clear
+    // NodesRail's overlay from the start — see the first test in this
+    // block's note for why.
+    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (supabase)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
+    await connectNodes(page, 0, 1);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    const pill = page.getByTestId('checks-dock-pill');
+    await expect(pill).toContainText('All checks passed', { timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
+
+    await dragPaletteItemOnto(page, 'Transform', { x: 450, y: 450 });
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await expect(pill).toContainText(/out of date/i);
+    await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeDisabled();
   });
 });
 
@@ -341,19 +463,21 @@ test.describe('canvas: palette purity — connection-driven sections', () => {
     await expect(rail.getByText('Dev sandbox (mysql)', { exact: true })).toBeVisible();
     await expect(rail.getByText('Dev sandbox (mongodb)', { exact: true })).toBeVisible();
 
-    // canvasA (canvas-e2e org) has mysql + mongodb connections only — no
-    // supabase connection, even though the supabase connector manifest is
-    // registered and etl_source-capable (packages/schemas/src/connectors/
-    // supabase.ts). It must not appear anywhere in the rail.
-    await expect(rail.getByText(/supabase/i)).toHaveCount(0);
-    // No connector in the registry declares "etl_sink" yet (all 3 are
-    // etl_source-only) — Destinations must not render as a section at all,
-    // not even an empty "None available yet" one.
-    await expect(rail.getByText('Destinations', { exact: true })).toHaveCount(0);
+    // canvasA (canvas-e2e org) has mysql + mongodb + supabase connections
+    // (dev-bootstrap.ts) — supabase's manifest capabilities are
+    // ["queryable","etl_source","etl_sink"] (etl_sink added Phase 5 Session
+    // 3, see packages/schemas/src/connectors/supabase.ts), so the same
+    // connection legitimately appears as BOTH a Sources entry and a
+    // Destinations entry (buildEntries in NodesRail.tsx pushes one row per
+    // matching capability, not one row per connection).
+    await expect(rail.getByText('Dev sandbox (supabase)', { exact: true })).toHaveCount(2);
+    await expect(rail.getByText('Destinations', { exact: true })).toBeVisible();
 
-    // Exactly 3 draggable entries total: the 2 real connections + the one
-    // generic (non-tool) Transform node — nothing invented, nothing extra.
-    await expect(rail.locator('[draggable="true"]')).toHaveCount(3);
+    // Exactly 5 draggable entries total: 3 Sources (mysql, mongodb,
+    // supabase) + 1 Destinations (supabase) + the one generic (non-tool)
+    // Transform node — nothing invented, nothing extra. mysql/mongodb stay
+    // etl_source-only, so neither appears under Destinations.
+    await expect(rail.locator('[draggable="true"]')).toHaveCount(5);
   });
 });
 

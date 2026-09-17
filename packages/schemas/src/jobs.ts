@@ -14,8 +14,14 @@ export const QUEUE_HEAVY = "heavy" as const;
  * Mirrors apps/api's and apps/worker's WorkspaceScope TS type exactly (org-
  * scoped XOR personal/owner-scoped) — chat is the first job payload that
  * needs it, since chat now supports org-less "individual" actors (see
- * supabase/migrations/0013_chat_personal_workspace.sql). EtlRunJob/
- * CheckRunJob stay plain orgId: they remain org-only by design.
+ * supabase/migrations/0013_chat_personal_workspace.sql). CheckRunJob
+ * (Phase 5 Session 3 Task 2) reuses it for the same reason: `workflows.run`
+ * is granted to "individual" in can.ts's capability matrix, and personal
+ * workflows (e.g. the canvasC e2e persona) must be able to run checks too
+ * — org-only would have been a real functional gap, not a deliberate scope
+ * limit. EtlRunJob stays plain orgId for now: workflow *execution*
+ * (Phase 6, write grants) hasn't been scoped for personal workspaces yet,
+ * unlike checks/chat which are both read-only.
  */
 export const WorkspaceScope = z.union([
   z.object({ orgId: z.string().uuid() }),
@@ -85,7 +91,7 @@ export type HeavyJob = z.infer<typeof HeavyJob>;
 
 export const CheckRunJob = z.object({
   kind: z.literal("check_run"),
-  orgId: z.string().uuid(),
+  scope: WorkspaceScope,
   workflowId: z.string().uuid(),
   checks: z.array(
     z.enum(["config", "credentials", "grants", "mappings", "dag"]),

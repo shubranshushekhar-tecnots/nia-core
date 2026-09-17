@@ -31,6 +31,14 @@ const EnvSchema = z.object({
   CHAT_SSE_MAX_DURATION_MS: z.coerce.number().int().positive().default(120_000),
   /** Comment-only keep-alive so intermediary proxies don't time out an idle SSE connection. */
   CHAT_SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(15_000),
+  /**
+   * Upper bound on checksQueue.ts's synchronous await of the worker's
+   * check_run job (see that file's header comment for why this is a
+   * blocking request/response, not SSE). Past this, the route fails clean
+   * with a 503 naming the worker unavailable rather than hanging the HTTP
+   * request indefinitely.
+   */
+  CHECK_RUN_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 export const env = EnvSchema.parse(process.env);

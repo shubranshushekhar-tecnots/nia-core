@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -29,11 +29,21 @@ import {
 } from '@/lib/canvas/mapping';
 import { findUpstreamSource } from '@/lib/canvas/upstream';
 import { getWorkflowGraph, putWorkflowGraph, GraphApiError, type WorkflowGraphResult } from '@/lib/api/graphClient';
+import { runWorkflowChecks, getLatestCheckRun, ChecksApiError } from '@/lib/api/checksClient';
 import { useCanvasStore } from '@/lib/canvas/store';
 import GraphFlowNode from './GraphFlowNode';
 import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRail';
 import NodeDrawer from './NodeDrawer';
-import { brandTextStyle, breadcrumbSepStyle } from '@/components/app/styles';
+import ChecksDock from './ChecksDock';
+import {
+  brandTextStyle,
+  breadcrumbSepStyle,
+  modalOverlayStyle,
+  modalCardStyle,
+  modalTitleStyle,
+  modalActionsStyle,
+  modalBtnGhostStyle,
+} from '@/components/app/styles';
 
 const nodeTypes = { source: GraphFlowNode, transform: GraphFlowNode, destination: GraphFlowNode };
 const AUTOSAVE_DELAY_MS = 800;
@@ -58,7 +68,7 @@ function CanvasInner({
   initialGraph: WorkflowGraphResult;
 }) {
   const ctx = useMappingContext(connections);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, setCenter, getNode } = useReactFlow();
   const queryClient = useQueryClient();
   const queryKey = useMemo(() => ['workflow-graph', workflow.id], [workflow.id]);
 
@@ -218,6 +228,69 @@ function CanvasInner({
     setSaveState('idle');
   }, [workflow.id, queryClient, queryKey, ctx, setNodes, setEdges, setVersion, setSaveState]);
 
+  // Checks (Phase 5 Session 3 Task 2). Latest persisted run is fetched once
+  // on mount (GET .../checks/latest, never re-runs anything); "Run checks"
+  // POSTs a fresh run and blocks (see checksClient.ts's header comment on
+  // why — the worker's BullMQ job is awaited synchronously by Express).
+  const checksQueryKey = useMemo(() => ['workflow-checks-latest', workflow.id], [workflow.id]);
+  const { data: latestCheckRun } = useQuery({
+    queryKey: checksQueryKey,
+    queryFn: () => getLatestCheckRun(workflow.id),
+    staleTime: Infinity,
+  });
+  const [checksRunning, setChecksRunning] = useState(false);
+  const [checksError, setChecksError] = useState<string | null>(null);
+  const [checksDockExpanded, setChecksDockExpanded] = useState(false);
+  const [showPhase6Stub, setShowPhase6Stub] = useState(false);
+
+  const handleRunChecks = useCallback(async () => {
+    setChecksDockExpanded(true);
+    setChecksRunning(true);
+    setChecksError(null);
+    try {
+      const result = await runWorkflowChecks(workflow.id);
+      queryClient.setQueryData(checksQueryKey, result);
+    } catch (error) {
+      setChecksError(error instanceof ChecksApiError ? error.message : 'Checks failed to run.');
+    } finally {
+      setChecksRunning(false);
+    }
+  }, [workflow.id, queryClient, checksQueryKey]);
+
+  const handleSelectCheckNode = useCallback(
+    (nodeId: string) => {
+      setSelectedNodeId(nodeId);
+      // Mirror what React Flow's own click-to-select does for a direct node
+      // click (onNodeClick above never touches this either — React Flow
+      // manages it internally on pointerdown) — a checks-dock row click
+      // never reaches the canvas's pointer handling, so the node's
+      // `selected` flag (which GraphFlowNode's NodeProps.selected reads for
+      // its highlight border, and which drives the `.react-flow__node.selected`
+      // CSS class) has to be set explicitly here instead.
+      setNodes((current) => current.map((n) => ({ ...n, selected: n.id === nodeId })));
+      const node = getNode(nodeId);
+      if (!node) return;
+      const width = node.measured?.width ?? 200;
+      const height = node.measured?.height ?? 80;
+      setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: 1, duration: 300 });
+    },
+    [setSelectedNodeId, setNodes, getNode, setCenter],
+  );
+
+  // Run (workflow execution) has no backing route yet (Phase 6) — clicking
+  // it while enabled shows a stub modal instead of creating any run rows.
+  // The gate itself is real: enabled only when the latest persisted check
+  // run is all-pass AND matches the live graph_version (checksStale below),
+  // proving the gate works even though execution itself doesn't exist yet.
+  const checksStale = !latestCheckRun || latestCheckRun.graphVersion !== version;
+  const failingChecks = latestCheckRun?.results.filter((r) => r.status === 'fail').length ?? 0;
+  const runEnabled = !checksStale && failingChecks === 0;
+  const runTooltip = checksStale
+    ? 'Run checks before running the workflow.'
+    : failingChecks > 0
+      ? `${failingChecks} check${failingChecks === 1 ? '' : 's'} failing — fix before running.`
+      : 'All checks passing.';
+
   const disabledRunBtnStyle = {
     fontSize: 12.5,
     fontWeight: 600,
@@ -227,6 +300,29 @@ function CanvasInner({
     borderRadius: 6,
     padding: '6px 12px',
     cursor: 'not-allowed',
+  } as const;
+
+  const enabledRunBtnStyle = {
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: 'var(--onacc)',
+    background: 'var(--acc)',
+    border: '1px solid var(--acc)',
+    borderRadius: 6,
+    padding: '6px 12px',
+    cursor: 'pointer',
+  } as const;
+
+  const runChecksBtnStyle = {
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: 'var(--ink)',
+    background: 'var(--surface2)',
+    border: '1px solid var(--line2)',
+    borderRadius: 6,
+    padding: '6px 12px',
+    cursor: checksRunning ? 'wait' : 'pointer',
+    opacity: checksRunning ? 0.6 : 1,
   } as const;
 
   return (
@@ -276,13 +372,27 @@ function CanvasInner({
               Saved elsewhere — reload
             </button>
           )}
-          {/* Non-functional stubs this session — checks/execution arrive in Session 3. */}
-          <button type="button" disabled title="Checks arrive in Session 3" style={disabledRunBtnStyle}>
-            Run checks
+          <button type="button" onClick={handleRunChecks} disabled={checksRunning} style={runChecksBtnStyle}>
+            {checksRunning ? 'Running…' : 'Run checks'}
           </button>
-          <button type="button" disabled title="Checks arrive in Session 3" style={disabledRunBtnStyle}>
-            Run
-          </button>
+          {/* Execution (Phase 6) has no backing route yet. Enabled only
+              when the latest check run is all-pass and matches the live
+              graph version; clicking while enabled shows a stub — no run
+              rows are created. Disabled states keep honest tooltips. */}
+          {runEnabled ? (
+            <button
+              type="button"
+              onClick={() => setShowPhase6Stub(true)}
+              title={runTooltip}
+              style={enabledRunBtnStyle}
+            >
+              Run
+            </button>
+          ) : (
+            <button type="button" disabled title={runTooltip} style={disabledRunBtnStyle}>
+              Run
+            </button>
+          )}
         </div>
       </header>
 
@@ -302,11 +412,29 @@ function CanvasInner({
           onNodeClick={onNodeClick}
           onPaneClick={onPaneClick}
           fitView
+          // A brand-new workflow mounts with zero nodes (workflow_graphs has
+          // no row yet — see seed.sql's comment on 'Canvas E2E Workflow').
+          // fitView's computed zoom for a degenerate/empty bounding box
+          // falls back to its default maxZoom (2), so the very first node a
+          // user drops renders at 200% — clamp it to 1 so an empty canvas
+          // never starts zoomed in.
+          fitViewOptions={{ maxZoom: 1 }}
         >
           <Background variant={BackgroundVariant.Dots} gap={20} color="var(--dot)" />
         </ReactFlow>
 
         <NodesRail connections={connections} />
+
+        <ChecksDock
+          running={checksRunning}
+          error={checksError}
+          results={latestCheckRun?.results ?? null}
+          ranAt={latestCheckRun?.ranAt ?? null}
+          stale={checksStale}
+          expanded={checksDockExpanded}
+          onToggleExpanded={() => setChecksDockExpanded((v) => !v)}
+          onSelectNode={handleSelectCheckNode}
+        />
 
         {selectedNode && (
           <NodeDrawer
@@ -317,6 +445,23 @@ function CanvasInner({
             onDelete={deleteSelectedNode}
             onClose={onPaneClick}
           />
+        )}
+
+        {showPhase6Stub && (
+          <div style={modalOverlayStyle} onClick={() => setShowPhase6Stub(false)}>
+            <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
+              <span style={modalTitleStyle}>Execution arrives in Phase 6</span>
+              <p style={{ fontSize: 13.5, color: 'var(--text-3)', margin: 0 }}>
+                Checks are passing and up to date, so the Run gate is open — but workflow execution itself isn&apos;t
+                built yet. No run was started.
+              </p>
+              <div style={modalActionsStyle}>
+                <button type="button" style={modalBtnGhostStyle} onClick={() => setShowPhase6Stub(false)}>
+                  Got it
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

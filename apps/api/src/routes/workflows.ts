@@ -10,6 +10,7 @@ import { AppError } from "../lib/appError.js";
 import { scopeFromActor } from "../lib/workspaceScope.js";
 import { getWorkflowDetail } from "../services/workflows.js";
 import { getWorkflowGraph, putWorkflowGraph } from "../services/workflowGraphs.js";
+import { getLatestCheckRun, runAndRecordChecks } from "../services/checks.js";
 
 export const workflowsRouter: ExpressRouter = Router();
 
@@ -52,6 +53,33 @@ workflowsRouter.put(
   asyncHandler(async (req, res) => {
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await putWorkflowGraph(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body);
+    res.json(data);
+  }),
+);
+
+// Checks (0014_workflow_check_runs.sql). POST runs the full check suite via
+// the worker and persists the outcome through req.supabase's own
+// record_check_run RPC call (see services/checks.ts's header comment on why
+// that split is mandatory, not stylistic). GET reads back the latest
+// persisted run without re-running anything, for the canvas to restore
+// check/Run-gating state on load without forcing a fresh run.
+workflowsRouter.post(
+  "/:id/checks",
+  requireCapability("workflows.run"),
+  validate({ params: workflowParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await runAndRecordChecks(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId);
+    res.status(201).json(data);
+  }),
+);
+
+workflowsRouter.get(
+  "/:id/checks/latest",
+  validate({ params: workflowParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getLatestCheckRun(req.supabase, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
   }),
 );

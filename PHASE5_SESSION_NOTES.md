@@ -274,3 +274,44 @@ delivered in chat; summary of the two real gaps found and fixed:
 - **Dark mode:** verbatim Q&A quoted for the human's confirmation in this
   session's chat response, per explicit instruction not to act on it
   either way — not reproduced here since no code/decision change resulted.
+
+## Phase 5 Session 3 — Task 1 revision: check-run audit log + etl_sink
+
+- **`workflow_check_runs` (0014) revised from client-writable to a strict
+  audit-log pattern before ever shipping.** The original draft gated
+  INSERT with the same `can_access_workflow` check used for SELECT —
+  but check results gate the Run button, so a client-writable row is a
+  forgeable gate: any authorized member could PostgREST-insert a fake
+  all-pass row at the current `graph_version` and enable Run without
+  checks ever actually running. Fixed: RLS now grants **SELECT only**;
+  all writes go through a new `security definer` function
+  `public.record_check_run(p_workflow uuid, p_results jsonb)` which
+  re-verifies `private.can_access_workflow` itself and reads
+  `graph_version` server-side from `workflow_graphs` in the same
+  statement (not a caller-supplied parameter, so it can't be forged
+  stale). Note the function is `public.record_check_run`, not
+  `private.record_check_run` as originally specified — `private`-schema
+  functions are never PostgREST-exposed (confirmed via
+  `0008_connector_secret_rpc.sql`'s own header comment), so `private`
+  would have made it uncallable from `req.supabase.rpc()`; corrected to
+  match the established `public`-schema/`security definer`/locked-down-
+  grants pattern from `0009_connector_write_paths.sql`'s
+  `create_connector_secret`/`log_execution_audit`. 3 new RLS probes
+  added (direct INSERT as a member → denied; RPC as a non-member →
+  exception; RPC as a member → row persisted with the current
+  `graph_version`, no way to supply another) — all passing against the
+  real remote DB, no regressions on the ~30 pre-existing probes.
+- **supabase manifest gained `etl_sink`** (destination placement only;
+  no write capability implied). Verified explicitly: neither `can.ts`
+  nor any RLS policy keys off connector capabilities — capabilities are
+  `NodesRail.tsx`'s `buildEntries()` UI-placement input only; the actual
+  write-permission gate stays `WRITE_OPERATIONS`/`checkGrants`, untouched
+  by this change. `dev-bootstrap.ts` now seeds canvasA (canvas-e2e org)
+  with a supabase connection alongside mysql/mongodb so the palette's
+  Destinations section and `checkDag`'s source→destination path
+  requirement are exercisable end-to-end; the demo org is intentionally
+  left unseeded (unaffected). `canvas.spec.ts`'s connection-driven
+  palette-purity test updated to match (supabase now lists under both
+  Sources and Destinations, 5 draggable entries instead of 3); the
+  zero-connection (canvasB) and Triggers-moat (canvasC) tests were
+  confirmed unaffected and left untouched.

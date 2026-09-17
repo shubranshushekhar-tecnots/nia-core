@@ -1,5 +1,5 @@
-import type { ConnectorConfig, ConnectorManifest, CredentialRef, IntrospectResponse } from "@nia/schemas";
-import { ExecuteResponse, IntrospectResponse as IntrospectResponseSchema } from "@nia/schemas";
+import type { ConnectorConfig, ConnectorManifest, CredentialRef, IntrospectResponse, TestResponse } from "@nia/schemas";
+import { ExecuteResponse, IntrospectResponse as IntrospectResponseSchema, TestResponse as TestResponseSchema } from "@nia/schemas";
 import type { ValidatedQuery } from "@nia/guardrails";
 import { env } from "../env.js";
 import type { DispatchResult } from "./errors.js";
@@ -7,6 +7,7 @@ import type { DispatchResult } from "./errors.js";
 const DEFAULT_ROW_CAP = 1000;
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_INTROSPECT_TIMEOUT_MS = 15000;
+const DEFAULT_TEST_TIMEOUT_MS = 15000;
 
 function baseUrl(manifest: ConnectorManifest): string {
   // Same CONNECTOR_DEV_HOST override apps/api/src/lib/connectorDispatch.ts
@@ -164,6 +165,78 @@ export async function sendIntrospectRequest(
       error: {
         kind: "service-error",
         message: `Malformed /introspect response from connector "${manifest.id}": ${parsed.error.message}`,
+      },
+    };
+  }
+  return { ok: true, value: parsed.data };
+}
+
+/**
+ * Calls a connector service's /test endpoint — apps/worker's counterpart to
+ * apps/api/src/lib/connectorDispatch.ts's dispatchTest, needed here for the
+ * checks engine's "credentials" check (Phase 5 Session 3 Task 2), which the
+ * worker runs so it can share the same testConnection injection point
+ * checks.ts already defines. Same DispatchResult<T> shape as
+ * sendToConnector/sendIntrospectRequest so callers handle all three
+ * uniformly.
+ */
+export async function sendTestRequest(
+  manifest: ConnectorManifest,
+  credential: CredentialRef,
+  config: ConnectorConfig,
+  opts: { timeoutMs?: number } = {},
+): Promise<DispatchResult<TestResponse>> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(manifest)}/test`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ credential, config }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return {
+        ok: false,
+        error: {
+          kind: "query-timeout",
+          message: `Test of connector "${manifest.id}" timed out after ${timeoutMs}ms.`,
+        },
+      };
+    }
+    return {
+      ok: false,
+      error: {
+        kind: "service-unreachable",
+        message: `Could not reach connector service "${manifest.id}": ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    let message = `connector service "${manifest.id}" responded ${res.status}`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) message = body.message;
+    } catch {
+      // Non-JSON error body — keep the generic message.
+    }
+    return { ok: false, error: { kind: "service-error", message } };
+  }
+
+  const parsed = TestResponseSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: {
+        kind: "service-error",
+        message: `Malformed /test response from connector "${manifest.id}": ${parsed.error.message}`,
       },
     };
   }

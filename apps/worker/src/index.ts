@@ -7,6 +7,7 @@ import {
   HeavyJob,
 } from "@nia/schemas";
 import { runChatQuery } from "./lib/chat/runChatQuery.js";
+import { runWorkflowChecks } from "./lib/checks/runWorkflowChecks.js";
 import { runGoldenSuite } from "./lib/eval/runGoldenSuite.js";
 import { registerNightlyEvalSchedule } from "./lib/eval/schedule.js";
 import { shutdownLangfuse } from "./lib/observability/langfuse.js";
@@ -56,18 +57,19 @@ const interactive = new Worker(
         return runChatQuery(payload, job.id!);
       }
       case "check_run":
-        // NOT wired to lib/dispatch.ts: CheckRunJob (@nia/schemas jobs.ts)
-        // carries no connectionIds at all, and there is no workflowId ->
-        // connectionId mapping anywhere in the codebase — workflow
-        // definitions store canvas nodes as opaque, untyped jsonb (see the
-        // comment on deleteConnection in
-        // apps/api/src/services/connections.ts). The "credentials" check in
-        // particular needs a real connectionId to dispatch a probe against,
-        // and there's no way to derive one from a workflowId today. This is
-        // a genuine schema gap (a canvas node schema has to exist first),
-        // flagged rather than worked around with a fabricated connectionId.
+        // Wired (Phase 5 Session 3 Task 2) — lib/checks/runWorkflowChecks.ts.
+        // The workflowId -> connectionId mapping this case's stub comment
+        // used to say didn't exist now does: GraphNode.connectionId (see
+        // packages/schemas/src/graph.ts) carries it per source/destination
+        // node, read straight off the workflow's persisted GraphDoc. This
+        // handler only computes results, never persists them — see
+        // runWorkflowChecks.ts's header comment for why the worker's
+        // service_role client structurally cannot call
+        // public.record_check_run itself (no auth.uid()); the Express route
+        // that enqueues this job is the one that persists, through its own
+        // req.supabase.
         console.log(`[interactive] check_run for workflow ${payload.workflowId}`);
-        return { status: "stub" };
+        return await runWorkflowChecks(payload);
     }
   },
   { connection, concurrency: 10 },
