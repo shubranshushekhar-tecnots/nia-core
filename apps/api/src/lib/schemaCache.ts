@@ -30,3 +30,16 @@ export function getCachedSchema(credential: CredentialRef): IntrospectResponse |
 export function setCachedSchema(credential: CredentialRef, schema: IntrospectResponse): void {
   cache.set(cacheKey(credential), { schema, fetchedAt: Date.now() });
 }
+
+/**
+ * Phase 5 Session 5, Block 2 — busts this connection's cached entry.
+ * refreshConnectionSchema() (services/connections.ts) calls this before
+ * re-introspecting, so a stale schema (e.g. a since-renamed column) is
+ * never served from THIS process's cache again even if the re-introspect
+ * call fails. Separate from apps/worker/src/lib/introspection.ts's own
+ * cache (different process, no shared memory) — see that refresh flow's
+ * header comment for how both halves are cleared together.
+ */
+export function invalidateCachedSchema(credential: CredentialRef): void {
+  cache.delete(cacheKey(credential));
+}

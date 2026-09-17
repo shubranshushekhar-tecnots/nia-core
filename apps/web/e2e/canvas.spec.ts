@@ -1,5 +1,23 @@
 import { test, expect, type Page } from '@playwright/test';
+import { execSync } from 'node:child_process';
 import { personas } from './fixtures/personas';
+
+/**
+ * Phase 5 Session 5, Block 2 — the drift e2e's mutation step. `nia_ro` (the
+ * app-facing dev-mysql user every connector dispatch actually uses) is
+ * REVOKE-ALL/GRANT-SELECT-only by design (docker-compose.yml's dev-mysql
+ * comment), so renaming a column requires the sandbox's root credential
+ * instead — root/devroot is a throwaway local-only Docker Compose secret,
+ * not a real credential, same trust level as the other dev-*-init.sql
+ * seeds. Container name is the fixed docker-compose project/service name
+ * (`nia-core-dev-mysql-1`), not discovered at runtime — this test only ever
+ * runs against this repo's own docker-compose stack.
+ */
+function alterEmployeesSalaryColumn(from: string, to: string) {
+  execSync(
+    `docker exec nia-core-dev-mysql-1 mysql -uroot -pdevroot sandbox -e "ALTER TABLE employees RENAME COLUMN ${from} TO ${to};"`,
+  );
+}
 
 /**
  * Navigates via real UI links (project list -> project detail -> workflow),
@@ -668,6 +686,146 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     await expect(drawer.getByText('158000')).toBeVisible();
     await expect(drawer.getByText('Preview capped at 50 rows.')).not.toBeVisible();
     await expect(drawer.getByText(/in-stream transform/)).not.toBeVisible();
+  });
+
+  /**
+   * Phase 5 Session 5, Block 2 — schema drift, proven end-to-end. Reuses the
+   * exact mysql->supabase pairing + `salary` mapping the two tests above
+   * already established as unambiguous. Runs last in this .serial block (not
+   * because order matters for the graph — beforeEach wipes every node before
+   * each test regardless — but because it's the one test in this file that
+   * mutates the SHARED dev-mysql sandbox schema itself; every earlier test
+   * above assumes `employees.salary` exists, so this must not run before them).
+   *
+   * Exercises three real caches across two processes in one pass: apps/api's
+   * schemaCache.ts (busted synchronously by refreshConnectionSchema),
+   * apps/worker's introspection.ts (busted via the schema_refresh BullMQ
+   * round trip), and this page's own react-query client (reset for free by
+   * the hard page.goto() navigations below — see MappingEditor.tsx's
+   * useEntityFields comment for why a soft client-side route change
+   * wouldn't have been enough).
+   */
+  test('schema drift: renaming the mapped source column fails checks, refreshing schema surfaces it in the drawer, fixing + re-approving passes again', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    await dragPaletteItemOnto(page, 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
+    await connectNodes(page, 0, 1);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    const pill = page.getByTestId('checks-dock-pill');
+    await expect(pill).toContainText(/failing/, { timeout: 15_000 });
+    await pill.click();
+    await expect(page.getByTestId('checks-dock-body')).not.toBeVisible();
+
+    await page.locator('.react-flow__node').nth(1).click();
+    const drawer = page.getByTestId('node-drawer');
+    await Promise.all([
+      page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema')),
+      page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema')),
+    ]);
+
+    await drawer.getByRole('button', { name: '+ Entry' }).click();
+    const fromSelect = drawer.locator('select').nth(0);
+    const toSelect = drawer.locator('select').nth(1);
+    await fromSelect.selectOption('salary');
+    await toSelect.selectOption('salary');
+
+    const approved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
+    await drawer.getByRole('button', { name: 'Approve' }).click();
+    await expect(drawer.getByText('Approved', { exact: true })).toBeVisible();
+    await approved;
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    await expect(pill).toContainText('All checks passed', { timeout: 15_000 });
+    await pill.click();
+    await expect(page.getByTestId('checks-dock-body')).not.toBeVisible();
+
+    // --- drift: rename the mapped column out from under the now-approved mapping ---
+    // try/finally so the sandbox column and both server-side caches are
+    // always restored even if an assertion below fails — every other test
+    // in this file (and mapping-smoke.ts) depends on `employees.salary`
+    // existing.
+    try {
+      alterEmployeesSalaryColumn('salary', 'salary_usd');
+
+      // "Refresh schema" lives on the manage-connection page, not the
+      // canvas — real navigation there and back (page.goto, not a client
+      // <Link> click) matters here: it also resets this tab's react-query
+      // client, so the drawer's next open is guaranteed to re-fetch the
+      // (now-drifted) schema over the network rather than serving a
+      // client-cached pre-rename result.
+      await page.goto('/app/connections');
+      const mysqlBadge = page.getByTestId('connection-badge-@mysql-dev');
+      await expect(mysqlBadge).toBeVisible();
+      await mysqlBadge.getByRole('button', { name: 'Refresh schema' }).click();
+      // The Server Action's fetch happens server-side (not on this page's
+      // own network stack), so there's no browser response to await here —
+      // useActionState's pending flag flipping back to false (the button's
+      // label reverting) is the proxy for "the round trip actually
+      // completed", same as every other useActionState button in this file.
+      await expect(mysqlBadge.getByRole('button', { name: 'Refresh schema' })).toBeVisible({ timeout: 15_000 });
+      await expect(mysqlBadge.getByText(/Couldn't refresh/)).toHaveCount(0);
+
+      await gotoWorkflow(page, 'Canvas E2E Project', 'Canvas E2E Workflow');
+      await dismissThreadIfOpen(page);
+
+      await page.getByRole('button', { name: 'Run checks' }).click();
+      await expect(pill).toContainText(/failing/, { timeout: 15_000 });
+      // checks.ts's checkMappings drift message — proves the worker's own
+      // introspection cache (not just apps/api's) actually got busted,
+      // since "Run checks" always executes worker-side.
+      await expect(page.getByTestId('checks-dock-body').getByText(/mapped source field "salary" no longer exists upstream/)).toBeVisible();
+      await pill.click();
+      await expect(page.getByTestId('checks-dock-body')).not.toBeVisible();
+
+      await page.locator('.react-flow__node').nth(1).click();
+      const reopenedDrawer = page.getByTestId('node-drawer');
+      await Promise.all([
+        page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema')),
+        page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema')),
+      ]);
+      const reopenedFromSelect = reopenedDrawer.locator('select').nth(0);
+      const reopenedToSelect = reopenedDrawer.locator('select').nth(1);
+
+      // The drawer's own drift indicator (MappingEditor.tsx's driftedField):
+      // the drifted entry's source-side FieldSelect is flagged, with the
+      // human-readable row message naming which side and which field.
+      await expect(reopenedFromSelect).toHaveValue('salary');
+      await expect(reopenedDrawer.getByText('"salary" no longer exists in the source schema — pick a new field.')).toBeVisible();
+
+      // Fix: point the entry at the column's new name (now a real option in
+      // the refreshed sourceFields list) and re-approve.
+      const fixed = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
+      await reopenedFromSelect.selectOption('salary_usd');
+      await expect(reopenedDrawer.getByText('Not approved')).toBeVisible();
+      await fixed;
+      await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+      await expect(reopenedDrawer.getByText(/no longer exists in the/)).not.toBeVisible();
+
+      const reapproved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
+      await reopenedDrawer.getByRole('button', { name: 'Approve' }).click();
+      await expect(reopenedDrawer.getByText('Approved', { exact: true })).toBeVisible();
+      await reapproved;
+      await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+      await page.getByRole('button', { name: 'Run checks' }).click();
+      await expect(pill).toContainText('All checks passed', { timeout: 15_000 });
+      await pill.click();
+      await expect(page.getByTestId('checks-dock-body')).not.toBeVisible();
+      void reopenedToSelect; // kept for symmetry with the setup block above; destination side never drifted in this scenario.
+    } finally {
+      // Test hygiene: restore the column name and both server-side caches
+      // regardless of outcome, so this test is re-runnable and every other
+      // spec's `employees.salary` assumption still holds afterward.
+      alterEmployeesSalaryColumn('salary_usd', 'salary');
+      await page.goto('/app/connections');
+      const mysqlBadge = page.getByTestId('connection-badge-@mysql-dev');
+      await mysqlBadge.getByRole('button', { name: 'Refresh schema' }).click();
+      await expect(mysqlBadge.getByRole('button', { name: 'Refresh schema' })).toBeVisible({ timeout: 15_000 });
+    }
   });
 });
 

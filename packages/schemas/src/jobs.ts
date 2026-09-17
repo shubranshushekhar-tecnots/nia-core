@@ -142,10 +142,26 @@ export const PreviewJob = z.object({
 });
 export type PreviewJob = z.infer<typeof PreviewJob>;
 
+/**
+ * Phase 5 Session 5, Block 2 — schema-refresh affordance. Carries only
+ * `connectionId` (not a workflowId): this busts/re-warms ONE connection's
+ * cached introspection result, independent of any particular workflow.
+ * Same triggeredByUserId contract as the other interactive jobs (this
+ * dispatches a real /introspect call against the connector service).
+ */
+export const SchemaRefreshJob = z.object({
+  kind: z.literal("schema_refresh"),
+  scope: WorkspaceScope,
+  connectionId: z.string().uuid(),
+  triggeredByUserId: z.string().uuid(),
+});
+export type SchemaRefreshJob = z.infer<typeof SchemaRefreshJob>;
+
 export const InteractiveJob = z.discriminatedUnion("kind", [
   ChatQueryJob,
   CheckRunJob,
   ProposeMappingJob,
   PreviewJob,
+  SchemaRefreshJob,
 ]);
 export type InteractiveJob = z.infer<typeof InteractiveJob>;

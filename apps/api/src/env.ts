@@ -56,6 +56,14 @@ const EnvSchema = z.object({
    * unavailable rather than hanging the HTTP request indefinitely.
    */
   PREVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
+  /**
+   * Upper bound on schemaRefreshQueue.ts's synchronous await of the
+   * worker's schema_refresh job (a single connector /introspect call, no
+   * LLM) — same budget class as CHECK_RUN_TIMEOUT_MS. Past this, the
+   * route fails clean with a 503 naming the worker unavailable rather
+   * than hanging the HTTP request indefinitely.
+   */
+  SCHEMA_REFRESH_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 export const env = EnvSchema.parse(process.env);

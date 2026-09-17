@@ -10,6 +10,7 @@ import { runChatQuery } from "./lib/chat/runChatQuery.js";
 import { runWorkflowChecks } from "./lib/checks/runWorkflowChecks.js";
 import { proposeMapping } from "./lib/mappings/proposeMapping.js";
 import { runPreview } from "./lib/preview/runPreview.js";
+import { refreshSchema } from "./lib/schema/refreshSchema.js";
 import { runGoldenSuite } from "./lib/eval/runGoldenSuite.js";
 import { registerNightlyEvalSchedule } from "./lib/eval/schedule.js";
 import { shutdownLangfuse } from "./lib/observability/langfuse.js";
@@ -87,6 +88,12 @@ const interactive = new Worker(
         // no-persistence shape as check_run/mappings_propose.
         console.log(`[interactive] preview_run for workflow ${payload.workflowId} dest ${payload.destNodeId}`);
         return await runPreview(payload);
+      case "schema_refresh":
+        // Block 2 (Phase 5 Session 5) — busts + re-warms this worker's own
+        // introspection cache; see refreshSchema.ts's header comment for
+        // why this is a separate half from apps/api's own cache-bust.
+        console.log(`[interactive] schema_refresh for connection ${payload.connectionId}`);
+        return await refreshSchema(payload);
     }
   },
   { connection, concurrency: 10 },

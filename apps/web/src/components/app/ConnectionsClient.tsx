@@ -6,6 +6,7 @@ import type { Connection, ConnectorCatalogEntry, ConnectorInstall } from '@/lib/
 import {
   installConnectorAction,
   testConnectionAction,
+  refreshConnectionSchemaAction,
   deleteConnectionAction,
   uninstallConnectorAction,
 } from '@/lib/connections/actions';
@@ -332,6 +333,22 @@ function TestButton({ connectionId }: { connectionId: string }) {
   );
 }
 
+// Phase 5 Session 5, Block 2 — busts both the Express and worker schema
+// caches (see connections/actions.ts's refreshConnectionSchemaAction header
+// comment) so a since-drifted field is picked up by the next "Run checks"
+// and the next time a destination drawer's field pickers load.
+function RefreshSchemaButton({ connectionId }: { connectionId: string }) {
+  const [state, formAction, pending] = useActionState(refreshConnectionSchemaAction.bind(null, connectionId), null);
+  return (
+    <form action={formAction} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <button type="submit" disabled={pending} style={connectionsBadgeLinkStyle}>
+        {pending ? 'Refreshing\u2026' : 'Refresh schema'}
+      </button>
+      {state?.error && <span style={connectionsBadgeMetaStyle}>{'\u2014'} {state.error}</span>}
+    </form>
+  );
+}
+
 // Real backend wiring (Step 5): providers/connections come from the Step 4
 // Express API (installs + connections + the static manifest catalog). Only
 // MySQL has a real manifest today; the "Available" grid below still shows
@@ -509,7 +526,7 @@ export default function ConnectionsClient({
                 </span>
                 <div style={connectionsBadgesRowStyle}>
                   {p.connections.map((c) => (
-                    <span key={c.handle} style={connectionsBadgeStyle(c.health)}>
+                    <span key={c.handle} data-testid={`connection-badge-${c.handle}`} style={connectionsBadgeStyle(c.health)}>
                       <span style={connectionsBadgeDotStyle(c.health)} />
                       <span style={connectionsBadgeHandleStyle}>{c.handle}</span>
                       {c.errorNote ? <span style={connectionsBadgeMetaStyle}>{'\u2014'} {c.errorNote}</span> : null}
@@ -517,6 +534,7 @@ export default function ConnectionsClient({
                       {badgeLabel(c.health) && <span style={connectionsBadgeMetaStyle}>{badgeLabel(c.health)}</span>}
                       {c.owner && <span style={connectionsBadgeMetaStyle}>{c.owner}</span>}
                       <TestButton connectionId={c.id} />
+                      <RefreshSchemaButton connectionId={c.id} />
                       <button
                         type="button"
                         style={connectionsBadgeLinkStyle}

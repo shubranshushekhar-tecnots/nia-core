@@ -15,6 +15,7 @@ import {
   deleteConnection,
   testConnection,
   getConnectionSchema,
+  refreshConnectionSchema,
 } from "../services/connections.js";
 
 export const connectionsRouter: ExpressRouter = Router();
@@ -104,6 +105,21 @@ connectionsRouter.get(
   asyncHandler(async (req, res) => {
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await getConnectionSchema(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    res.json(data);
+  }),
+);
+
+// Reuses connections.test's capability grant: like /test, this hits an
+// external system (a real /introspect call) and stays classified with
+// create/update/delete/test rather than with reads — see can.ts's
+// DECISION-C comment.
+connectionsRouter.post(
+  "/:id/schema/refresh",
+  requireCapability("connections.test"),
+  validate({ params: connectionParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await refreshConnectionSchema(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId);
     res.json(data);
   }),
 );

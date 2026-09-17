@@ -54,24 +54,28 @@ function FieldSelect({
   onChange,
   fields,
   placeholder,
+  invalid,
 }: {
   value: string;
   onChange: (v: string) => void;
   fields: string[];
   placeholder?: string;
+  /** Phase 5 Session 5, Block 2 — schema drift: entry references a field the live schema no longer has (see driftedField() below). Red-border-only, no new copy inline; the row-level message below the entry explains why. */
+  invalid?: boolean;
 }) {
+  const style = invalid ? { ...inputStyle, flex: 1, borderColor: 'var(--bad)' } : { ...inputStyle, flex: 1 };
   if (fields.length === 0) {
     return (
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder ?? 'field name'}
-        style={{ ...inputStyle, flex: 1, fontFamily: 'var(--font-data)' }}
+        style={{ ...style, fontFamily: 'var(--font-data)' }}
       />
     );
   }
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+    <select value={value} onChange={(e) => onChange(e.target.value)} style={style}>
       <option value="" disabled>
         Select field…
       </option>
@@ -83,6 +87,20 @@ function FieldSelect({
       ))}
     </select>
   );
+}
+
+/**
+ * Phase 5 Session 5, Block 2 — schema drift detection. CheckResult carries
+ * no structured field reference (message string only — see checks.ts), so
+ * rather than parsing that string this compares the entry's own value
+ * against the live-fetched field list (already on hand via useEntityFields,
+ * same data the FieldSelect dropdowns render from). Only flags once the
+ * live list has actually loaded (`fields.length > 0`) so an entry never
+ * flashes "drifted" while the schema query is still in flight — same
+ * loading-guard reasoning as the schema-race bug noted in session notes.
+ */
+function driftedField(value: string, fields: string[]): boolean {
+  return value !== '' && fields.length > 0 && !fields.includes(value);
 }
 
 function useEntityFields(connectionId?: string): string[] {
@@ -245,16 +263,28 @@ export default function MappingEditor({
         </div>
       )}
 
-      {mapping.entries.map((entry, i) => (
-        <div key={i} style={rowStyle}>
-          <FieldSelect value={entry.from} onChange={(v) => updateEntry(i, { from: v })} fields={sourceFields} placeholder="source field" />
-          <span style={{ color: 'var(--ink4)', fontSize: 12 }}>{'\u2192'}</span>
-          <FieldSelect value={entry.to} onChange={(v) => updateEntry(i, { to: v })} fields={destFields} placeholder="dest field" />
-          <button type="button" aria-label="Remove entry" onClick={() => removeEntry(i)} style={removeBtnStyle}>
-            {'\u2715'}
-          </button>
-        </div>
-      ))}
+      {mapping.entries.map((entry, i) => {
+        const fromDrifted = driftedField(entry.from, sourceFields);
+        const toDrifted = driftedField(entry.to, destFields);
+        return (
+          <div key={i}>
+            <div style={rowStyle}>
+              <FieldSelect value={entry.from} onChange={(v) => updateEntry(i, { from: v })} fields={sourceFields} placeholder="source field" invalid={fromDrifted} />
+              <span style={{ color: 'var(--ink4)', fontSize: 12 }}>{'\u2192'}</span>
+              <FieldSelect value={entry.to} onChange={(v) => updateEntry(i, { to: v })} fields={destFields} placeholder="dest field" invalid={toDrifted} />
+              <button type="button" aria-label="Remove entry" onClick={() => removeEntry(i)} style={removeBtnStyle}>
+                {'\u2715'}
+              </button>
+            </div>
+            {(fromDrifted || toDrifted) && (
+              <div style={{ fontSize: 11, color: 'var(--bad)', marginTop: -4, marginBottom: 8 }}>
+                {fromDrifted ? `"${entry.from}" ` : `"${entry.to}" `}
+                no longer exists in the {fromDrifted ? 'source' : 'destination'} schema — pick a new field.
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       <button
         type="button"

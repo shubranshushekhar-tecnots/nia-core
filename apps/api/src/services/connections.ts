@@ -4,7 +4,8 @@ import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 import { dispatchInvalidate, dispatchIntrospect, dispatchTest } from "../lib/connectorDispatch.js";
 import { logExecutionAudit } from "../lib/executionAudit.js";
-import { getCachedSchema, setCachedSchema } from "../lib/schemaCache.js";
+import { getCachedSchema, setCachedSchema, invalidateCachedSchema } from "../lib/schemaCache.js";
+import { runSchemaRefreshJob } from "../lib/schemaRefreshQueue.js";
 
 export type Connection = {
   id: string;
@@ -336,4 +337,50 @@ export async function getConnectionSchema(
 
   setCachedSchema(credential, result.value);
   return result.value;
+}
+
+/**
+ * Phase 5 Session 5, Block 2 — "Refresh schema" affordance's service
+ * function. Busts THIS process's cached entry immediately (so the next
+ * getConnectionSchema call — e.g. the destination drawer's field pickers —
+ * never serves stale data even if the round trip below fails), then
+ * enqueues a schema_refresh job so the WORKER's separate introspection
+ * cache (lib/introspection.ts, used by every check_run's mappings check —
+ * see runWorkflowChecks.ts's buildMappingsCheck) is busted and re-warmed
+ * too. Both caches are keyed identically (connectionId:credVersion) but
+ * live in different processes with no shared memory, so both halves must
+ * be cleared explicitly for a single click to make "Run checks"
+ * immediately see live (post-drift) field names.
+ */
+export async function refreshConnectionSchema(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  id: string,
+  triggeredByUserId: string,
+): Promise<IntrospectResponse> {
+  let query = supabase
+    .from("connections")
+    .select("id, connector_id, config, vault_secret_ref, cred_version")
+    .eq("id", id);
+  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
+  const { data } = await query.maybeSingle<{
+    id: string;
+    connector_id: string;
+    config: Record<string, unknown>;
+    vault_secret_ref: string;
+    cred_version: number;
+  }>();
+  if (!data) throw new AppError(404, "NOT_FOUND", "Connection not found.");
+
+  const credential: CredentialRef = {
+    connectionId: data.id,
+    credVersion: data.cred_version,
+    vaultRef: data.vault_secret_ref,
+  };
+  invalidateCachedSchema(credential);
+
+  const schema = await runSchemaRefreshJob({ scope, connectionId: id, triggeredByUserId });
+
+  setCachedSchema(credential, schema);
+  return schema;
 }

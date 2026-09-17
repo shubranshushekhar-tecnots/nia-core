@@ -44,7 +44,7 @@ function approvedMapping(entries: { from: string; to: string }[] = [{ from: "ema
   return { operation: "read" as const, mapping: { version: 1, entries, approvedAt: "2026-01-01T00:00:00.000Z" } };
 }
 
-function graph(opts: { mapping?: unknown; transforms?: string[] } = {}): GraphDoc {
+function graph(opts: { mapping?: Record<string, unknown>; transforms?: string[] } = {}): GraphDoc {
   const mapping = opts.mapping === undefined ? approvedMapping() : opts.mapping;
   const transformNodes = (opts.transforms ?? []).map((id) => ({
     id,

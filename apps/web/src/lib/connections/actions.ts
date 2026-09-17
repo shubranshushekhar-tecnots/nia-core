@@ -103,6 +103,29 @@ export async function testConnectionAction(
   return { success: true };
 }
 
+/**
+ * Phase 5 Session 5, Block 2 — "Refresh schema" affordance. Busts both the
+ * Express process's cached introspection result AND the worker's separate
+ * cache (see apps/api/src/services/connections.ts's refreshConnectionSchema
+ * header comment) so a since-drifted field is picked up by the NEXT "Run
+ * checks" and the next time a destination drawer's field pickers load —
+ * without this, both would keep reporting the pre-drift schema until each
+ * cache's 5-minute TTL happened to expire on its own.
+ */
+export async function refreshConnectionSchemaAction(
+  connectionId: string,
+  _prevState: ActionState,
+  _formData: FormData,
+): Promise<ActionState> {
+  try {
+    await apiFetchServer(`/connections/${connectionId}/schema/refresh`, { method: 'POST' });
+  } catch (err) {
+    return { error: apiErrorMessage(err, "Couldn't refresh the schema. Try again.") };
+  }
+  revalidatePath('/app/connections');
+  return { success: true };
+}
+
 export async function deleteConnectionAction(_prevState: ActionState, formData: FormData): Promise<ActionState> {
   const connectionId = String(formData.get('id'));
   try {
