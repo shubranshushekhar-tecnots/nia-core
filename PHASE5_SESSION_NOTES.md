@@ -845,3 +845,163 @@ mysql-dialect-quoted SQL, both `mapping-not-approved` variants,
 `no-upstream-source`, `checks-failing` reusing `checkMappings` with no
 new validation, both `entity-unresolved` variants, single- vs.
 multi-transform pushdown behavior, and `dispatch-failed` passthrough).
+
+## Phase 5 Session 5 — Block 2: schema drift, proven end-to-end
+
+Two separate, unshared in-memory introspection caches exist because
+schema reads happen from two different processes for two different
+reasons: `apps/api/src/lib/schemaCache.ts` backs `GET /:id/schema` (the
+drawer's field pickers), `apps/worker/src/lib/introspection.ts` backs
+check-run jobs (`checks` always execute on the worker via BullMQ). Both
+keyed `${connectionId}:${credVersion}`, both 5-min TTL, but process-local
+— refreshing one never busts the other. New `POST
+/connections/:id/schema/refresh` (Bearer, workspace-checked the same way
+every other connection route is) busts both: synchronously via
+`invalidateCachedSchema()` on the api side, and via a new `schema_refresh`
+BullMQ job (`apps/api/src/lib/schemaRefreshQueue.ts` enqueues,
+`apps/worker/src/lib/schema/refreshSchema.ts` consumes and calls
+`introspection.ts`'s own invalidation) for the worker side, awaited
+before the route responds so the UI's "Refresh schema" button only
+resolves once both caches are actually cold. The connector-service layer
+(`services/connector-mysql/src/index.ts`'s `/introspect`) has no cache of
+its own — queries `information_schema.columns` live every call — so only
+these two needed busting, not three.
+
+UI: a "Refresh schema" button next to each connection badge
+(`ConnectionsClient.tsx`'s new `RefreshSchemaButton`, mirrors
+`TestButton`'s `useActionState`/server-action pattern exactly). Drawer:
+`MappingEditor.tsx`'s `FieldSelect` gained an `invalid` prop (red border)
+and a `driftedField(value, fields)` helper that flags a mapping entry's
+value when it's non-empty, the live field list has already loaded
+(`fields.length > 0` — guards against flashing "drifted" while the
+schema query is still in flight, same class of race as the schema-race
+UX bug noted below), and the value isn't in that list. Compared against
+the already-fetched `sourceFields`/`destFields` client-side rather than
+parsing `CheckResult.message` strings — `checks.ts` carries no
+structured field reference, only a message.
+
+**No broken link found in the drift chain.** `packages/schemas/src/
+checks.ts`'s `checkMappings()` (lines 313-360) already correctly detects
+drift — looks up `currentFields` via `lookupFields(source.id)`, fails
+with `${nodeLabel(source)} -> ${nodeLabel(dest)}: mapped source field
+"${entry.from}" no longer exists upstream.` for any entry whose `from`
+isn't in the live set — this was pre-existing, correct code, not touched.
+The only missing pieces were the refresh mechanism (now built) and the
+UI surfacing (now built); the detection itself never needed a fix.
+
+New e2e (`canvas.spec.ts`, `.serial` block, last test — the only one that
+mutates the shared dev-mysql sandbox schema itself) proves the full
+chain live: builds a mysql->supabase graph, maps + approves
+`employees.salary`, checks pass; `docker exec`-renames the column to
+`salary_usd` (root/devroot — `nia_ro`, the credential every real
+connector dispatch uses, is REVOKE-ALL/GRANT-SELECT-only by design, so
+the mutation step needs the sandbox's own root, a throwaway local Docker
+secret); clicks "Refresh schema" on the `@mysql-dev` badge
+(`data-testid="connection-badge-@mysql-dev"`, added to
+`ConnectionsClient.tsx` for robust targeting); re-runs checks — fails
+with the exact upstream message; reopens the drawer — the drifted entry
+is highlighted with the "no longer exists in the source schema" copy;
+fixes the entry to `salary_usd`, re-approves, re-runs checks — green
+again; `finally` block renames the column back and re-refreshes both
+caches regardless of pass/fail, so the sandbox is always left correct for
+every other spec file that shares this fixture (confirmed
+`command-bar.spec.ts` has its own independent self-healing
+node-deletion `beforeEach`, so any leftover graph/mapping state
+self-heals on the next spec file's first test regardless of run order).
+
+First run hit the pre-existing, documented `gotoWorkflow` navigation
+flake in the shared `beforeEach` (unrelated to this test's own code —
+failed before the test body even started); passed clean on retry, and
+passed again inside a full `canvas.spec.ts` run (19/20 green, the one
+failure an unrelated pre-existing cross-org navigation timeout, deferred
+to the Block 5 clean-run pass per Rider C). Confirmed via `docker exec
+... DESCRIBE employees` after the run that the `finally` cleanup actually
+restored the column name.
+
+Committed `e8a9885`.
+
+## Phase 5 Session 5 — Block 3: latency levers
+
+Re-verified the plan's four specific levers (`.claude/plan-phase5-session5.md`,
+numbered independently from `docs/decisions.md`'s ruling text) with live
+evidence, not just a re-read of Phase 4's findings — per the plan's own
+instruction to re-probe rather than trust old docs alone. Full evidence
+(request/response artifacts) for all four is in `docs/decisions.md`
+("Phase 5 Session 5, Block 3: latency-lever re-verification, live
+evidence"), cross-referencing `PHASE4_EXIT.md` §4.4 Fix 1-3. Summary:
+
+1. **Faster query-gen model tier (BYOK) — still blocked, reconfirmed via
+   a live gateway probe today.** Direct call to the gateway
+   (`google/gemini-3.5-flash`) reproduces Phase 4's exact failure mode:
+   `provider_metadata.gateway.routing` shows the Google BYOK credential
+   rejected (`"API key not valid"`, 400), falling back to a `vertex`
+   system credential with a mandatory ~150-token reasoning tax
+   (`usage.completion_tokens_details.reasoning_tokens: 149`,
+   `usage.is_byok: false`). Unchanged from Phase 4; blocked on a
+   platform-level credential outside this repo.
+2. **Skip-rewrite fast path — N/A, confirmed no-op.**
+   `chat/nodes/rewrite.ts` is a pure pass-through (no LLM call,
+   `ChatQueryJob` carries no history to resolve against yet) — nothing to
+   skip. No code change.
+3. **Schema-context caching — technically available via undocumented
+   `cache_control` passthrough, but zero latency benefit; not
+   implemented.** The gateway's documented `/v1/chat/completions` schema
+   (`.nia/assets/API_REFERENCE.md`) lists no `cache_control` field, but an
+   empirical probe against `anthropic/claude-sonnet-4-6` proved it IS
+   accepted and functional (undocumented): first call wrote a
+   1808-token cache (`cache_creation_input_tokens: 1808`), a repeat call
+   hit it (`cached_tokens: 1808`, ~89% cost drop). Real finding, worth a
+   future cost-ledger entry — but a clean miss-vs-hit latency comparison
+   (fresh salted block vs. repeated block) showed no measurable latency
+   difference (4074ms miss vs. 4360ms/4005ms hits, within noise),
+   confirming Phase 4's root cause (provider inference-start floor, not
+   prefill compute) holds for cached prompts too. Not implemented — real
+   complexity (widening `ChatMessage.content` to content-block arrays)
+   for a cost win with no effect on the latency bar this block targets.
+4. **Answer-gen early-start / connection warmup — already moot, confirmed
+   live.** The plan's cheap candidate is a warmup fetch fired concurrently
+   with `dispatch()` to pre-warm the connection for the following
+   answer-gen call. Measured the actual gap it would bridge —
+   `executing` (dispatch) stage-start to `generating_answer` stage-start,
+   from a 10-run `latency_hops.mjs` probe with full per-stage timestamps —
+   and it's 54-113ms across all 10 runs, 35-70x under Node's default
+   undici `keepAliveTimeout` (4000ms). The connection from the
+   immediately-preceding `generateQuery` call on the same singleton
+   `OpenAI` client (`gatewayClient.ts`) is trivially still warm by the
+   time `buildAnswer` fires. No code change.
+
+No lever cleared "implement only if cheap and golden-gated" — all four
+close out as investigation-only. No golden-set re-run required (the
+plan's own conditional only applies "after any implemented lever").
+
+Re-measured with `node latency_hops.mjs` (10 runs, real `@mysql-dev`
+connection `d103a00c-9335-41d1-9d01-f22a4c654db2`, confirmed still valid
+against the live DB before running, full stack up):
+
+```
+                                     Session 4 (§Block 0)      Session 5 Block 3
+POST send -> BullMQ enqueue         p50=251ms   p95=292ms      p50=335ms   p95=796ms
+Enqueue -> worker picks up job       p50=2ms     p95=12ms       p50=3ms     p95=17ms
+Pickup -> first stage event          p50=11ms    p95=22ms       p50=9ms     p95=215ms
+First stage -> first token (worker)  p50=7595ms  p95=7806ms     p50=8243ms  p95=10674ms
+Worker publish -> client receipt     p50=4ms     p95=11ms       p50=3ms     p95=15ms
+TOTAL: POST -> first stage (client)  p50=383ms   p95=413ms      p50=481ms   p95=961ms
+TOTAL: POST -> first token (client)  p50=7846ms  p95=8089ms     p50=8517ms  p95=11275ms
+```
+
+Still fails the <3s bar (and the ≤5s p50 target from the ruling). p50
+moved from 7846ms to 8517ms and p95 widened from 8089ms to 11275ms —
+within normal single-machine, live-LLM-call noise for a 10-run sample
+(no code changed on the hot path this block; Block 2's cache-busting
+additions don't touch the chat pipeline), not a regression to chase.
+Reported here as this session's number for `PHASE5_EXIT.md`'s exit item.
+All four levers were investigated with live evidence this session (see
+above); none clears the bar for implementation — two are blocked on
+external factors (BYOK platform credential), two are confirmed no-ops
+(rewrite skip, connection warmup), and one (`cache_control` caching) is
+technically available but latency-neutral in this environment. Latency
+remains an open Phase 5 exit item.
+
+No commit this block until the write-up lands (no code changes —
+investigation + re-measurement only, folded into this block's own
+documentation commit).
