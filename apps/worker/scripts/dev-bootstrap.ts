@@ -8,11 +8,12 @@
  * suite — see supabase/seed.sql. What it does NOT do is install connectors
  * or create connections (those write to Vault via an RPC, not plain SQL,
  * so they don't belong in a SQL seed file). This script does that half:
- * idempotently ensures a MySQL and a Mongo connection exist against
- * docker-compose's sandbox DBs, pointed at both the demo org and the
- * canvas-e2e org (the latter gives canvas-e2e-a@nia.dev real source nodes
- * to drag onto the canvas), so a fresh `supabase db reset` is fully
- * recoverable with:
+ * idempotently ensures a MySQL, a Mongo, and a Supabase(Postgres) connection
+ * exist against docker-compose's sandbox DBs, pointed at both the demo org
+ * and the canvas-e2e org (the latter gives canvas-e2e-a@nia.dev real source
+ * nodes to drag onto the canvas, plus a real destination node now that the
+ * supabase manifest declares "etl_sink" — Phase 5 Session 3), so a fresh
+ * `supabase db reset` is fully recoverable with:
  *
  *   supabase db reset
  *   pnpm --filter @nia/worker bootstrap
@@ -51,9 +52,13 @@ const CANVAS_E2E_C_USER_ID = "00000000-0000-0000-0000-0000000000e3";
 
 // Dialed by the connector SERVICE containers, not this script — see
 // dispatch-smoke.ts's header comment for the full host-vs-container rationale.
+// supabase's sandbox config matches dispatch-smoke.ts's own SANDBOX entry
+// exactly (same dev-postgres container, same nia_ro role from
+// docker/dev-postgres-init.sql).
 const SANDBOX = {
   mysql: { host: "dev-mysql", port: 3306, database: "sandbox", user: "nia_ro", password: "nia_ro_pw" },
   mongodb: { host: "dev-mongo", port: 27017, database: "sandbox", user: "nia_ro", password: "nia_ro_pw" },
+  supabase: { host: "dev-postgres", port: 5432, database: "sandbox", user: "nia_ro", password: "nia_ro_pw" },
 } as const;
 
 type ConnectorId = keyof typeof SANDBOX;
@@ -135,7 +140,7 @@ async function main(): Promise<void> {
   const orgId = await getOrgId(ORG_SLUG);
   log(`Demo org: ${ORG_SLUG} (${orgId})`);
 
-  const connectionIds: Record<ConnectorId, string> = {
+  const connectionIds: Partial<Record<ConnectorId, string>> = {
     mysql: await seedConnection({ orgId }, "mysql", DEMO_USER_ID),
     mongodb: await seedConnection({ orgId }, "mongodb", DEMO_USER_ID),
   };
@@ -144,9 +149,14 @@ async function main(): Promise<void> {
   const canvasOrgId = await getOrgId(CANVAS_E2E_ORG_SLUG);
   log(`Canvas E2E org: ${CANVAS_E2E_ORG_SLUG} (${canvasOrgId})`);
 
+  // supabase added Session 3 (etl_sink amendment): canvas-e2e-a@nia.dev now
+  // has a real destination node to drag onto the canvas, not just sources —
+  // see canvas.spec.ts's "palette purity" describe block, which asserts on
+  // this exact connection set, and mapping-smoke's mysql -> supabase pairing.
   const canvasConnectionIds: Record<ConnectorId, string> = {
     mysql: await seedConnection({ orgId: canvasOrgId }, "mysql", CANVAS_E2E_USER_ID),
     mongodb: await seedConnection({ orgId: canvasOrgId }, "mongodb", CANVAS_E2E_USER_ID),
+    supabase: await seedConnection({ orgId: canvasOrgId }, "supabase", CANVAS_E2E_USER_ID),
   };
   log(`Canvas E2E connections ready: ${JSON.stringify(canvasConnectionIds, null, 2)}`);
 

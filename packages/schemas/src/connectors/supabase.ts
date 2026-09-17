@@ -18,8 +18,19 @@ import type { ConnectorManifest } from "../manifest.js";
  *
  * Read-only v1, matching MySQL/MongoDB's current stance — only "read" is
  * listed in `operations`, enforced by @nia/guardrails's
- * validatePostgresQuery before dispatch. capabilities is
- * ["queryable","etl_source"] only — no "etl_sink" for a read-only connector.
+ * validatePostgresQuery before dispatch.
+ *
+ * capabilities includes "etl_sink" (Phase 5 Session 3, approved scope):
+ * this declares "a supabase connection can be placed as a DESTINATION node
+ * in the canvas" and nothing more — capabilities gate palette/canvas
+ * placement only (NodesRail.tsx's buildEntries), never write permission.
+ * Real write execution stays governed by `operations` (still ["read"] only
+ * here) and the WRITE_OPERATIONS tripwire (checkGrants, checks.ts) — a
+ * destination node with no write verb configured is configuration-only.
+ * mysql/mongodb stay etl_source-only for now; this is otherwise the only
+ * connector with a destination shape, needed to make checkDag's
+ * source->destination path requirement and checkMappings exercisable
+ * end-to-end (mysql -> supabase).
  */
 export const supabaseManifest: ConnectorManifest = {
   id: "supabase",
@@ -36,6 +47,6 @@ export const supabaseManifest: ConnectorManifest = {
     { key: "password", label: "Password", type: "password", required: true, secret: true },
   ],
   operations: ["read"],
-  capabilities: ["queryable", "etl_source"],
+  capabilities: ["queryable", "etl_source", "etl_sink"],
   service: { host: "connector-supabase", port: 4030 },
 };

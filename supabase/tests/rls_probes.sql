@@ -1067,6 +1067,98 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 30 — 0014_workflow_check_runs.sql: an authorized org member cannot
+-- write a workflow_check_runs row directly via PostgREST insert — the audit-
+-- log pattern means SELECT is the only client-grantable privilege on this
+-- table; the only write path is record_check_run() (probes 31-32 below).
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_workflow_a uuid := (select id from test_ids where key = 'workflow_a');
+  denied boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+  begin
+    insert into public.workflow_check_runs (workflow_id, graph_version, results)
+    values (v_workflow_a, 1, '[{"id":"config","status":"pass","message":"forged"}]'::jsonb);
+    denied := false; -- insert succeeded — FAIL
+  exception when insufficient_privilege or others then
+    denied := true; -- expected: no insert policy exists on this table
+  end;
+  reset role;
+
+  if denied then
+    insert into probe_results values (30, 'authorized member cannot directly INSERT into workflow_check_runs', true);
+  else
+    insert into probe_results values (30, 'authorized member cannot directly INSERT into workflow_check_runs', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (30, 'workflow_check_runs direct-insert probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 31 — record_check_run() raises for a caller who isn't authorized
+-- for the target workflow (private.can_access_workflow re-checked inside
+-- the function itself, not trusted from the caller)
+-- =========================================================================
+do $$
+declare
+  v_org_b_owner uuid := (select id from test_ids where key = 'org_b_owner');
+  v_workflow_a uuid := (select id from test_ids where key = 'workflow_a');
+  raised boolean := false;
+begin
+  perform pg_temp.act_as(v_org_b_owner);
+  begin
+    perform public.record_check_run(v_workflow_a, '[{"id":"config","status":"pass","message":"forged"}]'::jsonb);
+    raised := false; -- call succeeded — FAIL
+  exception when others then
+    raised := true; -- expected
+  end;
+  reset role;
+
+  if raised then
+    insert into probe_results values (31, 'record_check_run raises for a non-member of the target workflow', true);
+  else
+    insert into probe_results values (31, 'record_check_run raises for a non-member of the target workflow', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (31, 'record_check_run non-member probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 32 — record_check_run() as an authorized member: the returned (and
+-- persisted) row always carries the CURRENT workflow_graphs.version — there
+-- is no p_graph_version parameter to supply a stale/forged one through.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_workflow_a uuid := (select id from test_ids where key = 'workflow_a');
+  v_current_version int;
+  v_run public.workflow_check_runs;
+  n_visible int;
+begin
+  select version into v_current_version from public.workflow_graphs where workflow_id = v_workflow_a;
+
+  perform pg_temp.act_as(v_member);
+  select * into v_run from public.record_check_run(v_workflow_a, '[{"id":"config","status":"pass","message":"ok"}]'::jsonb);
+  select count(*) into n_visible from public.workflow_check_runs where id = v_run.id and workflow_id = v_workflow_a;
+  reset role;
+
+  if v_run.graph_version = v_current_version and n_visible = 1 then
+    insert into probe_results values (32, 'record_check_run persists a row at the current graph_version, not a client-supplied one', true);
+  else
+    insert into probe_results values (32, 'record_check_run persists a row at the current graph_version, not a client-supplied one', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (32, 'record_check_run current-version probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$
