@@ -1159,6 +1159,70 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 33 — org member can create a workflow-linked conversation (via the
+-- new 0015 workflow_id column) and read it back; another member of the
+-- same org can see it too (same org-wide visibility as probe 18 — the
+-- new column is just a pointer, not a new access path)
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_workflow_a uuid := (select id from test_ids where key = 'workflow_a');
+  v_conv uuid;
+  n_self_sees int;
+  n_admin_sees int;
+begin
+  perform pg_temp.act_as(v_member);
+  insert into public.conversations (org_id, created_by, title, workflow_id)
+  values (v_org, v_member, 'Workflow-linked probe conversation', v_workflow_a)
+  returning id into v_conv;
+  select count(*) into n_self_sees from public.conversations where id = v_conv and workflow_id = v_workflow_a;
+  reset role;
+
+  perform pg_temp.act_as(v_admin);
+  select count(*) into n_admin_sees from public.conversations where id = v_conv and workflow_id = v_workflow_a;
+  reset role;
+
+  insert into test_ids values ('workflow_linked_conv', v_conv);
+
+  if n_self_sees = 1 and n_admin_sees = 1 then
+    insert into probe_results values (33, 'org member creates/reads a workflow-linked conversation; org-mate sees it too', true);
+  else
+    insert into probe_results values (33, 'org member creates/reads a workflow-linked conversation; org-mate sees it too', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (33, 'workflow-linked conversation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 34 — cross-org: org B's owner cannot see the workflow-linked
+-- conversation from probe 33 (proves workflow_id doesn't open a new
+-- access path around the existing org/owner XOR policy)
+-- =========================================================================
+do $$
+declare
+  v_org_b_owner uuid := (select id from test_ids where key = 'org_b_owner');
+  v_conv uuid := (select id from test_ids where key = 'workflow_linked_conv');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_org_b_owner);
+  select count(*) into n_visible from public.conversations where id = v_conv;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (34, 'cross-org actor cannot see another org''s workflow-linked conversation', true);
+  else
+    insert into probe_results values (34, 'cross-org actor cannot see another org''s workflow-linked conversation', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (34, 'cross-org workflow-linked conversation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$
