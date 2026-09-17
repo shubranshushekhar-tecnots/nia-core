@@ -27,4 +27,9 @@ supabase/.branches
 # playwright saved auth sessions (real cookies, not fixtures)
 apps/web/playwright/.auth/
 
+# playwright run artifacts (screenshots/traces/last-run state) — generated
+# fresh every invocation, not a fixture; only e2e/*.spec.ts-snapshots/
+# baselines are committed
+apps/web/test-results/
+
 .nia/NIA.local.md

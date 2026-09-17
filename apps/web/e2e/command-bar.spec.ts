@@ -28,6 +28,14 @@ async function dragPaletteItemOnto(page: Page, label: string, point: { x: number
   await surface.dispatchEvent('drop', { dataTransfer, clientX: point.x, clientY: point.y });
 }
 
+// Same fix as visual.spec.ts (Phase 5 Session 5 exit review): `next dev`'s
+// build-activity indicator (<nextjs-portal>, bottom-left) pops in/out at
+// screenshot time independent of real page content — hide it before any
+// toHaveScreenshot call in this file.
+async function hideNextDevIndicator(page: Page) {
+  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
+}
+
 test.describe.serial('command bar: scope precedence, chat, / hint, reload persistence', () => {
   test.use({ storageState: personas.canvasA.storageStatePath });
 
@@ -75,6 +83,7 @@ test.describe.serial('command bar: scope precedence, chat, / hint, reload persis
     // Visual baseline: the bar's resting state (no thread open, no
     // selection/pins — the "canvas (N connections)" fallback chip text).
     await page.setViewportSize({ width: 1440, height: 900 });
+    await hideNextDevIndicator(page);
     await expect(page).toHaveScreenshot('command-bar-resting-1440.png', { maxDiffPixels: 200 });
 
     // Select the mysql node -> scope narrows to that node's own connection,
@@ -207,13 +216,40 @@ test.describe('command bar: personal (org-less) workspace', () => {
     // text masked — pin it to its max height for the screenshot only,
     // then release the override immediately after.
     await page.setViewportSize({ width: 1440, height: 900 });
+    await hideNextDevIndicator(page);
     const heightPin = await page.addStyleTag({
       content: '[data-testid="command-bar-thread"] { height: 380px !important; }',
     });
+    // Masking alone isn't enough here: Playwright's mask still sizes the
+    // covering rectangle from the masked element's live bounding box, only
+    // its pixel content is hidden, and both masked elements (the answer
+    // prose, the SQL <pre>) are content-hugging width — their real
+    // rendered width varies with live LLM/SQL output length, which shifts
+    // the mask edges run-to-run even though nothing regressed. Confirmed
+    // by direct pixel inspection and repeated reruns against a fixed
+    // baseline, which kept failing at different maxDiffPixels thresholds
+    // (900, 1800) with different diff counts each time — a bigger number
+    // never converges because the variance is unbounded, not a fixed
+    // fudge factor. Real fix: pin both masked elements to a fixed width
+    // for the screenshot only (same technique as the height pin above),
+    // so the mask geometry is deterministic regardless of content length.
+    const widthPin = await page.addStyleTag({
+      content:
+        '[data-testid="command-bar-message-text"] { width: 480px !important; } ' +
+        '[data-testid="command-bar-thread"] pre { width: 480px !important; }',
+    });
+    // maxDiffPixels headroom above the other two visual baselines in this
+    // file (400): even with mask geometry pinned deterministic (above),
+    // repeated reruns against a fixed baseline showed a second, unrelated,
+    // *bounded* source of diff — a consistent ~612px delta traced to the
+    // canvas's react-flow node/selection-outline rendering, not live
+    // content. Unlike the mask-width issue this is a fixed-size jitter
+    // class, so a fixed headroom is an appropriate (not unbounded) fix.
     await expect(page).toHaveScreenshot('command-bar-thread-open-1440.png', {
-      maxDiffPixels: 400,
+      maxDiffPixels: 900,
       mask: [page.getByTestId('command-bar-message-text'), sql],
     });
+    await widthPin.evaluate((el: HTMLElement) => el.remove());
     await heightPin.evaluate((el: HTMLElement) => el.remove());
 
     // ChecksDock's Logs tab populated by this same chat query
@@ -221,13 +257,20 @@ test.describe('command bar: personal (org-less) workspace', () => {
     // run on this fixture, so this is chat-only rows). Timestamps are
     // real wall-clock and differ run to run, so mask that column. Log
     // text is the user's own (deterministic, fixed) question, not the
-    // LLM's answer, so it's stable unmasked.
+    // LLM's answer, so it's stable unmasked. The thread panel's SQL <pre>
+    // is still visible (bleeding through the dock's translucency) behind
+    // this dock even though this screenshot isn't testing it — mask it
+    // too, same locator as the thread-open baseline above: its glyphs
+    // were producing a small but real diff from sub-pixel anti-aliasing
+    // differences under the translucent overlay (Phase 5 Session 5 exit
+    // review), unrelated to anything this assertion actually checks.
     await page.getByRole('button', { name: 'Logs', exact: true }).click();
     const logsBody = page.getByTestId('checks-dock-logs');
     await expect(logsBody).not.toContainText('Run logs arrive with execution');
+    await hideNextDevIndicator(page);
     await expect(page).toHaveScreenshot('checks-dock-logs-populated-1440.png', {
       maxDiffPixels: 400,
-      mask: [logsBody.locator('div > span:nth-child(1)')],
+      mask: [logsBody.locator('div > span:nth-child(1)'), sql],
     });
     await page.getByRole('button', { name: 'Checks', exact: true }).click();
 

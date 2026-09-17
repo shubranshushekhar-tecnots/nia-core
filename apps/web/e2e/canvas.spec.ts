@@ -70,6 +70,14 @@ async function dragPaletteItemOnto(page: Page, label: string, point: { x: number
   await surface.dispatchEvent('drop', { dataTransfer, clientX: point.x, clientY: point.y });
 }
 
+// Same fix as visual.spec.ts / command-bar.spec.ts (Phase 5 Session 5 exit
+// review): `next dev`'s build-activity indicator (<nextjs-portal>,
+// bottom-left) pops in/out at screenshot time independent of real page
+// content — hide it before any toHaveScreenshot call in this file.
+async function hideNextDevIndicator(page: Page) {
+  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
+}
+
 /** Connects nodeIndex's source handle to nodeIndex's target handle via a real mouse drag on the actual handle elements (not a guessed pixel offset). */
 async function connectNodes(page: Page, fromNodeIndex: number, toNodeIndex: number) {
   const nodes = page.locator('.react-flow__node');
@@ -231,6 +239,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // separate full-suite invocations (e.g. after the checks-dock test
     // below has run at least once) — this shot's actual subject is the
     // NodesRail + NodeDrawer pairing, not the dock's state.
+    await hideNextDevIndicator(page);
     await expect(page).toHaveScreenshot('canvas-rail-drawer-1440.png', {
       maxDiffPixels: 50,
       mask: [page.getByTestId('checks-dock')],
@@ -425,6 +434,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // freshly re-panned) produces more sub-pixel jitter between otherwise-
     // identical runs (~1.4-2.5k px / ~0.01 ratio observed back-to-back) —
     // not a real regression signal at that magnitude.
+    await hideNextDevIndicator(page);
     await expect(page).toHaveScreenshot('checks-dock-failing-1440.png', { maxDiffPixels: 3000 });
 
     // handleSelectCheckNode just re-centered the viewport on node 0 —
@@ -459,6 +469,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // Session 3 Task 4 visual-diff baseline: dock open, all-pass state,
     // Run enabled. Same "no design mock for this state" caveat as the
     // failing-state shot above.
+    await hideNextDevIndicator(page);
     await expect(page).toHaveScreenshot('checks-dock-all-pass-1440.png', { maxDiffPixels: 50 });
 
     const runBtn = page.getByRole('button', { name: 'Run', exact: true });
@@ -560,6 +571,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // Same canvas/SVG sub-pixel jitter tolerance rationale as the
     // checks-dock-failing baseline above (~200-300px / ~0.01 ratio observed
     // back-to-back here).
+    await hideNextDevIndicator(page);
     await expect(page).toHaveScreenshot('destination-mapping-editor-1440.png', { maxDiffPixels: 500 });
 
     const approved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
@@ -857,6 +869,16 @@ test.describe('canvas: personal workspace', () => {
     await gotoWorkflow(page, 'Canvas E2E Personal Project', 'Canvas E2E Personal Workflow');
     const rail = page.getByTestId('nodes-rail');
     await expect(rail).toBeVisible();
+
+    // Self-healing reset, same convention as the serial block above and
+    // command-bar.spec.ts's own personal-workspace test — this shared
+    // fixture can carry a node left behind by that command-bar test (which
+    // deliberately doesn't clean up after itself) from an earlier
+    // full-suite invocation.
+    const deleteButtons = page.getByRole('button', { name: 'Delete node' });
+    while ((await deleteButtons.count()) > 0) {
+      await deleteButtons.first().click();
+    }
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
 
     // Triggers is listed first but isn't backed by any manifest yet
@@ -895,6 +917,15 @@ test.describe('canvas: palette purity — Triggers moat', () => {
 
   test('Triggers is locked: "Soon" badge, and a drag attempt lands no node on the canvas', async ({ page }) => {
     await gotoWorkflow(page, 'Canvas E2E Personal Project', 'Canvas E2E Personal Workflow');
+
+    // Self-healing reset — same shared fixture/rationale as the "personal
+    // workspace" describe block above.
+    const deleteButtons = page.getByRole('button', { name: 'Delete node' });
+    while ((await deleteButtons.count()) > 0) {
+      await deleteButtons.first().click();
+    }
+    await expect(page.locator('.react-flow__node')).toHaveCount(0);
+
     const rail = page.getByTestId('nodes-rail');
     const trigger = rail.getByText('Trigger', { exact: true });
     await expect(trigger).toBeVisible();

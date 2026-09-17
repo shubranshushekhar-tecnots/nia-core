@@ -27,18 +27,33 @@ import { test, expect } from '@playwright/test';
 // same shape as the two below: `page.goto('/app')` (with a storageState
 // fixture for the seeded account) + `toHaveScreenshot('app-home-1440.png')`.
 
+// Root cause of this suite's historical flakiness (Phase 5 Session 5 exit
+// review, confirmed by diffing actual screenshots pixel-for-pixel): these
+// tests run against `next dev` (per this repo's standard workflow — see
+// root CLAUDE.md), and Next's dev-mode build-activity indicator
+// (<nextjs-portal>, bottom-left corner) pops in/out depending on
+// background compile state at the exact moment the screenshot is taken —
+// nothing to do with real page content. It's a debug-only overlay, never
+// part of the page's actual visual contract, so hide it before every
+// screenshot in this file rather than let it leak into the diff.
+async function hideNextDevIndicator(page: import('@playwright/test').Page) {
+  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
+}
+
 test.describe('visual regression (1440px)', () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
   test('/login matches baseline', async ({ page }) => {
     await page.goto('/login');
     await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await hideNextDevIndicator(page);
     await expect(page).toHaveScreenshot('login-1440.png', { fullPage: true });
   });
 
   test('/signup matches baseline', async ({ page }) => {
     await page.goto('/signup');
     await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
+    await hideNextDevIndicator(page);
     await expect(page).toHaveScreenshot('signup-1440.png', { fullPage: true });
   });
 });
