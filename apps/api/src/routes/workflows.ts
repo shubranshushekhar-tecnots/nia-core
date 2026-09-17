@@ -10,8 +10,9 @@ import { AppError } from "../lib/appError.js";
 import { scopeFromActor } from "../lib/workspaceScope.js";
 import { getWorkflowDetail } from "../services/workflows.js";
 import { getWorkflowGraph, putWorkflowGraph } from "../services/workflowGraphs.js";
-import { getLatestCheckRun, runAndRecordChecks } from "../services/checks.js";
+import { getLatestCheckRun, listCheckRuns, runAndRecordChecks } from "../services/checks.js";
 import { proposeMappingForWorkflow } from "../services/mappings.js";
+import { getLatestConversationForWorkflow, listMessages } from "../services/chat.js";
 
 export const workflowsRouter: ExpressRouter = Router();
 
@@ -82,6 +83,37 @@ workflowsRouter.get(
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await getLatestCheckRun(req.supabase, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
+  }),
+);
+
+// Full check-run history (Logs tab, Phase 5 Session 4) — distinct from
+// /checks/latest's single-row read.
+workflowsRouter.get(
+  "/:id/checks",
+  validate({ params: workflowParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await listCheckRuns(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    res.json(data);
+  }),
+);
+
+// Restores a workflow's chat thread on reload (canvas command bar, Phase 5
+// Session 4) — the read side of 0015_conversation_workflow_link.sql. `null`
+// when no conversation has ever been linked to this workflow.
+workflowsRouter.get(
+  "/:id/conversation",
+  validate({ params: workflowParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const scope = scopeFromActor(req.actor);
+    const conversation = await getLatestConversationForWorkflow(req.supabase, scope, req.params.id!);
+    if (!conversation) {
+      res.json(null);
+      return;
+    }
+    const messages = await listMessages(req.supabase, scope, conversation.id);
+    res.json({ conversation, messages });
   }),
 );
 

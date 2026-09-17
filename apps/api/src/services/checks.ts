@@ -14,7 +14,8 @@ export type WorkflowCheckRun = {
 
 const ALL_CHECKS = ["config", "dag", "credentials", "mappings", "grants"] as const;
 
-async function assertWorkflowInScope(supabase: SupabaseClient, scope: WorkspaceScope, workflowId: string): Promise<void> {
+/** Exported for other workflow-scoped services (chat's conversation lookup, the Logs-tab activity feed) that need the same "workflow exists in this scope, else 404" guard without duplicating it. */
+export async function assertWorkflowInScope(supabase: SupabaseClient, scope: WorkspaceScope, workflowId: string): Promise<void> {
   let query = supabase.from("workflows").select("id", { count: "exact", head: true }).eq("id", workflowId);
   query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
   const { count } = await query;
@@ -81,4 +82,23 @@ export async function getLatestCheckRun(
     .maybeSingle();
 
   return data ? parseRow(data) : null;
+}
+
+/** Full history (newest first, capped at `limit`) — the Logs tab's check-run source (Phase 5 Session 4), distinct from getLatestCheckRun's single-row read. */
+export async function listCheckRuns(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  workflowId: string,
+  limit = 20,
+): Promise<WorkflowCheckRun[]> {
+  await assertWorkflowInScope(supabase, scope, workflowId);
+
+  const { data } = await supabase
+    .from("workflow_check_runs")
+    .select("id, workflow_id, graph_version, results, ran_at")
+    .eq("workflow_id", workflowId)
+    .order("ran_at", { ascending: false })
+    .limit(limit);
+
+  return (data ?? []).map(parseRow);
 }

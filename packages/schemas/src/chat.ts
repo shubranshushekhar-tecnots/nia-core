@@ -1,6 +1,15 @@
 import { z } from "zod";
 
 /**
+ * Bound on multi-source chat fan-out (apps/worker/src/lib/chat/multiSource/).
+ * Shared between apps/api's request-validation (fail fast, before enqueuing)
+ * and the worker's own refusal (`refused.kind: "capacity-limit"`) so the two
+ * can't drift — apps/worker/src/lib/chat/multiSource/constants.ts re-exports
+ * this instead of defining its own copy.
+ */
+export const MAX_SOURCES = 5;
+
+/**
  * Events the worker's chat pipeline (apps/worker/src/lib/chat/graph.ts)
  * publishes over Redis pub/sub as it runs, and apps/web's SSE route
  * (apps/web/src/app/api/chat/route.ts) forwards verbatim to the browser.

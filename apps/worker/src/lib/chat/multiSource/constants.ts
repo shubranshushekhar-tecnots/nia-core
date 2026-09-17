@@ -3,8 +3,13 @@
  * this is a correctness/availability boundary, not a tuning knob.
  */
 
-/** More than this many connectionIds is refused outright as a capacity limit — see nodes/planReduction.ts and index.ts's job-handler branching. */
-export const MAX_SOURCES = 5;
+/**
+ * More than this many connectionIds is refused outright as a capacity limit
+ * — see nodes/planReduction.ts and index.ts's job-handler branching.
+ * Re-exported from @nia/schemas (Phase 5 Session 4) so apps/api's request
+ * validation can't drift from the worker's own refusal threshold.
+ */
+export { MAX_SOURCES } from "@nia/schemas";
 
 /** At most this many per-source pipelines run concurrently, so a large fan-out can't open unbounded connections at once. */
 export const FANOUT_CONCURRENCY = 3;

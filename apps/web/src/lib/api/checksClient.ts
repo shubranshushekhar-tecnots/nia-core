@@ -67,3 +67,16 @@ export async function getLatestCheckRun(workflowId: string): Promise<WorkflowChe
   }
   return res.json() as Promise<WorkflowCheckRun | null>;
 }
+
+/** Full check-run history (newest first) — the Logs tab's check source (Phase 5 Session 4). */
+export async function listCheckRuns(workflowId: string): Promise<WorkflowCheckRun[]> {
+  const res = await fetch(`/api/backend/workflows/${workflowId}/checks`, {
+    method: 'GET',
+    headers: { Accept: 'application/json', ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ChecksApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+  }
+  return res.json() as Promise<WorkflowCheckRun[]>;
+}

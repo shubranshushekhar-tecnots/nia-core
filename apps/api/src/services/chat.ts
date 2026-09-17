@@ -13,6 +13,7 @@ export type Conversation = {
   id: string;
   title: string | null;
   createdBy: string;
+  workflowId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -21,15 +22,19 @@ type ConversationRow = {
   id: string;
   title: string | null;
   created_by: string;
+  workflow_id: string | null;
   created_at: string;
   updated_at: string;
 };
+
+const CONVERSATION_COLUMNS = "id, title, created_by, workflow_id, created_at, updated_at";
 
 function toConversation(row: ConversationRow): Conversation {
   return {
     id: row.id,
     title: row.title,
     createdBy: row.created_by,
+    workflowId: row.workflow_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -65,7 +70,7 @@ function toMessage(row: MessageRow): ChatMessage {
 }
 
 export async function listConversations(supabase: SupabaseClient, scope: WorkspaceScope): Promise<Conversation[]> {
-  let query = supabase.from("conversations").select("id, title, created_by, created_at, updated_at");
+  let query = supabase.from("conversations").select(CONVERSATION_COLUMNS);
   query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
   const { data } = await query.order("updated_at", { ascending: false });
   return (data ?? []).map((row) => toConversation(row as ConversationRow));
@@ -76,9 +81,26 @@ export async function getConversation(
   scope: WorkspaceScope,
   id: string,
 ): Promise<Conversation | null> {
-  let query = supabase.from("conversations").select("id, title, created_by, created_at, updated_at").eq("id", id);
+  let query = supabase.from("conversations").select(CONVERSATION_COLUMNS).eq("id", id);
   query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
   const { data } = await query.maybeSingle();
+  return data ? toConversation(data as ConversationRow) : null;
+}
+
+/**
+ * Latest conversation asked from a given workflow (canvas command bar,
+ * Phase 5 Session 4) — the "reopen workflow restores its thread" read
+ * path. `null` when no conversation has ever been linked to it yet (a
+ * fresh workflow, or one only ever used via /app/chat's own selector).
+ */
+export async function getLatestConversationForWorkflow(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  workflowId: string,
+): Promise<Conversation | null> {
+  let query = supabase.from("conversations").select(CONVERSATION_COLUMNS).eq("workflow_id", workflowId);
+  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
+  const { data } = await query.order("updated_at", { ascending: false }).limit(1).maybeSingle();
   return data ? toConversation(data as ConversationRow) : null;
 }
 
@@ -93,6 +115,7 @@ export async function createConversation(
   scope: WorkspaceScope,
   userId: string,
   firstMessage: string,
+  workflowId?: string,
 ): Promise<Conversation> {
   const { data, error } = await supabase
     .from("conversations")
@@ -101,8 +124,9 @@ export async function createConversation(
       owner_id: "orgId" in scope ? null : scope.ownerId,
       created_by: userId,
       title: deriveTitle(firstMessage),
+      workflow_id: workflowId ?? null,
     })
-    .select("id, title, created_by, created_at, updated_at")
+    .select(CONVERSATION_COLUMNS)
     .single();
   if (error || !data) throw error ?? new Error("Failed to create conversation.");
   return toConversation(data as ConversationRow);

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
-import { ChatStreamEvent } from "@nia/schemas";
+import { ChatStreamEvent, MAX_SOURCES } from "@nia/schemas";
 import { requireCookieAuth } from "../middleware/cookieAuth.js";
 import { attachActor } from "../middleware/actor.js";
 import { validate } from "../middleware/validate.js";
@@ -36,9 +36,12 @@ function sameScope(a: WorkspaceScope, b: WorkspaceScope): boolean {
 }
 
 /**
- * Single-source only for now — mirrors the worker's chat_query handler,
- * which rejects anything other than exactly one connectionId. Enforced
- * again here so a multi-source request never reaches the queue at all.
+ * 1-MAX_SOURCES connectionIds — the worker's multiSource pipeline
+ * (apps/worker/src/lib/chat/multiSource/) already supports this range;
+ * this mirrors its own capacity-limit refusal so an obviously-oversized
+ * request fails fast here instead of enqueuing a job that will just be
+ * refused downstream (Phase 5 Session 4 — previously hard-capped at
+ * exactly 1, which was stale relative to the worker's actual support).
  */
 const ChatRequestBody = z.object({
   // Absent on the first turn of a new thread — the route creates the
@@ -48,22 +51,25 @@ const ChatRequestBody = z.object({
   conversationId: z.string().uuid().optional(),
   message: z.string().trim().min(1),
   connectionIds: z.array(z.string().uuid()),
+  // Only consulted when creating a new conversation (no conversationId
+  // passed) — links it to the workflow it was asked from (canvas command
+  // bar) so reopening the workflow can restore the thread. Ignored when
+  // continuing an existing conversation (its workflow_id, if any, is
+  // already set).
+  workflowId: z.string().uuid().optional(),
 });
 
 chatRouter.post(
   "/chat",
   validate({ body: ChatRequestBody }),
   asyncHandler(async (req, res) => {
-    const { conversationId, message, connectionIds } = req.body as z.infer<typeof ChatRequestBody>;
+    const { conversationId, message, connectionIds, workflowId } = req.body as z.infer<typeof ChatRequestBody>;
 
-    if (connectionIds.length !== 1) {
-      throw new AppError(
-        400,
-        "VALIDATION_ERROR",
-        connectionIds.length === 0
-          ? "No connection selected — mention a connection to run this query against."
-          : "Querying multiple connections at once isn't supported yet — mention a single connection.",
-      );
+    if (connectionIds.length === 0) {
+      throw new AppError(400, "VALIDATION_ERROR", "No connection selected — mention a connection to run this query against.");
+    }
+    if (connectionIds.length > MAX_SOURCES) {
+      throw new AppError(400, "VALIDATION_ERROR", `Too many connections selected — at most ${MAX_SOURCES} at once.`);
     }
 
     const scope = scopeFromActor(req.actor!);
@@ -82,7 +88,7 @@ chatRouter.post(
         throw new AppError(404, "NOT_FOUND", "No conversation found for that id.");
       }
     } else {
-      const created = await createConversation(req.supabase!, scope, userId, message);
+      const created = await createConversation(req.supabase!, scope, userId, message, workflowId);
       resolvedConversationId = created.id;
     }
 
