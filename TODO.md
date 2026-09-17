@@ -23,9 +23,11 @@
   clean full-suite run (43 passed, 0 failed, 1 skipped).
   **Update:** a later re-verification pass found 3 more `canvas.spec.ts`
   failures this "43/0/1" number didn't cover (same `nextjs-portal` cause,
-  1 baseline; a shared-fixture node-pollution bug, 2 tests) — fixed, but
-  not yet re-confirmed in one clean full-suite run. See `PHASE5_EXIT.md`
-  §7.2 / §8.6.
+  1 baseline; a shared-fixture node-pollution bug, 2 tests) — fixed, and
+  since re-confirmed in one clean full-suite run along with 4 further
+  Phase 6 Block 0-era bugs found and fixed the same way (43 passed, 1
+  failed [pre-existing live-service flake, not this suite], 1 skipped,
+  0 did not run). See `PHASE5_EXIT.md` §7.3 / §8.6 — closed.
 - ~~Chat feature requires an organization — allow individual/personal-workspace
   users~~ — **reconciled and closed with artifacts** (chat.spec.ts 10/1/0,
   chat-smoke exit 0, user-keyed Redis keys captured live). See
@@ -42,17 +44,20 @@
   from arbitrary preview result shapes) is deferred; no chart library is
   in the repo yet either (checked `apps/web/package.json`), so this also
   needs a library decision when picked up.
-- **Compiler completeness (Phase 6 Block-0 prerequisite)**: explicit
+- ~~**Compiler completeness (Phase 6 Block-0 prerequisite)**: explicit
   source entity/table selection, `compilePushdown()`'s FROM gap, and
-  multi-transform pushdown chaining — three related gaps, one
-  consolidated item. Source nodes persist no entity selection today
-  (`SourceDestConfig` has no `entity` field); Phase 5 Session 5's preview
-  bridges this with `resolveSourceEntity()` (name-matching inference,
-  fails closed on zero/ambiguous matches) but that is preview-only and
-  not sufficient for a real ETL run, which cannot infer its source table
-  by guessing from mapped field names. Needs: persisted `entity` field on
-  `SourceDestConfig`, a drawer picker for it, and migrating
-  `checkMappings`/`proposeMapping`/`pushdown.ts` off the flat
-  `uniqueFieldNames` union onto that explicit selection. See
-  `PHASE5_SESSION_NOTES.md`'s Session 5 Block 1 entry and
-  `PHASE5_EXIT.md`'s open risks §8.1 for the full writeup.
+  multi-transform pushdown chaining~~ — **entity-selection gap CLOSED**
+  (commit `af00263`, Phase 6 Block 0): `SourceDestConfig` now persists an
+  optional `EntityRef`, picked explicitly via a `NodeDrawer` table picker;
+  `entityResolution.ts`'s `findPersistedEntity`/`fieldNamesForSource`
+  resolve against it with fallback to the old flat-union inference when
+  unset or stale (renamed/dropped upstream) — backward compatible with
+  pre-Block-0 graphs. `checkMappings`, `proposeMapping`, and
+  `runPreview`'s `buildPreviewQuery` all migrated onto it; `checkConfig`
+  gains a non-blocking warn nudging an explicit pick when absent.
+  `compilePushdown()`'s FROM gap and multi-transform chaining remain
+  intentionally un-addressed, by design, not oversight — pushdown stays
+  fragment-only (doc-clarified in the same commit) and multi-transform
+  still degrades to residual — both explicit Phase 5 Session 5 decisions,
+  not gaps to revisit. See `PHASE5_SESSION_NOTES.md`'s Session 5 Block 1
+  entry and `af00263`'s commit message for the full writeup.

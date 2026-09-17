@@ -266,7 +266,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     await page.locator('.react-flow__node').first().click();
     const drawer = page.getByTestId('node-drawer');
     await expect(drawer).toBeVisible();
-    await expect(drawer.getByText('Table')).toBeVisible();
+    await expect(drawer.getByText('Table', { exact: true })).toBeVisible();
 
     const tableSelect = drawer.locator('select');
     // Loads via useConnectionEntities' react-query call to getConnectionSchema
@@ -275,10 +275,16 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     await expect(tableSelect.locator('option')).toContainText(['sandbox_items'], { timeout: 10_000 });
     await expect(tableSelect.locator('option').first()).toHaveText('Infer from mapping…');
 
-    await tableSelect.selectOption({ label: 'sandbox_items' });
+    await tableSelect.selectOption({ label: 'sandbox.sandbox_items' });
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
     await page.reload();
+    // Same leftover-thread hazard as the other reload tests in this block
+    // (see dismissThreadIfOpen's doc comment below) — this shared fixture
+    // can carry real chat history left by command-bar.spec.ts, which
+    // auto-reopens the CommandBar thread on load and, left unguarded here,
+    // silently intercepts the node click below.
+    await dismissThreadIfOpen(page);
     await page.locator('.react-flow__node').first().click();
     const reopened = page.getByTestId('node-drawer');
     await expect(reopened.locator('select')).toHaveValue(/sandbox_items/);
@@ -472,8 +478,22 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // freshly re-panned) produces more sub-pixel jitter between otherwise-
     // identical runs (~1.4-2.5k px / ~0.01 ratio observed back-to-back) —
     // not a real regression signal at that magnitude.
+    // Two of the checks-dock rows (this orphan-node "fail" and the
+    // "no table selected" config "warn") render nodeLabel(), which bakes
+    // the node's crypto.randomUUID() id into the row text — a different
+    // random id every run, so those two rows can never pixel-match a
+    // committed baseline no matter how faithfully it was recorded. Mask
+    // the full ResultRow container (not just the message's own div, which
+    // is shrink-to-fit content-width and so a differently-long id/
+    // manifestId string leaves a sliver of that row unmasked at the right
+    // edge) — not the whole dock: the pill/other rows are still real
+    // regression signal.
     await hideNextDevIndicator(page);
-    await expect(page).toHaveScreenshot('checks-dock-failing-1440.png', { maxDiffPixels: 3000 });
+    const noTableRow = dockBody.getByText(/no table selected/);
+    await expect(page).toHaveScreenshot('checks-dock-failing-1440.png', {
+      maxDiffPixels: 3000,
+      mask: [orphanRow.locator('..').locator('..'), noTableRow.locator('..').locator('..')],
+    });
 
     // handleSelectCheckNode just re-centered the viewport on node 0 —
     // assert that pan actually happened (not just exploit it below): at
@@ -507,8 +527,15 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // Session 3 Task 4 visual-diff baseline: dock open, all-pass state,
     // Run enabled. Same "no design mock for this state" caveat as the
     // failing-state shot above.
+    // The "no table selected" config warn is non-blocking (pill only counts
+    // `fail`, not `warn` — see ChecksDock's failingChecks), so it's still
+    // in the dock here; same nodeLabel()-embeds-a-random-id hazard as the
+    // failing-state shot above, so mask it here too.
     await hideNextDevIndicator(page);
-    await expect(page).toHaveScreenshot('checks-dock-all-pass-1440.png', { maxDiffPixels: 50 });
+    await expect(page).toHaveScreenshot('checks-dock-all-pass-1440.png', {
+      maxDiffPixels: 50,
+      mask: [noTableRow.locator('..').locator('..')],
+    });
 
     const runBtn = page.getByRole('button', { name: 'Run', exact: true });
     await expect(runBtn).toBeEnabled();
