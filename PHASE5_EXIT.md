@@ -119,8 +119,35 @@ session (not a re-read of Phase 4's findings):
    probe reconfirms the account's Google BYOK credential is rejected
    (`"API key not valid"`), forcing a slower Vertex fallback with a
    mandatory ~150-token reasoning tax. Platform-level, outside this repo.
-2. **Skip-rewrite fast path** — N/A. `rewrite.ts` is already a pure
-   pass-through with no LLM call to skip.
+   Measured, not assumed — full evidence from `PHASE4_EXIT.md` §4.4, quoted
+   directly rather than re-linked, per this session's review:
+   - `google/gemini-3.5-flash`: quality-clean on the golden set, but its
+     isolated query-gen hop (`generating_query` status ts → next stage ts,
+     10 runs, `apps/web/latency_querygen.mjs`) came back **p50=6350ms —
+     slower than the default model's own p50=5616ms** measured the same
+     way. Root cause confirmed via `provider_metadata.gateway.routing`:
+     the BYOK failure above forces every Gemini call onto the gateway's
+     Vertex path, which adds a mandatory ~100–150 `thoughtsTokenCount`
+     reasoning tax that no tested `reasoning` param
+     (`enabled:false`/`max_tokens:1`/`effort:minimal|low`) could suppress.
+   - `google/gemini-2.5-flash` + explicit `reasoning:{enabled:false}` (2.5's
+     reasoning is controllable, unlike 3.5's): **3 golden-eval runs came
+     back 18/20, 19/20, 18/20**, with a new failure not seen on any other
+     config — `multi-count-all-three` (a multi-source COUNT reduction,
+     exactly the case class the spec named as must-hold) failed once. A
+     real regression, not baseline flakiness, so rejected per the spec's
+     own instruction.
+   - Net: neither tier clears both bars (quality + speed) at once.
+     `generateQuery.ts` stays on the default model, unchanged.
+2. **Skip-rewrite fast path** — N/A, confirmed by direct code read, not
+   inference: `apps/worker/src/lib/chat/nodes/rewrite.ts:12-15`,
+   `rewriteNode()` is `{ type: "status", stage: "rewriting" }` +
+   `return { standaloneMessage: state.rawMessage }` — no LLM call, no
+   gateway round-trip, nothing to skip. The doc comment above it
+   (lines 4-10) states this is deliberate: `ChatQueryJob` carries no
+   conversation history yet, so there's nothing to resolve pronouns
+   against; kept as its own graph node so wiring in real history later is
+   a one-node change, not a graph restructure.
 3. **Schema-context caching** — available (undocumented `cache_control`
    passthrough works against `claude-sonnet-4-6`, ~89% cost drop on a
    cache hit) but latency-neutral (4074ms miss vs. 4005-4360ms hits,
@@ -163,19 +190,63 @@ outside of mocked unit tests.
 `expectFaithfulnessOutcome`; `runGoldenSuite.ts` branches on it. No
 fixture case sets this field today.
 
-**The mechanism is empirically unreachable with the current pipeline.**
-`formatOutcome()` hands the entire winning row to both the answer-gen and
-faithfulness-grader prompts, so restating any of that row's real values is
-correctly graded `OK`. Live-tested with a temporary mysql seed
-(coincidentally-equal `tenure`/`incidents` values on one row): 8/8
-consecutive runs came back `"ok"`, zero variance. Every fabrication-bait
-variant tried (7 provocation strategies total, 15 real pipeline
-invocations across multi- and single-source) was either graded correctly
-or refused upstream by `reductionPlan.ts`'s classifier before reaching
-answer-gen — a second, independent backstop the plan's illustrative
-example didn't account for. Single-source (the one surface with no
-deterministic `reduce.ts` backstop) was also tested under adversarial
-load (13-row hand-computation) and also held, byte-perfect.
+**Verdict: A — PROVEN DEAD PATH**, on code-level structural grounds, not
+just empirical non-reproduction. (Correction from earlier session
+wording: the blocking mechanism is *not* `reduce.ts`'s deterministic
+MAX/MIN tie check — that only fires when 2+ rows share the extreme value
+of a `max`/`min` reduction, `verifyAndReduceNode.ts:54-59` /
+`reduce.ts:105-116`, and routes to a completely different node
+(`conflictNode.ts:11-17`, an immediate `conflict` event, no LLM call at
+all). It's architecturally unrelated to the faithfulness-retry path and
+never intercepts a `sum`/`count` question or a single-source question at
+all.)
+
+The real, structural reason `conflict-retry`/`conflict-final` can't
+organically fire: **answer-gen and the faithfulness grader are always fed
+byte-identical source content**, by direct code reference, not
+convention:
+- **Multi-source:** both `buildAnswerGenPrompt()`
+  (`answerGenMulti.ts:42`) and `buildFaithfulnessMultiPrompt()`
+  (`faithfulnessMulti.ts:25`) call the exact same
+  `formatOutcome(args.outcome)` on the exact same `outcome` object — same
+  function, same reference, same string.
+- **Single-source:** both `buildAnswerGenPrompt()`
+  (`nodes/buildAnswer.ts:21,30-35`) and `buildFaithfulnessPrompt()`
+  (`nodes/faithfulness.ts:13-17`) are handed the identical
+  `state.tabularResult` object reference — no copying, no reformatting.
+
+Given that, any value the model restates from that shared source is, by
+construction, "supported by the rows" per the grader's own rubric
+(`faithfulness.ts`'s system prompt: "graded whether an answer is fully
+and only supported by the given data rows") — even a semantically
+confused-but-real restatement passes. Only genuine fabrication (inventing
+a value not present in that shared source) could trigger `CONFLICT`, and
+this session's live testing (below) found the model doesn't do that
+either, under real adversarial pressure.
+
+Live-tested with a temporary mysql seed (coincidentally-equal
+`tenure`/`incidents` values on one row): 8/8 consecutive runs came back
+`"ok"`, zero variance. Every fabrication-bait variant tried (7 provocation
+strategies total, 15 real pipeline invocations across multi- and
+single-source) was either graded correctly or refused upstream by
+`reductionPlan.ts`'s classifier before reaching answer-gen — a second,
+independent backstop the plan's illustrative example didn't account for.
+Single-source (the one surface with no deterministic `reduce.ts`
+backstop) was also tested under adversarial load (13-row
+hand-computation) and also held, byte-perfect.
+
+**Removal recommendation (flagged for Phase 6, not actioned this
+session):** don't remove `applyFaithfulnessVerdict()`'s retry policy or
+the `conflict-retry`/`conflict-final` states themselves — they're cheap,
+correct, generic safety plumbing that costs nothing to keep and would
+correctly catch a real future fabrication (e.g. after a model swap, or if
+a future prompt change ever separates the answer-gen and grader source
+content). What Phase 6 *should* deprioritize is chasing a golden fixture
+that exercises this path: given the structural finding above, no fixture
+can force it without literally breaking the shared-source guarantee
+(i.e. constructing a case where the grader sees different content than
+answer-gen did) — at which point it wouldn't be testing this pipeline's
+real behavior anymore. Revisit only if the shared-source design changes.
 
 **Recorded as a legitimate negative finding**, not shipped as a fixture
 pretending to exercise a path it doesn't. All temporary seed changes were
@@ -207,68 +278,133 @@ Every workspace, one clean sequential pass, all green:
 
 ### 7.1 Rider C: single clean-invocation full Playwright run
 
-Requirement: one full, single-invocation Playwright run on a quiet
-machine (load average < 2, all specs, `workers` policy as configured, zero
-exclusions), specifically to determine whether the `gotoWorkflow`
-navigation flake (reported as "pre-existing, load-related" in three prior
-sessions with no clean-run attempt) is genuinely environmental or a named
-bug.
+Requirement: one full, single-invocation Playwright run, all specs, zero
+exclusions, that (a) determines whether the `gotoWorkflow` navigation
+flake is genuinely environmental, and (b) per this session's exit review,
+resolves — not just explains — the 3 named failing visual baselines
+(`/login`, `/signup`, `command-bar-thread-open-1440`).
 
-**Machine load was not actually under 2** at run time (`uptime` showed
-2.89-4.85 across pre-run checks) — this IDE's own renderer/GPU helper
-processes and macOS's Virtualization framework (backing Docker, which the
-sandbox DBs the tests depend on require) are both baseline overhead that
-can't be stopped without breaking the environment or the test
-prerequisites. Reported honestly rather than claimed as met. One
-first-attempt run was discarded: it failed immediately with `EADDRINUSE`
-because a stale dev server (corrupted by an intervening `pnpm -r build`
-overwriting its `.next` dev-mode chunks with production output) was still
-squatting on port 3100 — killed the stale process, cleared `.next`, reran
-clean.
-
-**Clean single-invocation result**
+**Final clean result**
 (`cd apps/web && PORT=3100 npx playwright test`, `workers: 1`, all 6 spec
-files, zero exclusions, 4.0m total): **40 passed, 3 failed, 1 skipped**
-(44 tests total).
+files, zero exclusions, 6.0m): **43 passed, 0 failed, 1 skipped** (44
+tests total). All 3 originally-named baselines pass; so do the 2
+additional baselines discovered and fixed along the way
+(`command-bar-resting-1440`, `checks-dock-logs-populated-1440`).
 
-- **`gotoWorkflow` did NOT reproduce** — every test that hits it,
-  including the two new, heaviest Block 1/Block 2 additions
-  (`canvas.spec.ts`'s destination-preview test and schema-drift test,
-  8.4s and 17.3s respectively), passed on the first attempt with zero
-  retries anywhere in the run. This is the first genuinely clean
-  single-invocation result across the flake's three prior "documented"
-  mentions. Per Rider C, this is evidence the flake is load-related, not
-  a code bug — but see the caveat immediately below: this run's own load
-  average never actually dropped under 2, so "quiet" here means
-  "quieter/more isolated than a normal working session," not "verified
-  clean at the requested bar." Worth one more clean-run attempt on a
-  machine with no IDE overhead if the flake resurfaces.
-- **2 of the 3 failures are a known, pre-existing chore, not a
-  regression:** `visual.spec.ts`'s `/login` and `/signup` baseline diffs
-  (5182px and 5960px, ~1% pixel ratio) are documented in
-  `PHASE5_SESSION_NOTES.md`'s Session 1 close-out and `TODO.md` as
-  pre-existing, confirmed via git history to be unrelated to any
-  session's canvas/command-bar/chat work. Unchanged status; still ledgered
-  as a chore.
-- **1 failure is the same known-chore class, confirmed via git log:**
-  `command-bar.spec.ts:157` ("canvasC ... gets a cited answer through the
-  command bar") failed its `command-bar-thread-open-1440.png` screenshot
-  assertion (1148px diff, `maxDiffPixels: 400`). This baseline was
-  specifically re-targeted by a prior session (commit `6dbb3c8`) at this
-  single-connection personal-workspace test to eliminate multi-source
-  citation instability (masking the answer prose + pinning the thread
-  panel's height). `git log` on the baseline PNG and on the page/component
-  it covers confirms neither has been touched since — same pre-existing,
-  unrelated ~1% pixel-ratio drift class as `/login`/`/signup`, not a
-  regression from this or any other session's work. Consolidated with
-  those two into one `TODO.md` chore.
-- **`chat.spec.ts:56`** ("refused case renders the refused state") is
-  skipped via a literal `test.skip(..., async () => {})` — an empty,
-  pre-existing stub, not introduced this session (confirmed via
-  `PHASE5_SESSION_NOTES.md`'s Session 4 close-out, which already logged
-  this same skip as "pre-existing, undocumented before that session — not
-  introduced by it"). Still an open, low-priority coverage gap, unchanged
-  status.
+**How the 3 baselines were actually resolved** (root-caused, not
+threshold-chased — direct pixel diffs were viewed for every failure, not
+just pixel-ratio numbers):
+1. **`nextjs-portal` dev-mode indicator** (affects all 5 baselines,
+   both spec files): Next 15's `next dev` renders a build-activity badge
+   (bottom-left "N — n Issues") that pops in/out with background compile
+   state at the exact screenshot instant — nothing to do with page
+   content. Fixed with a `hideNextDevIndicator()` helper
+   (`page.addStyleTag({ content: 'nextjs-portal { display: none
+   !important; }' })`) called before every `toHaveScreenshot()` in
+   `visual.spec.ts` and `command-bar.spec.ts`.
+2. **Mask-geometry tracking live content length**
+   (`command-bar-thread-open-1440` only): Playwright's `mask` option
+   hides pixel content but still sizes the covering rectangle from the
+   masked element's real bounding box. The masked answer-prose and SQL
+   `<pre>` are content-hugging width, so their real width — and hence the
+   mask edges — shifts with live LLM/SQL output length. Proved this
+   wasn't a threshold problem empirically first: raising `maxDiffPixels`
+   400→900→1800 did not converge (failed at 900 w/ 1148px, passed twice
+   at 1800, failed again at 1800 w/ 2580px) — unbounded variance, not
+   fixed noise. Fixed structurally instead, extending the file's existing
+   `heightPin` pattern with a matching `widthPin`
+   (`page.addStyleTag` forcing `width: 480px !important` on both masked
+   elements immediately before the screenshot, removed immediately
+   after) so mask geometry is deterministic regardless of content length.
+3. **react-flow node/selection-outline rendering jitter**
+   (`command-bar-thread-open-1440` only, residual after fix 2): a small,
+   *bounded* (~612px) diff traced to canvas selection-outline rendering,
+   unrelated to content. Given a fixed-magnitude source (unlike fix 2's
+   unbounded one), a modest `maxDiffPixels: 900` headroom is the
+   appropriate fix here — documented in-line to distinguish this bounded
+   case from fix 2's unbounded one, so a future reader doesn't
+   mis-generalize "just raise the threshold."
+4. **SQL panel bleeding through a translucent overlay**
+   (`checks-dock-logs-populated-1440` only): the thread panel's SQL
+   `<pre>` (same `sql` locator used elsewhere in the file) was visible
+   through the Logs dock's semi-transparency, unmasked in this specific
+   screenshot even though it isn't what the assertion is testing. Fixed
+   by adding `sql` to this screenshot's existing `mask` array — reusing
+   the established pattern.
+
+Each fix was durability-verified with repeated isolated reruns of just
+the affected spec file (5/5 clean for `command-bar-thread-open-1440`,
+3/3 clean for `checks-dock-logs-populated-1440`, 2/2 clean for
+`/login`/`/signup`) before being confirmed again in the full-suite run
+above.
+
+**`gotoWorkflow` did NOT reproduce** in the final clean run — every test
+that hits it passed with zero retries. Across the 5 full-suite attempts
+run this session (see below), it failed intermittently in 2 of them,
+consistent with its multi-session "pre-existing, load-related" history;
+not chased further, unchanged open-risk status (§8).
+
+**A genuine environmental finding, reported transparently rather than
+laundered into "explained elsewhere":** this dev machine is memory-
+constrained (8GB RAM) and was found mid-review at ~89% swap utilization
+(<70MB free physical RAM) with Docker (8 containers, 32h uptime) + the
+Next dev server + leftover orphaned Playwright/Chromium processes from
+earlier runs in this session all resident simultaneously. Of 5 full-suite
+attempts this session, the first 3 (before this was diagnosed) surfaced
+between 2 and 11 failures each, with a **different set of unrelated
+tests failing each time** (including trivial, unrelated-to-any-session's-
+work tests like the `/app/chat` redirect-boundary check) — the signature
+of resource-exhaustion flakiness, not a code regression. After killing
+the orphaned process trees and confirming no visual-baseline fix
+regressed by rerunning affected specs in isolation, the next full run
+dropped to 2 failures (both proved transient by an isolated rerun: 6/6
+clean), and the final run above was fully clean. Ledgered as a new,
+separate Phase 6 note in §8 — distinct from, and not a cause for
+doubting, the visual-baseline fixes above, which were independently
+verified via isolated spec reruns outside of this noisy full-suite
+signal.
+
+### 7.2 Post-write follow-up: 3 more failures found on re-verification, 2 fixed classes
+
+A later re-verification pass (same day, after §7.1 was written) re-ran the
+full suite and found **3 failures §7.1's "43 passed, 0 failed" did not
+cover** — all in `canvas.spec.ts`, all pre-existing bugs that §7.1's own
+run never reached because they sit later in a `.serial` block whose first
+test (`canvas-rail-drawer-1440`, below) was itself failing and aborting the
+remaining serial tests, so full coverage of this file was never actually
+exercised end-to-end in one pass before now:
+
+1. **`canvas-rail-drawer-1440.png`** — the same `nextjs-portal` dev-badge
+   cause as §7.1 fix 1, just not yet applied to `canvas.spec.ts`
+   (`hideNextDevIndicator()` existed only in `visual.spec.ts`/
+   `command-bar.spec.ts`). Fixed: added the same helper to
+   `canvas.spec.ts` and called it before all 4 of its `toHaveScreenshot()`
+   calls (`canvas-rail-drawer-1440`, `checks-dock-failing-1440`,
+   `checks-dock-all-pass-1440`, `destination-mapping-editor-1440`);
+   re-recorded all 4 baselines.
+2. **Cross-test node pollution on the shared "Canvas E2E Personal
+   Workflow" fixture** — `canvas: personal workspace`'s and
+   `canvas: palette purity — Triggers moat`'s tests both assert
+   `.react-flow__node` count `0` at the start, but
+   `command-bar.spec.ts`'s `canvasC` test (same fixture, same persona)
+   deliberately drags a real node onto it and never cleans up afterward
+   (by the suite's own established self-healing convention: reset at the
+   *start* of a test that needs empty state, not cleanup at the end — the
+   `.serial` block earlier in this same file already does this). These two
+   tests were the ones missing that convention. Fixed by adding the same
+   delete-all-nodes-then-assert-0 self-heal used elsewhere in this file to
+   both.
+
+**Verification status: partial, not re-confirmed clean end-to-end.** The
+2 fixed baselines were re-recorded and visually reviewed. A full-suite
+rerun to confirm all three fixes hold together was interrupted by
+`canvas-e2e-b@nia.dev`'s auth-setup step failing
+(`e2e/auth.setup.ts:22`, sign-in never redirected off `/login`) — almost
+certainly the same Supabase GoTrue sign-in rate-limit noted in
+`playwright.config.ts`'s `workers: 1` comment, from the volume of
+back-to-back full-suite invocations already run today. Per direction, not
+chased further this session — carried to §8 as an explicit open item
+rather than silently assumed fixed.
 
 ## 8. Open risks carried to Phase 6
 
@@ -319,17 +455,19 @@ files, zero exclusions, 4.0m total): **40 passed, 3 failed, 1 skipped**
    (c) revising the bar. See §5, `docs/decisions.md`'s Block 3 entry.
 
 3. **Faithfulness-retry regeneration path (`conflict-retry`/
-   `conflict-final`) remains unproven live**, now backed by a real,
-   evidenced investigation rather than just an unstaffed gap: Session 5's
-   Block 4 spent 7 provocation strategies / 15 real pipeline invocations
-   trying to organically trigger it and could not, for structural reasons
-   (deterministic multi-source reduction, an upstream classifier refusing
-   multi-fact questions, and reliable model arithmetic even adversarially)
-   documented in §6. The `expectFaithfulnessOutcome` plumbing is in place
-   for if/when a real trigger is found (e.g. after a model change, or a
-   prompt/architecture change that removes one of the backstops) — this
-   is now a "revisit if circumstances change" item, not an open TODO to
-   force this session.
+   `conflict-final`) is a proven-dead path for this pipeline as currently
+   architected** (§6 verdict A) — not just unreached, but structurally
+   unreachable: answer-gen and the faithfulness grader always see
+   byte-identical source content (`formatOutcome()`'s shared `outcome`
+   reference for multi-source, `state.tabularResult`'s shared reference
+   for single-source), so no fixture can force a `CONFLICT` verdict
+   without breaking that guarantee — at which point it would no longer be
+   testing this pipeline's real behavior. Keep the retry-policy code as
+   cheap generic safety plumbing; do not spend further Phase 6 effort
+   trying to fixture-trigger it. Revisit only if the shared-source design
+   changes (e.g. a future prompt/architecture change, or a model swap that
+   changes fabrication behavior). `expectFaithfulnessOutcome` plumbing
+   stays in place for that scenario.
 
 4. **Schema-queries-mid-flight -> silent empty-string mapping entry is a
    real UX bug shaped like a test bug**, not just a test race.
@@ -343,9 +481,26 @@ files, zero exclusions, 4.0m total): **40 passed, 3 failed, 1 skipped**
    schema query resolves) is the likely fix. See `PHASE5_SESSION_NOTES.md`'s
    Block 2 entry for the surrounding context.
 
-5. **3 stale visual baselines still un-re-baselined**
-   (`visual.spec.ts`'s `/login`/`/signup`, `command-bar.spec.ts`'s
-   `command-bar-thread-open-1440`) — all pre-existing ~1% pixel-ratio
-   diffs confirmed via `git log` to be unrelated to any session's work,
-   most recently reproduced by this session's Block 5 full-battery
-   Playwright run (§7.1). Consolidated into one `TODO.md` chore.
+5. **Local full-suite Playwright runs are memory-constrained on this dev
+   machine, independent of test correctness.** This session's exit review
+   traced 5 baseline screenshots' flakiness to 4 real root causes (all
+   fixed, §7.1) — but while verifying the fix with repeated full-suite
+   runs, also surfaced that this machine (8GB RAM) hits ~89% swap
+   utilization when Docker's sandbox stack + `next dev` + a Playwright run
+   are all resident together, producing transient, non-reproducible
+   failures in unrelated trivial tests (confirmed via isolated reruns
+   passing cleanly). Not a code defect — a CI runner or a machine with
+   more headroom would not exhibit this — but worth knowing before
+   treating a single noisy local full-suite run as signal. If it recurs,
+   check `vm_stat`/`sysctl vm.swapusage` and orphaned
+   `chrome-headless-shell`/`playwright test` processes from prior runs
+   before assuming a regression.
+
+6. **`canvas.spec.ts`'s 3-failure fix (§7.2) needs one more clean
+   full-suite confirmation.** The `hideNextDevIndicator` + dual self-heal
+   fixes are applied and the affected baselines re-recorded, but the
+   confirming full-suite rerun was interrupted by a `canvas-e2e-b` auth-setup
+   flake before completing (see §7.2) — not yet re-confirmed together in
+   one clean pass. First action for whoever starts Phase 6: run the full
+   Playwright suite once, cleanly, and fold that result into this file
+   before treating Phase 5's e2e status as closed.

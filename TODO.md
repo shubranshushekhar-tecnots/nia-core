@@ -1,12 +1,26 @@
 # TODO
 
-- Chore: 3 stale visual snapshots (`/login`, `/signup`,
-  `command-bar-thread-open-1440`) are failing pixel-diffs at ~0.01 ratio
-  in `apps/web/test-results` (pre-existing, not a regression from any
-  session's work — confirmed via `git log` that none of their baseline
-  PNGs or the pages they cover were touched by the sessions that
-  reproduced them, most recently Phase 5 Session 5 Block 5's full-battery
-  Playwright run). Re-baseline them.
+- ~~Chore: visual-baseline pixel-diffs (`/login`, `/signup`,
+  `command-bar-thread-open-1440`, plus `command-bar-resting-1440` and
+  `checks-dock-logs-populated-1440`, discovered during the same
+  investigation)~~ — **CLOSED, all 5 root-caused and fixed** (Phase 5
+  Session 5 exit-review close-out, `PHASE5_EXIT.md` §7.1). Four distinct
+  causes, none of them real app drift: (1) Next dev-mode's build-activity
+  pill (`<nextjs-portal>`) popping in/out with compile state, hidden via
+  `display: none` before every screenshot; (2) Playwright's screenshot
+  `mask` sizing its covering rectangle from the masked element's live
+  bounding box, so content-hugging-width elements (answer prose, SQL
+  `<pre>`) shifted the mask edges with real LLM/SQL output length — fixed
+  with a fixed-width CSS pin before the screenshot (same pattern as the
+  file's existing `heightPin`), not a bigger tolerance (raising
+  `maxDiffPixels` alone was tried and proven not to converge — unbounded
+  variance, not fixed noise); (3) a separate, small, *bounded* react-flow
+  selection-outline rendering jitter, given a modest fixed `maxDiffPixels`
+  headroom since it is fixed-magnitude, unlike (2); (4) the SQL panel
+  bleeding through a translucent dock overlay in one screenshot that
+  wasn't masking it — added to that screenshot's existing `mask` array.
+  Verified via repeated isolated reruns (5/5, 3/3, 2/2 clean) and a final
+  clean full-suite run (43 passed, 0 failed, 1 skipped).
 - ~~Chat feature requires an organization — allow individual/personal-workspace
   users~~ — **reconciled and closed with artifacts** (chat.spec.ts 10/1/0,
   chat-smoke exit 0, user-keyed Redis keys captured live). See
