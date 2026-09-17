@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveSourceEntity } from "./entityResolution.js";
+import { resolveSourceEntity, findPersistedEntity, fieldNamesForSource } from "./entityResolution.js";
 import type { IntrospectResponse } from "./contract.js";
 
 function schema(entities: IntrospectResponse["entities"]): IntrospectResponse {
@@ -81,5 +81,49 @@ describe("resolveSourceEntity", () => {
       ["id", "id"],
     );
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("findPersistedEntity", () => {
+  const TWO_TABLES = schema([
+    { namespace: "public", name: "orders", fields: [{ name: "id", type: "int" }] },
+    { namespace: "public", name: "customers", fields: [{ name: "id", type: "int" }, { name: "name", type: "string" }] },
+  ]);
+
+  it("finds the entity matching namespace+name", () => {
+    const result = findPersistedEntity(TWO_TABLES, { namespace: "public", name: "customers" });
+    expect(result?.name).toBe("customers");
+  });
+
+  it("returns undefined when the ref no longer resolves (renamed/dropped upstream)", () => {
+    const result = findPersistedEntity(TWO_TABLES, { namespace: "public", name: "deleted_table" });
+    expect(result).toBeUndefined();
+  });
+
+  it("is namespace-sensitive — a name match in the wrong namespace doesn't resolve", () => {
+    const result = findPersistedEntity(TWO_TABLES, { namespace: "other_schema", name: "customers" });
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("fieldNamesForSource", () => {
+  const TWO_TABLES = schema([
+    { namespace: "public", name: "orders", fields: [{ name: "id", type: "int" }, { name: "total", type: "int" }] },
+    { namespace: "public", name: "customers", fields: [{ name: "id", type: "int" }, { name: "name", type: "string" }] },
+  ]);
+
+  it("scopes strictly to the persisted entity's fields when it resolves", () => {
+    const result = fieldNamesForSource(TWO_TABLES, { namespace: "public", name: "customers" });
+    expect(result.sort()).toEqual(["id", "name"]);
+  });
+
+  it("falls back to the flat deduplicated union when no entity is given (pre-Block-0 behavior)", () => {
+    const result = fieldNamesForSource(TWO_TABLES);
+    expect(result.sort()).toEqual(["id", "name", "total"]);
+  });
+
+  it("falls back to the flat union when the persisted entity has drifted (no longer resolves)", () => {
+    const result = fieldNamesForSource(TWO_TABLES, { namespace: "public", name: "deleted_table" });
+    expect(result.sort()).toEqual(["id", "name", "total"]);
   });
 });

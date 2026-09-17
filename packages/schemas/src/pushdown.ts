@@ -13,10 +13,16 @@ import type { FilterCondition, TransformConfig, TransformStep } from "./nodeConf
  *
  * Scope: this compiles a FRAGMENT (a WHERE clause / extra SELECT
  * expressions / params for SQL, a partial aggregation pipeline for Mongo),
- * not a full runnable statement — GraphNode.config for source nodes has no
- * table/entity selection yet (Session 2 scope cut), so there is no FROM
- * target to splice into. Phase 6's worker-side executor is expected to
- * splice this fragment into the query it already builds.
+ * not a full runnable statement — this stays true even after Phase 6 Block 0
+ * added `SourceDestConfig.entity` (nodeConfig.ts): resolving *which*
+ * table/collection is a separate concern (entityResolution.ts's
+ * findPersistedEntity/resolveSourceEntity, called by runPreview.ts/Phase 6's
+ * executor) from compiling *what to do* against it, and this module still
+ * has no reason to take a FROM target as input. Callers splice this
+ * fragment into a query they build themselves once they've already resolved
+ * the entity — see runPreview.ts's buildPreviewQuery for the reference
+ * pattern (resolve entity first, call compilePushdown for the fragment,
+ * combine both into the runnable statement).
  *
  * Steps apply in array order (TransformConfig.steps' own ordering
  * contract). Pushdown walks that order and accumulates into the compiled

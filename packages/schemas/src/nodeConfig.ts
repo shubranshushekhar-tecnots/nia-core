@@ -66,16 +66,39 @@ export const FieldMapping = z.object({
 export type FieldMapping = z.infer<typeof FieldMapping>;
 
 /**
+ * Identifies one entity (table/collection) within a connection's introspected
+ * schema (contract.ts's IntrospectResponse) by namespace+name — the same pair
+ * SchemaEntity uses. A bare string isn't enough: names can collide across
+ * namespaces/schemas within one connection.
+ */
+export const EntityRef = z.object({
+  namespace: z.string(),
+  name: z.string(),
+});
+export type EntityRef = z.infer<typeof EntityRef>;
+
+/**
  * Source/destination node config: which verb the node performs. Write verbs
  * are locked in the UI behind a write grant (Phase 6) — see manifest.ts's
  * WRITE_OPERATIONS. `mapping` is only ever populated on destination nodes
  * (source nodes have no field-mapping concept — they're the "from" side) —
  * it's optional on this shared schema rather than splitting source/dest
  * into separate config types, since every other field is identical.
+ *
+ * `entity` (Phase 6 Block 0): the persisted table/collection selection for a
+ * *source* node, set via the drawer's entity picker. Optional and additive —
+ * graphs saved before this field existed simply have no `entity`, and every
+ * consumer (entityResolution.ts's fieldNamesForSource/findPersistedEntity,
+ * proposeMapping, runWorkflowChecks, runPreview) falls back to the prior
+ * flat-union/inference behavior when it's absent, so nothing about existing
+ * graphs' check/preview/mapping behavior changes just because this field now
+ * exists. Not used on destination nodes today (destination entity/writes are
+ * out of Block-0 scope).
  */
 export const SourceDestConfig = z.object({
   operation: Operation.default("read"),
   mapping: FieldMapping.optional(),
+  entity: EntityRef.optional(),
 });
 export type SourceDestConfig = z.infer<typeof SourceDestConfig>;
 

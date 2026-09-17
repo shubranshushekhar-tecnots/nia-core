@@ -140,6 +140,22 @@ export function checkConfig(graph: GraphDoc): CheckResult[] {
           }
         }
       }
+
+      // Phase 6 Block 0: nudge, don't block. A source node with no
+      // persisted `entity` still works today — resolveSourceEntity/
+      // fieldNamesForSource (entityResolution.ts) fall back to inferring
+      // it from the mapping's field names, same as every graph saved
+      // before this field existed. `warn` (not `fail`) so existing
+      // graphs/workflows don't regress from a passing/runnable state the
+      // instant this check ships — see nodeConfig.ts's `entity` comment.
+      if (node.type === "source" && !parsed.value.entity) {
+        results.push({
+          id: "config",
+          status: "warn",
+          message: `Node ${nodeLabel(node)}: no table selected — the source table will be inferred from the mapping instead. Pick one explicitly to avoid ambiguous-table errors.`,
+          nodeId: node.id,
+        });
+      }
     }
   }
 

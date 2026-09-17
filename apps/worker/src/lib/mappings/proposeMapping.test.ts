@@ -51,6 +51,21 @@ function schema(fields: string[]) {
   return { ok: true as const, value: { entities: [{ namespace: "public", name: "t", fields: fields.map((name) => ({ name, type: "text" })) }] } };
 }
 
+// Two distinct tables on the same connection, sharing no fields, so a
+// persisted-entity scope is unambiguously distinguishable from the flat
+// union across both.
+function multiEntitySchema() {
+  return {
+    ok: true as const,
+    value: {
+      entities: [
+        { namespace: "public", name: "users", fields: [{ name: "email", type: "text" }, { name: "name", type: "text" }] },
+        { namespace: "public", name: "archive_users", fields: [{ name: "legacy_id", type: "text" }] },
+      ],
+    },
+  };
+}
+
 beforeEach(() => {
   resolveGraphMock.mockReset();
   resolveConnectionMock.mockReset();
@@ -121,6 +136,38 @@ describe("proposeMapping", () => {
     const result = await proposeMapping("wf-1", "dest", SCOPE);
 
     expect(result).toEqual({ ok: false, error: { kind: "workflow-not-found", message: expect.stringContaining("not found") } });
+  });
+
+  it("scopes source fields to the persisted entity, dropping a proposal that references a field from a different table on the same connection", async () => {
+    resolveGraphMock.mockResolvedValueOnce({
+      nodes: [
+        {
+          id: "src",
+          type: "source",
+          manifestId: "mysql",
+          connectionId: SOURCE_CONN,
+          position: { x: 0, y: 0 },
+          config: { entity: { namespace: "public", name: "users" } },
+        },
+        { id: "dest", type: "destination", manifestId: "supabase", connectionId: DEST_CONN, position: { x: 0, y: 0 }, config: {} },
+      ],
+      edges: [{ id: "e1", source: "src", target: "dest" }],
+    });
+    getSchemaMock.mockImplementation(async (connection: { id: string }) =>
+      connection.id === SOURCE_CONN ? multiEntitySchema() : schema(["full_name", "email_address"]),
+    );
+    // "legacy_id" is a real field on the connection (archive_users), but not
+    // on the persisted "users" entity — it must be dropped, same as any
+    // other hallucinated field name would be.
+    completeMock.mockResolvedValueOnce(
+      '{"entries":[{"from":"email","to":"email_address"},{"from":"legacy_id","to":"full_name"}]}',
+    );
+
+    const result = await proposeMapping("wf-1", "dest", SCOPE);
+
+    expect(result).toEqual({ ok: true, value: { entries: [{ from: "email", to: "email_address" }] } });
+    const [, userMsg] = completeMock.mock.calls[0]![0] as { role: string; content: string }[];
+    expect(userMsg!.content).toContain('"email","name"'); // scoped list, not the flat union including legacy_id
   });
 
   it("fails with homogeneous-path when source and destination share a manifest", async () => {

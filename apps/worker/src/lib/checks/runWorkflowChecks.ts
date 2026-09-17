@@ -5,6 +5,8 @@ import {
   checkDag,
   checkGrants,
   checkMappings,
+  parseNodeConfig,
+  fieldNamesForSource,
   type CheckResult,
   type CheckRunJob,
   type FieldsLookup,
@@ -104,9 +106,12 @@ async function buildMappingsCheck(graph: GraphDoc, scope: WorkspaceScope): Promi
       if (!resolved.ok) continue;
       const schema = await getSchema(resolved.value);
       if (!schema.ok) continue;
-      const names = new Set<string>();
-      for (const entity of schema.value.entities) for (const field of entity.fields) names.add(field.name);
-      fieldsBySourceId.set(sourceId, Array.from(names));
+      // Phase 6 Block 0: scope to the source's persisted entity when it
+      // resolves against the live schema; falls back to the flat union
+      // (pre-Block-0 behavior) otherwise — see fieldNamesForSource's doc.
+      const sourceConfig = parseNodeConfig("source", source.config);
+      const entity = !sourceConfig.unrecognized && sourceConfig.type !== "transform" ? sourceConfig.value.entity : undefined;
+      fieldsBySourceId.set(sourceId, fieldNamesForSource(schema.value, entity));
     } catch {
       // Can't verify drift for this source — checkMappings treats a
       // missing lookup entry as "unknown," not a failure.

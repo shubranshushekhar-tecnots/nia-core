@@ -5,11 +5,12 @@ import {
   manifestDialect,
   parseNodeConfig,
   resolveSourceEntity,
+  findPersistedEntity,
+  fieldNamesForSource,
   type DialectQuery,
   type FieldsLookup,
   type GraphDoc,
   type GraphNode,
-  type IntrospectResponse,
   type MappingEntry,
   type PreviewChart,
   type PreviewJob,
@@ -141,12 +142,6 @@ function isReadShaped(query: QueryPayload): boolean {
   return !query.pipeline.some((stage) => "$out" in stage || "$merge" in stage);
 }
 
-function uniqueFieldNames(schema: IntrospectResponse): string[] {
-  const names = new Set<string>();
-  for (const entity of schema.entities) for (const field of entity.fields) names.add(field.name);
-  return Array.from(names);
-}
-
 function computeAutoChart(columns: PreviewValue["columns"], rows: unknown[][]): PreviewChart | null {
   const numericIdx: number[] = [];
   const textIdx: number[] = [];
@@ -199,11 +194,21 @@ export async function runPreview(job: PreviewJob): Promise<PreviewOutcome> {
     return { ok: false, error: { kind: "introspect-failed", message: `Source schema: ${sourceSchema.error.message}` } };
   }
 
+  // Phase 6 Block 0: prefer the source node's persisted entity when it
+  // still resolves against the live schema — no more inferring from mapped
+  // field names. Only falls back to resolveSourceEntity's inference when no
+  // entity is persisted (graphs saved before this field existed) or it no
+  // longer resolves (e.g. table renamed/dropped upstream).
+  const parsedSource = parseNodeConfig(source.type, source.config);
+  const persistedEntity = !parsedSource.unrecognized && parsedSource.type !== "transform" ? parsedSource.value.entity : undefined;
+  const resolvedPersistedEntity = persistedEntity ? findPersistedEntity(sourceSchema.value, persistedEntity) : undefined;
+
   // Reuse check results — no new validation logic. checkConfig is pure;
   // checkMappings needs the same source-fields I/O this function already
   // just did for schema resolution, so it's reused here rather than
   // re-fetched, mirroring runWorkflowChecks.ts's buildMappingsCheck.
-  const lookupFields: FieldsLookup = (sourceNodeId) => (sourceNodeId === source.id ? uniqueFieldNames(sourceSchema.value) : undefined);
+  const lookupFields: FieldsLookup = (sourceNodeId) =>
+    sourceNodeId === source.id ? fieldNamesForSource(sourceSchema.value, persistedEntity) : undefined;
   const relevantFailures = [...checkConfig(graph), ...checkMappings(graph, lookupFields)].filter(
     (r) => r.nodeId === dest.id && r.status === "fail",
   );
@@ -211,9 +216,13 @@ export async function runPreview(job: PreviewJob): Promise<PreviewOutcome> {
     return { ok: false, error: { kind: "checks-failing", message: relevantFailures.map((r) => r.message).join(" ") } };
   }
 
-  const entityResult = resolveSourceEntity(sourceSchema.value, mapping.entries.map((e) => e.from));
-  if (!entityResult.ok) {
-    return { ok: false, error: { kind: "entity-unresolved", message: entityResult.message } };
+  let entity = resolvedPersistedEntity;
+  if (!entity) {
+    const entityResult = resolveSourceEntity(sourceSchema.value, mapping.entries.map((e) => e.from));
+    if (!entityResult.ok) {
+      return { ok: false, error: { kind: "entity-unresolved", message: entityResult.message } };
+    }
+    entity = entityResult.entity;
   }
 
   const dialect = manifestDialect(source.manifestId);
@@ -242,7 +251,7 @@ export async function runPreview(job: PreviewJob): Promise<PreviewOutcome> {
     }
   }
 
-  const query = buildPreviewQuery(dialect, entityResult.entity, mapping.entries, dialectQuery);
+  const query = buildPreviewQuery(dialect, entity, mapping.entries, dialectQuery);
   if (!isReadShaped(query)) {
     return { ok: false, error: { kind: "not-read-shaped", message: "Compiled preview query was not read-shaped; refused before dispatch." } };
   }

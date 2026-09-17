@@ -1,4 +1,4 @@
-import { ProposalSchema, type IntrospectResponse, type MappingEntry } from "@nia/schemas";
+import { ProposalSchema, parseNodeConfig, fieldNamesForSource, type IntrospectResponse, type MappingEntry } from "@nia/schemas";
 import { resolveGraph } from "../checks/runWorkflowChecks.js";
 import { resolveConnection } from "../resolveConnection.js";
 import { getSchema } from "../introspection.js";
@@ -72,7 +72,13 @@ export async function proposeMapping(workflowId: string, destNodeId: string, sco
   if (!sourceSchema.ok) return { ok: false, error: { kind: "introspect-failed", message: `Source schema: ${sourceSchema.error.message}` } };
   if (!destSchema.ok) return { ok: false, error: { kind: "introspect-failed", message: `Destination schema: ${destSchema.error.message}` } };
 
-  const sourceFields = uniqueFieldNames(sourceSchema.value);
+  // Phase 6 Block 0: prefer the source node's persisted entity (scoped field
+  // list, no cross-table ambiguity) over the flat union; falls back to the
+  // flat union automatically when no entity is persisted or it no longer
+  // resolves against the live schema (see fieldNamesForSource's doc comment).
+  const sourceConfig = parseNodeConfig("source", source.config);
+  const sourceEntity = !sourceConfig.unrecognized && sourceConfig.type !== "transform" ? sourceConfig.value.entity : undefined;
+  const sourceFields = fieldNamesForSource(sourceSchema.value, sourceEntity).sort();
   const destFields = uniqueFieldNames(destSchema.value);
 
   try {

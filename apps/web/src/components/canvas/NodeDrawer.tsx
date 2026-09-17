@@ -1,7 +1,10 @@
 'use client';
 
-import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, parseNodeConfig, type CheckResult, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, parseNodeConfig, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
+import { getConnectionSchema } from '@/lib/api/connectionsClient';
 import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
 
@@ -52,15 +55,55 @@ const lockedBadgeStyle = {
   padding: '1px 6px',
 } as const;
 
+/** `entity` refs have no natural single-string key (namespace+name can each contain anything) — NUL is never a valid identifier character in any of this codebase's supported dialects, so it's a safe join separator for a <select> option value. */
+const ENTITY_KEY_SEP = '\u0000';
+function entityKey(ref: EntityRef): string {
+  return `${ref.namespace}${ENTITY_KEY_SEP}${ref.name}`;
+}
+function parseEntityKey(key: string): EntityRef {
+  const [namespace, name] = key.split(ENTITY_KEY_SEP);
+  return { namespace: namespace ?? '', name: name ?? '' };
+}
+
+/**
+ * Phase 6 Block 0 — mirrors MappingEditor.tsx's useEntityFields, same query
+ * key (`['connection-schema', connectionId]`) so both hooks share one
+ * react-query cache entry per connection rather than double-fetching.
+ * Returns entities (not a flat field union) since this hook backs the
+ * table/entity picker, not a field dropdown.
+ */
+function useConnectionEntities(connectionId?: string): { namespace: string; name: string }[] {
+  const { data: schema } = useQuery({
+    queryKey: ['connection-schema', connectionId],
+    queryFn: () => getConnectionSchema(connectionId!),
+    enabled: !!connectionId,
+    staleTime: 5 * 60_000,
+  });
+  return useMemo(() => {
+    if (!schema) return [];
+    return schema.entities
+      .map((e) => ({ namespace: e.namespace, name: e.name }))
+      .sort((a, b) => (a.namespace + a.name).localeCompare(b.namespace + b.name));
+  }, [schema]);
+}
+
 function SourceDestForm({
   config,
   operations,
+  nodeType,
+  connectionId,
   onChange,
 }: {
   config: SourceDestConfig;
   operations: Operation[];
+  /** Entity picker only renders for source nodes — see nodeConfig.ts's `entity` comment: destination entity/writes are out of Block-0 scope. */
+  nodeType: 'source' | 'destination';
+  connectionId?: string;
   onChange: (next: SourceDestConfig) => void;
 }) {
+  const entities = useConnectionEntities(nodeType === 'source' ? connectionId : undefined);
+  const selectedKey = config.entity ? entityKey(config.entity) : '';
+
   return (
     <div>
       <div style={sectionHeaderStyle}>Verb</div>
@@ -72,12 +115,36 @@ function SourceDestForm({
             title={locked ? 'Requires write grant — Phase 6' : undefined}
             style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: locked ? 'var(--ink4)' : 'var(--ink)', marginBottom: 6, cursor: locked ? 'not-allowed' : 'pointer' }}
           >
-            <input type="radio" name="operation" disabled={locked} checked={config.operation === op} onChange={() => onChange({ operation: op })} />
+            <input type="radio" name="operation" disabled={locked} checked={config.operation === op} onChange={() => onChange({ ...config, operation: op })} />
             {op}
             {locked && <span style={lockedBadgeStyle}>Locked</span>}
           </label>
         );
       })}
+
+      {nodeType === 'source' && (
+        <div style={{ marginTop: 16 }}>
+          <div style={sectionHeaderStyle}>Table</div>
+          {entities.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>
+              {connectionId ? 'Loading tables…' : 'Select a connection first.'}
+            </div>
+          ) : (
+            <select
+              value={selectedKey}
+              onChange={(e) => onChange({ ...config, entity: e.target.value ? parseEntityKey(e.target.value) : undefined })}
+              style={{ width: '100%', height: 28, borderRadius: 6, border: '1px solid var(--line2)', padding: '0 8px', fontSize: 12.5, boxSizing: 'border-box', color: 'var(--ink)', background: 'var(--surface)' }}
+            >
+              <option value="">Infer from mapping…</option>
+              {entities.map((e) => (
+                <option key={entityKey(e)} value={entityKey(e)}>
+                  {e.namespace ? `${e.namespace}.${e.name}` : e.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -129,6 +196,8 @@ export default function NodeDrawer({
         <SourceDestForm
           config={parsed.value as SourceDestConfig}
           operations={manifest?.operations ?? ['read']}
+          nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
+          connectionId={data.connectionId}
           onChange={(next) => onConfigChange(next)}
         />
       )}

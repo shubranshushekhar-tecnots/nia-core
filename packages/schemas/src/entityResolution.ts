@@ -1,4 +1,5 @@
 import type { IntrospectResponse } from "./contract.js";
+import type { EntityRef } from "./nodeConfig.js";
 
 /**
  * Ground-truth: source nodes have no persisted entity/table selection
@@ -64,4 +65,32 @@ export function resolveSourceEntity(
     };
   }
   return { ok: true, entity: candidates[0]! };
+}
+
+/**
+ * Phase 6 Block 0: looks up a persisted `SourceDestConfig.entity` ref against
+ * a *live* introspected schema. Returns undefined (not an error) if the ref
+ * doesn't match any entity in the current schema — e.g. the table was
+ * renamed/dropped upstream since the ref was saved — so callers fall back to
+ * the flat-union/inference behavior rather than hard-failing on drift.
+ */
+export function findPersistedEntity(schema: IntrospectResponse, ref: EntityRef): SchemaEntity | undefined {
+  return schema.entities.find((e) => e.namespace === ref.namespace && e.name === ref.name);
+}
+
+/**
+ * Phase 6 Block 0: the field-name list a mapping/preview/check consumer
+ * should use for a source. When `entity` is given and still resolves against
+ * the live schema, this scopes strictly to that one entity's fields — no
+ * more flat union losing table context. Otherwise (no persisted entity, or
+ * it no longer resolves) it falls back to the pre-Block-0 flat, deduplicated
+ * union across every entity, preserving existing behavior for graphs saved
+ * before `entity` existed.
+ */
+export function fieldNamesForSource(schema: IntrospectResponse, entity?: EntityRef): string[] {
+  if (entity) {
+    const resolved = findPersistedEntity(schema, entity);
+    if (resolved) return resolved.fields.map((f) => f.name);
+  }
+  return Array.from(new Set(schema.entities.flatMap((e) => e.fields.map((f) => f.name))));
 }

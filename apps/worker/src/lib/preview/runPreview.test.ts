@@ -212,6 +212,59 @@ describe("runPreview", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("prefers the source node's persisted entity over inference, resolving even when mapping fields would otherwise be ambiguous across multiple entities (Phase 6 Block 0)", async () => {
+    getSchemaMock.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        entities: [
+          { namespace: "public", name: "users", fields: [{ name: "email", type: "string" }, { name: "id", type: "string" }] },
+          { namespace: "public", name: "contacts", fields: [{ name: "email", type: "string" }, { name: "id", type: "string" }] },
+        ],
+      },
+    });
+    const g = graph();
+    g.nodes.find((n) => n.id === "src")!.config = { entity: { namespace: "public", name: "contacts" } };
+    resolveGraphMock.mockResolvedValueOnce(g);
+
+    const result = await runPreview(baseJob());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const [, query] = dispatchMock.mock.calls[0]!;
+    expect(query.sql).toMatch(/^SELECT .* FROM `public`\.`contacts`$/);
+  });
+
+  it("falls back to inferring the entity from mapped fields when the persisted entity has drifted (renamed/dropped upstream)", async () => {
+    const g = graph();
+    g.nodes.find((n) => n.id === "src")!.config = { entity: { namespace: "public", name: "deleted_table" } };
+    resolveGraphMock.mockResolvedValueOnce(g);
+    // Default getSchemaMock (schema(["email", "id"])) has entityName "users" and no "deleted_table" —
+    // the persisted ref no longer resolves, so this must fall back to resolveSourceEntity's inference,
+    // same as a pre-Block-0 graph with no entity at all.
+
+    const result = await runPreview(baseJob());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const [, query] = dispatchMock.mock.calls[0]!;
+    expect(query.sql).toMatch(/^SELECT .* FROM `public`\.`users`$/);
+  });
+
+  it("combines a persisted entity's FROM target with a single transform node's pushdown WHERE fragment", async () => {
+    const g = graph({ transforms: ["t1"] });
+    g.nodes.find((n) => n.id === "src")!.config = { entity: { namespace: "public", name: "users" } };
+    g.nodes.find((n) => n.id === "t1")!.config = { steps: [{ kind: "filter", conditions: [{ field: "id", operator: "eq", value: 1 }] }] };
+    resolveGraphMock.mockResolvedValueOnce(g);
+
+    const result = await runPreview(baseJob());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const [, query] = dispatchMock.mock.calls[0]!;
+    expect(query.sql).toContain("FROM `public`.`users`");
+    expect(query.sql).toContain("WHERE");
+  });
+
   it("compiles a single transform node's pushdown normally (WHERE fragment reaches the dispatched query)", async () => {
     const g = graph({ transforms: ["t1"] });
     const transformNode = g.nodes.find((n) => n.id === "t1")!;

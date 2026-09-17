@@ -109,7 +109,26 @@ describe("checkConfig", () => {
   it("fails a source/destination node with no connection selected", () => {
     const graph: GraphDoc = { nodes: [node({ id: "n1", type: "source" })], edges: [] };
     const results = checkConfig(graph);
-    expect(results).toEqual([{ id: "config", status: "fail", message: expect.stringContaining("no connection selected"), nodeId: "n1" }]);
+    // A source with no connection also has no entity, so both the fail
+    // (blocking) and the Block-0 entity nudge (non-blocking) fire — assert
+    // on the fail specifically rather than the full result set.
+    expect(results).toContainEqual({ id: "config", status: "fail", message: expect.stringContaining("no connection selected"), nodeId: "n1" });
+  });
+
+  it("warns (does not fail) a source node with a connection but no persisted entity", () => {
+    const graph: GraphDoc = { nodes: [node({ id: "n1", type: "source", connectionId: CONN })], edges: [] };
+    const results = checkConfig(graph);
+    expect(results).toEqual([
+      { id: "config", status: "warn", message: expect.stringContaining("no table selected"), nodeId: "n1" },
+    ]);
+  });
+
+  it("doesn't warn a source node once a persisted entity is set", () => {
+    const graph: GraphDoc = {
+      nodes: [node({ id: "n1", type: "source", connectionId: CONN, config: { entity: { namespace: "public", name: "users" } } })],
+      edges: [],
+    };
+    expect(checkConfig(graph)).toEqual([{ id: "config", status: "pass", message: "Every node's config is valid and complete." }]);
   });
 
   it("fails a destination mapping entry with an unset field (permissive at the schema layer, not at check time)", () => {
@@ -131,7 +150,7 @@ describe("checkConfig", () => {
   it("passes a fully valid graph", () => {
     const graph: GraphDoc = {
       nodes: [
-        node({ id: "n1", type: "source", connectionId: CONN }),
+        node({ id: "n1", type: "source", connectionId: CONN, config: { entity: { namespace: "public", name: "users" } } }),
         node({ id: "n2", type: "transform", config: { steps: [] } }),
       ],
       edges: [],

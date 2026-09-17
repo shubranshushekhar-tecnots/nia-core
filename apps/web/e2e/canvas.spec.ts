@@ -231,6 +231,21 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     const readRadio = drawer.getByRole('radio', { name: 'read' });
     await expect(readRadio).toBeChecked();
     await expect(readRadio).toBeEnabled();
+
+    // Phase 6 Block 0: the entity/table picker. Renders for every source
+    // node once its connection's schema resolves (async fetch — starts as
+    // "Loading tables…"), defaulting to "Infer from mapping…" until a table
+    // is explicitly picked. The dev-mysql sandbox seeds exactly two tables
+    // (docker/dev-mysql-init.sql: employees, sandbox_items), alphabetically
+    // after the placeholder, so index 1 is "employees" without depending on
+    // the exact namespace-qualified label format.
+    const tableSelect = drawer.locator('select');
+    await expect(tableSelect).toBeVisible({ timeout: 10_000 });
+    await expect(tableSelect.locator('option')).toHaveCount(3);
+    await expect(tableSelect.locator('option').first()).toHaveText('Infer from mapping…');
+    await tableSelect.selectOption({ index: 1 });
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
     // maxDiffPixels tolerates a few pixels of sub-pixel jitter from the
     // canvas's SVG node/edge rendering (react-flow) between runs — not a
     // real regression signal at this magnitude. ChecksDock is masked: its
@@ -244,6 +259,29 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
       maxDiffPixels: 50,
       mask: [page.getByTestId('checks-dock')],
     });
+  });
+
+  test('source drawer: entity/table picker lists live tables from the connection, selecting one autosaves and persists across reload (Phase 6 Block 0)', async ({ page }) => {
+    await dragPaletteItemOnto(page, 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await page.locator('.react-flow__node').first().click();
+    const drawer = page.getByTestId('node-drawer');
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByText('Table')).toBeVisible();
+
+    const tableSelect = drawer.locator('select');
+    // Loads via useConnectionEntities' react-query call to getConnectionSchema
+    // — wait for the real introspected option list, not the "Select a
+    // connection first" / "Loading tables…" placeholder text.
+    await expect(tableSelect.locator('option')).toContainText(['sandbox_items'], { timeout: 10_000 });
+    await expect(tableSelect.locator('option').first()).toHaveText('Infer from mapping…');
+
+    await tableSelect.selectOption({ label: 'sandbox_items' });
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await page.reload();
+    await page.locator('.react-flow__node').first().click();
+    const reopened = page.getByTestId('node-drawer');
+    await expect(reopened.locator('select')).toHaveValue(/sandbox_items/);
   });
 
   test('transform drawer: build a filter step, autosave, reload keeps it, and shows the pushdown summary', async ({ page }) => {

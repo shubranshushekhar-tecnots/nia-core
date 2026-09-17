@@ -23,6 +23,18 @@ describe("SourceDestConfig", () => {
   it("rejects an operation outside the manifest.ts Operation enum", () => {
     expect(() => SourceDestConfig.parse({ operation: "delete_everything" })).toThrow();
   });
+
+  it("leaves entity undefined when absent (pre-Block-0 graphs)", () => {
+    expect(SourceDestConfig.parse({})).toEqual({ operation: "read" });
+    expect(SourceDestConfig.parse({}).entity).toBeUndefined();
+  });
+
+  it("round-trips a persisted entity ref through JSON", () => {
+    const parsed = SourceDestConfig.parse({ operation: "read", entity: { namespace: "public", name: "users" } });
+    const roundTripped = SourceDestConfig.parse(JSON.parse(JSON.stringify(parsed)));
+    expect(roundTripped).toEqual(parsed);
+    expect(roundTripped.entity).toEqual({ namespace: "public", name: "users" });
+  });
 });
 
 describe("TransformConfig", () => {
