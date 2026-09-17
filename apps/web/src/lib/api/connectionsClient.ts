@@ -46,3 +46,34 @@ export async function getConnectionSchema(connectionId: string): Promise<Introsp
   }
   return res.json() as Promise<IntrospectResponse>;
 }
+
+/**
+ * Mirrors apps/api/src/services/grants.ts's WriteGrant shape exactly (that
+ * type lives in apps/api, not @nia/schemas, since it's server-only — see
+ * that file's header comment). Browser-side JSON contract for
+ * GET /connections/:id/grants, used by NodeDrawer.tsx (Phase 6 Block 2) to
+ * decide which write verbs unlock for a selected entity.
+ */
+export type WriteGrant = {
+  id: string;
+  connectionId: string;
+  grantedByUserId: string;
+  scope: Record<string, unknown>;
+  grantedAt: string;
+  revokedAt: string | null;
+  confirmedAt: string | null;
+  credVersion: number;
+  writeCredentialVaultRef: string | null;
+};
+
+export async function getWriteGrants(connectionId: string): Promise<WriteGrant[]> {
+  const res = await fetch(`/api/backend/connections/${connectionId}/grants`, {
+    method: 'GET',
+    headers: { Accept: 'application/json', ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ConnectionsApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+  }
+  return res.json() as Promise<WriteGrant[]>;
+}

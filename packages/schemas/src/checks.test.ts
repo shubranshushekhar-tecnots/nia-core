@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkConfig, checkCredentials, checkDag, checkGrants, checkMappings } from "./checks.js";
+import type { WriteGrantLookup } from "./checks.js";
 import type { GraphDoc } from "./graph.js";
 
 const CONN = "11111111-1111-1111-1111-111111111111";
@@ -160,23 +161,73 @@ describe("checkConfig", () => {
 });
 
 describe("checkGrants", () => {
-  it("passes when no operation is configured", () => {
+  const noGrants: WriteGrantLookup = async () => false;
+  const allGrants: WriteGrantLookup = async () => true;
+
+  it("passes when no operation is configured", async () => {
     const graph: GraphDoc = { nodes: [node({ id: "n1", type: "source" })], edges: [] };
-    expect(checkGrants(graph)).toEqual([{ id: "grants", status: "pass", message: "No write operations configured anywhere in this workflow." }]);
+    expect(await checkGrants(graph, noGrants)).toEqual([
+      { id: "grants", status: "pass", message: "Every write operation is covered by a confirmed, unrevoked write grant." },
+    ]);
   });
 
-  it("passes for the read operation", () => {
+  it("passes for the read operation", async () => {
     const graph: GraphDoc = { nodes: [node({ id: "n1", type: "source", config: { operation: "read" } })], edges: [] };
-    expect(checkGrants(graph)[0]!.status).toBe("pass");
+    expect((await checkGrants(graph, noGrants))[0]!.status).toBe("pass");
   });
 
-  it("fails loudly (tripwire) if a write verb appears in config, even alongside an otherwise-unrecognized shape", () => {
+  it("fails loudly (even alongside an otherwise-unrecognized shape) if a write verb has no connection selected", async () => {
     const graph: GraphDoc = {
-      nodes: [node({ id: "n1", type: "destination", config: { operation: "insert", garbage: true } })],
+      nodes: [node({ id: "n1", type: "destination", connectionId: undefined, config: { operation: "insert", garbage: true } })],
       edges: [],
     };
-    const results = checkGrants(graph);
-    expect(results).toEqual([{ id: "grants", status: "fail", message: expect.stringContaining('write operation "insert"'), nodeId: "n1" }]);
+    const results = await checkGrants(graph, allGrants);
+    expect(results).toEqual([{ id: "grants", status: "fail", message: expect.stringContaining("no connection selected"), nodeId: "n1" }]);
+  });
+
+  it("fails if a write verb has a connection but no entity/table selected, even if a grant would otherwise cover it", async () => {
+    const graph: GraphDoc = {
+      nodes: [node({ id: "n1", type: "destination", connectionId: CONN, config: { operation: "insert" } })],
+      edges: [],
+    };
+    const results = await checkGrants(graph, allGrants);
+    expect(results).toEqual([{ id: "grants", status: "fail", message: expect.stringContaining("no table selected"), nodeId: "n1" }]);
+  });
+
+  it("fails if no confirmed, unrevoked write grant covers the selected entity's namespace", async () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "destination",
+          connectionId: CONN,
+          config: { operation: "insert", entity: { namespace: "public", name: "users" } },
+        }),
+      ],
+      edges: [],
+    };
+    const results = await checkGrants(graph, noGrants);
+    expect(results).toEqual([
+      { id: "grants", status: "fail", message: expect.stringContaining('no confirmed, unrevoked write grant covers "public"'), nodeId: "n1" },
+    ]);
+  });
+
+  it("passes when a confirmed, unrevoked write grant covers the selected entity's namespace", async () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "destination",
+          connectionId: CONN,
+          config: { operation: "insert", entity: { namespace: "public", name: "users" } },
+        }),
+      ],
+      edges: [],
+    };
+    const results = await checkGrants(graph, allGrants);
+    expect(results).toEqual([
+      { id: "grants", status: "pass", message: "Every write operation is covered by a confirmed, unrevoked write grant." },
+    ]);
   });
 });
 

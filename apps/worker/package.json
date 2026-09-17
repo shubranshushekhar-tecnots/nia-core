@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "smoke": "tsx scripts/dispatch-smoke.ts",
+    "smoke:write": "tsx scripts/write-smoke.ts",
     "smoke:chat": "tsx scripts/chat-smoke.ts",
     "smoke:mapping": "tsx scripts/mapping-smoke.ts",
     "diagnose:count": "tsx scripts/chat-count-diagnose.ts",
@@ -30,6 +31,8 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "pg": "^8.13.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^5.0.0"

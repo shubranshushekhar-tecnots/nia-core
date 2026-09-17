@@ -48,6 +48,9 @@ services:
       PORT: 4030
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Phase 6 Block 2 — must match apps/worker/.env's copy exactly (worker
+      # signs the write-dispatch context, this service re-verifies it).
+      WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET}
     ports:
       - "4030:4030"   # exposed for local curl; internal-network-only in prod
     networks:

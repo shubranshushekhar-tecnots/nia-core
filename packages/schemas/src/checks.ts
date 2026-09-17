@@ -11,14 +11,14 @@ import { WRITE_OPERATIONS } from "./manifest.js";
  * that only ever inspects a workflow's own already-persisted GraphDoc/config,
  * never untrusted executed SQL/Mongo text).
  *
- * Two of the five checks (credentials, mappings) inherently need I/O — a
- * connector /test call, and introspected-schema data respectively. Rather
- * than import Supabase/connector-dispatch here (which would break the
- * worker+api shared-importability contract), those two checks take the I/O
- * result as an injected parameter/callback and the caller (worker or api
- * service layer) owns the actual fetch + the ~60s test-result cache Task 1c
- * asks for. config/dag/grants are fully self-contained since they only ever
- * look at the GraphDoc already in hand.
+ * Three of the five checks (credentials, mappings, grants) inherently need
+ * I/O — a connector /test call, introspected-schema data, and (Phase 6
+ * Block 2) a write_grants table lookup, respectively. Rather than import
+ * Supabase/connector-dispatch here (which would break the worker+api
+ * shared-importability contract), those checks take the I/O result as an
+ * injected parameter/callback and the caller (worker or api service layer)
+ * owns the actual fetch. config/dag are fully self-contained since they
+ * only ever look at the GraphDoc already in hand.
  *
  * `id` on a CheckResult is the check *kind* (mirrors CheckRunJob.checks'
  * enum in jobs.ts — config|dag|credentials|mappings|grants), not a
@@ -380,28 +380,66 @@ export function checkMappings(graph: GraphDoc, lookupFields: FieldsLookup): Chec
 const WRITE_OPERATION_SET = new Set<string>(WRITE_OPERATIONS);
 
 /**
- * The Phase 6 tripwire: write verbs are locked out of the UI entirely right
- * now, so this should always pass trivially. It deliberately reads the RAW
- * node.config (not the parsed value) so it still catches a write verb even
- * inside a config that otherwise fails checkConfig's strict parse — a
- * malformed-but-dangerous config must never slip past this check just
- * because it's also malformed.
+ * `hasActiveGrant` is injected — the caller (worker/api) owns the actual
+ * write_grants table lookup (resolveWriteGrant.ts on the worker side),
+ * same pattern as TestConnectionFn/FieldsLookup above, so this module never
+ * imports Supabase itself. Returns true iff the connection has a confirmed,
+ * unrevoked write grant whose scope covers `namespace`.
  */
-export function checkGrants(graph: GraphDoc): CheckResult[] {
+export type WriteGrantLookup = (connectionId: string, namespace: string) => Promise<boolean>;
+
+/**
+ * Phase 6 Block 2: a write-verb node PASSES iff its connection has a
+ * confirmed, unrevoked write grant covering the node's selected entity's
+ * namespace. Deliberately reads the RAW node.config (not the parsed value,
+ * same as the pre-Block-2 tripwire this replaces) so it still catches a
+ * write verb even inside a config that otherwise fails checkConfig's strict
+ * parse — a malformed-but-dangerous config must never slip past this check
+ * just because it's also malformed. A write-verb node with no connection,
+ * or no entity/namespace selected yet, fails closed: there is nothing to
+ * check grant coverage against, so it can never be treated as passing.
+ */
+export async function checkGrants(graph: GraphDoc, hasActiveGrant: WriteGrantLookup): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   for (const node of graph.nodes) {
-    const operation = (node.config as Record<string, unknown>).operation;
-    if (typeof operation === "string" && WRITE_OPERATION_SET.has(operation)) {
+    const raw = node.config as Record<string, unknown>;
+    const operation = raw.operation;
+    if (typeof operation !== "string" || !WRITE_OPERATION_SET.has(operation)) continue;
+
+    if (!node.connectionId) {
       results.push({
         id: "grants",
         status: "fail",
-        message: `Node ${nodeLabel(node)} has write operation "${operation}" configured — write verbs are not permitted yet.`,
+        message: `Node ${nodeLabel(node)} has write operation "${operation}" configured but no connection selected.`,
+        nodeId: node.id,
+      });
+      continue;
+    }
+
+    const rawEntity = raw.entity as { namespace?: unknown } | undefined;
+    const namespace = rawEntity && typeof rawEntity.namespace === "string" ? rawEntity.namespace : undefined;
+    if (!namespace) {
+      results.push({
+        id: "grants",
+        status: "fail",
+        message: `Node ${nodeLabel(node)} has write operation "${operation}" configured but no table selected — a write grant cannot be verified without one.`,
+        nodeId: node.id,
+      });
+      continue;
+    }
+
+    const granted = await hasActiveGrant(node.connectionId, namespace);
+    if (!granted) {
+      results.push({
+        id: "grants",
+        status: "fail",
+        message: `Node ${nodeLabel(node)} has write operation "${operation}" configured but no confirmed, unrevoked write grant covers "${namespace}" on its connection.`,
         nodeId: node.id,
       });
     }
   }
   if (results.length === 0) {
-    results.push({ id: "grants", status: "pass", message: "No write operations configured anywhere in this workflow." });
+    results.push({ id: "grants", status: "pass", message: "Every write operation is covered by a confirmed, unrevoked write grant." });
   }
   return results;
 }

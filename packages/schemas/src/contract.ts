@@ -95,6 +95,69 @@ export const InvalidateRequest = z.object({
 });
 export const InvalidateResponse = z.object({ evicted: z.boolean() });
 
+/**
+ * Phase 6 Block 2 — the write path. Unlike QueryPayload (worker-composed
+ * SQL/pipeline text), a write request is fully structured: the connector
+ * service itself builds the parameterized UPSERT from entity/columns/
+ * upsertKeys, so these three fields are real SQL *identifiers*, not
+ * free text — constrained here (not reusing nodeConfig.ts's looser
+ * EntityRef, which also allows the picker's transient "" state) so a
+ * malformed identifier is rejected at parse time, before it ever reaches
+ * connector-supabase's own allowlist re-check (defense in depth, same
+ * two-layers-even-internally posture as the signed context below).
+ */
+const SqlIdentifier = z
+  .string()
+  .min(1)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be a valid SQL identifier");
+
+export const WriteEntityRef = z.object({
+  namespace: SqlIdentifier,
+  name: SqlIdentifier,
+});
+export type WriteEntityRef = z.infer<typeof WriteEntityRef>;
+
+/**
+ * The worker computes this (writeSignature.ts) before dispatch and
+ * connector-supabase independently recomputes + verifies it (its own copy
+ * of the same helper) before trusting the request — "worker-side check
+ * before dispatch + connector-side re-check" from the kickoff spec's Block
+ * 2, layer 2 of the write path's three (UI / API / DB-credential-privilege)
+ * layers. `issuedAt` (epoch ms) bounds the signature to a short freshness
+ * window even though this is internal-network-only traffic. Deliberately
+ * NOT a JWT/existing-auth-token reuse — this asserts something a user JWT
+ * doesn't ("the worker re-checked this exact entity+columns against a
+ * confirmed grant just now"), not identity.
+ */
+export const WriteContext = z.object({
+  connectionId: z.string().uuid(),
+  grantId: z.string().uuid(),
+  entity: WriteEntityRef,
+  columns: z.array(SqlIdentifier).min(1),
+  issuedAt: z.number().int(),
+  signature: z.string(),
+});
+export type WriteContext = z.infer<typeof WriteContext>;
+
+export const WriteRequest = z.object({
+  credential: CredentialRef,
+  config: ConnectorConfig,
+  entity: WriteEntityRef,
+  columns: z.array(SqlIdentifier).min(1),
+  /** Positional per row, same convention as TabularResult.rows — each inner array's values line up with `columns` by index. */
+  rows: z.array(z.array(z.unknown())),
+  upsertKeys: z.array(SqlIdentifier).min(1),
+  timeoutMs: z.number().int().positive().default(15000),
+  context: WriteContext,
+});
+export type WriteRequest = z.infer<typeof WriteRequest>;
+
+export const WriteResponse = z.object({
+  written: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+});
+export type WriteResponse = z.infer<typeof WriteResponse>;
+
 export const HealthResponse = z.object({
   status: z.literal("ok"),
   service: z.string(),

@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, parseNodeConfig, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
-import { getConnectionSchema } from '@/lib/api/connectionsClient';
+import { getConnectionSchema, getWriteGrants } from '@/lib/api/connectionsClient';
 import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
 
@@ -70,7 +70,10 @@ function parseEntityKey(key: string): EntityRef {
  * key (`['connection-schema', connectionId]`) so both hooks share one
  * react-query cache entry per connection rather than double-fetching.
  * Returns entities (not a flat field union) since this hook backs the
- * table/entity picker, not a field dropdown.
+ * table/entity picker, not a field dropdown. Block 2 extends this hook's
+ * caller to destination nodes too — a destination now also needs an entity
+ * selected so checkGrants/the lock logic below have a namespace to check
+ * write-grant coverage against.
  */
 function useConnectionEntities(connectionId?: string): { namespace: string; name: string }[] {
   const { data: schema } = useQuery({
@@ -87,6 +90,37 @@ function useConnectionEntities(connectionId?: string): { namespace: string; name
   }, [schema]);
 }
 
+/**
+ * Phase 6 Block 2 — the set of schema namespaces this connection has an
+ * active (confirmed, unrevoked) write grant covering. Mirrors the server's
+ * own check (checkGrants in @nia/schemas/checks.ts, resolveWriteGrant.ts on
+ * the worker side, verifyActiveWriteGrant in connector-supabase's
+ * pool-manager.ts) purely for UX — this is layer 1 of the spec's
+ * three-layer guardrail (UI unlock / API validation / the write
+ * credential's actual DB privileges), never the enforcement itself. A
+ * grant with a scope that isn't `{ schemas: [...] }`-shaped, or with no
+ * schemas array at all, covers nothing.
+ */
+function useGrantedNamespaces(connectionId?: string): Set<string> {
+  const { data: grants } = useQuery({
+    queryKey: ['connection-write-grants', connectionId],
+    queryFn: () => getWriteGrants(connectionId!),
+    enabled: !!connectionId,
+    staleTime: 30_000,
+  });
+  return useMemo(() => {
+    const namespaces = new Set<string>();
+    for (const grant of grants ?? []) {
+      if (!grant.confirmedAt || grant.revokedAt) continue;
+      const schemas = (grant.scope as { schemas?: unknown } | null)?.schemas;
+      if (Array.isArray(schemas)) {
+        for (const s of schemas) if (typeof s === 'string') namespaces.add(s);
+      }
+    }
+    return namespaces;
+  }, [grants]);
+}
+
 function SourceDestForm({
   config,
   operations,
@@ -96,23 +130,35 @@ function SourceDestForm({
 }: {
   config: SourceDestConfig;
   operations: Operation[];
-  /** Entity picker only renders for source nodes — see nodeConfig.ts's `entity` comment: destination entity/writes are out of Block-0 scope. */
   nodeType: 'source' | 'destination';
   connectionId?: string;
   onChange: (next: SourceDestConfig) => void;
 }) {
-  const entities = useConnectionEntities(nodeType === 'source' ? connectionId : undefined);
+  const entities = useConnectionEntities(connectionId);
+  const grantedNamespaces = useGrantedNamespaces(connectionId);
   const selectedKey = config.entity ? entityKey(config.entity) : '';
+  const namespace = config.entity?.namespace;
+  const grantCovers = namespace !== undefined && grantedNamespaces.has(namespace);
 
   return (
     <div>
       <div style={sectionHeaderStyle}>Verb</div>
       {operations.map((op) => {
-        const locked = WRITE_OPERATIONS.includes(op);
+        // Phase 6 Block 2: a write verb unlocks once the node's connection
+        // has a confirmed, unrevoked write grant covering the selected
+        // entity's namespace — mirrors checkGrants' server-side pass
+        // condition exactly (@nia/schemas/checks.ts). This is layer 1 of
+        // the three-layer guardrail; the connector service and its actual
+        // DB privileges (layers 2/3) still enforce this independently.
+        const isWriteOp = WRITE_OPERATIONS.includes(op);
+        const locked = isWriteOp && !grantCovers;
+        const lockedReason = !namespace
+          ? 'Select a table with an active write grant to unlock this verb.'
+          : `Requires a confirmed write grant covering "${namespace}".`;
         return (
           <label
             key={op}
-            title={locked ? 'Requires write grant — Phase 6' : undefined}
+            title={locked ? lockedReason : undefined}
             style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: locked ? 'var(--ink4)' : 'var(--ink)', marginBottom: 6, cursor: locked ? 'not-allowed' : 'pointer' }}
           >
             <input type="radio" name="operation" disabled={locked} checked={config.operation === op} onChange={() => onChange({ ...config, operation: op })} />
@@ -122,29 +168,27 @@ function SourceDestForm({
         );
       })}
 
-      {nodeType === 'source' && (
-        <div style={{ marginTop: 16 }}>
-          <div style={sectionHeaderStyle}>Table</div>
-          {entities.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>
-              {connectionId ? 'Loading tables…' : 'Select a connection first.'}
-            </div>
-          ) : (
-            <select
-              value={selectedKey}
-              onChange={(e) => onChange({ ...config, entity: e.target.value ? parseEntityKey(e.target.value) : undefined })}
-              style={{ width: '100%', height: 28, borderRadius: 6, border: '1px solid var(--line2)', padding: '0 8px', fontSize: 12.5, boxSizing: 'border-box', color: 'var(--ink)', background: 'var(--surface)' }}
-            >
-              <option value="">Infer from mapping…</option>
-              {entities.map((e) => (
-                <option key={entityKey(e)} value={entityKey(e)}>
-                  {e.namespace ? `${e.namespace}.${e.name}` : e.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-      )}
+      <div style={{ marginTop: 16 }}>
+        <div style={sectionHeaderStyle}>Table</div>
+        {entities.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>
+            {connectionId ? 'Loading tables…' : 'Select a connection first.'}
+          </div>
+        ) : (
+          <select
+            value={selectedKey}
+            onChange={(e) => onChange({ ...config, entity: e.target.value ? parseEntityKey(e.target.value) : undefined })}
+            style={{ width: '100%', height: 28, borderRadius: 6, border: '1px solid var(--line2)', padding: '0 8px', fontSize: 12.5, boxSizing: 'border-box', color: 'var(--ink)', background: 'var(--surface)' }}
+          >
+            <option value="">{nodeType === 'source' ? 'Infer from mapping…' : 'Select a table…'}</option>
+            {entities.map((e) => (
+              <option key={entityKey(e)} value={entityKey(e)}>
+                {e.namespace ? `${e.namespace}.${e.name}` : e.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
     </div>
   );
 }

@@ -10,9 +10,13 @@ export type WriteGrant = {
   scope: Record<string, unknown>;
   grantedAt: string;
   revokedAt: string | null;
+  confirmedAt: string | null;
+  credVersion: number;
+  writeCredentialVaultRef: string | null;
 };
 
-const GRANTS_SELECT = "id, connection_id, granted_by_user_id, scope, granted_at, revoked_at";
+const GRANTS_SELECT =
+  "id, connection_id, granted_by_user_id, scope, granted_at, revoked_at, confirmed_at, cred_version, write_credential_vault_ref";
 
 type WriteGrantRow = {
   id: string;
@@ -21,6 +25,9 @@ type WriteGrantRow = {
   scope: Record<string, unknown>;
   granted_at: string;
   revoked_at: string | null;
+  confirmed_at: string | null;
+  cred_version: number;
+  write_credential_vault_ref: string | null;
 };
 
 function toWriteGrant(row: WriteGrantRow): WriteGrant {
@@ -31,6 +38,9 @@ function toWriteGrant(row: WriteGrantRow): WriteGrant {
     scope: row.scope,
     grantedAt: row.granted_at,
     revokedAt: row.revoked_at,
+    confirmedAt: row.confirmed_at,
+    credVersion: row.cred_version,
+    writeCredentialVaultRef: row.write_credential_vault_ref,
   };
 }
 
@@ -39,6 +49,19 @@ function toWriteGrant(row: WriteGrantRow): WriteGrant {
  * scope comes entirely from the parent connection, so every entry point
  * here first loads the connection through the caller's own workspace scope
  * (which is itself RLS-backed) to confirm access before touching grants.
+ *
+ * create/confirm/revoke go through the RPCs 0016_write_grants.sql shipped
+ * (create_write_grant / confirm_write_grant / revoke_write_grant) rather
+ * than direct table writes — 0016 revoked direct INSERT/UPDATE on
+ * write_grants at both the RLS-policy and table-grant layers, which
+ * silently broke this file's original direct .insert()/.update() calls
+ * (predated 0016; fixed here as part of Block 2). Each RPC is SECURITY
+ * DEFINER and re-derives its own auth check from auth.uid() against the
+ * connection's org/owner, so req.supabase must stay the caller's own
+ * (user-JWT) client, never a service-role one, for that check to mean
+ * anything — and the actor is no longer a caller-supplied param (unlike
+ * the old direct insert), it's whatever auth.uid() resolves to inside the
+ * RPC.
  */
 export async function listWriteGrants(
   supabase: SupabaseClient,
@@ -60,18 +83,40 @@ export async function createWriteGrant(
   supabase: SupabaseClient,
   scope: WorkspaceScope,
   connectionId: string,
-  grantedByUserId: string,
   grantScope: Record<string, unknown>,
 ): Promise<WriteGrant> {
   const connection = await getConnection(supabase, scope, connectionId);
   if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
-  const { data, error } = await supabase
-    .from("write_grants")
-    .insert({ connection_id: connectionId, granted_by_user_id: grantedByUserId, scope: grantScope })
-    .select(GRANTS_SELECT)
-    .single();
+  const { data, error } = await supabase.rpc("create_write_grant", {
+    p_connection_id: connectionId,
+    p_scope: grantScope,
+  });
   if (error) throw new AppError(500, "CREATE_FAILED", error.message);
+  return toWriteGrant(data as WriteGrantRow);
+}
+
+/**
+ * Second step: attaches the write credential's Vault ref. Fails (RPC
+ * raises) if the grant is already confirmed or already revoked — 0016's
+ * deliberate non-idempotence; rotation is revoke + create a new grant, not
+ * re-confirm.
+ */
+export async function confirmWriteGrant(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  connectionId: string,
+  grantId: string,
+  writeCredentialVaultRef: string,
+): Promise<WriteGrant> {
+  const connection = await getConnection(supabase, scope, connectionId);
+  if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
+
+  const { data, error } = await supabase.rpc("confirm_write_grant", {
+    p_grant_id: grantId,
+    p_write_credential_vault_ref: writeCredentialVaultRef,
+  });
+  if (error) throw new AppError(409, "CONFIRM_FAILED", error.message);
   return toWriteGrant(data as WriteGrantRow);
 }
 
@@ -85,13 +130,7 @@ export async function revokeWriteGrant(
   const connection = await getConnection(supabase, scope, connectionId);
   if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
-  const { data, error } = await supabase
-    .from("write_grants")
-    .update({ revoked_at: new Date().toISOString() })
-    .eq("id", grantId)
-    .eq("connection_id", connectionId)
-    .select(GRANTS_SELECT)
-    .single();
-  if (error) throw new AppError(500, "REVOKE_FAILED", error.message);
+  const { data, error } = await supabase.rpc("revoke_write_grant", { p_grant_id: grantId });
+  if (error) throw new AppError(409, "REVOKE_FAILED", error.message);
   return toWriteGrant(data as WriteGrantRow);
 }

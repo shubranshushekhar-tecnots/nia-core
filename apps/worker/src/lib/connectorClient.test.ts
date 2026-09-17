@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { ConnectorManifest, CredentialRef } from "@nia/schemas";
+import type { ConnectorManifest, CredentialRef, WriteRequest } from "@nia/schemas";
 import { validateBeforeDispatch } from "@nia/guardrails";
-import { sendToConnector } from "./connectorClient.js";
+import { sendToConnector, sendWriteRequest } from "./connectorClient.js";
 
 /**
  * Compile-time-only proof, alongside the runtime tests below: this file is
@@ -91,6 +91,95 @@ describe("sendToConnector", () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ not: "tabular" }), { status: 200 }));
 
     const result = await sendToConnector(manifest, credential, {}, validQuery());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("service-error");
+  });
+});
+
+const supabaseManifest: ConnectorManifest = {
+  id: "supabase",
+  name: "Supabase",
+  version: "1.0.0",
+  category: "database",
+  auth: { method: "credentials" },
+  configSchema: [],
+  operations: ["read", "insert"],
+  capabilities: ["queryable", "etl_sink"],
+  service: { host: "connector-supabase", port: 4030 },
+};
+
+function writeRequest(): WriteRequest {
+  return {
+    credential: { connectionId: credential.connectionId, credVersion: 1, vaultRef: "write-vault-ref" },
+    config: {},
+    entity: { namespace: "sales", name: "orders" },
+    columns: ["id", "total"],
+    rows: [[1, 100]],
+    upsertKeys: ["id"],
+    timeoutMs: 15000,
+    context: {
+      connectionId: credential.connectionId,
+      grantId: "22222222-2222-2222-2222-222222222222",
+      entity: { namespace: "sales", name: "orders" },
+      columns: ["id", "total"],
+      issuedAt: Date.now(),
+      signature: "deadbeef",
+    },
+  };
+}
+
+describe("sendWriteRequest", () => {
+  const originalFetch = global.fetch;
+  beforeEach(() => {
+    global.fetch = vi.fn();
+  });
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("returns ok with the parsed WriteResponse on a successful response", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ written: 3, durationMs: 12 }), { status: 200 }));
+
+    const result = await sendWriteRequest(supabaseManifest, writeRequest());
+    expect(result).toEqual({ ok: true, value: { written: 3, durationMs: 12 } });
+  });
+
+  it("normalizes a non-2xx response to service-error", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ message: "no confirmed, unrevoked write grant covers this entity" }), { status: 500 }));
+
+    const result = await sendWriteRequest(supabaseManifest, writeRequest());
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "service-error", message: "no confirmed, unrevoked write grant covers this entity" },
+    });
+  });
+
+  it("normalizes a network failure to service-unreachable", async () => {
+    vi.mocked(global.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
+
+    const result = await sendWriteRequest(supabaseManifest, writeRequest());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("service-unreachable");
+  });
+
+  it("normalizes an aborted request to query-timeout", async () => {
+    vi.mocked(global.fetch).mockImplementation(() => {
+      const err = new Error("aborted");
+      err.name = "AbortError";
+      return Promise.reject(err);
+    });
+
+    const result = await sendWriteRequest(supabaseManifest, writeRequest(), { timeoutMs: 10 });
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "query-timeout", message: 'Write against connector "supabase" timed out after 10ms.' },
+    });
+  });
+
+  it("normalizes a malformed success-status response to service-error", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ not: "a write response" }), { status: 200 }));
+
+    const result = await sendWriteRequest(supabaseManifest, writeRequest());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe("service-error");
   });

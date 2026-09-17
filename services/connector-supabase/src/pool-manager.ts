@@ -65,8 +65,7 @@ async function resolveVaultSecret(vaultRef: string): Promise<{ user: string; pas
   return { user: (data as { user: string }).user, password: (data as { password: string }).password };
 }
 
-export async function getPool(cred: CredentialRef, config: ConnectorConfig): Promise<pg.Pool> {
-  const key = `${cred.connectionId}:${cred.credVersion}`;
+function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): Promise<pg.Pool> {
   const existing = pools.get(key);
   if (existing) {
     existing.lastUsed = Date.now();
@@ -94,6 +93,52 @@ export async function getPool(cred: CredentialRef, config: ConnectorConfig): Pro
     if (pools.get(key)?.poolPromise === poolPromise) pools.delete(key);
   });
   return poolPromise;
+}
+
+export async function getPool(cred: CredentialRef, config: ConnectorConfig): Promise<pg.Pool> {
+  return createPool(`${cred.connectionId}:${cred.credVersion}`, cred, config);
+}
+
+/**
+ * Phase 6 Block 2 — write path gets its own pool, keyed
+ * `connectionId:write:credVersion`, so a write credential's connections
+ * never share a socket with the read pool (different Postgres role,
+ * different privilege level, different vaultRef). `cred.credVersion` here
+ * is the write grant's own cred_version (0016_write_grants.sql), not the
+ * connection's read-side one — rotating the write credential ages out
+ * this pool independently of the read pool, same mechanism as read-side
+ * rotation.
+ */
+export async function getWritePool(cred: CredentialRef, config: ConnectorConfig): Promise<pg.Pool> {
+  return createPool(`${cred.connectionId}:write:${cred.credVersion}`, cred, config);
+}
+
+/**
+ * Phase 6 Block 2 — connector-side re-check of the write grant referenced
+ * by the signed context, independent of the worker's own pre-dispatch
+ * check (see contract.ts's WriteContext comment: "two layers even inside
+ * the internal network"). write_grants has no org_id/owner_id of its own
+ * (0007_connectors.sql/apps/api/src/services/grants.ts's header comment) —
+ * scope is entirely the parent connection's, which the worker already
+ * resolved under WorkspaceScope before it ever signed this context, so a
+ * direct service-role lookup by grantId+connectionId here is a re-check of
+ * that same fact, not a fresh authorization decision.
+ */
+export async function verifyActiveWriteGrant(
+  grantId: string,
+  connectionId: string,
+  namespace: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("write_grants")
+    .select("scope, confirmed_at, revoked_at")
+    .eq("id", grantId)
+    .eq("connection_id", connectionId)
+    .maybeSingle();
+  if (error || !data) return false;
+  if (!data.confirmed_at || data.revoked_at) return false;
+  const schemas = (data.scope as { schemas?: unknown } | null)?.schemas;
+  return Array.isArray(schemas) && schemas.includes(namespace);
 }
 
 export async function evict(connectionId: string): Promise<boolean> {

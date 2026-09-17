@@ -28,6 +28,17 @@ const EnvSchema = z
     REDIS_URL: z.string().default("redis://localhost:6379"),
     CONNECTOR_DEV_HOST: z.string().optional(),
     /**
+     * Phase 6 Block 2 — shared secret for the write-dispatch signed context
+     * (see lib/writeSignature.ts). connector-supabase holds an identical
+     * copy of the same helper + secret (its own env, not Zod-validated —
+     * see that service's index.ts) and independently recomputes the HMAC
+     * rather than trusting the worker's say-so — "worker-side check before
+     * dispatch + connector-side re-check" from the kickoff spec. min(32)
+     * is a floor, not a real strength guarantee; generate with e.g.
+     * `openssl rand -hex 32`.
+     */
+    WRITE_DISPATCH_SIGNING_SECRET: z.string().min(32),
+    /**
      * Nia Gateway (OpenAI-compatible AI gateway) — the chat pipeline's only
      * LLM client. Server-side only: apps/web never sees this key, it only
      * enqueues jobs and relays already-generated tokens over Redis pub/sub.

@@ -11,9 +11,11 @@ import {
   type CheckRunJob,
   type FieldsLookup,
   type TestConnectionFn,
+  type WriteGrantLookup,
 } from "@nia/schemas";
 import { supabase } from "../supabaseClient.js";
 import { resolveConnection } from "../resolveConnection.js";
+import { resolveWriteGrant } from "../resolveWriteGrant.js";
 import { sendTestRequest } from "../connectorClient.js";
 import { getSchema } from "../introspection.js";
 import type { WorkspaceScope } from "../workspaceScope.js";
@@ -63,11 +65,16 @@ export async function runWorkflowChecks(job: CheckRunJob): Promise<{ results: Ch
     return { ok: tested.value.ok, message: tested.value.error };
   };
 
+  const hasActiveGrant: WriteGrantLookup = async (connectionId, namespace) => {
+    const resolved = await resolveWriteGrant(connectionId, namespace);
+    return resolved.ok;
+  };
+
   const requested = new Set(job.checks);
   const results: CheckResult[] = [];
   if (requested.has("config")) results.push(...checkConfig(graph));
   if (requested.has("dag")) results.push(...checkDag(graph));
-  if (requested.has("grants")) results.push(...checkGrants(graph));
+  if (requested.has("grants")) results.push(...(await checkGrants(graph, hasActiveGrant)));
   if (requested.has("credentials")) results.push(...(await checkCredentials(graph, testConnection)));
   if (requested.has("mappings")) {
     results.push(...(await buildMappingsCheck(graph, job.scope)));

@@ -19,13 +19,22 @@
  *    status or a response that doesn't match ExecuteResponse.
  *  - query-timeout: the request to the connector service was aborted after
  *    exceeding its timeout budget.
+ *  - grant-invalid: Phase 6 Block 2's write-dispatch pre-check
+ *    (resolveWriteGrant.ts) — the connection has no confirmed, unrevoked
+ *    write grant covering the entity's namespace. The connector service
+ *    re-derives this same check independently (pool-manager.ts's
+ *    verifyActiveWriteGrant) — this is the worker-side half of the spec's
+ *    "two layers even inside the internal network" guardrail, so a grant
+ *    revoked between the worker's check and the connector's own re-check
+ *    is still caught.
  */
 export type DispatchErrorKind =
   | "connection-not-found"
   | "guardrail-rejected"
   | "service-unreachable"
   | "service-error"
-  | "query-timeout";
+  | "query-timeout"
+  | "grant-invalid";
 
 export type DispatchError = {
   kind: DispatchErrorKind;

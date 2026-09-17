@@ -49,6 +49,7 @@ export type OrgAction =
   | "connections.delete"
   | "connections.test"
   | "grants.create"
+  | "grants.confirm"
   | "grants.revoke";
 
 /**
@@ -124,6 +125,7 @@ const CAPABILITY_MATRIX = {
   "connections.delete": ["individual", "member", "admin", "owner"],
   "connections.test": ["individual", "member", "admin", "owner"],
   "grants.create": ["individual", "member", "admin", "owner"],
+  "grants.confirm": ["individual", "member", "admin", "owner"],
   "grants.revoke": ["individual", "member", "admin", "owner"],
 } as const satisfies Record<OrgAction, readonly ActorRole[]>;
 
