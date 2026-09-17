@@ -21,6 +21,11 @@
   wasn't masking it — added to that screenshot's existing `mask` array.
   Verified via repeated isolated reruns (5/5, 3/3, 2/2 clean) and a final
   clean full-suite run (43 passed, 0 failed, 1 skipped).
+  **Update:** a later re-verification pass found 3 more `canvas.spec.ts`
+  failures this "43/0/1" number didn't cover (same `nextjs-portal` cause,
+  1 baseline; a shared-fixture node-pollution bug, 2 tests) — fixed, but
+  not yet re-confirmed in one clean full-suite run. See `PHASE5_EXIT.md`
+  §7.2 / §8.6.
 - ~~Chat feature requires an organization — allow individual/personal-workspace
   users~~ — **reconciled and closed with artifacts** (chat.spec.ts 10/1/0,
   chat-smoke exit 0, user-keyed Redis keys captured live). See
