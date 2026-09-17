@@ -29,7 +29,16 @@ export type ChatQueryResult =
   | { status: "error"; reason: "no-connection-selected" }
   | { status: "refused"; reason: "capacity-limit" | string }
   | { status: "error"; error: string }
-  | { status: "ok"; faithful: boolean }
+  | {
+      status: "ok";
+      faithful: boolean;
+      // Surfaced for the golden-set eval runner to distinguish a plain
+      // first-try faithful answer from one that only shipped after the
+      // faithfulness retry loop ran its course (conflict-final) — see
+      // runGoldenSuite.ts's "answer" case and applyFaithfulnessVerdict.
+      faithfulnessOutcome: "ok" | "conflict-retry" | "conflict-final" | undefined;
+      answerGenAttempts: number;
+    }
   | { status: "conflict" };
 
 export async function runChatQuery(payload: ChatQueryJob, jobId: string): Promise<ChatQueryResult> {
@@ -95,7 +104,12 @@ export async function runChatQuery(payload: ChatQueryJob, jobId: string): Promis
 
       return finalState.error
         ? { status: "error", error: finalState.error }
-        : { status: "ok", faithful: finalState.faithful === true };
+        : {
+            status: "ok",
+            faithful: finalState.faithful === true,
+            faithfulnessOutcome: finalState.faithfulnessOutcome,
+            answerGenAttempts: finalState.answerGenAttempts,
+          };
     } catch (err) {
       const message = err instanceof Error ? err.message : "Chat pipeline crashed unexpectedly.";
       await publishChatEvent(scope, jobId, { type: "error", message });
@@ -177,7 +191,12 @@ export async function runChatQuery(payload: ChatQueryJob, jobId: string): Promis
       citations,
       status: "complete",
     });
-    return { status: "ok", faithful: finalState.faithful === true };
+    return {
+      status: "ok",
+      faithful: finalState.faithful === true,
+      faithfulnessOutcome: finalState.faithfulnessOutcome,
+      answerGenAttempts: finalState.answerGenAttempts,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Chat pipeline crashed unexpectedly.";
     await publishChatEvent(scope, jobId, { type: "error", message });

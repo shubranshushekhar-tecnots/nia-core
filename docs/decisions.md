@@ -177,3 +177,90 @@ required by the plan's own conditional wording ("full golden set must
 hold after any implemented lever") since no lever was implemented.
 Latency remains an open Phase 5 exit item, carried forward with this
 session's live re-verification as the current evidence.
+
+## Phase 5 Session 5, Block 4: semantic-conflict golden case — organic trigger unreachable, live-evidenced
+
+Goal per plan: a golden fixture where two sources share the same numeric
+value with contradictory semantics, engineered so `reduce.ts`'s
+deterministic tie-check does NOT catch it, forcing only the LLM
+faithfulness grader to catch the mismatch — proving the shared
+`conflict-retry` → `conflict-final` retry policy (`applyFaithfulnessVerdict`,
+`faithfulness.ts`) actually fires end-to-end, not just in isolation.
+
+**Infrastructure landed (kept, harmless regardless of the finding below):**
+`runChatQuery.ts`'s `ChatQueryResult` "ok" variant now surfaces
+`faithfulnessOutcome`/`answerGenAttempts` (previously only `faithful:
+boolean`); `goldenCase.ts`'s `expect` schema gained an optional
+`expectFaithfulnessOutcome: "ok" | "conflict-final"`; `runGoldenSuite.ts`'s
+`"answer"` case branches on it — when set to `"conflict-final"` it does
+NOT auto-fail on `faithful:false`, instead asserting
+`faithfulnessOutcome === "conflict-final"` and `answerGenAttempts === 1`.
+No fixture case sets this field today (see below).
+
+**The originally-designed mechanism does not work, confirmed by reading
+the actual prompts, not just inspection.** The plan's illustrative
+"different field name per source" example is inexpressible at all:
+`reductionPlan.ts` classifies `targetField` from question text alone,
+with no schema access, and assumes one field name means the same thing
+across every source (no field-mapping). Its actual replacement —
+"single true winner on a target field, whose winning row ALSO has a
+second, coincidentally-equal-valued column with different real-world
+meaning" — was live-tested (multi-source, mysql `tenure`=15/`incidents`=15
+on the same Grace Hopper row, mongo capped below the mysql max so no
+cross-source tie ever forms) and does NOT trigger a conflict, because
+`formatOutcome()` (`answerGenMulti.ts`) hands the ENTIRE winning row to
+BOTH `buildAnswerMulti` and `faithfulnessMulti` — the grader has the same
+context the answer came from, so restating any of that row's real,
+given values is correctly graded `OK`, not `CONFLICT`. The faithfulness
+prompt's "without fabricating any other numeric claim" wording reads, in
+practice, as "beyond what you were given" — not "beyond the bare target
+field" as originally assumed.
+
+**Live evidence, multi-source (mysql `tenure`/`incidents` seed, temporary
+— since reverted, see below):**
+- Bare question ("Who has the highest tenure, across these sources?"),
+  8 consecutive real runs: 8/8 `faithfulnessOutcome: "ok"`,
+  `answerGenAttempts: 0`, byte-identical structure each time. Zero
+  organic variance.
+- Two-part elaboration ("...and what does their record show?"): still
+  `ok` — model volunteers salary/incidents unprompted but all
+  grounded in the given row, so still graded faithful.
+- Fabrication-bait questions requiring a second computed fact not in the
+  given result (second-highest delta, percentage-of-total, decade/month
+  unit conversion, within-row field comparison, "flag anything
+  concerning"): every one of these was refused upstream by
+  `reductionPlan.ts`'s classifier as `unsupported-operation` before ever
+  reaching `buildAnswerMulti`/faithfulness — the classifier's "requires
+  more than one number combined" rule is a second, independent backstop
+  the plan's example didn't account for.
+- Unit-mismatch bait ("...in months?"): model restated the same number
+  15 relabeled "15 months" — faithfulness only tracks number identity,
+  not unit/label consistency, so this also passed `ok`.
+
+**Live evidence, single-source (the one surface with no deterministic
+reduce.ts backstop — `buildAnswerNode` has the LLM compute the answer
+directly from raw rows, per `buildAnswer.ts`/`answerGen.ts`):** seeded 10
+extra mysql rows (temporary) with awkward two-digit tenure values (13
+rows total, true sum 239) and asked the model to hand-compute a running
+total from the raw row dump rather than use SQL `SUM`. It produced a
+byte-perfect running-total table (239, matching exactly) and added
+correctly-derived extra facts (correct min/max by name) — still `ok`.
+
+**Conclusion:** with the current gateway model, this pipeline's
+defense-in-depth (deterministic `reduce.ts` for multi-source removing
+LLM arithmetic entirely; a classifier that refuses any question needing
+more than one computed fact; an answer-gen prompt that's followed
+reliably even under adversarial single-source hand-computation load)
+makes an organically-triggered faithfulness conflict empirically
+unreachable via honest data/question engineering within the effort spent
+here (7 distinct provocation strategies across 15 real pipeline
+invocations, multi- and single-source). This is a legitimate system
+finding, not a gap in effort — recorded here rather than shipping a
+fixture that pretends to exercise a path it doesn't. All temporary seed
+changes (mysql/mongo `tenure`/`incidents` columns, the 10 extra
+single-source rows) were reverted live and never landed in
+`docker/dev-*-init.sql`/`.js`; no fixture case was added to
+`chat-v1.jsonl`. The `expectFaithfulnessOutcome` plumbing above is left
+in place for if/when a real trigger (e.g. a future weaker/cheaper model
+tier, or a genuine product bug) is found — at that point a case can be
+added directly, no further infra work needed.

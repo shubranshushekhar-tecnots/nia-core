@@ -58,6 +58,8 @@ export type EvalCaseResult = {
   citationFailure: boolean;
   mustRefuseFailure: boolean;
   faithful: boolean | null;
+  faithfulnessOutcome: "ok" | "conflict-retry" | "conflict-final" | null;
+  answerGenAttempts: number | null;
   latencyMs: number;
   traceId: string;
   citations: CitationReproductionResult[];
@@ -128,6 +130,8 @@ export async function runGoldenSuite(): Promise<EvalReport> {
     let invariantPass = true;
     let mustRefuseFailure = false;
     let faithful: boolean | null = null;
+    let faithfulnessOutcome: "ok" | "conflict-retry" | "conflict-final" | null = null;
+    let answerGenAttempts: number | null = null;
 
     switch (kase.expect.type) {
       case "answer": {
@@ -136,7 +140,22 @@ export async function runGoldenSuite(): Promise<EvalReport> {
           notes.push(`expected an answer, got status=${result.status}`);
         } else {
           faithful = result.faithful;
-          if (!result.faithful) {
+          faithfulnessOutcome = result.faithfulnessOutcome ?? null;
+          answerGenAttempts = result.answerGenAttempts;
+          const expectedOutcome = kase.expect.expectFaithfulnessOutcome ?? "ok";
+          if (expectedOutcome === "conflict-final") {
+            // Engineered case: the pipeline's faithfulness retry loop must
+            // actually fire once and still ship unfaithful — not just any
+            // faithful:false. A plain first-try disagreement (no retry) or
+            // a first-try faithful:true would both be a fixture-design
+            // failure here, not a pass.
+            if (result.faithfulnessOutcome !== "conflict-final" || result.answerGenAttempts !== 1) {
+              invariantPass = false;
+              notes.push(
+                `expected faithfulnessOutcome=conflict-final after exactly one retry, got outcome=${result.faithfulnessOutcome} attempts=${result.answerGenAttempts}`,
+              );
+            }
+          } else if (!result.faithful) {
             invariantPass = false;
             notes.push("faithfulness check disagreed with the shipped answer");
           }
@@ -209,6 +228,8 @@ export async function runGoldenSuite(): Promise<EvalReport> {
       citationFailure,
       mustRefuseFailure,
       faithful,
+      faithfulnessOutcome,
+      answerGenAttempts,
       latencyMs,
       traceId: jobId,
       citations: citationResults,

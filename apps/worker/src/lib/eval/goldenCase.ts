@@ -16,6 +16,21 @@ export const GoldenCase = z.object({
     mustContain: z.array(z.string()).optional(),
     mustNotContain: z.array(z.string()).optional(),
     refusalKind: z.enum(["unsupported-operation", "partial-failure", "capacity-limit"]).optional(),
+    /**
+     * "answer"-type cases only. Defaults to "ok" (must ship faithful on the
+     * first try, today's only behavior). "conflict-final" asserts the
+     * pipeline's faithfulness retry loop actually fired once and the
+     * answer still shipped unfaithful after that retry — for a golden case
+     * specifically engineered to exercise that path. When set,
+     * runGoldenSuite.ts does NOT auto-fail on faithful:false; it instead
+     * asserts faithfulnessOutcome === "conflict-final" and
+     * answerGenAttempts === 1. As of Phase 5 Session 5 no fixture case sets
+     * this — see docs/decisions.md's "Block 4" write-up for the live
+     * investigation into why an organic trigger proved unreachable with the
+     * current pipeline + model, and what infrastructure (this field
+     * included) is left in place for if/when one is found.
+     */
+    expectFaithfulnessOutcome: z.enum(["ok", "conflict-final"]).optional(),
   }),
 });
 export type GoldenCase = z.infer<typeof GoldenCase>;
