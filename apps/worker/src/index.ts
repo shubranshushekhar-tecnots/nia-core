@@ -8,6 +8,7 @@ import {
 } from "@nia/schemas";
 import { runChatQuery } from "./lib/chat/runChatQuery.js";
 import { runWorkflowChecks } from "./lib/checks/runWorkflowChecks.js";
+import { proposeMapping } from "./lib/mappings/proposeMapping.js";
 import { runGoldenSuite } from "./lib/eval/runGoldenSuite.js";
 import { registerNightlyEvalSchedule } from "./lib/eval/schedule.js";
 import { shutdownLangfuse } from "./lib/observability/langfuse.js";
@@ -70,6 +71,13 @@ const interactive = new Worker(
         // req.supabase.
         console.log(`[interactive] check_run for workflow ${payload.workflowId}`);
         return await runWorkflowChecks(payload);
+      case "mappings_propose":
+        // Task 3 — proposeMapping.ts owns resolving the graph/connections
+        // and calling the LLM gateway; this handler only computes the
+        // proposal, it never persists it (see proposeMapping.ts's header
+        // comment — approval is a separate, explicit graph-save write).
+        console.log(`[interactive] mappings_propose for workflow ${payload.workflowId} dest ${payload.destNodeId}`);
+        return await proposeMapping(payload.workflowId, payload.destNodeId, payload.scope);
     }
   },
   { connection, concurrency: 10 },

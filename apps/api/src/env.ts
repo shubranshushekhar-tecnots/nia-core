@@ -39,6 +39,14 @@ const EnvSchema = z.object({
    * request indefinitely.
    */
   CHECK_RUN_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  /**
+   * Upper bound on mappingsQueue.ts's synchronous await of the worker's
+   * mappings_propose job (an LLM call, so a longer budget than
+   * CHECK_RUN_TIMEOUT_MS's pure-graph-inspection default). Past this, the
+   * route fails clean with a 503 naming the worker unavailable rather than
+   * hanging the HTTP request indefinitely.
+   */
+  MAPPING_PROPOSE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
 });
 
 export const env = EnvSchema.parse(process.env);

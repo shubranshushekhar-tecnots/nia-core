@@ -8,6 +8,21 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
+  // Pinned to 1 (not left to Playwright's CPU-based default) after Phase 5
+  // Session 3 Task 2's e2e hardening pass found canvas.spec.ts's
+  // gotoWorkflow navigation intermittently timing out under 4 concurrent
+  // workers — root-caused to resource contention against the single
+  // `next dev` webServer this config spins up (see the webServer block
+  // below), not a product bug: the same suite passes reliably, faster per
+  // test, at workers:1. Playwright has no true per-project worker cap (the
+  // `projects` array only varies browser/testMatch/fullyParallel, not
+  // concurrency), and every project here shares that one dev server, so
+  // this is pinned globally rather than just for canvas.spec.ts/
+  // chat.spec.ts specifically — scoping it to "the heavy tests" would
+  // still contend with whatever else is running concurrently. Revisit if
+  // the webServer is ever split per-project or CI gets a dedicated runner
+  // per shard.
+  workers: 1,
   reporter: 'list',
   use: {
     baseURL: BASE_URL,

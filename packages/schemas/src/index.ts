@@ -8,6 +8,7 @@ export * from "./expression.js";
 export * from "./nodeConfig.js";
 export * from "./pushdown.js";
 export * from "./checks.js";
+export * from "./mappingProposal.js";
 export * from "./can.js";
 export * from "./audit.js";
 export * from "./connectors/mysql.js";

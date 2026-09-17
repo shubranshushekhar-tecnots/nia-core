@@ -440,6 +440,7 @@ function CanvasInner({
           <NodeDrawer
             key={selectedNode.id}
             node={selectedNode}
+            workflowId={workflow.id}
             upstreamSource={upstreamSource}
             onConfigChange={updateSelectedNodeConfig}
             onDelete={deleteSelectedNode}

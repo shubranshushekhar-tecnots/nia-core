@@ -3,6 +3,7 @@
 import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, parseNodeConfig, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
 import TransformEditor from './TransformEditor';
+import MappingEditor from './MappingEditor';
 
 /**
  * Node properties drawer — docked to the canvas's right edge, replacing
@@ -83,12 +84,14 @@ function SourceDestForm({
 
 export default function NodeDrawer({
   node,
+  workflowId,
   upstreamSource,
   onConfigChange,
   onDelete,
   onClose,
 }: {
   node: CanvasNode;
+  workflowId: string;
   upstreamSource?: { connectionId?: string; manifestId?: string };
   onConfigChange: (config: Record<string, unknown>) => void;
   onDelete: () => void;
@@ -125,6 +128,19 @@ export default function NodeDrawer({
           operations={manifest?.operations ?? ['read']}
           onChange={(next) => onConfigChange(next)}
         />
+      )}
+
+      {data.resolved && data.graphNodeType === 'destination' && !parsed.unrecognized && (
+        <div style={{ borderTop: '1px solid var(--line2)', marginTop: 16, paddingTop: 16 }}>
+          <MappingEditor
+            config={parsed.value as SourceDestConfig}
+            workflowId={workflowId}
+            destNodeId={node.id}
+            destConnectionId={data.connectionId}
+            sourceConnectionId={upstreamSource?.connectionId}
+            onChange={(next) => onConfigChange(next)}
+          />
+        </div>
       )}
 
       {data.resolved && data.graphNodeType === 'transform' && !parsed.unrecognized && (

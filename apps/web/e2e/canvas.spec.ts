@@ -364,6 +364,93 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     await expect(pill).toContainText(/out of date/i);
     await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeDisabled();
   });
+
+  /**
+   * Task 3 item 4's Playwright bullet — manual (no-LLM) mapping approval
+   * flow. mysql -> supabase is the heterogeneous pairing (mysql's manifest
+   * is etl_source-only; supabase is the only canvasA connection with
+   * etl_sink, see palette-purity test above), so this is the first test in
+   * the suite to actually exercise checkMappings' heterogeneous path — every
+   * earlier checks-dock test deliberately used supabase->supabase to dodge
+   * it (see that test's own header comment). The seeded dev-mysql/
+   * dev-postgres sandboxes share identical field names (id/name/salary,
+   * docker/dev-{mysql,postgres}-init.sql) so real field pickers have real,
+   * matching options to select without needing the LLM proposal path (that
+   * path is covered live by scripts/mapping-smoke.ts instead, per the plan).
+   */
+  test('destination drawer: manual field mapping — no approval fails checks, approving passes, editing clears approval and fails again', async ({ page }) => {
+    await dragPaletteItemOnto(page, 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
+    await connectNodes(page, 0, 1);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    const pill = page.getByTestId('checks-dock-pill');
+    await expect(pill).toContainText(/failing/, { timeout: 15_000 });
+    await expect(page.getByTestId('checks-dock-body').getByText(/no approved field mapping/)).toBeVisible();
+    // The expanded dock body overlaps the drawer's bottom edge (both are
+    // bottom-anchored) and intercepts pointer events there — collapse it
+    // before opening the drawer so the drawer's own buttons (Approve, in
+    // particular) are actually clickable, not just visible.
+    await pill.click();
+    await expect(page.getByTestId('checks-dock-body')).not.toBeVisible();
+
+    await page.locator('.react-flow__node').nth(1).click();
+    const drawer = page.getByTestId('node-drawer');
+    // MappingEditor fetches BOTH sides' connection schemas independently
+    // (useEntityFields, one call per side) as soon as it mounts. Unlike the
+    // transform-editor test above (which waits for an *existing* field
+    // <input placeholder="field name"> to disappear), there's no FieldSelect
+    // in the DOM yet here — "+ Entry" is what creates the first one, and it
+    // defaults the new row to sourceFields[0]/destFields[0]. Clicking it
+    // before these two fetches land would default to empty strings, which
+    // fails MappingEntry's min(1) validation on the very next render and
+    // permanently flips this node into NodeDrawer's read-only "unrecognized
+    // config" fallback — so the schema fetches must be awaited first, not
+    // the fields *inside* an entry that doesn't exist yet.
+    await Promise.all([
+      page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema')),
+      page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema')),
+    ]);
+    await expect(drawer.getByText('Field mapping')).toBeVisible();
+    await expect(drawer.getByText('Not approved')).toBeVisible();
+
+    await drawer.getByRole('button', { name: '+ Entry' }).click();
+    const fromSelect = drawer.locator('select').nth(0);
+    const toSelect = drawer.locator('select').nth(1);
+    await fromSelect.selectOption('salary');
+    await toSelect.selectOption('salary');
+
+    const approved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
+    await drawer.getByRole('button', { name: 'Approve' }).click();
+    await expect(drawer.getByText('Approved')).toBeVisible();
+    await approved;
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await expect(pill).toContainText(/out of date/i);
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    await expect(pill).toContainText('All checks passed', { timeout: 15_000 });
+    // Re-running re-expands the dock (FlowCanvas.tsx sets expanded:true on
+    // every run) — collapse it again before touching the still-open drawer.
+    await pill.click();
+    await expect(page.getByTestId('checks-dock-body')).not.toBeVisible();
+
+    // Editing the approved entry clears approvedAt immediately, client-side
+    // (updateEntries in MappingEditor.tsx) — no round-trip needed to observe
+    // the badge flip, but the edit still autosaves like any other config
+    // change, so wait for that PUT before trusting a re-run against the
+    // server's persisted graph.
+    const edited = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
+    await fromSelect.selectOption('name');
+    await expect(drawer.getByText('Not approved')).toBeVisible();
+    await edited;
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await expect(pill).toContainText(/out of date/i);
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    await expect(pill).toContainText(/failing/, { timeout: 15_000 });
+    await expect(page.getByTestId('checks-dock-body').getByText(/no approved field mapping/)).toBeVisible();
+  });
 });
 
 test.describe('canvas: cross-org access', () => {

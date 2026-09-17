@@ -105,8 +105,29 @@ export const CheckRunJob = z.object({
 });
 export type CheckRunJob = z.infer<typeof CheckRunJob>;
 
+/**
+ * Task 3 — AI-proposed field mappings. Deliberately carries only
+ * `destNodeId`, not connection ids: the worker re-resolves the destination
+ * node, its upstream source, and both connections from the workflow's own
+ * GraphDoc (same resolveGraph() used by CheckRunJob's handler) rather than
+ * trusting client-supplied connection ids for a scope-sensitive lookup.
+ * Result is delivered via BullMQ's QueueEvents.waitUntilFinished (see
+ * apps/api/src/lib/mappingsQueue.ts) — not persisted by this job at all;
+ * proposals are never auto-applied (approval is a separate graph-save
+ * write the user triggers explicitly).
+ */
+export const ProposeMappingJob = z.object({
+  kind: z.literal("mappings_propose"),
+  scope: WorkspaceScope,
+  workflowId: z.string().uuid(),
+  destNodeId: z.string(),
+  triggeredByUserId: z.string().uuid(),
+});
+export type ProposeMappingJob = z.infer<typeof ProposeMappingJob>;
+
 export const InteractiveJob = z.discriminatedUnion("kind", [
   ChatQueryJob,
   CheckRunJob,
+  ProposeMappingJob,
 ]);
 export type InteractiveJob = z.infer<typeof InteractiveJob>;

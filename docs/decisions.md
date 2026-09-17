@@ -34,6 +34,40 @@ deliberately kept its light/dark toggle — the app shell's lack of one is
 the intentional asymmetry. Do not describe `/app`'s light-only state as
 theme debt or an oversight; it's settled scope.
 
+## App shell dark mode: deferred to backlog (Session 3 reaffirmation)
+
+Recorded verbatim per the Session 3 kickoff decision: "App shell is
+light-only for v1; Midnight Navy dark theme deferred to backlog until a
+screen requires it." This reaffirms, rather than reopens, the "App shell is
+light-only — a decision, not theme debt" entry above — no code change
+accompanies this entry; `AppShell.tsx` was already light-only and stays
+that way.
+
+## Accent is indigo; the copper `--ign` token is a separate, unaudited concern
+
+Recorded verbatim: "Accent is the design file's indigo family; the older
+copper `--ign` token audit is superseded. CI greps updated accordingly —
+copper/#C98757 no longer enforced, indigo no longer banned."
+
+`TOKENS.md` already documents these as two distinct tokens, not competing
+choices for the same role: `--primary`/`--acc` (`#4F46E5`, indigo) is the
+general UI accent used across Landing/Console/App-light and Auth; `--live`/
+`--acc-solid` (`#C98757`, copper) is a narrower, semantic "flow/ETL node
+status" color scoped to the automation canvas, unrelated to the page-wide
+accent role. This decision confirms indigo as the accent and retires any
+open question about auditing/enforcing copper as an alternative
+general-accent choice — it does not remove `--ign`/`--live` from
+`theme.css`, since that token still serves its original canvas-node-status
+purpose.
+
+Note: no CI script, lint rule, or `.github/workflows` entry in this repo
+currently greps for or enforces either color (checked `package.json`
+scripts, `scripts/`, and `.github/workflows/` — none exist). "CI greps
+updated accordingly" has no concrete mechanism to update; if a real
+enforcement script is added later, it should allow `--ign`/`#C98757` in
+`theme.css`'s node-status block and treat indigo (`#4F46E5`/`--primary`) as
+the sanctioned page-wide accent, not a banned color.
+
 ## Standing rule: a test-run claim must name its artifact
 
 Any report claiming a test suite, smoke script, or e2e run passed (or

@@ -15,9 +15,67 @@ import type { GraphNodeType } from "./graph.js";
  * flag it in the drawer instead of losing the workflow.
  */
 
-/** Source/destination node config: which verb the node performs. Write verbs are locked in the UI behind a write grant (Phase 6) — see manifest.ts's WRITE_OPERATIONS. */
+/**
+ * A single source-field -> destination-field pairing. `from`/`to` are field
+ * *names* (not ids) since introspected schemas (contract.ts's
+ * IntrospectResponse) key fields by name within an entity, and the union-
+ * of-entities pattern this codebase already uses for field pickers
+ * (TransformEditor.tsx) also only ever surfaces names.
+ */
+/**
+ * from/to intentionally allow "" (not .min(1)) — same reasoning as
+ * FilterCondition.field above: the mapping editor autosaves on every
+ * pick, so a freshly-added entry (user hasn't chosen a field on one side
+ * yet — e.g. the other side's schema is still loading) is a normal
+ * transient on-the-wire shape, not a corrupt config. A .min(1) here would
+ * make SourceDestConfig fail to parse the instant such an entry lands,
+ * flipping the whole node into NodeDrawer's read-only "unrecognized"
+ * fallback with no way back except deleting the node — completeness is
+ * enforced at check-time instead (checkConfig, checks.ts), not schema-time.
+ */
+export const MappingEntry = z.object({
+  from: z.string(),
+  to: z.string(),
+});
+export type MappingEntry = z.infer<typeof MappingEntry>;
+
+/**
+ * Field mapping for a heterogeneous (cross-connector-type) source ->
+ * destination path — Task 3. Lives on the *destination* node's config
+ * (below), not a separate table: no migration needed, and it travels with
+ * the GraphDoc the same way every other per-node setting does.
+ *
+ * `approvedAt: null` means "proposed/edited but not yet approved" —
+ * checkMappings (checks.ts) treats an unapproved mapping as a failing
+ * heterogeneous path, same as no mapping at all. Editing `entries` after
+ * approval MUST clear `approvedAt` back to null (drift honesty: an approval
+ * only ever covers the exact entries it was granted for) — callers that
+ * mutate `entries` are responsible for also nulling `approvedAt` in the
+ * same update; this schema doesn't enforce that invariant itself since it's
+ * a stateless shape, not a state machine.
+ *
+ * `version` increments on every approval (starts at 1) — a simple audit
+ * trail of how many times this mapping has been (re-)approved, not
+ * currently read by any check.
+ */
+export const FieldMapping = z.object({
+  version: z.number().int().min(1).default(1),
+  entries: z.array(MappingEntry).default([]),
+  approvedAt: z.string().nullable().default(null),
+});
+export type FieldMapping = z.infer<typeof FieldMapping>;
+
+/**
+ * Source/destination node config: which verb the node performs. Write verbs
+ * are locked in the UI behind a write grant (Phase 6) — see manifest.ts's
+ * WRITE_OPERATIONS. `mapping` is only ever populated on destination nodes
+ * (source nodes have no field-mapping concept — they're the "from" side) —
+ * it's optional on this shared schema rather than splitting source/dest
+ * into separate config types, since every other field is identical.
+ */
 export const SourceDestConfig = z.object({
   operation: Operation.default("read"),
+  mapping: FieldMapping.optional(),
 });
 export type SourceDestConfig = z.infer<typeof SourceDestConfig>;
 

@@ -105,17 +105,41 @@ export function checkConfig(graph: GraphDoc): CheckResult[] {
           }
         }
       }
-    } else if ((node.type === "source" || node.type === "destination") && !node.connectionId) {
+    } else if (node.type === "source" || node.type === "destination") {
       // A source/destination node's *only* other required field, beyond the
       // operation SourceDestConfig already validates, is which connection it
       // runs against — connectionId lives on GraphNode itself, not inside
       // config, but "required field present" is still exactly what this is.
-      results.push({
-        id: "config",
-        status: "fail",
-        message: `Node ${nodeLabel(node)} has no connection selected.`,
-        nodeId: node.id,
-      });
+      if (!node.connectionId) {
+        results.push({
+          id: "config",
+          status: "fail",
+          message: `Node ${nodeLabel(node)} has no connection selected.`,
+          nodeId: node.id,
+        });
+      }
+
+      // Same permissive-schema/strict-check-time split as the filter/
+      // computed-field cases above: MappingEntry.from/to allow "" so the
+      // mapping editor can autosave a freshly-added, not-yet-picked entry
+      // (nodeConfig.ts's MappingEntry comment) without the config flipping
+      // unrecognized. A check run is not a keystroke though — an entry with
+      // either side still unset is genuinely incomplete, so it's re-flagged
+      // here, same as checkMappings already re-flags a missing/drifted
+      // *approval* for heterogeneous pairs (this is a lower-level,
+      // approval-independent completeness gate on the entries themselves).
+      if (node.type === "destination" && parsed.value.mapping) {
+        for (const [i, entry] of parsed.value.mapping.entries.entries()) {
+          if (entry.from === "" || entry.to === "") {
+            results.push({
+              id: "config",
+              status: "fail",
+              message: `Node ${nodeLabel(node)}: mapping entry ${i + 1} has no field selected on one or both sides.`,
+              nodeId: node.id,
+            });
+          }
+        }
+      }
     }
   }
 
@@ -273,20 +297,20 @@ export async function checkCredentials(graph: GraphDoc, testConnection: TestConn
 // ---- d. mappings --------------------------------------------------------
 
 /**
- * Deliberately does NOT import anything from nodeConfig.ts's NodeConfig
- * union for mapping storage — Task 3 (this session, not yet reached) owns
- * adding the actual `mapping` field to destination-node config. This check
- * accepts the mapping + introspected-fields data via injected lookups so it
- * can be written, and unit-tested, against fixtures now without preempting
- * Task 3's schema. Once Task 3 lands, the caller supplies these lookups by
- * reading the same GraphDoc it already has in hand — no new I/O required.
+ * Reads the mapping straight off the destination node's own config
+ * (nodeConfig.ts's FieldMapping, added Task 3) via parseNodeConfig — no
+ * injected lookup needed for this half, since a node's own config is
+ * already in the GraphDoc the caller has in hand, with no I/O involved.
+ * Current introspected field names for a source node, or undefined if
+ * unknown (not yet introspected/cached), are still injected: this is real
+ * I/O (a connector schema fetch) that must stay out of this pure module —
+ * treated as "can't verify" rather than a hard failure, to avoid
+ * false-negative drift reports when introspection data simply isn't cached
+ * yet.
  */
-export type ApprovedMapping = { entries: { from: string; to: string }[]; approvedAt: string | null };
-export type MappingLookup = (destNodeId: string) => ApprovedMapping | undefined;
-/** Current introspected field names for a source node, or undefined if unknown (not yet introspected/cached) — treated as "can't verify" rather than a hard failure, to avoid false-negative drift reports when introspection data simply isn't cached yet. */
 export type FieldsLookup = (sourceNodeId: string) => string[] | undefined;
 
-export function checkMappings(graph: GraphDoc, lookupMapping: MappingLookup, lookupFields: FieldsLookup): CheckResult[] {
+export function checkMappings(graph: GraphDoc, lookupFields: FieldsLookup): CheckResult[] {
   const results: CheckResult[] = [];
   const nodesById = new Map(graph.nodes.map((n) => [n.id, n]));
 
@@ -300,7 +324,8 @@ export function checkMappings(graph: GraphDoc, lookupMapping: MappingLookup, loo
       const heterogeneous = Boolean(source.manifestId && dest.manifestId && source.manifestId !== dest.manifestId);
       if (!heterogeneous) continue; // homogeneous/unresolved paths pass automatically.
 
-      const mapping = lookupMapping(dest.id);
+      const parsed = parseNodeConfig(dest.type, dest.config);
+      const mapping = !parsed.unrecognized && parsed.type !== "transform" ? parsed.value.mapping : undefined;
       if (!mapping || !mapping.approvedAt) {
         results.push({
           id: "mappings",

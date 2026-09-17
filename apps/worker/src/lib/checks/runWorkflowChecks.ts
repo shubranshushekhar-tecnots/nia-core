@@ -7,11 +7,13 @@ import {
   checkMappings,
   type CheckResult,
   type CheckRunJob,
+  type FieldsLookup,
   type TestConnectionFn,
 } from "@nia/schemas";
 import { supabase } from "../supabaseClient.js";
 import { resolveConnection } from "../resolveConnection.js";
 import { sendTestRequest } from "../connectorClient.js";
+import { getSchema } from "../introspection.js";
 import type { WorkspaceScope } from "../workspaceScope.js";
 
 /** Mirrors apps/api/src/services/workflowGraphs.ts's "never saved" sentinel. */
@@ -25,7 +27,7 @@ const EMPTY_GRAPH: GraphDoc = { nodes: [], edges: [] };
  * correctly refused it." A workflow that exists but belongs to a different
  * org/owner is treated identically to one that doesn't exist.
  */
-async function resolveGraph(workflowId: string, scope: WorkspaceScope): Promise<GraphDoc | null> {
+export async function resolveGraph(workflowId: string, scope: WorkspaceScope): Promise<GraphDoc | null> {
   let workflowQuery = supabase.from("workflows").select("id", { count: "exact", head: true }).eq("id", workflowId);
   workflowQuery = "orgId" in scope ? workflowQuery.eq("org_id", scope.orgId) : workflowQuery.is("org_id", null).eq("owner_id", scope.ownerId);
   const { count } = await workflowQuery;
@@ -66,19 +68,51 @@ export async function runWorkflowChecks(job: CheckRunJob): Promise<{ results: Ch
   if (requested.has("grants")) results.push(...checkGrants(graph));
   if (requested.has("credentials")) results.push(...(await checkCredentials(graph, testConnection)));
   if (requested.has("mappings")) {
-    // Task 3 (destination field-mapping schema/UI) hasn't landed yet, so
-    // there's no persisted mapping data to look up — both lookups
-    // legitimately return "unknown" for every destination node.
-    // checkMappings.ts treats an unknown mapping as "no approved mapping"
-    // for any heterogeneous source->destination edge (see checks.ts's own
-    // header comment on checkMappings) — so today, any workflow pairing
-    // two different connector types (e.g. mysql -> supabase, now possible
-    // since the supabase connector gained etl_sink) will genuinely FAIL
-    // this check. That's an honest reflection of the current gap, not a
-    // fabricated pass — once Task 3 lands, swap these two `() => undefined`
-    // lookups for real reads of the destination node's persisted mapping
-    // and the source's cached introspected fields.
-    results.push(...checkMappings(graph, () => undefined, () => undefined));
+    results.push(...(await buildMappingsCheck(graph, job.scope)));
   }
   return { results };
+}
+
+/**
+ * checkMappings (checks.ts) reads a destination's *approved mapping*
+ * directly off the GraphDoc it already has — no I/O needed for that half
+ * (Task 3). The other half, current introspected field names for each
+ * source, is real I/O (a cached connector schema fetch), so it's built here
+ * and injected as a FieldsLookup. Only sources feeding a heterogeneous edge
+ * are resolved, and any resolve/introspect failure degrades to "unknown"
+ * (`undefined`) rather than a hard failure — same precedent as
+ * checkCredentials' catch block above: a connectivity hiccup during a check
+ * run must never fabricate a false drift failure.
+ */
+async function buildMappingsCheck(graph: GraphDoc, scope: WorkspaceScope): Promise<CheckResult[]> {
+  const destManifestByNodeId = new Map(graph.nodes.filter((n) => n.type === "destination").map((n) => [n.id, n.manifestId]));
+  const heterogeneousSourceIds = new Set<string>();
+  for (const edge of graph.edges) {
+    const source = graph.nodes.find((n) => n.id === edge.source);
+    const destManifestId = destManifestByNodeId.get(edge.target);
+    if (source?.manifestId && destManifestId && source.manifestId !== destManifestId) {
+      heterogeneousSourceIds.add(source.id);
+    }
+  }
+
+  const fieldsBySourceId = new Map<string, string[]>();
+  for (const sourceId of heterogeneousSourceIds) {
+    const source = graph.nodes.find((n) => n.id === sourceId);
+    if (!source?.connectionId) continue;
+    try {
+      const resolved = await resolveConnection(source.connectionId, scope);
+      if (!resolved.ok) continue;
+      const schema = await getSchema(resolved.value);
+      if (!schema.ok) continue;
+      const names = new Set<string>();
+      for (const entity of schema.value.entities) for (const field of entity.fields) names.add(field.name);
+      fieldsBySourceId.set(sourceId, Array.from(names));
+    } catch {
+      // Can't verify drift for this source — checkMappings treats a
+      // missing lookup entry as "unknown," not a failure.
+    }
+  }
+
+  const lookupFields: FieldsLookup = (sourceNodeId) => fieldsBySourceId.get(sourceNodeId);
+  return checkMappings(graph, lookupFields);
 }

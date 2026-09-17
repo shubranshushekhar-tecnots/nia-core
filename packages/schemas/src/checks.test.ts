@@ -97,6 +97,22 @@ describe("checkConfig", () => {
     expect(results).toEqual([{ id: "config", status: "fail", message: expect.stringContaining("no connection selected"), nodeId: "n1" }]);
   });
 
+  it("fails a destination mapping entry with an unset field (permissive at the schema layer, not at check time)", () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "destination",
+          connectionId: CONN,
+          config: { operation: "read", mapping: { version: 1, entries: [{ from: "id", to: "" }], approvedAt: null } },
+        }),
+      ],
+      edges: [],
+    };
+    const results = checkConfig(graph);
+    expect(results.some((r) => r.status === "fail" && r.nodeId === "n1" && r.message.includes("mapping entry"))).toBe(true);
+  });
+
   it("passes a fully valid graph", () => {
     const graph: GraphDoc = {
       nodes: [
@@ -162,48 +178,58 @@ describe("checkMappings", () => {
   const dest = node({ id: "dest", type: "destination", manifestId: "supabase" });
   const edge = { id: "e1", source: "src", target: "dest" };
 
+  function destWithMapping(mapping?: { entries: { from: string; to: string }[]; approvedAt: string | null }) {
+    return { ...dest, config: mapping ? { mapping: { version: 1, ...mapping } } : {} };
+  }
+
   it("passes automatically for a homogeneous (same-manifest) path with no mapping needed", () => {
     const graph: GraphDoc = { nodes: [{ ...source, manifestId: "mysql" }, { ...dest, manifestId: "mysql" }], edges: [edge] };
-    expect(checkMappings(graph, () => undefined, () => undefined)).toEqual([
+    expect(checkMappings(graph, () => undefined)).toEqual([
       { id: "mappings", status: "pass", message: "Every heterogeneous source-to-destination path has an approved, drift-free mapping." },
     ]);
   });
 
   it("fails a heterogeneous path with no approved mapping", () => {
-    const graph: GraphDoc = { nodes: [source, dest], edges: [edge] };
-    const results = checkMappings(graph, () => undefined, () => undefined);
+    const graph: GraphDoc = { nodes: [source, destWithMapping()], edges: [edge] };
+    const results = checkMappings(graph, () => undefined);
     expect(results).toEqual([{ id: "mappings", status: "fail", message: expect.stringContaining("no approved field mapping"), nodeId: "dest" }]);
   });
 
   it("fails on drift: a mapped source field no longer exists upstream", () => {
-    const graph: GraphDoc = { nodes: [source, dest], edges: [edge] };
-    const results = checkMappings(
-      graph,
-      () => ({ entries: [{ from: "old_col", to: "new_col" }], approvedAt: "2026-01-01T00:00:00Z" }),
-      () => ["current_col"],
-    );
+    const graph: GraphDoc = {
+      nodes: [source, destWithMapping({ entries: [{ from: "old_col", to: "new_col" }], approvedAt: "2026-01-01T00:00:00Z" })],
+      edges: [edge],
+    };
+    const results = checkMappings(graph, () => ["current_col"]);
     expect(results).toEqual([
       { id: "mappings", status: "fail", message: expect.stringContaining('"old_col" no longer exists upstream'), nodeId: "dest" },
     ]);
   });
 
   it("passes an approved mapping whose fields still exist", () => {
-    const graph: GraphDoc = { nodes: [source, dest], edges: [edge] };
-    const results = checkMappings(
-      graph,
-      () => ({ entries: [{ from: "current_col", to: "new_col" }], approvedAt: "2026-01-01T00:00:00Z" }),
-      () => ["current_col"],
-    );
+    const graph: GraphDoc = {
+      nodes: [source, destWithMapping({ entries: [{ from: "current_col", to: "new_col" }], approvedAt: "2026-01-01T00:00:00Z" })],
+      edges: [edge],
+    };
+    const results = checkMappings(graph, () => ["current_col"]);
     expect(results[0]!.status).toBe("pass");
   });
 
   it("skips drift verification (does not fail) when introspection data is unavailable", () => {
-    const graph: GraphDoc = { nodes: [source, dest], edges: [edge] };
-    const results = checkMappings(
-      graph,
-      () => ({ entries: [{ from: "old_col", to: "new_col" }], approvedAt: "2026-01-01T00:00:00Z" }),
-      () => undefined,
-    );
+    const graph: GraphDoc = {
+      nodes: [source, destWithMapping({ entries: [{ from: "old_col", to: "new_col" }], approvedAt: "2026-01-01T00:00:00Z" })],
+      edges: [edge],
+    };
+    const results = checkMappings(graph, () => undefined);
     expect(results[0]!.status).toBe("pass");
+  });
+
+  it("fails an edited-but-unapproved mapping (approvedAt cleared) even though entries are present", () => {
+    const graph: GraphDoc = {
+      nodes: [source, destWithMapping({ entries: [{ from: "current_col", to: "new_col" }], approvedAt: null })],
+      edges: [edge],
+    };
+    const results = checkMappings(graph, () => ["current_col"]);
+    expect(results).toEqual([{ id: "mappings", status: "fail", message: expect.stringContaining("no approved field mapping"), nodeId: "dest" }]);
   });
 });

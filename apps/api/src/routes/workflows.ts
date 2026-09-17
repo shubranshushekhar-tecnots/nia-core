@@ -11,6 +11,7 @@ import { scopeFromActor } from "../lib/workspaceScope.js";
 import { getWorkflowDetail } from "../services/workflows.js";
 import { getWorkflowGraph, putWorkflowGraph } from "../services/workflowGraphs.js";
 import { getLatestCheckRun, runAndRecordChecks } from "../services/checks.js";
+import { proposeMappingForWorkflow } from "../services/mappings.js";
 
 export const workflowsRouter: ExpressRouter = Router();
 
@@ -81,5 +82,30 @@ workflowsRouter.get(
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await getLatestCheckRun(req.supabase, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
+  }),
+);
+
+const proposeMappingBodySchema = z.object({ destNodeId: z.string().min(1) });
+
+// AI-proposed field mappings (Task 3). Gated the same as PUT /:id/graph
+// (workflows.updateDefinition, not workflows.run) — this is a config-editing
+// assist, not a workflow execution. Deliberately has NO persistence step of
+// its own (services/mappings.ts's header comment): the returned proposal is
+// only ever stored once the user explicitly approves it via the ordinary
+// PUT /:id/graph call.
+workflowsRouter.post(
+  "/:id/mappings/propose",
+  requireCapability("workflows.updateDefinition"),
+  validate({ params: workflowParamsSchema, body: proposeMappingBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await proposeMappingForWorkflow(
+      req.supabase,
+      scopeFromActor(req.actor),
+      req.params.id!,
+      req.body.destNodeId,
+      req.actor.userId,
+    );
+    res.status(201).json(data);
   }),
 );
