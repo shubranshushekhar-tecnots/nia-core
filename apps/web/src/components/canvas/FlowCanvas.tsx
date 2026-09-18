@@ -252,25 +252,29 @@ function CanvasInner({
   const [checksDockExpanded, setChecksDockExpanded] = useState(false);
   const [checksDockTab, setChecksDockTab] = useState<'checks' | 'logs'>('checks');
 
-  // Execution (Phase 6 Block 3). Scoped to exactly one destination node per
-  // run (see docs/decisions.md) — runNodeId below is null whenever the
-  // graph doesn't have exactly one, which the Run button's tooltip
-  // surfaces directly rather than guessing which destination to run.
+  // Execution (Phase 6 Block 3; Block 5 — multi-destination fan-out). Each
+  // destination node runs independently (own runId/checkpoint/stream — see
+  // apps/api/src/services/runs.ts's startWorkflowRun), so run state is keyed
+  // by destNodeId rather than a single flat RunState.
   type RunState =
-    | { status: 'idle' }
     | { status: 'starting' }
     | { status: 'running'; totalRowsProcessed: number }
     | { status: 'cancelling'; totalRowsProcessed: number }
     | { status: 'cancelled'; totalRowsProcessed: number }
     | { status: 'done'; totalRowsProcessed: number; durationMs: number }
     | { status: 'error'; message: string };
-  const [runState, setRunState] = useState<RunState>({ status: 'idle' });
-  const runTeardownRef = useRef<(() => void) | null>(null);
-  // Block 3.5 item 3 — the currently in-flight run's id, kept outside
-  // RunState since cancel needs it regardless of which sub-state (running
-  // vs cancelling) the UI is in; cleared on every terminal event.
-  const currentRunIdRef = useRef<string | null>(null);
-  useEffect(() => () => runTeardownRef.current?.(), []);
+  const [runStates, setRunStates] = useState<Record<string, RunState>>({});
+  const runTeardownsRef = useRef<Record<string, () => void>>({});
+  // Block 3.5 item 3 — the currently in-flight runId per destination, kept
+  // outside RunState since cancel needs it regardless of which sub-state
+  // (running vs cancelling) the UI is in; cleared on every terminal event.
+  const runIdByDestRef = useRef<Record<string, string>>({});
+  useEffect(
+    () => () => {
+      for (const teardown of Object.values(runTeardownsRef.current)) teardown();
+    },
+    [],
+  );
 
   // Block 3.5 item 4 — Logs tab's `kind: 'run'` source. Reuses the same SSE
   // events already driving the run-status panel above rather than a
@@ -285,74 +289,127 @@ function CanvasInner({
   }, []);
 
   const destinationNodes = useMemo(() => nodes.filter((n) => n.data.graphNodeType === 'destination'), [nodes]);
-  const runNodeId = destinationNodes.length === 1 ? destinationNodes[0]!.id : null;
+  // Block 5: every destination node in the graph runs, not just "the" one —
+  // the old single-destination-per-run scope cut is gone (see docs/
+  // decisions.md's Block 5 entry). Labeled by the destination's connection
+  // handle for the per-run status cards below.
+  const runNodeIds = useMemo(() => destinationNodes.map((n) => n.id), [destinationNodes]);
+  const destLabel = useCallback(
+    (destNodeId: string) => {
+      const node = destinationNodes.find((n) => n.id === destNodeId);
+      const connectionId = node?.data.connectionId;
+      return (connectionId && ctx.connectionsById.get(connectionId)?.handle) || destNodeId.slice(0, 8);
+    },
+    [destinationNodes, ctx.connectionsById],
+  );
 
   const handleRun = useCallback(async () => {
-    if (!runNodeId) return;
-    runTeardownRef.current?.();
-    setRunState({ status: 'starting' });
+    if (runNodeIds.length === 0) return;
+    for (const teardown of Object.values(runTeardownsRef.current)) teardown();
+    runTeardownsRef.current = {};
+    runIdByDestRef.current = {};
     lastProgressLogRef.current = 0;
+    setRunStates(Object.fromEntries(runNodeIds.map((id) => [id, { status: 'starting' } as RunState])));
     try {
-      const { runId } = await startWorkflowRun(workflow.id, runNodeId);
-      currentRunIdRef.current = runId;
-      runTeardownRef.current = streamRun(workflow.id, runId, {
-        onEvent: (event) => {
-          if (event.type === 'started') {
-            setRunState({ status: 'running', totalRowsProcessed: 0 });
-            logRunActivity('Run started');
-          } else if (event.type === 'progress') {
-            setRunState((prev) => ({
-              status: prev.status === 'cancelling' ? 'cancelling' : 'running',
-              totalRowsProcessed: event.totalRowsProcessed,
-            }));
-            const now = Date.now();
-            if (now - lastProgressLogRef.current >= 3000) {
-              lastProgressLogRef.current = now;
-              logRunActivity(`Run progress — ${event.totalRowsProcessed.toLocaleString()} rows`);
+      const { runs } = await startWorkflowRun(workflow.id, runNodeIds);
+      for (const { destNodeId, runId } of runs) {
+        runIdByDestRef.current[destNodeId] = runId;
+        runTeardownsRef.current[destNodeId] = streamRun(workflow.id, runId, {
+          onEvent: (event) => {
+            if (event.type === 'started') {
+              setRunStates((prev) => ({ ...prev, [destNodeId]: { status: 'running', totalRowsProcessed: 0 } }));
+              logRunActivity(`Run started — ${destLabel(destNodeId)}`);
+            } else if (event.type === 'progress') {
+              setRunStates((prev) => ({
+                ...prev,
+                [destNodeId]: {
+                  status: prev[destNodeId]?.status === 'cancelling' ? 'cancelling' : 'running',
+                  totalRowsProcessed: event.totalRowsProcessed,
+                },
+              }));
+              const now = Date.now();
+              if (now - lastProgressLogRef.current >= 3000) {
+                lastProgressLogRef.current = now;
+                logRunActivity(`Run progress — ${destLabel(destNodeId)} — ${event.totalRowsProcessed.toLocaleString()} rows`);
+              }
+            } else if (event.type === 'done') {
+              delete runIdByDestRef.current[destNodeId];
+              setRunStates((prev) => ({
+                ...prev,
+                [destNodeId]: { status: 'done', totalRowsProcessed: event.totalRowsProcessed, durationMs: event.durationMs },
+              }));
+              logRunActivity(
+                `Run complete — ${destLabel(destNodeId)} — ${event.totalRowsProcessed.toLocaleString()} rows in ${(event.durationMs / 1000).toFixed(1)}s`,
+              );
+            } else if (event.type === 'error') {
+              delete runIdByDestRef.current[destNodeId];
+              setRunStates((prev) => ({ ...prev, [destNodeId]: { status: 'error', message: event.message } }));
+              logRunActivity(`Run failed — ${destLabel(destNodeId)} — ${event.message}`);
+            } else if (event.type === 'cancel') {
+              delete runIdByDestRef.current[destNodeId];
+              setRunStates((prev) => ({
+                ...prev,
+                [destNodeId]: {
+                  status: 'cancelled',
+                  totalRowsProcessed:
+                    prev[destNodeId]?.status === 'running' || prev[destNodeId]?.status === 'cancelling'
+                      ? (prev[destNodeId] as { totalRowsProcessed: number }).totalRowsProcessed
+                      : 0,
+                },
+              }));
+              logRunActivity(`Run cancelled — ${destLabel(destNodeId)}`);
             }
-          } else if (event.type === 'done') {
-            currentRunIdRef.current = null;
-            setRunState({ status: 'done', totalRowsProcessed: event.totalRowsProcessed, durationMs: event.durationMs });
-            logRunActivity(`Run complete — ${event.totalRowsProcessed.toLocaleString()} rows in ${(event.durationMs / 1000).toFixed(1)}s`);
-          } else if (event.type === 'error') {
-            currentRunIdRef.current = null;
-            setRunState({ status: 'error', message: event.message });
-            logRunActivity(`Run failed — ${event.message}`);
-          } else if (event.type === 'cancel') {
-            currentRunIdRef.current = null;
-            setRunState((prev) => ({
-              status: 'cancelled',
-              totalRowsProcessed: prev.status === 'running' || prev.status === 'cancelling' ? prev.totalRowsProcessed : 0,
-            }));
-            logRunActivity('Run cancelled');
-          }
-        },
-        onTransportError: () => setRunState({ status: 'error', message: 'Lost connection to the run stream.' }),
-      });
+          },
+          onTransportError: () =>
+            setRunStates((prev) => ({ ...prev, [destNodeId]: { status: 'error', message: 'Lost connection to the run stream.' } })),
+        });
+      }
     } catch (err) {
-      setRunState({ status: 'error', message: err instanceof RunApiError ? err.message : 'Failed to start the run.' });
+      const message = err instanceof RunApiError ? err.message : 'Failed to start the run.';
+      setRunStates(Object.fromEntries(runNodeIds.map((id) => [id, { status: 'error', message } as RunState])));
     }
-  }, [workflow.id, runNodeId, logRunActivity]);
+  }, [workflow.id, runNodeIds, logRunActivity, destLabel]);
 
-  // Block 3.5 item 3 — cooperative cancel. Doesn't set 'cancelled' itself:
-  // the worker only actually stops between chunks (runEtl.ts's checkpoint
-  // poll), and the run stream's own `cancel` event (handled in handleRun's
-  // onEvent above) is the sole source of truth for when that's happened.
-  // This only flips workflow_runs.status and shows an interim "Cancelling…"
-  // state so the button doesn't look inert while that's in flight.
-  const handleCancel = useCallback(async () => {
-    const runId = currentRunIdRef.current;
-    if (!runId) return;
-    setRunState((prev) => ({
-      status: 'cancelling',
-      totalRowsProcessed: prev.status === 'running' || prev.status === 'cancelling' ? prev.totalRowsProcessed : 0,
-    }));
-    try {
-      await cancelWorkflowRun(workflow.id, runId);
-    } catch (err) {
-      setRunState({ status: 'error', message: err instanceof RunApiError ? err.message : 'Failed to cancel the run.' });
-    }
-  }, [workflow.id]);
+  // Block 3.5 item 3 — cooperative cancel, per destination. Doesn't set
+  // 'cancelled' itself: the worker only actually stops between chunks
+  // (runEtl.ts's checkpoint poll), and the run stream's own `cancel` event
+  // (handled in handleRun's onEvent above) is the sole source of truth for
+  // when that's happened. This only flips workflow_runs.status and shows an
+  // interim "Cancelling…" state so the card doesn't look inert while that's
+  // in flight.
+  const handleCancel = useCallback(
+    async (destNodeId: string) => {
+      const runId = runIdByDestRef.current[destNodeId];
+      if (!runId) return;
+      setRunStates((prev) => ({
+        ...prev,
+        [destNodeId]: {
+          status: 'cancelling',
+          totalRowsProcessed:
+            prev[destNodeId]?.status === 'running' || prev[destNodeId]?.status === 'cancelling'
+              ? (prev[destNodeId] as { totalRowsProcessed: number }).totalRowsProcessed
+              : 0,
+        },
+      }));
+      try {
+        await cancelWorkflowRun(workflow.id, runId);
+      } catch (err) {
+        setRunStates((prev) => ({
+          ...prev,
+          [destNodeId]: { status: 'error', message: err instanceof RunApiError ? err.message : 'Failed to cancel the run.' },
+        }));
+      }
+    },
+    [workflow.id],
+  );
+
+  const dismissRun = useCallback((destNodeId: string) => {
+    setRunStates((prev) => {
+      const next = { ...prev };
+      delete next[destNodeId];
+      return next;
+    });
+  }, []);
 
   // Command bar's chat session (Phase 5 Session 4) — lifted up from
   // CommandBar.tsx itself so its live `messages` can also feed the Logs
@@ -415,19 +472,20 @@ function CanvasInner({
     [setSelectedNodeId, setNodes, getNode, setCenter],
   );
 
-  // Run (workflow execution, Phase 6 Block 3). Enabled only when the latest
-  // persisted check run is all-pass AND matches the live graph_version
-  // (checksStale below), AND the graph has exactly one destination node
-  // (runNodeId, single-destination-per-run scope cut — see
-  // docs/decisions.md). Mapping/entity/upsert-key completeness is NOT
-  // re-validated here — the worker validates all of that itself and
-  // surfaces a clean `error` stream event rather than silently failing, so
-  // duplicating that check here would just be a second place to keep in
-  // sync.
+  // Run (workflow execution, Phase 6 Block 3; Block 5 — multi-destination
+  // fan-out). Enabled only when the latest persisted check run is all-pass
+  // AND matches the live graph_version (checksStale below), AND the graph
+  // has at least one destination node. Mapping/entity/upsert-key
+  // completeness is NOT re-validated here — the worker validates all of
+  // that itself, per destination, and surfaces a clean `error` stream event
+  // rather than silently failing, so duplicating that check here would just
+  // be a second place to keep in sync.
   const checksStale = !latestCheckRun || latestCheckRun.graphVersion !== version;
   const failingChecks = latestCheckRun?.results.filter((r) => r.status === 'fail').length ?? 0;
-  const runInFlight = runState.status === 'starting' || runState.status === 'running' || runState.status === 'cancelling';
-  const runEnabled = !checksStale && failingChecks === 0 && !!runNodeId && !runInFlight;
+  const runInFlight = Object.values(runStates).some(
+    (s) => s.status === 'starting' || s.status === 'running' || s.status === 'cancelling',
+  );
+  const runEnabled = !checksStale && failingChecks === 0 && runNodeIds.length > 0 && !runInFlight;
   // Block 3.5 item 2: checkConfig's source-entity-missing case stays a
   // `warn` (see checks.ts's amended comment), so an unset entity never
   // blocks Run at the enabled/disabled level — but the run itself WILL
@@ -441,15 +499,15 @@ function CanvasInner({
     ? 'Run checks before running the workflow.'
     : failingChecks > 0
       ? `${failingChecks} check${failingChecks === 1 ? '' : 's'} failing — fix before running.`
-      : !runNodeId
-        ? destinationNodes.length === 0
-          ? 'Add a destination node before running.'
-          : 'Only one destination node is supported per run — remove the others.'
+      : runNodeIds.length === 0
+        ? 'Add a destination node before running.'
         : runInFlight
           ? 'A run is already in progress.'
           : unsetEntityWarning
             ? 'A source node has no table selected — the run will fail unless you pick one explicitly.'
-            : 'All checks passing.';
+            : runNodeIds.length > 1
+              ? `Runs all ${runNodeIds.length} destinations.`
+              : 'All checks passing.';
 
   const disabledRunBtnStyle = {
     fontSize: 12.5,
@@ -535,11 +593,12 @@ function CanvasInner({
           <button type="button" onClick={handleRunChecks} disabled={checksRunning} style={runChecksBtnStyle}>
             {checksRunning ? 'Running…' : 'Run checks'}
           </button>
-          {/* Execution (Phase 6 Block 3). Enabled only when the latest check
-              run is all-pass, up to date, and the graph has exactly one
-              destination node; clicking enqueues a real run and streams its
-              progress into the panel below. Disabled states keep honest
-              tooltips. */}
+          {/* Execution (Phase 6 Block 3; Block 5 — multi-destination
+              fan-out). Enabled only when the latest check run is all-pass,
+              up to date, and the graph has at least one destination node;
+              clicking enqueues one real run per destination and streams
+              each one's progress into its own card below. Disabled states
+              keep honest tooltips. */}
           {runEnabled ? (
             <button type="button" onClick={handleRun} title={runTooltip} style={enabledRunBtnStyle}>
               Run
@@ -622,7 +681,7 @@ function CanvasInner({
           />
         )}
 
-        {runState.status !== 'idle' && (
+        {Object.keys(runStates).length > 0 && (
           <div
             style={{
               position: 'absolute',
@@ -630,65 +689,77 @@ function CanvasInner({
               bottom: 16,
               zIndex: 30,
               width: 300,
-              boxSizing: 'border-box',
-              padding: '14px 16px',
-              borderRadius: 10,
-              background: 'var(--surface)',
-              border: `1px solid ${runState.status === 'error' ? 'var(--bad)' : 'var(--line2)'}`,
-              boxShadow: 'var(--shadow)',
               display: 'flex',
               flexDirection: 'column',
-              gap: 6,
+              gap: 8,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>
-                {runState.status === 'starting' && 'Starting run…'}
-                {runState.status === 'running' && 'Running…'}
-                {runState.status === 'cancelling' && 'Cancelling…'}
-                {runState.status === 'cancelled' && 'Run cancelled'}
-                {runState.status === 'done' && 'Run complete'}
-                {runState.status === 'error' && 'Run failed'}
-              </span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                {runState.status === 'running' && (
-                  <button
-                    type="button"
-                    onClick={handleCancel}
-                    style={{
-                      border: '1px solid var(--line2)',
-                      background: 'none',
-                      color: 'var(--ink3)',
-                      cursor: 'pointer',
-                      fontSize: 11.5,
-                      fontWeight: 600,
-                      borderRadius: 5,
-                      padding: '2px 8px',
-                    }}
-                  >
-                    Cancel
-                  </button>
+            {Object.entries(runStates).map(([destNodeId, runState]) => (
+              <div
+                key={destNodeId}
+                style={{
+                  boxSizing: 'border-box',
+                  padding: '14px 16px',
+                  borderRadius: 10,
+                  background: 'var(--surface)',
+                  border: `1px solid ${runState.status === 'error' ? 'var(--bad)' : 'var(--line2)'}`,
+                  boxShadow: 'var(--shadow)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>
+                    {destLabel(destNodeId)} —{' '}
+                    {runState.status === 'starting' && 'Starting run…'}
+                    {runState.status === 'running' && 'Running…'}
+                    {runState.status === 'cancelling' && 'Cancelling…'}
+                    {runState.status === 'cancelled' && 'Cancelled'}
+                    {runState.status === 'done' && 'Complete'}
+                    {runState.status === 'error' && 'Failed'}
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {runState.status === 'running' && (
+                      <button
+                        type="button"
+                        onClick={() => handleCancel(destNodeId)}
+                        style={{
+                          border: '1px solid var(--line2)',
+                          background: 'none',
+                          color: 'var(--ink3)',
+                          cursor: 'pointer',
+                          fontSize: 11.5,
+                          fontWeight: 600,
+                          borderRadius: 5,
+                          padding: '2px 8px',
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      aria-label="Dismiss"
+                      onClick={() => dismissRun(destNodeId)}
+                      style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                    >
+                      {'\u2715'}
+                    </button>
+                  </div>
+                </div>
+                {(runState.status === 'running' ||
+                  runState.status === 'cancelling' ||
+                  runState.status === 'cancelled' ||
+                  runState.status === 'done') && (
+                  <span style={{ fontSize: 12, color: 'var(--ink3)' }}>
+                    {runState.totalRowsProcessed.toLocaleString()} row{runState.totalRowsProcessed === 1 ? '' : 's'} written
+                    {runState.status === 'done' ? ` in ${(runState.durationMs / 1000).toFixed(1)}s` : ''}
+                  </span>
                 )}
-                <button
-                  type="button"
-                  aria-label="Dismiss"
-                  onClick={() => setRunState({ status: 'idle' })}
-                  style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 12, padding: 0 }}
-                >
-                  {'\u2715'}
-                </button>
+                {runState.status === 'error' && <span style={{ fontSize: 12, color: 'var(--bad)' }}>{runState.message}</span>}
               </div>
-            </div>
-            {(runState.status === 'running' ||
-              runState.status === 'cancelling' ||
-              runState.status === 'cancelled' ||
-              runState.status === 'done') && (
-              <span style={{ fontSize: 12, color: 'var(--ink3)' }}>
-                {runState.totalRowsProcessed.toLocaleString()} row{runState.totalRowsProcessed === 1 ? '' : 's'} written
-                {runState.status === 'done' ? ` in ${(runState.durationMs / 1000).toFixed(1)}s` : ''}
-              </span>
-            )}
-            {runState.status === 'error' && <span style={{ fontSize: 12, color: 'var(--bad)' }}>{runState.message}</span>}
+            ))}
           </div>
         )}
       </div>

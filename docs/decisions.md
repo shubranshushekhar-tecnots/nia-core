@@ -404,21 +404,30 @@ kickoff's ledger-hygiene item, both now name where the cut work actually
 lands:
 
 - **Multi-destination fan-out** (a run targeting more than one destination
-  node in the same graph) → **Phase 6, a later session**, not this one.
-  Requires deciding how a single source chunk's read fans out to N
-  destination writes (independent per-destination cursors? one shared
-  cursor gated on the slowest destination?) before `runEtl.ts`'s single-
-  `nodeId`-per-job shape can be generalized — deliberately not scoped into
-  Block 3.5, which is checkpoint-soundness-only.
+  node in the same graph) — **DONE, Block 5 (Part 3c):** answered "independent
+  per-destination cursors, no shared gating" — each destination gets its own
+  runId/checkpoint/SSE stream, minted in an ordinary loop over `destNodeIds`
+  (`services/runs.ts`'s `startWorkflowRun`); `runEtl.ts`/`workflowRuns.ts`/
+  `publish.ts` needed no change since they were already keyed per-runId, not
+  per-workflow. `FlowCanvas.tsx` tracks `runNodeIds`/a status-panel list
+  instead of a single run. Live-verified: two independent runIds minted for
+  the same destination, both completed, rows landed idempotently (no dupes).
 - **Personal-workspace execution** (`EtlRunJob.orgId: string` — plain,
   non-`WorkspaceScope`-union, per `jobs.ts`'s own header comment on that
-  field) → tracked, not forgotten: extending it to accept the same
-  `WorkspaceScope` union `ChatQueryJob`/`CheckRunJob` already use is a
-  **named future-session task** (not this Block 3.5 session — checkpoint
-  soundness, cancel, and the runner test suite were this session's scope),
-  to be picked up whenever personal-workspace workflow execution is
-  prioritized. `services/runs.ts`'s `startWorkflowRun` continues to reject
-  a personal-workspace actor with a clean 400 until then.
+  field) — **DONE, Block 5 (Part 3d):** `EtlRunJob.orgId` → `EtlRunJob.scope:
+  WorkspaceScope`, same union `ChatQueryJob`/`CheckRunJob` already use.
+  `workflowRuns.ts`'s `startRun` now writes `org_id` or `owner_id` depending
+  on which half of the union the job carries (`workflow_runs` already had a
+  nullable `owner_id` + `org_xor_owner` check constraint + owner-aware select
+  policy since `0005_individual_workspace.sql` — no migration needed, only
+  the job payload and its two consumers, api's `services/runs.ts` and
+  worker's `workflowRuns.ts`/`runEtl.ts`, were still hardcoded to orgId).
+  `services/runs.ts`'s `startWorkflowRun` no longer rejects a
+  personal-workspace actor — `routes/runs.ts`'s `scopeFromActor` already
+  branched org-vs-personal the same way chat/checks do, it just wasn't
+  reaching a scope-generic job payload before. Runner test suite
+  (`runEtl.test.ts`) updated to the new `scope` field, all 11 cases still
+  pass; `@nia/worker`/`@nia/api`/`@nia/web` typecheck clean.
 
 ## Phase 6 Block 4 correction: the grant-creation UI never shipped in Block 2
 
@@ -480,3 +489,107 @@ have to re-derive them:**
   design (existing graphs keep checking green), but the Run button's own
   tooltip and the runner itself both enforce hard-fail. See Block 3.5
   item 2 above.
+
+## Phase 6 Block 6: aggregate transform — v1 vocabulary, shipped and proven
+
+Implemented the Stage 1-approved v1 aggregate vocabulary end to end:
+schema (`nodeConfig.ts`'s `AggregateStep`/`AggregationSpec`, fns `count,
+count_field, count_distinct, sum, avg, min, max`, `groupBy: string[]`
+with `[]` meaning whole-table aggregate, `having` reusing
+`FilterCondition`), pushdown compilation to real SQL `GROUP BY`/`HAVING`
+(mysql/postgres) and Mongo `$group` (`pushdown.ts`), the ETL runner's
+non-paginated aggregate execution path (`runEtl.ts`), residual (in-
+process) execution for non-pushable cases (`residualTransform.ts`),
+`checkConfig` validation (`checks.ts`), and the `AggregateStepEditor` UI
+in the transform drawer (`TransformEditor.tsx`).
+
+**Ruling 1 (%-of-total) — the finding held, nothing was quietly made
+first-class.** The task's explicit instruction was to stop and report if
+the composition proof broke rather than silently promoting `%_of_total`
+to a first-class fn. It did not break, but it also does not prove what a
+first read of "%-of-total via composition" might suggest: a literal
+broadcast %-of-total (each row divided by one whole-table total, same
+grain in/out) is **not expressible** through this transform chain — no
+window/join primitive exists, and chaining can only change or collapse
+grain, never broadcast a coarser aggregate back onto finer rows. What
+`pushdown.test.ts`'s ruling-1 test actually proves is narrower but real:
+(a) dividing two sibling aggregation aliases from the *same* Aggregate
+step via a residual `computed_field` (sum ÷ count → avg-shaped ratio),
+and (b) a second, coarser-grain Aggregate step validly chaining after a
+pushed one as a residual multi-level rollup. Both are genuine, tested
+compositions; neither is a full %-of-total. `nodeConfig.ts`'s
+`AggregateStep` doc comment and `TODO.md`'s Block 6 ledger both state
+this precisely so it isn't misread as "solved" later. No window/join
+primitive was built to close the gap — out of scope for v1, parked per
+the original Stage 1 framing (revisit only on real user friction).
+
+**Ruling 2 (having validation) — enforced at check-time, not schema-time.**
+`FilterCondition.field` is just a string; the schema can't tell a raw
+upstream field from an aggregation alias. `checks.ts`'s new aggregate
+branch restricts `having` field references to `[...groupBy,
+...aggregation aliases]` and fails with a clear message naming the
+offending field otherwise. `AggregateStepEditor`'s having-condition
+builder mirrors this at the UI level (its field dropdown is populated
+from `havingFieldOptions = [...groupBy, ...non-empty aliases]` only, so
+a raw field can't even be selected from the UI in the first place —
+belt-and-suspenders with the check-time enforcement, not a replacement
+for it).
+
+**Ruling 3 (residual memory constraint) — documented once, at the
+implementation site.** `residualTransform.ts`'s aggregate case carries
+the required comment: residual aggregation buffers per-group state (a
+`Map` of group-key → accumulators, plus a `Set` per `count_distinct`
+aggregation) entirely in memory for the chunk being processed.
+Pushdown-eligible aggregates are strongly preferred for that reason.
+Streaming/spillable aggregation is ledgered in `TODO.md` as a future
+item, not built this block.
+
+**Ruling 4 (alias collisions include groupBy names) — enforced in both
+layers.** `checks.ts`'s aggregate branch seeds its collision-detection
+`Set` with `step.groupBy` before checking aggregation aliases against
+it, so an alias that collides with a groupBy field name fails exactly
+like a sibling-alias collision would. `AggregateStepEditor`'s
+`outputNames` map does the same union at the UI level, driving the
+live red-border/warning-banner feedback.
+
+**Architectural finding not in the original four rulings: keyset
+pagination is fundamentally incompatible with GROUP BY.** The ETL
+runner's chunking model pages by the source table's primary key: GROUP
+BY collapses row cardinality, so there is no meaningful post-aggregation
+cursor to page over. Resolution (disclosed in `TODO.md`, not hidden):
+a pushed-down aggregate query executes as a single non-paginated read,
+capped at `MAX_CHUNK_ROWS` (1000 output rows), with `isLastChunk` forced
+`true` unconditionally. A workflow whose grouped output would exceed
+1000 rows truncates silently today — no warning surfaces yet. This is a
+real v1 limitation, not an edge case glossed over; a correct fix would
+need an aggregate-aware cursor (e.g. keyset over the groupBy columns) or
+a pre-flight row-count check, neither of which was in scope for this
+block.
+
+**Two more structural pushdown limits, both by design
+(`pushdown.ts`'s `splitPushable`):** a pushed Aggregate step can only be
+preceded by `filter` steps — a preceding `computed_field` or
+`drop_fields` forces the whole aggregate to residual, since pushdown
+doesn't attempt to translate arbitrary computed-field expressions into
+the dialect's SELECT list ahead of a GROUP BY. And at most one Aggregate
+step is ever pushed per node; a second Aggregate step always falls to
+residual (this is exactly the proven multi-level-rollup composition case
+under ruling 1, not an oversight).
+
+**Proof artifact — live smoke test, "highest salary per cohort"
+(`apps/worker/scripts/aggregate-smoke.ts`):** a real mysql sandbox
+source table (6 rows, 3 cohorts: eng/sales/ops), a real Aggregate
+transform node (`MAX(salary) GROUP BY cohort`), and a real Postgres
+destination table, driven through the actual `runEtl()` runner (not a
+hand-rolled query) against live docker-compose sandbox infra + the
+local Supabase stack. The script independently compiles and asserts the
+pushdown plan (`residualCount === 0`, `pushedDownCount === 1`,
+`dialectQuery.isAggregate === true`) as proof the aggregation is a real
+`GROUP BY`, not client-side aggregation, then asserts `runEtl()` returns
+`status: "done"` on its first call with zero next-chunk jobs enqueued
+(proving the no-pagination-for-aggregates behavior above), then verifies
+the 3 destination rows by direct query against the exact expected
+per-cohort maxima, and finally verifies `workflow_runs.rows_processed
+=== 3` (the aggregated output row count, not the 6 source rows). Ran
+clean on first execution, all 8 assertions passed. Full output
+captured verbatim in the Block 6 closing report.

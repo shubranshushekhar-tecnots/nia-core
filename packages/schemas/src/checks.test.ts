@@ -107,6 +107,145 @@ describe("checkConfig", () => {
     expect(results.some((r) => r.status === "fail" && r.message.includes("no output name"))).toBe(true);
   });
 
+  it("fails an aggregation with no output alias", () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "transform",
+          config: { steps: [{ kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "sum", field: "salary", alias: "" }] }] },
+        }),
+      ],
+      edges: [],
+    };
+    const results = checkConfig(graph);
+    expect(results.some((r) => r.status === "fail" && r.message.includes("no output alias"))).toBe(true);
+  });
+
+  it("fails a non-count aggregation with no field selected", () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "transform",
+          config: { steps: [{ kind: "aggregate", groupBy: [], aggregations: [{ fn: "sum", field: null, alias: "total" }] }] },
+        }),
+      ],
+      edges: [],
+    };
+    const results = checkConfig(graph);
+    expect(results.some((r) => r.status === "fail" && r.message.includes("no field selected"))).toBe(true);
+  });
+
+  it("passes a count aggregation with field: null (COUNT(*) shape)", () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "transform",
+          config: { steps: [{ kind: "aggregate", groupBy: [], aggregations: [{ fn: "count", field: null, alias: "n" }] }] },
+        }),
+      ],
+      edges: [],
+    };
+    expect(checkConfig(graph)).toEqual([{ id: "config", status: "pass", message: "Every node's config is valid and complete." }]);
+  });
+
+  it("fails an aggregation alias that collides with a sibling aggregation alias", () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "transform",
+          config: {
+            steps: [
+              {
+                kind: "aggregate",
+                groupBy: [],
+                aggregations: [
+                  { fn: "sum", field: "salary", alias: "total" },
+                  { fn: "count", field: null, alias: "total" },
+                ],
+              },
+            ],
+          },
+        }),
+      ],
+      edges: [],
+    };
+    const results = checkConfig(graph);
+    expect(results.some((r) => r.status === "fail" && r.message.includes('more than one output named "total"'))).toBe(true);
+  });
+
+  it("fails an aggregation alias that collides with a groupBy field name (ruling 4)", () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "transform",
+          config: {
+            steps: [
+              { kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "count", field: null, alias: "cohort" }] },
+            ],
+          },
+        }),
+      ],
+      edges: [],
+    };
+    const results = checkConfig(graph);
+    expect(results.some((r) => r.status === "fail" && r.message.includes('more than one output named "cohort"'))).toBe(true);
+  });
+
+  it("fails a having condition that references a raw upstream field, not an alias or groupBy field (ruling 2)", () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "transform",
+          config: {
+            steps: [
+              {
+                kind: "aggregate",
+                groupBy: ["cohort"],
+                aggregations: [{ fn: "sum", field: "salary", alias: "total" }],
+                having: [{ field: "salary", operator: "gt", value: 100 }],
+              },
+            ],
+          },
+        }),
+      ],
+      edges: [],
+    };
+    const results = checkConfig(graph);
+    expect(results.some((r) => r.status === "fail" && r.message.includes('references "salary"') && r.message.includes("neither an aggregation alias nor a groupBy field"))).toBe(true);
+  });
+
+  it("passes a having condition that references an aggregation alias or a groupBy field", () => {
+    const graph: GraphDoc = {
+      nodes: [
+        node({
+          id: "n1",
+          type: "transform",
+          config: {
+            steps: [
+              {
+                kind: "aggregate",
+                groupBy: ["cohort"],
+                aggregations: [{ fn: "sum", field: "salary", alias: "total" }],
+                having: [
+                  { field: "total", operator: "gt", value: 100 },
+                  { field: "cohort", operator: "neq", value: "sales" },
+                ],
+              },
+            ],
+          },
+        }),
+      ],
+      edges: [],
+    };
+    expect(checkConfig(graph)).toEqual([{ id: "config", status: "pass", message: "Every node's config is valid and complete." }]);
+  });
+
   it("fails a source/destination node with no connection selected", () => {
     const graph: GraphDoc = { nodes: [node({ id: "n1", type: "source" })], edges: [] };
     const results = checkConfig(graph);

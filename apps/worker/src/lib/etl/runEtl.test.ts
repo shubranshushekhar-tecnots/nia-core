@@ -68,7 +68,7 @@ const RUN_ID = "33333333-3333-3333-3333-333333333333";
 function baseJob(overrides: Partial<EtlRunJob> = {}): EtlRunJob {
   return {
     kind: "etl_run",
-    orgId: "org-1",
+    scope: SCOPE,
     workflowId: "wf-1",
     runId: RUN_ID,
     nodeId: "dest",
@@ -179,7 +179,7 @@ describe("runEtl — chunk loop happy path", () => {
     const result = await runEtl(job, queue);
 
     expect(result).toEqual({ status: "chunk", nextCursor: "2" });
-    expect(startRunMock).toHaveBeenCalledWith(job.runId, job.workflowId, job.orgId);
+    expect(startRunMock).toHaveBeenCalledWith(job.runId, job.workflowId, job.scope);
 
     expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
     const [connId, input] = dispatchWriteMock.mock.calls[0]!;

@@ -6,6 +6,7 @@ import {
   FilterStep,
   ComputedFieldStep,
   DropFieldsStep,
+  AggregateStep,
   parseNodeConfig,
 } from "./nodeConfig.js";
 
@@ -71,8 +72,32 @@ describe("TransformConfig", () => {
     expect(parsed.steps[0]).toEqual(step);
   });
 
-  it("rejects a step kind outside filter|computed_field|drop_fields", () => {
-    expect(() => TransformConfig.parse({ steps: [{ kind: "aggregate" }] })).toThrow();
+  it("round-trips an aggregate step with groupBy, aggregations, and having", () => {
+    const step: AggregateStep = {
+      kind: "aggregate",
+      groupBy: ["cohort"],
+      aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }],
+      having: [{ field: "max_salary", operator: "gt", value: 1000 }],
+    };
+    const parsed = TransformConfig.parse({ steps: [step] });
+    const roundTripped = TransformConfig.parse(JSON.parse(JSON.stringify(parsed)));
+    expect(roundTripped).toEqual(parsed);
+    expect(parsed.steps[0]).toEqual(step);
+  });
+
+  it("defaults an aggregate step's groupBy/aggregations to [] (whole-table aggregate)", () => {
+    const parsed = TransformConfig.parse({ steps: [{ kind: "aggregate" }] });
+    expect(parsed.steps[0]).toEqual({ kind: "aggregate", groupBy: [], aggregations: [] });
+  });
+
+  it("allows field: null on an aggregate step's aggregation (count-star)", () => {
+    const step: AggregateStep = { kind: "aggregate", groupBy: [], aggregations: [{ fn: "count", field: null, alias: "n" }] };
+    const parsed = TransformConfig.parse({ steps: [step] });
+    expect(parsed.steps[0]).toEqual(step);
+  });
+
+  it("rejects a step kind outside filter|computed_field|drop_fields|aggregate", () => {
+    expect(() => TransformConfig.parse({ steps: [{ kind: "not_a_real_kind" }] })).toThrow();
   });
 });
 

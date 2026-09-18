@@ -74,10 +74,10 @@ async function fail(scope: WorkspaceScope, runId: string, nodeId: string, messag
  * connection for the heavy queue across the whole worker process.
  */
 export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult> {
-  const scope: WorkspaceScope = { orgId: job.orgId };
+  const scope: WorkspaceScope = job.scope;
 
   if (job.cursor === null) {
-    await startRun(job.runId, job.workflowId, job.orgId);
+    await startRun(job.runId, job.workflowId, job.scope);
     await publishRunEvent(scope, job.runId, { type: "started", nodeId: job.nodeId });
   }
 
@@ -151,19 +151,6 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     return fail(scope, job.runId, job.nodeId, `Source connector "${source.manifestId ?? "unknown"}" has no supported query dialect.`);
   }
 
-  // Block 3.5 item 1a: SQL keyset pagination requires a verified single-
-  // column unique key (IntrospectResponse.primaryKey — contract.ts). Mongo
-  // always keys off `_id` (queryBuilder.ts), so this only gates SQL
-  // dialects. Mirrors the upsertKeys-missing precondition above.
-  if (dialect !== "mongo" && !entity.primaryKey) {
-    return fail(
-      scope,
-      job.runId,
-      job.nodeId,
-      `Source table "${entity.namespace}.${entity.name}" has no single-column primary/unique key — the ETL runner requires one for reliable pagination. Add a primary key (or a unique constraint on one column) to this table to run this workflow.`,
-    );
-  }
-
   // Same >1-transform-node degrade-to-residual boundary as runPreview.ts's
   // compilePushdown call (never designed to chain pushdown across multiple
   // nodes) — but unlike preview, which only *counts* residual steps for
@@ -184,9 +171,30 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     }
   }
 
+  // Phase 6 Block 6: a pushed `aggregate` step is never keyset-paginated —
+  // GROUP BY/$group collapses row identity, eliminating the very column
+  // pagination cursors on (see queryBuilder.ts's header comment). This must
+  // be known BEFORE the primary-key precondition below, since an aggregate
+  // pushdown has no use for a source primary key at all.
+  const isAggregatePushdown = dialectQuery !== null && dialectQuery.isAggregate === true;
+
+  // Block 3.5 item 1a: SQL keyset pagination requires a verified single-
+  // column unique key (IntrospectResponse.primaryKey — contract.ts). Mongo
+  // always keys off `_id` (queryBuilder.ts), so this only gates SQL
+  // dialects. Mirrors the upsertKeys-missing precondition above. Skipped
+  // entirely for an aggregate pushdown (Block 6) — see isAggregatePushdown.
+  if (dialect !== "mongo" && !entity.primaryKey && !isAggregatePushdown) {
+    return fail(
+      scope,
+      job.runId,
+      job.nodeId,
+      `Source table "${entity.namespace}.${entity.name}" has no single-column primary/unique key — the ETL runner requires one for reliable pagination. Add a primary key (or a unique constraint on one column) to this table to run this workflow.`,
+    );
+  }
+
   const { lastKey } = parseCursor(effectiveCursorRaw);
   const requestedLimit = Math.min(job.chunkSize, MAX_CHUNK_ROWS);
-  const keyColumn = dialect === "mongo" ? "_id" : entity.primaryKey!;
+  const keyColumn = dialect === "mongo" ? "_id" : isAggregatePushdown ? undefined : entity.primaryKey!;
   const query = buildEtlReadQuery(dialect, entity, dialectQuery, dialect === "mongo" ? undefined : keyColumn, lastKey, requestedLimit);
 
   const result = await dispatch(sourceConnectionId, query, scope, job.triggeredByUserId, { rowCap: requestedLimit });
@@ -223,7 +231,9 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   }
 
   const totalRowsProcessed = await recordChunkProgress(job.runId, rowsWritten, JSON.stringify({ lastKey: nextKey } satisfies Cursor));
-  const isLastChunk = sourceRowsFetched < requestedLimit;
+  // Block 6: an aggregate pushdown is a single non-paginated statement (see
+  // isAggregatePushdown above) — there is no next chunk to fetch, ever.
+  const isLastChunk = isAggregatePushdown || sourceRowsFetched < requestedLimit;
 
   if (isLastChunk) {
     const durationMs = await finishRun(job.runId, "succeeded");

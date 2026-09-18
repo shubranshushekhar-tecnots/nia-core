@@ -21,6 +21,15 @@ import type { DialectQuery, QueryPayload, SourceDialect } from "@nia/schemas";
  * key (contract.ts); runEtl.ts hard-fails before ever calling this if the
  * source entity has none. Mongo sources always key off `_id` (guaranteed
  * unique), ignoring `keyColumn`, same as before.
+ *
+ * Block 6: a pushed `aggregate` transform step (`dialectQuery.isAggregate`)
+ * is NEVER keyset-paginated — GROUP BY/$group collapses row identity, which
+ * eliminates the very column pagination cursors on. Such a query instead
+ * runs as a single flat, non-paginated statement capped by `limit`
+ * (MAX_CHUNK_ROWS output GROUPS, not source rows) — runEtl.ts forces
+ * `isLastChunk: true` for this case. Real, disclosed v1 limitation (see
+ * TODO.md): an aggregate producing more than MAX_CHUNK_ROWS groups is
+ * silently truncated, not paginated across multiple runner chunks.
  */
 
 /** Guardrails cap every query's effective row count at 1000 regardless of what's requested (packages/guardrails/src/sql/validator.ts and mongodb.ts) — clamping here makes that explicit instead of silently truncated downstream. */
@@ -40,11 +49,29 @@ export function buildEtlReadQuery(
   limit: number,
 ): QueryPayload {
   if (dialect === "mongo") {
-    const pipeline: Record<string, unknown>[] =
-      dialectQuery && dialectQuery.dialect === "mongo" ? [...dialectQuery.pipeline] : [];
+    const mongoQuery = dialectQuery && dialectQuery.dialect === "mongo" ? dialectQuery : null;
+    const pipeline: Record<string, unknown>[] = mongoQuery ? [...mongoQuery.pipeline] : [];
+    if (mongoQuery?.isAggregate) {
+      // No keyset stages — $group has already collapsed row identity. Single non-paginated run, capped by limit (see this file's header comment).
+      pipeline.push({ $limit: limit });
+      return { kind: "mongo", collection: entity.name, pipeline };
+    }
     if (cursor !== null) pipeline.push({ $match: { _id: { $gt: cursor } } });
     pipeline.push({ $sort: { _id: 1 } }, { $limit: limit });
     return { kind: "mongo", collection: entity.name, pipeline };
+  }
+
+  const sqlQuery = dialectQuery && dialectQuery.dialect !== "mongo" ? dialectQuery : null;
+  const from = `${quoteIdent(entity.namespace, dialect)}.${quoteIdent(entity.name, dialect)}`;
+
+  if (sqlQuery?.isAggregate) {
+    // No keyset pagination — GROUP BY has already collapsed the source primary key. Single non-paginated run, capped by limit (see this file's header comment).
+    const params = [...sqlQuery.params];
+    const where = sqlQuery.whereSql ? ` WHERE ${sqlQuery.whereSql}` : "";
+    const groupBy = sqlQuery.groupBySql ? ` GROUP BY ${sqlQuery.groupBySql}` : "";
+    const having = sqlQuery.havingSql ? ` HAVING ${sqlQuery.havingSql}` : "";
+    const sql = `SELECT ${sqlQuery.selectSql} FROM ${from}${where}${groupBy}${having} LIMIT ${limit}`;
+    return { kind: "sql", sql, params };
   }
 
   // SQL callers must have already verified keyColumn is a real, single-
@@ -53,10 +80,8 @@ export function buildEtlReadQuery(
   if (!keyColumn) {
     throw new Error("buildEtlReadQuery: SQL dialects require a keyColumn for keyset pagination.");
   }
-  const sqlQuery = dialectQuery && dialectQuery.dialect !== "mongo" ? dialectQuery : null;
   const selectParts = ["*"];
   if (sqlQuery?.selectSql) selectParts.push(sqlQuery.selectSql);
-  const from = `${quoteIdent(entity.namespace, dialect)}.${quoteIdent(entity.name, dialect)}`;
   const quotedKey = quoteIdent(keyColumn, dialect);
   const params = [...(sqlQuery?.params ?? [])];
   const conditions = sqlQuery?.whereSql ? [sqlQuery.whereSql] : [];
