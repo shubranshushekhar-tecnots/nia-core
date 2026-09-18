@@ -142,3 +142,61 @@ connectors; the statement generator covers their dialect syntax only, not
 real execution), a revoke-from-the-UI affordance, and Block 4's two proof
 artifacts above. Not yet verified live (no browser session run this
 pass) — typecheck is clean across `@nia/schemas`/`@nia/api`/`@nia/web`.
+
+## Block 5 fast-mode session (2026-09-18): kill test, live E2E, real bug fix, Part 3c/3d/3e
+
+Per user direction ("skip unnecessary tests... fix small bugs later"),
+this session ran the mini kill test (Part 1, 50k rows, passed clean after
+clearing several rounds of orphaned/stale concurrent `kill-test.ts`
+processes from earlier in the session — see `docs/decisions.md` for the
+contamination diagnosis), then a real browser E2E pass (Part 2: canvas →
+grant confirm → checks → Run → rows verified landing), then closed out
+the remaining named scope cuts from Block 5's own "Scope cuts" list
+(Part 3):
+
+- **mysql/mongodb write dispatch (3a/3b):** confirmed already fully built
+  and committed (`319663d`) from earlier in the session, not a stub —
+  `writeSql.ts`/`writeOps.ts`/`writeSignature.ts` in both connector
+  services, wired end to end through `runEtl.ts`'s `dispatchWrite` call.
+  Live-verified via `write-smoke.ts` (10/10 checks) and the real browser
+  Run in Part 2.
+- **Multi-destination fan-out (3c):** implemented. `startWorkflowRun`
+  (api `services/runs.ts`) takes `destNodeIds: string[]`, loops, mints an
+  independent runId/checkpoint/SSE stream per destination — no shared
+  cursor gating. `FlowCanvas.tsx` reworked from a single `runState`/
+  `runNodeId` to `runNodeIds`/a list of status-panel cards. Live-verified:
+  two independent runIds for the same destination, both completed, rows
+  landed idempotently.
+- **Personal-workspace execution (3d):** implemented. `EtlRunJob.orgId`
+  (plain string) → `EtlRunJob.scope: WorkspaceScope` (the same org/owner
+  union `ChatQueryJob`/`CheckRunJob` use). `workflowRuns.ts`'s `startRun`
+  now writes `org_id` or `owner_id` off the scope union — no migration
+  needed, `workflow_runs` already had the nullable `owner_id` +
+  `org_xor_owner` constraint since `0005_individual_workspace.sql`.
+  `services/runs.ts`'s `startWorkflowRun` no longer 400s a
+  personal-workspace actor. Runner test suite (`runEtl.test.ts`) updated
+  to the new field, all 11 cases pass; worker's full suite (209 tests,
+  25 files) still green; `@nia/worker`/`@nia/api`/`@nia/web` typecheck
+  clean.
+- **Revoke-from-UI (3e):** implemented. New `RevokeAccessPanel` in
+  `NodeDrawer.tsx`, rendered in place of `GrantAccessPanel` once a
+  destination namespace is grant-covered — wires the previously-unused
+  `revokeWriteGrant` client wrapper to a real button. Doesn't touch the
+  underlying DB role/privileges (manual `REVOKE`/`DROP ROLE`, same
+  asymmetry as granting requiring a manual `CREATE ROLE`/`GRANT`); only
+  flips the row so `checkGrants`/the verb lock treat the namespace as
+  uncovered again.
+
+Along the way, Part 2's browser pass found and fixed a real,
+previously-undiscovered production bug: `POST /workflows/:id/run` was
+completely unreachable via cookie auth (401) because of Express
+router-mount ordering — see `docs/decisions.md`'s matching entry for the
+root cause and fix (`apps/api/src/routes/runs.ts` + `index.ts`).
+
+Still not done: Block 4's two proof artifacts (Playwright E2E for the
+grant/run/status flow; the full 1,000,000-row kill test — the mini 50k
+version above stood in for it this session) remain deferred to a named
+verification session, per the standing decision in `docs/decisions.md`.
+All Part 3 code changes this session are typechecked and unit-tested but
+not yet re-verified live in the browser (the Part 2 E2E ran before the
+3c/3d/3e changes landed).

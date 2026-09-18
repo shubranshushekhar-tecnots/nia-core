@@ -19,9 +19,12 @@ export const QUEUE_HEAVY = "heavy" as const;
  * is granted to "individual" in can.ts's capability matrix, and personal
  * workflows (e.g. the canvasC e2e persona) must be able to run checks too
  * — org-only would have been a real functional gap, not a deliberate scope
- * limit. EtlRunJob stays plain orgId for now: workflow *execution*
- * (Phase 6, write grants) hasn't been scoped for personal workspaces yet,
- * unlike checks/chat which are both read-only.
+ * limit. EtlRunJob (Block 5) now reuses it too: `workflow_runs` has carried
+ * a nullable `owner_id` + `org_xor_owner` check constraint and an
+ * owner-aware select policy since 0005_individual_workspace.sql — the DB
+ * side was always ready, only the job payload and its two consumers
+ * (apps/api's services/runs.ts, apps/worker's workflowRuns.ts/runEtl.ts)
+ * were still hardcoded to orgId.
  */
 export const WorkspaceScope = z.union([
   z.object({ orgId: z.string().uuid() }),
@@ -51,7 +54,7 @@ export type ChatQueryJob = z.infer<typeof ChatQueryJob>;
 
 export const EtlRunJob = z.object({
   kind: z.literal("etl_run"),
-  orgId: z.string().uuid(),
+  scope: WorkspaceScope,
   workflowId: z.string().uuid(),
   runId: z.string().uuid(),
   /** DAG node this job executes; edges become job dependencies. */

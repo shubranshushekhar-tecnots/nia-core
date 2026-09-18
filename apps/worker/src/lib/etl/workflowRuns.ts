@@ -1,3 +1,4 @@
+import type { WorkspaceScope } from "../workspaceScope.js";
 import { supabase } from "../supabaseClient.js";
 
 /**
@@ -15,13 +16,20 @@ import { supabase } from "../supabaseClient.js";
  * BullMQ stalled-job retry redelivering that exact same first job (worker
  * killed mid-chunk, per Block 4's eventual resilience bar) never crashes on
  * a duplicate-key insert — it just leaves the original row as-is.
+ *
+ * Block 5 (Part 3d): scope-generic — writes org_id or owner_id depending on
+ * which half of the WorkspaceScope union the job carries. `workflow_runs`
+ * has enforced an org_xor_owner check constraint (and an owner-aware select
+ * policy) since 0005_individual_workspace.sql, so exactly one of the two
+ * columns is ever set on a row; no migration was needed for this change.
  */
-export async function startRun(runId: string, workflowId: string, orgId: string): Promise<void> {
+export async function startRun(runId: string, workflowId: string, scope: WorkspaceScope): Promise<void> {
   await supabase.from("workflow_runs").upsert(
     {
       id: runId,
       workflow_id: workflowId,
-      org_id: orgId,
+      org_id: "orgId" in scope ? scope.orgId : null,
+      owner_id: "ownerId" in scope ? scope.ownerId : null,
       status: "running",
       rows_processed: 0,
       started_at: new Date().toISOString(),

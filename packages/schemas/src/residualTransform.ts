@@ -1,5 +1,5 @@
 import type { Expr } from "./expression.js";
-import type { FilterCondition, TransformStep } from "./nodeConfig.js";
+import type { AggregateStep, FilterCondition, TransformStep } from "./nodeConfig.js";
 
 /**
  * In-process executor for the transform steps a pushdown compiler
@@ -72,6 +72,135 @@ function matchesCondition(cond: FilterCondition, row: Record<string, unknown>): 
   }
 }
 
+/**
+ * Phase 6 Block 6 (ruling 3, docs/decisions.md): residual aggregation
+ * buffers per-group state in memory — one accumulator entry per distinct
+ * groupBy key seen in this chunk, plus (for `count_distinct`) a full `Set`
+ * of every distinct value seen per group, for the lifetime of this call.
+ * Pushdown-eligible aggregates (compiled to GROUP BY / $group by
+ * pushdown.ts, executed by the source database) are strongly preferred —
+ * they never hold this state in the worker process. Streaming/bounded-
+ * memory aggregation (e.g. HyperLogLog for count_distinct, or a spill-to-
+ * disk group map) is a real future item, ledgered in TODO.md, not
+ * implemented here — a residual aggregate over a chunk with very high
+ * cardinality groupBy values or very large per-group distinct sets can
+ * exhaust worker memory. v1 accepts this because the runner's per-chunk
+ * row cap (MAX_CHUNK_ROWS, apps/worker's queryBuilder.ts) already bounds
+ * how many source rows a residual aggregate ever sees at once.
+ */
+function applyAggregateStep(objRows: Record<string, unknown>[], step: AggregateStep): { cols: string[]; rows: Record<string, unknown>[] } {
+  type GroupState = {
+    groupValues: Record<string, unknown>;
+    count: number;
+    fieldCounts: Map<string, number>;
+    sums: Map<string, number>;
+    mins: Map<string, number>;
+    maxs: Map<string, number>;
+    distinctSets: Map<string, Set<unknown>>;
+  };
+
+  const groups = new Map<string, GroupState>();
+
+  for (const row of objRows) {
+    const groupValues: Record<string, unknown> = {};
+    for (const field of step.groupBy) groupValues[field] = row[field] ?? null;
+    const key = JSON.stringify(step.groupBy.map((f) => groupValues[f]));
+
+    let state = groups.get(key);
+    if (!state) {
+      state = { groupValues, count: 0, fieldCounts: new Map(), sums: new Map(), mins: new Map(), maxs: new Map(), distinctSets: new Map() };
+      groups.set(key, state);
+    }
+    state.count += 1;
+
+    for (const agg of step.aggregations) {
+      const value = agg.field ? row[agg.field] : undefined;
+      const present = value !== null && value !== undefined;
+      switch (agg.fn) {
+        case "count":
+          break; // uses state.count directly below
+        case "count_field":
+          if (present) state.fieldCounts.set(agg.alias, (state.fieldCounts.get(agg.alias) ?? 0) + 1);
+          break;
+        case "count_distinct":
+          if (present) {
+            const set = state.distinctSets.get(agg.alias) ?? new Set<unknown>();
+            set.add(value);
+            state.distinctSets.set(agg.alias, set);
+          }
+          break;
+        case "sum":
+          state.sums.set(agg.alias, (state.sums.get(agg.alias) ?? 0) + Number(value ?? 0));
+          break;
+        case "avg":
+          state.sums.set(agg.alias, (state.sums.get(agg.alias) ?? 0) + Number(value ?? 0));
+          if (present) state.fieldCounts.set(agg.alias, (state.fieldCounts.get(agg.alias) ?? 0) + 1);
+          break;
+        case "min": {
+          const num = Number(value);
+          if (!Number.isNaN(num)) {
+            const cur = state.mins.get(agg.alias);
+            if (cur === undefined || num < cur) state.mins.set(agg.alias, num);
+          }
+          break;
+        }
+        case "max": {
+          const num = Number(value);
+          if (!Number.isNaN(num)) {
+            const cur = state.maxs.get(agg.alias);
+            if (cur === undefined || num > cur) state.maxs.set(agg.alias, num);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  const cols = [...step.groupBy, ...step.aggregations.map((a) => a.alias)];
+  let outRows: Record<string, unknown>[] = [];
+  for (const state of groups.values()) {
+    const outRow: Record<string, unknown> = { ...state.groupValues };
+    for (const agg of step.aggregations) {
+      switch (agg.fn) {
+        case "count":
+          outRow[agg.alias] = state.count;
+          break;
+        case "count_field":
+          outRow[agg.alias] = state.fieldCounts.get(agg.alias) ?? 0;
+          break;
+        case "count_distinct":
+          outRow[agg.alias] = state.distinctSets.get(agg.alias)?.size ?? 0;
+          break;
+        case "sum":
+          outRow[agg.alias] = state.sums.get(agg.alias) ?? 0;
+          break;
+        case "avg": {
+          const sum = state.sums.get(agg.alias) ?? 0;
+          const count = state.fieldCounts.get(agg.alias) ?? 0;
+          outRow[agg.alias] = count > 0 ? sum / count : null;
+          break;
+        }
+        case "min":
+          outRow[agg.alias] = state.mins.get(agg.alias) ?? null;
+          break;
+        case "max":
+          outRow[agg.alias] = state.maxs.get(agg.alias) ?? null;
+          break;
+      }
+    }
+    outRows.push(outRow);
+  }
+
+  // ruling 2: having may only reference an aggregation alias or a groupBy
+  // field — both are now plain top-level keys on outRow, so matchesCondition
+  // (the same helper filter steps use) applies directly, no special-casing.
+  if (step.having && step.having.length > 0) {
+    outRows = outRows.filter((row) => step.having!.every((cond) => matchesCondition(cond, row)));
+  }
+
+  return { cols, rows: outRows };
+}
+
 export function applyResidualTransforms(
   columns: string[],
   rows: unknown[][],
@@ -97,6 +226,10 @@ export function applyResidualTransforms(
         for (const f of step.fields) delete next[f];
         return next;
       });
+    } else if (step.kind === "aggregate") {
+      const result = applyAggregateStep(objRows, step);
+      cols = result.cols;
+      objRows = result.rows;
     }
   }
 

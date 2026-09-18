@@ -164,7 +164,70 @@ export const DropFieldsStep = z.object({
 });
 export type DropFieldsStep = z.infer<typeof DropFieldsStep>;
 
-export const TransformStep = z.discriminatedUnion("kind", [FilterStep, ComputedFieldStep, DropFieldsStep]);
+/**
+ * Phase 6 Block 6 — v1 aggregate-transform vocabulary. Reference digest
+ * (docs/decisions.md) mapped DAX's Aggregation category onto this shape:
+ * `count`/`count_field`/`count_distinct`/`sum`/`avg`/`min`/`max`. Deliberately
+ * excludes `stddev`/`variance`/`median` (ledgered, not v1 — see TODO.md) and
+ * has no first-class %-of-total or top-N (both parked/composition per the
+ * approved digest, see TODO.md and this file's AggregateStep doc below).
+ */
+export const AggregateFn = z.enum(["count", "count_field", "count_distinct", "sum", "avg", "min", "max"]);
+export type AggregateFn = z.infer<typeof AggregateFn>;
+
+/**
+ * `field` is null only for `fn: "count"` (COUNT(*) / Mongo $sum:1 — no
+ * column operand). Every other fn requires a field name. Not enforced here
+ * (permissive parse, per this file's header comment) — enforced at
+ * check-time by checkConfig (checks.ts).
+ * `alias` intentionally allows "" for the same autosave-transient reason as
+ * FilterCondition.field/ComputedFieldStep.name above — checkConfig is where
+ * emptiness/collisions actually fail.
+ */
+export const AggregationSpec = z.object({
+  fn: AggregateFn,
+  field: z.string().nullable(),
+  alias: z.string(),
+});
+export type AggregationSpec = z.infer<typeof AggregationSpec>;
+
+/**
+ * `groupBy: []` means a whole-table aggregate (single output row) — a valid,
+ * common case (e.g. "total row count"), not treated as "no grouping
+ * configured yet" by any consumer.
+ *
+ * `having` reuses FilterCondition (AND-composed, same as FilterStep) rather
+ * than inventing a parallel condition shape — but per ruling 2 (docs/
+ * decisions.md), its `field` may reference ONLY an aggregation alias or a
+ * groupBy field name, never a raw upstream (pre-aggregate) field; checkConfig
+ * enforces that distinction, since FilterCondition's own schema can't tell
+ * the difference (it's just a string).
+ *
+ * `%_of_total` and top-N-per-group are deliberately NOT first-class members
+ * of this shape — see TODO.md's Block 6 ledger entries. Ruling 1 (docs/
+ * decisions.md) found that a literal broadcast %-of-total (each row divided
+ * by one whole-table total, same grain in/out) is NOT expressible via this
+ * transform chain — there's no window/join primitive, and chaining can only
+ * ever change or collapse grain, never broadcast a coarser total back onto
+ * finer rows. What IS proven (pushdown.test.ts's "ruling 1" composition
+ * case): (a) a single Aggregate step's own sibling aggregation aliases (e.g.
+ * sum + count in the same output row) can be divided via a residual
+ * computed_field to get an avg-shaped ratio, and (b) a second, coarser-grain
+ * Aggregate step can validly chain after a pushed one as a residual
+ * multi-level rollup. Neither reproduces true per-row broadcast division —
+ * that gap is disclosed, not silently worked around. Top-N-per-group is
+ * inexpressible until a Sort/Limit transform kind exists (parked, v1.1
+ * candidate).
+ */
+export const AggregateStep = z.object({
+  kind: z.literal("aggregate"),
+  groupBy: z.array(z.string()).default([]),
+  aggregations: z.array(AggregationSpec).default([]),
+  having: z.array(FilterCondition).optional(),
+});
+export type AggregateStep = z.infer<typeof AggregateStep>;
+
+export const TransformStep = z.discriminatedUnion("kind", [FilterStep, ComputedFieldStep, DropFieldsStep, AggregateStep]);
 export type TransformStep = z.infer<typeof TransformStep>;
 
 export const TransformConfig = z.object({

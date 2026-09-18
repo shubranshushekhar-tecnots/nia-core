@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildGrantStatementText, parseNodeConfig, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
-import { confirmWriteGrant, createWriteGrant, getConnectionSchema, getWriteGrants, type WriteGrant } from '@/lib/api/connectionsClient';
+import { confirmWriteGrant, createWriteGrant, getConnectionSchema, getWriteGrants, revokeWriteGrant, type WriteGrant } from '@/lib/api/connectionsClient';
 import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
 
@@ -282,6 +282,46 @@ function GrantAccessPanel({
   );
 }
 
+/**
+ * Phase 6 Block 5 (Part 3e) — the counterpart to GrantAccessPanel: once a
+ * namespace is grant-covered, offer to revoke it from the same spot instead
+ * of leaving `revokeWriteGrant` (connectionsClient.ts) wired but unused.
+ * Revoking doesn't touch the underlying DB role/privileges (that's a manual
+ * `REVOKE`/`DROP ROLE` step, same asymmetry as granting requiring a manual
+ * `CREATE ROLE`/`GRANT`) — it only flips the row so `checkGrants`/the verb
+ * lock immediately treat this namespace as uncovered again.
+ */
+function RevokeAccessPanel({ connectionId, grant, namespace }: { connectionId: string; grant: WriteGrant; namespace: string }) {
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleRevoke() {
+    setBusy(true);
+    setError(null);
+    try {
+      await revokeWriteGrant(connectionId, grant.id);
+      await queryClient.invalidateQueries({ queryKey: ['connection-write-grants', connectionId] });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to revoke write grant.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={grantPanelStyle}>
+      <div style={{ fontSize: 11.5, color: 'var(--ok)', marginBottom: 8 }}>
+        Write access granted to &quot;{namespace}&quot;.
+      </div>
+      <button type="button" style={grantButtonStyle} disabled={busy} onClick={handleRevoke}>
+        {busy ? 'Revoking…' : 'Revoke access'}
+      </button>
+      {error && <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>{error}</div>}
+    </div>
+  );
+}
+
 function SourceDestForm({
   config,
   operations,
@@ -306,6 +346,10 @@ function SourceDestForm({
   const pendingGrant =
     namespace !== undefined
       ? grants.find((g) => !g.revokedAt && !g.confirmedAt && grantScopeHasNamespace(g, namespace))
+      : undefined;
+  const activeGrant =
+    namespace !== undefined
+      ? grants.find((g) => !g.revokedAt && g.confirmedAt && grantScopeHasNamespace(g, namespace))
       : undefined;
 
   return (
@@ -360,6 +404,9 @@ function SourceDestForm({
 
       {nodeType === 'destination' && connectionId && namespace !== undefined && !grantCovers && (
         <GrantAccessPanel connectionId={connectionId} connectorId={manifestId} namespace={namespace} pendingGrant={pendingGrant} />
+      )}
+      {nodeType === 'destination' && connectionId && namespace !== undefined && grantCovers && activeGrant && (
+        <RevokeAccessPanel connectionId={connectionId} grant={activeGrant} namespace={namespace} />
       )}
     </div>
   );

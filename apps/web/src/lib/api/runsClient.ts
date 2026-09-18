@@ -23,17 +23,26 @@ export class RunApiError extends Error {
   }
 }
 
-export async function startWorkflowRun(workflowId: string, destNodeId: string): Promise<{ runId: string }> {
+/**
+ * Block 5 (multi-destination fan-out): `destNodeIds` is a non-empty array —
+ * each destination gets its own independent runId (see apps/api/src/
+ * services/runs.ts's startWorkflowRun). Callers stream each returned
+ * `runId` separately via streamRun below.
+ */
+export async function startWorkflowRun(
+  workflowId: string,
+  destNodeIds: string[],
+): Promise<{ runs: { destNodeId: string; runId: string }[] }> {
   const res = await fetch(`/api/backend/workflows/${workflowId}/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ destNodeId }),
+    body: JSON.stringify({ destNodeIds }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new RunApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
   }
-  return res.json() as Promise<{ runId: string }>;
+  return res.json() as Promise<{ runs: { destNodeId: string; runId: string }[] }>;
 }
 
 /**

@@ -44,16 +44,21 @@ export const runsRouter: ExpressRouter = Router();
 // per-route lets Express correctly fall through to workflowsRouter for any
 // path that isn't one of this router's three run-related routes.
 const workflowParamsSchema = z.object({ id: z.string().uuid() });
-const runBodySchema = z.object({ destNodeId: z.string().min(1) });
+// Block 5 (multi-destination fan-out): destNodeIds is a non-empty array —
+// FlowCanvas.tsx now sends every destination node in the graph, not just
+// "the" one (the old single-destination-per-run scope cut). See
+// services/runs.ts's startWorkflowRun for how each id becomes an
+// independent run/runId.
+const runBodySchema = z.object({ destNodeIds: z.array(z.string().min(1)).min(1) });
 
 // Starts a real ETL run (Phase 6 Block 3) — enqueues the worker's chunked
 // runEtl.ts job chain and mints the runId the client streams against via
 // GET /:id/run/stream. Gated like /:id/checks (workflows.run, not
 // workflows.updateDefinition): this actually moves data, unlike
-// preview/mappings-propose. Org-only — services/runs.ts's startWorkflowRun
-// refuses a personal-workspace actor with a clean 400 (EtlRunJob has no
-// personal-workspace scope yet, see its own header comment), so there's no
-// separate requireOrgActor gate here.
+// preview/mappings-propose. Org-or-personal — scopeFromActor branches on
+// whether the actor has an org, and services/runs.ts's startWorkflowRun
+// (Block 5, Part 3d) is scope-generic, so no separate requireOrgActor gate
+// is needed here.
 runsRouter.post(
   "/:id/run",
   requireCookieAuth,
@@ -66,7 +71,7 @@ runsRouter.post(
       req.supabase,
       scopeFromActor(req.actor),
       req.params.id!,
-      req.body.destNodeId,
+      req.body.destNodeIds,
       req.actor.userId,
     );
     res.status(202).json(data);

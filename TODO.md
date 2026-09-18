@@ -83,3 +83,47 @@
   generalization) same-day. A reduced mechanism-only kill test ran in
   the full test's place — see `docs/decisions.md`'s matching entry for
   the full writeup and exactly what's still owed.
+- **Phase 6 Block 6 (aggregate transform) ledger:**
+  - **Sort/Limit transform kind doesn't exist** — top-N-per-group (e.g.
+    "top 3 earners per cohort") is inexpressible until it does. Parked
+    as a v1.1 candidate, not part of the v1 aggregate vocabulary shipped
+    this block.
+  - **`%_of_total` stays composition, not a first-class fn — and ruling 1
+    found a real gap, not just a style preference.** A literal broadcast
+    %-of-total (every row divided by one whole-table total, same grain
+    in and out) is **not expressible** via this transform chain — there's
+    no window/join primitive, and chaining can only change or collapse
+    grain, never broadcast a coarser total back onto finer rows. What IS
+    proven (`pushdown.test.ts`'s ruling-1 case): (a) a single Aggregate
+    step's own sibling aliases (e.g. `sum` + `count` in one output row)
+    can be divided via a residual `computed_field` to get an avg-shaped
+    ratio, and (b) a second, coarser-grain Aggregate step validly chains
+    after a pushed one as a residual multi-level rollup. Neither
+    reproduces true per-row broadcast division. A first-class
+    `%_of_total` fn (or a window/broadcast primitive) is parked, not
+    scheduled — revisit only if real user friction shows up, per the
+    Stage 1 digest's original framing.
+  - **Aggregate pushdown never paginates.** `runEtl.ts` executes a
+    pushed-down aggregate as a single non-paginated query capped at
+    `MAX_CHUNK_ROWS` (1000 output rows) with `isLastChunk` forced `true`
+    — the runner's keyset-pagination model is keyed on the source
+    primary key, which GROUP BY collapses, so there's no cursor to
+    paginate over post-aggregation. A workflow whose grouped output
+    would exceed 1000 rows silently truncates today. No truncation
+    warning surfaces in the UI yet. Revisit if/when large-cardinality
+    group-bys become a real workload (proper fix would need an
+    aggregate-aware cursor, e.g. keyset over the group-by columns
+    themselves, or a hard pre-flight row-count check).
+  - **Residual (non-pushed) aggregation buffers all per-group state in
+    memory** (`residualTransform.ts`) — a `Map` of group-key → running
+    accumulators, plus a `Set` per `count_distinct` aggregation. Fine at
+    current chunk sizes; would not scale to unbounded cardinality group-
+    bys or very wide `count_distinct` sets. Streaming/spillable
+    aggregation is ledgered as a future item, not built.
+  - **Pushed-aggregate structural limits** (`pushdown.ts`'s
+    `splitPushable`): a pushed Aggregate step can only be preceded by
+    `filter` steps, never `computed_field`/`drop_fields` (those force
+    the aggregate to residual); and at most one Aggregate step is ever
+    pushed per node — a second Aggregate step always falls to residual
+    (the proven multi-level-rollup composition case above). Both are
+    disclosed v1 limitations, not bugs.
