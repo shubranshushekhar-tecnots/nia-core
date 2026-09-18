@@ -32,6 +32,21 @@ app.get("/health", (_req, res) => {
 // apps/web/src/lib/dashboard/queries.ts. Write routes (Step 3) not added yet.
 app.use("/dashboard", dashboardRouter);
 app.use("/projects", projectsRouter);
+
+// runsRouter (POST /workflows/:id/run(/cancel), GET /workflows/:id/run/
+// stream — cookie-authenticated, not Bearer, since GET .../run/stream is
+// consumed via a browser EventSource which can never attach a custom
+// Authorization header) is mounted at the SAME "/workflows" prefix as
+// workflowsRouter, but BEFORE it: workflowsRouter has a blanket
+// `.use(requireAuth, attachActor)` (Bearer-only) that runs for every
+// request matching "/workflows/*" regardless of whether one of its own
+// routes matches — so mounted first, it would intercept and 401 these
+// cookie-authed run routes before they ever reached runsRouter. Mounting
+// runsRouter first lets Express match its three specific routes directly;
+// anything else under "/workflows" correctly falls through to
+// workflowsRouter right after (runsRouter has no blanket auth of its own —
+// see that file's header comment).
+app.use("/workflows", runsRouter);
 app.use("/workflows", workflowsRouter);
 
 // Connector system (Step 4): install/uninstall, connection CRUD + test,
@@ -41,13 +56,13 @@ app.use("/connectors", connectorsRouter);
 app.use("/connections", connectionsRouter);
 app.use("/connections/:connectionId/grants", grantsRouter);
 
-// POST /chat, GET /chat/stream, POST /workflows/:id/run, GET
-// /workflows/:id/run/stream — cookie-authenticated (not Bearer, unlike
-// everything above), reached same-origin through apps/web's
-// /api/backend/:path* rewrite. See routes/chat.ts / routes/runs.ts for the
-// full rationale (EventSource can't attach a Bearer header).
+// POST /chat, GET /chat/stream — cookie-authenticated, mounted at "/" LAST
+// (chatRouter has a blanket cookie-auth .use() of its own; mounting it at
+// "/" before any Bearer-authed router above would intercept and 401 all of
+// them the same way workflowsRouter almost did to runsRouter — safe here
+// only because every router above it fully owns and responds to its own
+// prefix first). See routes/chat.ts for the EventSource/Bearer rationale.
 app.use("/", chatRouter);
-app.use("/", runsRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

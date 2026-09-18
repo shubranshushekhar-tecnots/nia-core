@@ -11,6 +11,7 @@
     "test": "vitest run",
     "smoke": "tsx scripts/dispatch-smoke.ts",
     "smoke:write": "tsx scripts/write-smoke.ts",
+    "smoke:write:mysql-mongo": "tsx scripts/write-smoke-mysql-mongo.ts",
     "smoke:chat": "tsx scripts/chat-smoke.ts",
     "smoke:mapping": "tsx scripts/mapping-smoke.ts",
     "diagnose:count": "tsx scripts/chat-count-diagnose.ts",
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@types/pg": "^8.11.10",
+    "mongodb": "^7.6.0",
     "mysql2": "^3.11.4",
     "pg": "^8.13.1",
     "tsx": "^4.19.2",

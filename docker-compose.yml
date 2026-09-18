@@ -20,6 +20,9 @@ services:
       # other table with this key.
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Phase 6 Block 5 — must match apps/worker/.env's copy exactly (worker
+      # signs the write-dispatch context, this service re-verifies it).
+      WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET}
     ports:
       - "4010:4010"   # exposed for local curl; internal-network-only in prod
     networks:
@@ -34,6 +37,9 @@ services:
       PORT: 4020
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Phase 6 Block 5 — must match apps/worker/.env's copy exactly (worker
+      # signs the write-dispatch context, this service re-verifies it).
+      WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET}
     ports:
       - "4020:4020"   # exposed for local curl; internal-network-only in prod
     networks:
