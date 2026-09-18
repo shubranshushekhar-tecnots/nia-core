@@ -1276,8 +1276,22 @@ declare
   v_conn   uuid := (select id from test_ids where key = 'connection_org');
   v_grant  public.write_grants;
   n_audit_events int;
+  v_prior_max_cred_version int;
   lifecycle_ok boolean := false;
 begin
+  -- 0018_write_grant_cred_version_bump.sql made cred_version
+  -- connection-relative (max(existing cred_version on this connection) + 1),
+  -- not a fixed "1 on first confirm" — probe 16 above already plants an
+  -- unconfirmed grant on this same connection_org fixture (for its own,
+  -- unrelated RLS-visibility purpose), which legitimately participates in
+  -- that max(). Capture the pre-confirm baseline here instead of assuming
+  -- this is the first grant ever created on the connection, so this probe
+  -- asserts 0018's real "strictly increasing relative to prior grants"
+  -- contract rather than a test-ordering-dependent literal value.
+  select coalesce(max(cred_version), 0) into v_prior_max_cred_version
+  from public.write_grants
+  where connection_id = v_conn;
+
   perform pg_temp.act_as(v_member);
 
   select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["reporting"]}'::jsonb);
@@ -1302,7 +1316,7 @@ begin
   lifecycle_ok := v_grant.confirmed_at is not null
     and v_grant.revoked_at is not null
     and v_grant.write_credential_vault_ref = 'vault:write-cred-probe-36'
-    and v_grant.cred_version = 1
+    and v_grant.cred_version = v_prior_max_cred_version + 1
     and n_audit_events = 3;
 
   if lifecycle_ok then
