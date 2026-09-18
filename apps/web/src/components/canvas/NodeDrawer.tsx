@@ -19,20 +19,14 @@ import MappingEditor from './MappingEditor';
  *   - transform                    -> TransformEditor (filter/computed/drop)
  */
 
+/* Outer box chrome (position/width/border/shadow/scroll region) now lives on
+   NodePopover.tsx's NodeToolbar wrapper (styles.ts's nodePopoverShellStyle) —
+   this component is rendered inside that shell, not as its own floating
+   panel, so this stays padding-only. Everything below this const is
+   unchanged from before the popover restructure. */
 const drawerStyle = {
-  position: 'absolute',
-  right: 16,
-  top: 16,
-  bottom: 16,
-  width: 320,
-  background: 'var(--surface)',
-  border: '1px solid var(--line2)',
-  borderRadius: 12,
-  boxShadow: '0 4px 16px rgba(15,23,42,.10)',
   padding: 16,
-  overflowY: 'auto',
   boxSizing: 'border-box',
-  zIndex: 20,
 } as const;
 
 const sectionHeaderStyle = {

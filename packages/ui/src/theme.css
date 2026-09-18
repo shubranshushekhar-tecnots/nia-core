@@ -203,6 +203,23 @@
      border, --acc-solid for the scope-toggle switch's "on" fill). */
   --acc-bd: rgba(79, 70, 229, .28);
   --acc-solid: var(--acc);
+
+  /* Workflow canvas redesign (docked rail / node popover / Copilot sidebar)
+     — new, distinctly-named tokens only. --line2 and --acc/--acc-bd/--acc-solid
+     above are shared with the Home dashboard's ChatClient.tsx (via
+     apps/web/src/components/app/styles.ts's chatCitationChipStyle etc.), so
+     their values are NOT touched here; anything the redesign needs that
+     differs from those four gets its own name instead. --panel-line is the
+     design's lighter card/panel border family (distinct from --line2's
+     stronger divider). --rail-w/--copilot-w are the docked-panel widths
+     agreed with the redesign spec (Copilot: 344px, explicit); --rail-w keeps
+     the builder palette's existing visual footprint now that it docks
+     instead of floats. */
+  --panel-line: #E7E6EE;
+  --rail-w: 256px;
+  --rail-w-collapsed: 64px;
+  --copilot-w: 344px;
+  --popover-shadow: 0 24px 56px rgba(15, 23, 42, .16);
 }
 
 /* ------------------------------------------------------------

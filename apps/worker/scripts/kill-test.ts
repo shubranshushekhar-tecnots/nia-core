@@ -422,7 +422,15 @@ async function enqueueFirstChunk(orgId: string, workflowId: string, runId: strin
   try {
     await queue.add(
       "etl_run",
-      EtlRunJob.parse({ kind: "etl_run", orgId, workflowId, runId, nodeId: "dest", cursor: null, triggeredByUserId: DEMO_USER_ID }),
+      EtlRunJob.parse({
+        kind: "etl_run",
+        scope: { orgId },
+        workflowId,
+        runId,
+        nodeId: "dest",
+        cursor: null,
+        triggeredByUserId: DEMO_USER_ID,
+      }),
       { jobId: runId },
     );
   } finally {

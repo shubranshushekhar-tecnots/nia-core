@@ -6,6 +6,7 @@ import {
   ReactFlowProvider,
   Background,
   BackgroundVariant,
+  MiniMap,
   addEdge,
   useNodesState,
   useEdgesState,
@@ -37,10 +38,20 @@ import { useChatSession } from '@/lib/chat/useChatSession';
 import { buildActivityFeed, type ActivityItem } from '@/lib/canvas/activityFeed';
 import GraphFlowNode from './GraphFlowNode';
 import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRail';
-import NodeDrawer from './NodeDrawer';
+import NodePopover from './NodePopover';
 import ChecksDock from './ChecksDock';
-import CommandBar from './CommandBar';
+import CopilotSidebar from './CopilotSidebar';
 import { brandTextStyle, breadcrumbSepStyle } from '@/components/app/styles';
+import {
+  canvasBodyStyle,
+  canvasFullscreenWrapStyle,
+  canvasSurfaceStyle,
+  topBarStyle,
+  viewportFullscreenBtnStyle,
+  viewportToolbarBtnStyle,
+  viewportToolbarDividerStyle,
+  viewportToolbarStyle,
+} from './styles';
 
 const nodeTypes = { source: GraphFlowNode, transform: GraphFlowNode, destination: GraphFlowNode };
 const AUTOSAVE_DELAY_MS = 800;
@@ -69,7 +80,24 @@ function CanvasInner({
   initialMessages: ChatMessage[];
 }) {
   const ctx = useMappingContext(connections);
-  const { screenToFlowPosition, setCenter, getNode } = useReactFlow();
+  const { screenToFlowPosition, setCenter, getNode, zoomIn, zoomOut, fitView } = useReactFlow();
+  // Wraps canvas-surface + CopilotSidebar (not just the canvas) so "full
+  // view" keeps Copilot visible/usable instead of it disappearing along
+  // with everything outside the fullscreened subtree.
+  const fullscreenRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const handler = () => setIsFullscreen(document.fullscreenElement === fullscreenRef.current);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      fullscreenRef.current?.requestFullscreen();
+    }
+  }, []);
   const queryClient = useQueryClient();
   const queryKey = useMemo(() => ['workflow-graph', workflow.id], [workflow.id]);
 
@@ -545,18 +573,7 @@ function CanvasInner({
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--canvas)' }}>
-      <header
-        style={{
-          height: 52,
-          flex: 'none',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '0 16px',
-          borderBottom: '1px solid var(--line2)',
-          background: 'var(--surface)',
-        }}
-      >
+      <header style={topBarStyle}>
         <a href="/app" style={brandTextStyle}>
           {workflow.project.name}
         </a>
@@ -611,157 +628,195 @@ function CanvasInner({
         </div>
       </header>
 
-      <div
-        data-testid="canvas-surface"
-        style={{ flex: 1, position: 'relative' }}
-        onDrop={onDrop}
-        onDragOver={(e) => e.preventDefault()}
-      >
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          onNodesChange={handleNodesChange}
-          onEdgesChange={handleEdgesChange}
-          onConnect={onConnect}
-          onNodeClick={onNodeClick}
-          onPaneClick={onPaneClick}
-          fitView
-          // A brand-new workflow mounts with zero nodes (workflow_graphs has
-          // no row yet — see seed.sql's comment on 'Canvas E2E Workflow').
-          // fitView's computed zoom for a degenerate/empty bounding box
-          // falls back to its default maxZoom (2), so the very first node a
-          // user drops renders at 200% — clamp it to 1 so an empty canvas
-          // never starts zoomed in.
-          fitViewOptions={{ maxZoom: 1 }}
-        >
-          <Background variant={BackgroundVariant.Dots} gap={20} color="var(--dot)" />
-        </ReactFlow>
-
+      <div style={canvasBodyStyle}>
         <NodesRail connections={connections} />
 
-        <CommandBar
-          connections={connections}
-          wiredConnectionIds={wiredConnectionIds}
-          selectedConnectionId={selectedNode?.data.connectionId ?? null}
-          messages={chatSession.messages}
-          streamStage={chatSession.streamStage}
-          sending={chatSession.sending}
-          transportError={chatSession.transportError}
-          send={chatSession.send}
-          retry={chatSession.retry}
-          resetConversation={chatSession.resetConversation}
-          checksDockExpanded={checksDockExpanded}
-        />
-
-        <ChecksDock
-          running={checksRunning}
-          error={checksError}
-          results={latestCheckRun?.results ?? null}
-          ranAt={latestCheckRun?.ranAt ?? null}
-          stale={checksStale}
-          expanded={checksDockExpanded}
-          onToggleExpanded={() => setChecksDockExpanded((v) => !v)}
-          onSelectNode={handleSelectCheckNode}
-          activeTab={checksDockTab}
-          onTabChange={setChecksDockTab}
-          logs={activityFeed}
-        />
-
-        {selectedNode && (
-          <NodeDrawer
-            key={selectedNode.id}
-            node={selectedNode}
-            workflowId={workflow.id}
-            upstreamSource={upstreamSource}
-            checkResults={latestCheckRun?.results ?? null}
-            onConfigChange={updateSelectedNodeConfig}
-            onDelete={deleteSelectedNode}
-            onClose={onPaneClick}
-          />
-        )}
-
-        {Object.keys(runStates).length > 0 && (
+        <div ref={fullscreenRef} style={canvasFullscreenWrapStyle}>
           <div
-            style={{
-              position: 'absolute',
-              right: 16,
-              bottom: 16,
-              zIndex: 30,
-              width: 300,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-            }}
+            data-testid="canvas-surface"
+            style={canvasSurfaceStyle}
+            onDrop={onDrop}
+            onDragOver={(e) => e.preventDefault()}
           >
-            {Object.entries(runStates).map(([destNodeId, runState]) => (
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onNodesChange={handleNodesChange}
+              onEdgesChange={handleEdgesChange}
+              onConnect={onConnect}
+              onNodeClick={onNodeClick}
+              onPaneClick={onPaneClick}
+              fitView
+              // A brand-new workflow mounts with zero nodes (workflow_graphs has
+              // no row yet — see seed.sql's comment on 'Canvas E2E Workflow').
+              // fitView's computed zoom for a degenerate/empty bounding box
+              // falls back to its default maxZoom (2), so the very first node a
+              // user drops renders at 200% — clamp it to 1 so an empty canvas
+              // never starts zoomed in.
+              fitViewOptions={{ maxZoom: 1 }}
+            >
+              <Background variant={BackgroundVariant.Dots} gap={20} color="var(--dot)" />
+              <MiniMap
+                pannable
+                zoomable
+                maskColor="rgba(15,23,42,.06)"
+                style={{ background: 'var(--surface)', border: '1px solid var(--panel-line)', borderRadius: 10 }}
+              />
+
+              {selectedNode && (
+                <NodePopover
+                  key={selectedNode.id}
+                  node={selectedNode}
+                  workflowId={workflow.id}
+                  upstreamSource={upstreamSource}
+                  checkResults={latestCheckRun?.results ?? null}
+                  onConfigChange={updateSelectedNodeConfig}
+                  onDelete={deleteSelectedNode}
+                  onClose={onPaneClick}
+                />
+              )}
+            </ReactFlow>
+
+            <div style={viewportToolbarStyle(checksDockExpanded)} data-testid="viewport-toolbar">
+              <button type="button" style={viewportToolbarBtnStyle} onClick={() => zoomOut()} aria-label="Zoom out" title="Zoom out">
+                {'\u2212'}
+              </button>
+              <button type="button" style={viewportToolbarBtnStyle} onClick={() => zoomIn()} aria-label="Zoom in" title="Zoom in">
+                {'+'}
+              </button>
+              <button
+                type="button"
+                style={viewportToolbarBtnStyle}
+                onClick={() => fitView({ maxZoom: 1, duration: 300 })}
+                aria-label="Fit view"
+                title="Fit view"
+              >
+                {'\u2317'}
+              </button>
+              <div style={viewportToolbarDividerStyle} />
+              <button
+                type="button"
+                style={viewportFullscreenBtnStyle(isFullscreen)}
+                onClick={toggleFullscreen}
+                aria-label={isFullscreen ? 'Exit full view' : 'Full view'}
+                title={isFullscreen ? 'Exit full view' : 'Full view'}
+              >
+                <span aria-hidden>{isFullscreen ? '\u2716' : '\u26F6'}</span>
+                {isFullscreen ? 'Exit full view' : 'Full view'}
+              </button>
+            </div>
+
+            <ChecksDock
+              running={checksRunning}
+              error={checksError}
+              results={latestCheckRun?.results ?? null}
+              ranAt={latestCheckRun?.ranAt ?? null}
+              stale={checksStale}
+              expanded={checksDockExpanded}
+              onToggleExpanded={() => setChecksDockExpanded((v) => !v)}
+              onSelectNode={handleSelectCheckNode}
+              activeTab={checksDockTab}
+              onTabChange={setChecksDockTab}
+              logs={activityFeed}
+            />
+
+            {Object.keys(runStates).length > 0 && (
               <div
-                key={destNodeId}
                 style={{
-                  boxSizing: 'border-box',
-                  padding: '14px 16px',
-                  borderRadius: 10,
-                  background: 'var(--surface)',
-                  border: `1px solid ${runState.status === 'error' ? 'var(--bad)' : 'var(--line2)'}`,
-                  boxShadow: 'var(--shadow)',
+                  position: 'absolute',
+                  right: 16,
+                  bottom: 16,
+                  zIndex: 30,
+                  width: 300,
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: 6,
+                  gap: 8,
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>
-                    {destLabel(destNodeId)} —{' '}
-                    {runState.status === 'starting' && 'Starting run…'}
-                    {runState.status === 'running' && 'Running…'}
-                    {runState.status === 'cancelling' && 'Cancelling…'}
-                    {runState.status === 'cancelled' && 'Cancelled'}
-                    {runState.status === 'done' && 'Complete'}
-                    {runState.status === 'error' && 'Failed'}
-                  </span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    {runState.status === 'running' && (
-                      <button
-                        type="button"
-                        onClick={() => handleCancel(destNodeId)}
-                        style={{
-                          border: '1px solid var(--line2)',
-                          background: 'none',
-                          color: 'var(--ink3)',
-                          cursor: 'pointer',
-                          fontSize: 11.5,
-                          fontWeight: 600,
-                          borderRadius: 5,
-                          padding: '2px 8px',
-                        }}
-                      >
-                        Cancel
-                      </button>
+                {Object.entries(runStates).map(([destNodeId, runState]) => (
+                  <div
+                    key={destNodeId}
+                    style={{
+                      boxSizing: 'border-box',
+                      padding: '14px 16px',
+                      borderRadius: 10,
+                      background: 'var(--surface)',
+                      border: `1px solid ${runState.status === 'error' ? 'var(--bad)' : 'var(--line2)'}`,
+                      boxShadow: 'var(--shadow)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>
+                        {destLabel(destNodeId)} —{' '}
+                        {runState.status === 'starting' && 'Starting run…'}
+                        {runState.status === 'running' && 'Running…'}
+                        {runState.status === 'cancelling' && 'Cancelling…'}
+                        {runState.status === 'cancelled' && 'Cancelled'}
+                        {runState.status === 'done' && 'Complete'}
+                        {runState.status === 'error' && 'Failed'}
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        {runState.status === 'running' && (
+                          <button
+                            type="button"
+                            onClick={() => handleCancel(destNodeId)}
+                            style={{
+                              border: '1px solid var(--line2)',
+                              background: 'none',
+                              color: 'var(--ink3)',
+                              cursor: 'pointer',
+                              fontSize: 11.5,
+                              fontWeight: 600,
+                              borderRadius: 5,
+                              padding: '2px 8px',
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          aria-label="Dismiss"
+                          onClick={() => dismissRun(destNodeId)}
+                          style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                        >
+                          {'\u2715'}
+                        </button>
+                      </div>
+                    </div>
+                    {(runState.status === 'running' ||
+                      runState.status === 'cancelling' ||
+                      runState.status === 'cancelled' ||
+                      runState.status === 'done') && (
+                      <span style={{ fontSize: 12, color: 'var(--ink3)' }}>
+                        {runState.totalRowsProcessed.toLocaleString()} row{runState.totalRowsProcessed === 1 ? '' : 's'} written
+                        {runState.status === 'done' ? ` in ${(runState.durationMs / 1000).toFixed(1)}s` : ''}
+                      </span>
                     )}
-                    <button
-                      type="button"
-                      aria-label="Dismiss"
-                      onClick={() => dismissRun(destNodeId)}
-                      style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 12, padding: 0 }}
-                    >
-                      {'\u2715'}
-                    </button>
+                    {runState.status === 'error' && <span style={{ fontSize: 12, color: 'var(--bad)' }}>{runState.message}</span>}
                   </div>
-                </div>
-                {(runState.status === 'running' ||
-                  runState.status === 'cancelling' ||
-                  runState.status === 'cancelled' ||
-                  runState.status === 'done') && (
-                  <span style={{ fontSize: 12, color: 'var(--ink3)' }}>
-                    {runState.totalRowsProcessed.toLocaleString()} row{runState.totalRowsProcessed === 1 ? '' : 's'} written
-                    {runState.status === 'done' ? ` in ${(runState.durationMs / 1000).toFixed(1)}s` : ''}
-                  </span>
-                )}
-                {runState.status === 'error' && <span style={{ fontSize: 12, color: 'var(--bad)' }}>{runState.message}</span>}
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        )}
+
+          <CopilotSidebar
+            connections={connections}
+            wiredConnectionIds={wiredConnectionIds}
+            selectedConnectionId={selectedNode?.data.connectionId ?? null}
+            messages={chatSession.messages}
+            streamStage={chatSession.streamStage}
+            sending={chatSession.sending}
+            transportError={chatSession.transportError}
+            send={chatSession.send}
+            retry={chatSession.retry}
+            resetConversation={chatSession.resetConversation}
+          />
+        </div>
       </div>
     </div>
   );
