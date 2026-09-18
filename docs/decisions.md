@@ -446,3 +446,37 @@ credential entry + two-step confirm) now explicitly lands in **Block 5
 (write-path generalization)**, where mysql/mongo destination dialects
 make the per-dialect statement text a real requirement anyway rather
 than a supabase-only stub.
+
+## User-authorized fast mode (2026-09-18): full proof battery deferred
+
+User explicitly directed a speed-priority pass on Phase 6 Block 4/5
+rather than the full proof battery: "skip unnecessary tests... we can
+come back and fix small bugs later." Recorded here so this isn't
+mistaken for silently-dropped rigor later. **Deferred to a named
+verification session before PHASE6_EXIT:**
+
+- The full 1,000,000-row × 2-runs kill -9 resilience test
+  (`apps/worker/scripts/kill-test.ts` — script exists, written Block 4,
+  still unrun at full scale). A smaller mechanism-only version (single
+  kill point, reduced row count) was run in its place this session — see
+  this session's kill-test artifact log for the row count/kill point
+  actually used, and the result.
+- The grant/run/status-panel Playwright E2E test (Block 4's other
+  planned proof artifact).
+- A live probe battery / isolation measurement pass across the new
+  mysql/mongodb write paths (Block 5) beyond the single 3-row live smoke
+  test each got this session.
+
+**Two standing pointers, answered plainly so a future session doesn't
+have to re-derive them:**
+- Checkpoint/cursor truth lives in Postgres (`workflow_runs.cursor_json`,
+  migration `0017_run_checkpoints.sql`), not the Redis job payload — see
+  `runEtl.ts`'s resume logic and Block 3.5 item 1 above. The job payload
+  cursor is a transport hint only; the persisted cursor always wins on
+  redelivery/resume.
+- The entity run-gate is a hard runtime precondition: `runEtl.ts`/
+  `startWorkflowRun` reject an unset source entity at run start (not a
+  soft warn) — `checks.ts`'s pre-flight check stays `warn`-level by
+  design (existing graphs keep checking green), but the Run button's own
+  tooltip and the runner itself both enforce hard-fail. See Block 3.5
+  item 2 above.

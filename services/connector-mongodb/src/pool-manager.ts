@@ -55,12 +55,11 @@ async function resolveVaultSecret(vaultRef: string): Promise<{ user: string; pas
   return { user: (data as { user: string }).user, password: (data as { password: string }).password };
 }
 
-export async function getDb(cred: CredentialRef, config: ConnectorConfig): Promise<Db> {
-  const key = `${cred.connectionId}:${cred.credVersion}`;
+function createMongoClient(key: string, cred: CredentialRef, config: ConnectorConfig): Promise<{ client: MongoClient; db: Db }> {
   const existing = pools.get(key);
   if (existing) {
     existing.lastUsed = Date.now();
-    return (await existing.clientPromise).db;
+    return existing.clientPromise;
   }
 
   // Build the promise and write it to the cache before any await runs —
@@ -78,7 +77,48 @@ export async function getDb(cred: CredentialRef, config: ConnectorConfig): Promi
   clientPromise.catch(() => {
     if (pools.get(key)?.clientPromise === clientPromise) pools.delete(key);
   });
-  return (await clientPromise).db;
+  return clientPromise;
+}
+
+export async function getDb(cred: CredentialRef, config: ConnectorConfig): Promise<Db> {
+  const { db } = await createMongoClient(`${cred.connectionId}:${cred.credVersion}`, cred, config);
+  return db;
+}
+
+/**
+ * Phase 6 Block 5 — write path gets its own client, keyed
+ * `connectionId:write:credVersion`, mirroring connector-mysql/
+ * connector-supabase's getWritePool exactly: a write credential never
+ * shares a connection with the read pool. `cred.credVersion` here is the
+ * write grant's own cred_version (0016_write_grants.sql), not the
+ * connection's read-side one.
+ */
+export async function getWriteDb(cred: CredentialRef, config: ConnectorConfig): Promise<Db> {
+  const { db } = await createMongoClient(`${cred.connectionId}:write:${cred.credVersion}`, cred, config);
+  return db;
+}
+
+/**
+ * Phase 6 Block 5 — connector-side re-check of the write grant referenced
+ * by the signed context, independent of the worker's own pre-dispatch
+ * check. Mirrors connector-mysql/connector-supabase's verifyActiveWriteGrant
+ * exactly (same write_grants table, same service-role lookup).
+ */
+export async function verifyActiveWriteGrant(
+  grantId: string,
+  connectionId: string,
+  namespace: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("write_grants")
+    .select("scope, confirmed_at, revoked_at")
+    .eq("id", grantId)
+    .eq("connection_id", connectionId)
+    .maybeSingle();
+  if (error || !data) return false;
+  if (!data.confirmed_at || data.revoked_at) return false;
+  const schemas = (data.scope as { schemas?: unknown } | null)?.schemas;
+  return Array.isArray(schemas) && schemas.includes(namespace);
 }
 
 export async function evict(connectionId: string): Promise<boolean> {

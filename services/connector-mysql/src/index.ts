@@ -4,15 +4,19 @@ import {
   IntrospectRequest,
   ExecuteRequest,
   InvalidateRequest,
+  WriteRequest,
   type TabularResult,
+  type WriteResponse,
 } from "@nia/schemas";
-import { getPool, evict, poolCount } from "./pool-manager.js";
+import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant } from "./pool-manager.js";
+import { verifyWriteContext } from "./writeSignature.js";
+import { buildUpsertSql } from "./writeSql.js";
 
 /**
  * connector-mysql — one shared service per tool type on the internal Docker
- * network. Uniform contract: /test /introspect /execute /invalidate /health.
- * (/write and /invoke arrive with the write-grant and actions phases,
- * on separate endpoints with their own pool keys and audit trail.)
+ * network. Uniform contract: /test /introspect /execute /invalidate /health,
+ * plus /write (Phase 6 Block 5 — this connector's etl_sink capability,
+ * mirroring connector-supabase's write path exactly, just MySQL-dialect).
  *
  * The worker sends dialect-native, guardrail-approved queries. This service's
  * jobs are pooling, execution, and normalization to the tabular shape.
@@ -24,7 +28,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-mysql",
   pools: poolCount(),
-  routes: ["test", "introspect", "execute", "invalidate"],
+  routes: ["test", "introspect", "execute", "invalidate", "write"],
 }));
 
 app.post("/test", async (req) => {
@@ -115,6 +119,85 @@ app.post("/execute", async (req): Promise<TabularResult> => {
       truncated,
     },
   };
+});
+
+/**
+ * Phase 6 Block 5 — write path. Mirrors connector-supabase's /write exactly
+ * (same validation order, same two independent checks before any SQL runs:
+ * verifyWriteContext's HMAC+freshness, then a fresh verifyActiveWriteGrant
+ * lookup) — see that file's header comment for the full rationale. Only
+ * difference is dialect: buildUpsertSql (writeSql.ts) emits MySQL's
+ * `ON DUPLICATE KEY UPDATE` instead of Postgres's `ON CONFLICT`, and this
+ * runs the statement via pool.query directly (mysql2's client-side
+ * `timeout` option) rather than a executeWithStatementTimeout wrapper —
+ * connector-mysql has never had one; /execute above uses the same
+ * pool.query({sql, values, timeout}) shape.
+ */
+const WRITE_ROW_CAP = Number(process.env.WRITE_ROW_CAP ?? 5000);
+
+app.post("/write", async (req): Promise<WriteResponse> => {
+  const body = WriteRequest.parse(req.body);
+
+  if (body.rows.length > WRITE_ROW_CAP) {
+    throw new Error(`write request has ${body.rows.length} rows, exceeding the ${WRITE_ROW_CAP}-row cap per call`);
+  }
+  for (const row of body.rows) {
+    if (row.length !== body.columns.length) {
+      throw new Error(`row has ${row.length} values, expected ${body.columns.length} (one per column)`);
+    }
+  }
+  for (const key of body.upsertKeys) {
+    if (!body.columns.includes(key)) {
+      throw new Error(`upsertKey "${key}" is not present in columns`);
+    }
+  }
+
+  if (body.entity.namespace !== body.context.entity.namespace || body.entity.name !== body.context.entity.name) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+  const requestColumns = new Set(body.columns);
+  const contextColumns = new Set(body.context.columns);
+  const columnsMatch =
+    requestColumns.size === contextColumns.size && [...requestColumns].every((c) => contextColumns.has(c));
+  if (!columnsMatch) {
+    throw new Error("request columns do not match the signed context's columns");
+  }
+  if (body.context.connectionId !== body.credential.connectionId) {
+    throw new Error("signed context connectionId does not match the request credential");
+  }
+
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const signatureValid = verifyWriteContext(
+    {
+      connectionId: body.context.connectionId,
+      grantId: body.context.grantId,
+      entity: body.context.entity,
+      columns: body.context.columns,
+      issuedAt: body.context.issuedAt,
+    },
+    body.context.signature,
+    secret,
+  );
+  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+
+  const grantActive = await verifyActiveWriteGrant(
+    body.context.grantId,
+    body.context.connectionId,
+    body.entity.namespace,
+  );
+  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+
+  const pool = await getWritePool(body.credential, body.config);
+  const sql = buildUpsertSql(body.entity, body.columns, body.upsertKeys, body.rows.length);
+  const start = Date.now();
+  const [result] = await pool.query({
+    sql,
+    values: body.rows.flat(),
+    timeout: body.timeoutMs,
+  });
+  const written = (result as { affectedRows?: number }).affectedRows ?? 0;
+  return { written, durationMs: Date.now() - start };
 });
 
 app.post("/invalidate", async (req) => {

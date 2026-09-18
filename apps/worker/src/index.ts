@@ -127,7 +127,18 @@ const heavy = new Worker(
       }
     }
   },
-  { connection, concurrency: 3 },
+  // maxStalledCount: 5 — BullMQ's own default is 1, meaning a job is
+  // permanently failed ("job stalled more than allowable limit", via
+  // job.deferredFailure — bypasses `attempts` entirely, see worker.js's
+  // getUnrecoverableErrorMessage) the *second* time it's ever detected
+  // stalled, no matter how many `attempts` its opts allow. A worker
+  // process that dies mid-chunk (crash, redeploy, `kill -9`) always leaves
+  // its current job stalled once; tolerating only one such event across a
+  // run's entire lifetime is too fragile for a long-running chunked ETL
+  // job that resumes safely from Postgres's checkpoint (see runEtl.ts's
+  // header comment) — discovered via Block 4's kill test permanently
+  // stalling a run on its second kill.
+  { connection, concurrency: 3, maxStalledCount: 5 },
 );
 
 // Registered once at boot — upsertJobScheduler is idempotent (keyed by

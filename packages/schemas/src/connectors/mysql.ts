@@ -9,10 +9,14 @@ import type { ConnectorManifest } from "../manifest.js";
  * host/port/database are non-secret and live in Postgres so they can be
  * SSRF-validated at save/connect time and displayed without a Vault round trip.
  *
- * Only "read" is listed in `operations`: connector-mysql's /execute endpoint
- * runs whatever dialect-native query the worker sends, but until the worker's
- * guardrails + write-grant enforcement exist, MySQL is wired read-only. Write
- * verbs (insert/update/delete/push_dataset) come with other connectors later.
+ * Only "read" is listed in `operations` — connector-mysql's /execute endpoint
+ * runs whatever dialect-native query the worker sends, and the ETL write path
+ * (Phase 6 Block 5) dispatches writes directly via dispatchWrite()/entity+
+ * upsertKeys, not through the operations-radio-driven action-node mechanism
+ * (same pattern as connector-supabase, which also keeps operations:["read"]
+ * despite having a working /write). `capabilities` does carry "etl_sink" now
+ * that connector-mysql/src/index.ts exposes POST /write (batch upsert via
+ * `ON DUPLICATE KEY UPDATE`, HMAC-checked write context + grant re-check).
  */
 export const mysqlManifest: ConnectorManifest = {
   id: "mysql",
@@ -28,6 +32,6 @@ export const mysqlManifest: ConnectorManifest = {
     { key: "password", label: "Password", type: "password", required: true, secret: true },
   ],
   operations: ["read"],
-  capabilities: ["queryable", "etl_source"],
+  capabilities: ["queryable", "etl_source", "etl_sink"],
   service: { host: "connector-mysql", port: 4010 },
 };

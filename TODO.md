@@ -72,4 +72,14 @@
   just nudge the drawer. This is a decision to implement in Phase 6 Block 4's
   run-gating work (the `checks` requested set the Run button already
   evaluates), not a code change yet — recorded here so Block 4 doesn't
-  relitigate it.
+  relitigate it. **Done, Block 3.5:** `runEtl.ts`/`startWorkflowRun`
+  hard-reject an unset entity at run start; `checks.ts` stays `warn`
+  deliberately (see `docs/decisions.md`'s Block 3.5 entry).
+- **User-authorized fast mode (2026-09-18):** the full kill test (1M
+  rows × 2 runs), the grant/run/status Playwright E2E, a live probe
+  battery, and an isolation measurement pass across the new
+  mysql/mongodb write paths were DEFERRED to a named verification
+  session before PHASE6_EXIT, in favor of shipping Block 5 (write-path
+  generalization) same-day. A reduced mechanism-only kill test ran in
+  the full test's place — see `docs/decisions.md`'s matching entry for
+  the full writeup and exactly what's still owed.

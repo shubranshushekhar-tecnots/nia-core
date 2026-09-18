@@ -3,13 +3,17 @@ import type { ConnectorManifest } from "../manifest.js";
 /**
  * connector-mongodb's contract mirrors connector-mysql's: `config` jsonb
  * (host/port/database — SSRF-validatable, non-secret) plus a Vault-resolved
- * `user`/`password` fetched by the service itself. Read-only v1
- * (aggregation-pipeline only, enforced by @nia/guardrails's
+ * `user`/`password` fetched by the service itself. Reads stay
+ * pipeline-only (aggregation-pipeline, enforced by @nia/guardrails's
  * validateMongoPipeline before dispatch) — only "read" is listed in
- * `operations`, matching MySQL's current stance.
+ * `operations`, matching MySQL's/Supabase's stance (the ETL write path
+ * dispatches directly via dispatchWrite()/entity+upsertKeys, not through
+ * the operations-radio action-node mechanism).
  *
- * capabilities is ["queryable","etl_source"] only — no "etl_sink", since a
- * read-only connector cannot be a data sink.
+ * capabilities now carries "etl_sink": connector-mongodb/src/index.ts
+ * exposes POST /write (Phase 6 Block 5 — batch bulkWrite replaceOne
+ * upserts, HMAC-checked write context + grant re-check, same contract as
+ * the SQL dialects).
  */
 export const mongodbManifest: ConnectorManifest = {
   id: "mongodb",
@@ -25,6 +29,6 @@ export const mongodbManifest: ConnectorManifest = {
     { key: "password", label: "Password", type: "password", required: true, secret: true },
   ],
   operations: ["read"],
-  capabilities: ["queryable", "etl_source"],
+  capabilities: ["queryable", "etl_source", "etl_sink"],
   service: { host: "connector-mongodb", port: 4020 },
 };

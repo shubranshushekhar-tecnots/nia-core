@@ -64,8 +64,7 @@ async function resolveVaultSecret(vaultRef: string): Promise<{ user: string; pas
   return { user: (data as { user: string }).user, password: (data as { password: string }).password };
 }
 
-export async function getPool(cred: CredentialRef, config: ConnectorConfig): Promise<mysql.Pool> {
-  const key = `${cred.connectionId}:${cred.credVersion}`;
+function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): Promise<mysql.Pool> {
   const existing = pools.get(key);
   if (existing) {
     existing.lastUsed = Date.now();
@@ -92,6 +91,46 @@ export async function getPool(cred: CredentialRef, config: ConnectorConfig): Pro
     if (pools.get(key)?.poolPromise === poolPromise) pools.delete(key);
   });
   return poolPromise;
+}
+
+export async function getPool(cred: CredentialRef, config: ConnectorConfig): Promise<mysql.Pool> {
+  return createPool(`${cred.connectionId}:${cred.credVersion}`, cred, config);
+}
+
+/**
+ * Phase 6 Block 5 — write path gets its own pool, keyed
+ * `connectionId:write:credVersion`, mirroring connector-supabase's
+ * getWritePool exactly: a write credential never shares a socket with the
+ * read pool (different MySQL user, different privilege level, different
+ * vaultRef). `cred.credVersion` here is the write grant's own cred_version
+ * (0016_write_grants.sql), not the connection's read-side one.
+ */
+export async function getWritePool(cred: CredentialRef, config: ConnectorConfig): Promise<mysql.Pool> {
+  return createPool(`${cred.connectionId}:write:${cred.credVersion}`, cred, config);
+}
+
+/**
+ * Phase 6 Block 5 — connector-side re-check of the write grant referenced
+ * by the signed context, independent of the worker's own pre-dispatch
+ * check. Mirrors connector-supabase's verifyActiveWriteGrant exactly (same
+ * write_grants table, same service-role lookup) — see that file's comment
+ * for the full rationale.
+ */
+export async function verifyActiveWriteGrant(
+  grantId: string,
+  connectionId: string,
+  namespace: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("write_grants")
+    .select("scope, confirmed_at, revoked_at")
+    .eq("id", grantId)
+    .eq("connection_id", connectionId)
+    .maybeSingle();
+  if (error || !data) return false;
+  if (!data.confirmed_at || data.revoked_at) return false;
+  const schemas = (data.scope as { schemas?: unknown } | null)?.schemas;
+  return Array.isArray(schemas) && schemas.includes(namespace);
 }
 
 export async function evict(connectionId: string): Promise<boolean> {

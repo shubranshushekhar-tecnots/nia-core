@@ -21,7 +21,12 @@ const queue = new Queue(QUEUE_HEAVY, { connection });
  * workflow_runs.id and lib/runChannel.ts's channel/replay keys.
  */
 export async function enqueueEtlRun(job: EtlRunJob): Promise<void> {
-  await queue.add("etl_run", EtlRunJob.parse(job), { jobId: job.runId });
+  // attempts: 3 — see runEtl.ts's matching self-enqueue comment: BullMQ
+  // defaults to 0 retries when unset, which permanently fails a job on its
+  // first stall detection instead of redelivering it. Applied here too so
+  // the very first chunk of a run gets the same stall tolerance as every
+  // chunk after it.
+  await queue.add("etl_run", EtlRunJob.parse(job), { jobId: job.runId, attempts: 3 });
 }
 
 /**

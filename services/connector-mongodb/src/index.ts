@@ -5,11 +5,15 @@ import {
   IntrospectRequest,
   ExecuteRequest,
   InvalidateRequest,
+  WriteRequest,
   type TabularResult,
+  type WriteResponse,
 } from "@nia/schemas";
-import { getDb, evict, poolCount } from "./pool-manager.js";
+import { getDb, getWriteDb, evict, poolCount, verifyActiveWriteGrant } from "./pool-manager.js";
 import { flattenDocuments } from "./flatten.js";
 import { resolveColumnType, serializeCellValue } from "./column-types.js";
+import { verifyWriteContext } from "./writeSignature.js";
+import { buildBulkWriteOps } from "./writeOps.js";
 
 /**
  * apps/worker's queryBuilder.ts (Phase 6 Block 3.5) sends _id cursor values
@@ -39,7 +43,8 @@ function hydrateObjectIdCursor(pipeline: Record<string, unknown>[]): Record<stri
 
 /**
  * connector-mongodb — mirrors connector-mysql's contract exactly:
- * /test /introspect /execute /invalidate /health.
+ * /test /introspect /execute /invalidate /health, plus /write (Phase 6
+ * Block 5 — this connector's etl_sink capability).
  *
  * ExecuteRequest.query is the shared discriminated QueryPayload
  * (see @nia/schemas contract.ts); this service only accepts the
@@ -55,7 +60,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-mongodb",
   pools: poolCount(),
-  routes: ["test", "introspect", "execute", "invalidate"],
+  routes: ["test", "introspect", "execute", "invalidate", "write"],
 }));
 
 app.post("/test", async (req) => {
@@ -126,6 +131,82 @@ app.post("/execute", async (req): Promise<TabularResult> => {
       truncated,
     },
   };
+});
+
+/**
+ * Phase 6 Block 5 — write path. Mirrors connector-mysql/connector-supabase's
+ * /write exactly (same validation order, same two independent checks before
+ * anything runs: verifyWriteContext's HMAC+freshness, then a fresh
+ * verifyActiveWriteGrant lookup) — see connector-supabase/src/index.ts's
+ * header comment for the full rationale. Only difference is dialect:
+ * buildBulkWriteOps (writeOps.ts) produces `bulkWrite` replaceOne/upsert
+ * operations instead of parameterized SQL text. entity.name is the target
+ * collection; entity.namespace is the database (matches /introspect's
+ * `namespace: config.database` convention), used only for the grant-scope
+ * check below, not to select a different database than the pooled
+ * connection's own (config.database).
+ */
+const WRITE_ROW_CAP = Number(process.env.WRITE_ROW_CAP ?? 5000);
+
+app.post("/write", async (req): Promise<WriteResponse> => {
+  const body = WriteRequest.parse(req.body);
+
+  if (body.rows.length > WRITE_ROW_CAP) {
+    throw new Error(`write request has ${body.rows.length} rows, exceeding the ${WRITE_ROW_CAP}-row cap per call`);
+  }
+  for (const row of body.rows) {
+    if (row.length !== body.columns.length) {
+      throw new Error(`row has ${row.length} values, expected ${body.columns.length} (one per column)`);
+    }
+  }
+  for (const key of body.upsertKeys) {
+    if (!body.columns.includes(key)) {
+      throw new Error(`upsertKey "${key}" is not present in columns`);
+    }
+  }
+
+  if (body.entity.namespace !== body.context.entity.namespace || body.entity.name !== body.context.entity.name) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+  const requestColumns = new Set(body.columns);
+  const contextColumns = new Set(body.context.columns);
+  const columnsMatch =
+    requestColumns.size === contextColumns.size && [...requestColumns].every((c) => contextColumns.has(c));
+  if (!columnsMatch) {
+    throw new Error("request columns do not match the signed context's columns");
+  }
+  if (body.context.connectionId !== body.credential.connectionId) {
+    throw new Error("signed context connectionId does not match the request credential");
+  }
+
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const signatureValid = verifyWriteContext(
+    {
+      connectionId: body.context.connectionId,
+      grantId: body.context.grantId,
+      entity: body.context.entity,
+      columns: body.context.columns,
+      issuedAt: body.context.issuedAt,
+    },
+    body.context.signature,
+    secret,
+  );
+  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+
+  const grantActive = await verifyActiveWriteGrant(
+    body.context.grantId,
+    body.context.connectionId,
+    body.entity.namespace,
+  );
+  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+
+  const db = await getWriteDb(body.credential, body.config);
+  const ops = buildBulkWriteOps(body.columns, body.upsertKeys, body.rows);
+  const start = Date.now();
+  const result = await db.collection(body.entity.name).bulkWrite(ops);
+  const written = result.upsertedCount + result.matchedCount;
+  return { written, durationMs: Date.now() - start };
 });
 
 app.post("/invalidate", async (req) => {

@@ -255,6 +255,16 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   if (raceDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, raceDelayMs));
 
   const nextJob: EtlRunJob = { ...job, cursor: JSON.stringify({ lastKey: nextKey } satisfies Cursor) };
-  await queue.add("etl_run", nextJob, { jobId: randomUUID() });
+  // attempts: 3 — BullMQ's actual default when unset is 0 (see bullmq's
+  // Job constructor), meaning a job that stalls (e.g. its worker is killed
+  // mid-chunk) is moved to permanent failure on the *first* stall detection,
+  // never redelivered. That silently defeats the whole point of this
+  // runner's checkpoint-truth design (see this file's header comment: "a
+  // BullMQ stalled-job retry redelivering the exact same job is safe to
+  // fully re-run") — discovered via Block 4's kill test landing a kill
+  // mid-lock and getting the run permanently stuck. Redelivery is safe here
+  // specifically because every invocation re-derives from the persisted
+  // Postgres cursor rather than trusting its own payload.
+  await queue.add("etl_run", nextJob, { jobId: randomUUID(), attempts: 3 });
   return { status: "chunk", nextCursor: nextKey };
 }
