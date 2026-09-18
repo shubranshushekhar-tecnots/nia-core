@@ -57,6 +57,27 @@ app.post("/introspect", async (req) => {
      WHERE table_schema NOT IN ('information_schema','pg_catalog','pg_toast')
      ORDER BY table_schema, table_name, ordinal_position`,
   );
+  // Postgres's information_schema.columns has no PK flag of its own (unlike
+  // MySQL's column_key) — primary-key columns are discovered separately via
+  // table_constraints + key_column_usage, filtered to PRIMARY KEY, and
+  // merged in below. Phase 6 Block 3.5: backs IntrospectResponse's
+  // per-entity primaryKey used for the ETL runner's keyset pagination.
+  const pkResult = await pool.query(
+    `SELECT tc.table_schema, tc.table_name, kcu.column_name
+     FROM information_schema.table_constraints tc
+     JOIN information_schema.key_column_usage kcu
+       ON kcu.constraint_name = tc.constraint_name
+      AND kcu.constraint_schema = tc.constraint_schema
+     WHERE tc.constraint_type = 'PRIMARY KEY'
+       AND tc.table_schema NOT IN ('information_schema','pg_catalog','pg_toast')`,
+  );
+  const pkColsByEntity = new Map<string, string[]>();
+  for (const r of pkResult.rows as Array<Record<string, string>>) {
+    const key = `${r.table_schema}.${r.table_name}`;
+    if (!pkColsByEntity.has(key)) pkColsByEntity.set(key, []);
+    pkColsByEntity.get(key)!.push(r.column_name!);
+  }
+
   const byEntity = new Map<string, { namespace: string; name: string; fields: { name: string; type: string }[] }>();
   for (const r of result.rows as Array<Record<string, string>>) {
     const key = `${r.table_schema}.${r.table_name}`;
@@ -65,7 +86,14 @@ app.post("/introspect", async (req) => {
     }
     byEntity.get(key)!.fields.push({ name: r.column_name!, type: r.data_type! });
   }
-  return { entities: [...byEntity.values()] };
+  // Single-column PK only — composite PKs report null (same as no PK
+  // found), since keyset pagination needs one orderable value.
+  return {
+    entities: [...byEntity.entries()].map(([key, entity]) => {
+      const pkCols = pkColsByEntity.get(key) ?? [];
+      return { ...entity, primaryKey: pkCols.length === 1 ? pkCols[0]! : null };
+    }),
+  };
 });
 
 app.post("/execute", async (req): Promise<TabularResult> => {

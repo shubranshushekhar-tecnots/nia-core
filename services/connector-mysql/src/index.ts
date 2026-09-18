@@ -47,22 +47,42 @@ app.post("/introspect", async (req) => {
   // regardless of the case used in this query text, so explicit lowercase
   // aliases are required (not just style) to make the destructuring below
   // actually populate instead of silently reading `undefined`.
+  //
+  // column_key is native to information_schema.columns ('PRI' marks a
+  // primary-key column) — no join needed here, unlike Postgres (see
+  // connector-supabase's /introspect). Phase 6 Block 3.5: this is what
+  // lets IntrospectResponse report a verified-unique key per entity for
+  // the ETL runner's keyset pagination.
   const [rows] = await pool.query(
     `SELECT table_schema AS table_schema, table_name AS table_name,
-            column_name AS column_name, data_type AS data_type
+            column_name AS column_name, data_type AS data_type,
+            column_key AS column_key
      FROM information_schema.columns
      WHERE table_schema NOT IN ('information_schema','mysql','performance_schema','sys')
      ORDER BY table_schema, table_name, ordinal_position`,
   );
-  const byEntity = new Map<string, { namespace: string; name: string; fields: { name: string; type: string }[] }>();
+  const byEntity = new Map<
+    string,
+    { namespace: string; name: string; fields: { name: string; type: string }[]; primaryKeyCols: string[] }
+  >();
   for (const r of rows as Array<Record<string, string>>) {
     const key = `${r.table_schema}.${r.table_name}`;
     if (!byEntity.has(key)) {
-      byEntity.set(key, { namespace: r.table_schema!, name: r.table_name!, fields: [] });
+      byEntity.set(key, { namespace: r.table_schema!, name: r.table_name!, fields: [], primaryKeyCols: [] });
     }
-    byEntity.get(key)!.fields.push({ name: r.column_name!, type: r.data_type! });
+    const entity = byEntity.get(key)!;
+    entity.fields.push({ name: r.column_name!, type: r.data_type! });
+    if (r.column_key === "PRI") entity.primaryKeyCols.push(r.column_name!);
   }
-  return { entities: [...byEntity.values()] };
+  // Single-column PK only — a composite PK can't drive keyset pagination
+  // (WHERE key > cursor needs one orderable value), so it's reported the
+  // same as "no key found" (null) rather than picking one column.
+  return {
+    entities: [...byEntity.values()].map(({ primaryKeyCols, ...entity }) => ({
+      ...entity,
+      primaryKey: primaryKeyCols.length === 1 ? primaryKeyCols[0]! : null,
+    })),
+  };
 });
 
 app.post("/execute", async (req): Promise<TabularResult> => {

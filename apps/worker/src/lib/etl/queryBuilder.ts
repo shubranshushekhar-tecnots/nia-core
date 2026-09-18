@@ -1,7 +1,8 @@
 import type { DialectQuery, QueryPayload, SourceDialect } from "@nia/schemas";
 
 /**
- * Phase 6 Block 3 — builds the real ETL runner's per-chunk read query.
+ * Phase 6 Block 3 (offset pagination) / Block 3.5 (keyset pagination) —
+ * builds the real ETL runner's per-chunk read query.
  *
  * Deliberately NOT the same shape as apps/worker/src/lib/preview/
  * runPreview.ts's buildPreviewQuery: that helper aliases `from AS to`
@@ -12,14 +13,14 @@ import type { DialectQuery, QueryPayload, SourceDialect } from "@nia/schemas";
  * columns — the in-process residualTransform.ts step and the final
  * from->to mapping projection both happen afterward, in runEtl.ts.
  *
- * `orderColumn` is a best-effort stability aid for offset pagination:
- * contract.ts's IntrospectResponse carries no primary-key marker, so there
- * is no dialect-agnostic way to know a real key column. SQL sources sort by
- * the first introspected field name (or omit ORDER BY entirely if the
- * entity has no fields) — good enough to make repeated chunks reasonably
- * stable in practice, not a correctness guarantee against concurrent writes
- * to the source during a run. Mongo sources always sort by `_id` instead
- * (guaranteed to exist and be stable), ignoring `orderColumn`.
+ * Block 3.5: replaced LIMIT/OFFSET (safe only under an assumption that a
+ * non-unique sort column has no ties, which isn't guaranteed) with keyset
+ * pagination — `WHERE key > cursor ORDER BY key LIMIT n` — immune to ties
+ * and to offset drift from concurrent writes during the run. `keyColumn`
+ * for SQL sources is IntrospectResponse's verified single-column primary
+ * key (contract.ts); runEtl.ts hard-fails before ever calling this if the
+ * source entity has none. Mongo sources always key off `_id` (guaranteed
+ * unique), ignoring `keyColumn`, same as before.
  */
 
 /** Guardrails cap every query's effective row count at 1000 regardless of what's requested (packages/guardrails/src/sql/validator.ts and mongodb.ts) — clamping here makes that explicit instead of silently truncated downstream. */
@@ -34,23 +35,39 @@ export function buildEtlReadQuery(
   dialect: SourceDialect,
   entity: { namespace: string; name: string },
   dialectQuery: DialectQuery | null,
-  orderColumn: string | undefined,
-  offset: number,
+  keyColumn: string | undefined,
+  cursor: string | number | null,
   limit: number,
 ): QueryPayload {
   if (dialect === "mongo") {
     const pipeline: Record<string, unknown>[] =
       dialectQuery && dialectQuery.dialect === "mongo" ? [...dialectQuery.pipeline] : [];
-    pipeline.push({ $sort: { _id: 1 } }, { $skip: offset }, { $limit: limit });
+    if (cursor !== null) pipeline.push({ $match: { _id: { $gt: cursor } } });
+    pipeline.push({ $sort: { _id: 1 } }, { $limit: limit });
     return { kind: "mongo", collection: entity.name, pipeline };
   }
 
+  // SQL callers must have already verified keyColumn is a real, single-
+  // column unique key (runEtl.ts's hard-fail precondition) — this function
+  // doesn't re-verify that itself, it only builds the query shape.
+  if (!keyColumn) {
+    throw new Error("buildEtlReadQuery: SQL dialects require a keyColumn for keyset pagination.");
+  }
   const sqlQuery = dialectQuery && dialectQuery.dialect !== "mongo" ? dialectQuery : null;
   const selectParts = ["*"];
   if (sqlQuery?.selectSql) selectParts.push(sqlQuery.selectSql);
   const from = `${quoteIdent(entity.namespace, dialect)}.${quoteIdent(entity.name, dialect)}`;
-  const where = sqlQuery?.whereSql ? ` WHERE ${sqlQuery.whereSql}` : "";
-  const orderBy = orderColumn ? ` ORDER BY ${quoteIdent(orderColumn, dialect)}` : "";
-  const sql = `SELECT ${selectParts.join(", ")} FROM ${from}${where}${orderBy} LIMIT ${limit} OFFSET ${offset}`;
-  return { kind: "sql", sql, params: sqlQuery?.params ?? [] };
+  const quotedKey = quoteIdent(keyColumn, dialect);
+  const params = [...(sqlQuery?.params ?? [])];
+  const conditions = sqlQuery?.whereSql ? [sqlQuery.whereSql] : [];
+  if (cursor !== null) {
+    // params are positional (?/$n resolved downstream per-dialect by the
+    // connector, same convention as sqlQuery.params) — the cursor param is
+    // appended last since it's added last to `conditions`.
+    conditions.push(`${quotedKey} > ${dialect === "mysql" ? "?" : `$${params.length + 1}`}`);
+    params.push(cursor);
+  }
+  const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+  const sql = `SELECT ${selectParts.join(", ")} FROM ${from}${where} ORDER BY ${quotedKey} LIMIT ${limit}`;
+  return { kind: "sql", sql, params };
 }

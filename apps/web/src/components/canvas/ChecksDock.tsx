@@ -7,8 +7,8 @@ import type { ActivityItem } from '@/lib/canvas/activityFeed';
  * Full-width bottom dock for the canvas (Phase 5 Session 3 Task 2
  * completion pass) — replaces CheckResultsPanel.tsx's right-anchored
  * dropdown. "Logs" went live in Session 4 — merged check-run + chat-query
- * feed from activityFeed.ts; a `kind: 'run'` source joins it once Phase 6's
- * execution SSE-replay channel exists.
+ * feed from activityFeed.ts; Phase 6 Block 3.5 added the `kind: 'run'`
+ * source (FlowCanvas.tsx's own live run-stream events, throttled).
  *
  * Collapse/expand is driven entirely by the summary pill ("All checks
  * passed ⌄" / "N failing ⌄" / "Checks out of date ⌄"), which doubles as
@@ -203,7 +203,7 @@ export default function ChecksDock({
       {expanded && activeTab === 'logs' && (
         <div style={bodyStyle} data-testid="checks-dock-logs">
           {logs.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>Run logs arrive with execution (Phase 6)</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No activity yet — checks, chat, and run events will appear here.</div>
           ) : (
             logs.map((l, i) => (
               <div key={`${l.kind}-${l.time}-${i}`} style={logRowStyle}>

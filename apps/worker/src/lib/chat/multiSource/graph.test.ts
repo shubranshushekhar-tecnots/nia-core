@@ -69,6 +69,7 @@ const schema: IntrospectResponse = {
         { name: "name", type: "text" },
         { name: "salary", type: "numeric" },
       ],
+      primaryKey: null,
     },
   ],
 };

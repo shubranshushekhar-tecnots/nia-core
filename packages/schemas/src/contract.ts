@@ -54,6 +54,19 @@ export const IntrospectResponse = z.object({
       namespace: z.string(),
       name: z.string(),
       fields: z.array(z.object({ name: z.string(), type: z.string() })),
+      /**
+       * Single-column verified-unique key for this entity, if one exists
+       * (SQL: the sole PRIMARY KEY column; null if the table has no PK or a
+       * composite one — composite-key keyset pagination isn't supported,
+       * so those entities are treated the same as "no key found"). Mongo
+       * connectors never populate this — apps/worker/src/lib/etl/
+       * queryBuilder.ts always keys Mongo off `_id` instead, which is
+       * unconditionally unique. Phase 6 Block 3.5: this is what lets the
+       * ETL runner do keyset pagination (WHERE key > cursor) instead of
+       * OFFSET, and what backs the "no unique key → hard fail at run
+       * start" precondition in runEtl.ts.
+       */
+      primaryKey: z.string().nullable().default(null),
     }),
   ),
 });

@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { ObjectId } from "mongodb";
 import {
   TestRequest,
   IntrospectRequest,
@@ -9,6 +10,32 @@ import {
 import { getDb, evict, poolCount } from "./pool-manager.js";
 import { flattenDocuments } from "./flatten.js";
 import { resolveColumnType, serializeCellValue } from "./column-types.js";
+
+/**
+ * apps/worker's queryBuilder.ts (Phase 6 Block 3.5) sends _id cursor values
+ * as plain hex strings over the wire (QueryPayload's mongo pipeline is
+ * `Record<string, unknown>[]`, JSON over HTTP — there's no BSON ObjectId
+ * type on that transport). A bare string in `{_id: {$gt: "<hex>"}}` would
+ * silently never match anything: BSON type-orders ObjectId and string
+ * separately, so the comparison is well-formed but vacuous, not an error.
+ * This rehydrates any string-valued _id comparison back into a real
+ * ObjectId (only when it's a valid 24-hex-char ObjectId string, so
+ * collections with non-ObjectId _id values — plain strings/numbers — pass
+ * through unmodified and keyset pagination still works for them natively).
+ */
+function hydrateObjectIdCursor(pipeline: Record<string, unknown>[]): Record<string, unknown>[] {
+  return pipeline.map((stage) => {
+    const match = stage.$match as Record<string, unknown> | undefined;
+    if (!match || typeof match !== "object" || !("_id" in match)) return stage;
+    const idCond = match._id;
+    if (!idCond || typeof idCond !== "object") return stage;
+    const rehydrated: Record<string, unknown> = {};
+    for (const [op, value] of Object.entries(idCond as Record<string, unknown>)) {
+      rehydrated[op] = typeof value === "string" && ObjectId.isValid(value) ? new ObjectId(value) : value;
+    }
+    return { ...stage, $match: { ...match, _id: rehydrated } };
+  });
+}
 
 /**
  * connector-mongodb — mirrors connector-mysql's contract exactly:
@@ -58,7 +85,11 @@ app.post("/introspect", async (req) => {
       name,
       type: resolveColumnType(arrayColumns.has(name), rows.map((r) => r[name])),
     }));
-    entities.push({ namespace: String(config.database ?? ""), name: collInfo.name, fields });
+    // primaryKey stays null — queryBuilder.ts always keys Mongo off `_id`
+    // (unconditionally unique) regardless of this field, so there's
+    // nothing to discover here. IntrospectResponse.primaryKey defaults to
+    // null on parse either way; set explicitly for readability.
+    entities.push({ namespace: String(config.database ?? ""), name: collInfo.name, fields, primaryKey: null });
   }
   return { entities };
 });
@@ -68,7 +99,8 @@ app.post("/execute", async (req): Promise<TabularResult> => {
   if (body.query.kind !== "mongo") {
     throw new Error(`connector-mongodb only accepts mongo queries, got kind: ${body.query.kind}`);
   }
-  const { collection, pipeline } = body.query;
+  const { collection } = body.query;
+  const pipeline = hydrateObjectIdCursor(body.query.pipeline);
   const db = await getDb(body.credential, body.config);
   const start = Date.now();
   const docs = await db

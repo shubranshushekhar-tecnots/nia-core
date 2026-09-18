@@ -56,6 +56,32 @@ runsRouter.post(
   }),
 );
 
+const runCancelBodySchema = z.object({ runId: z.string().uuid() });
+
+// Block 3.5 item 3 — cooperative cancel. Auth shape mirrors POST /:id/run
+// (requireCapability("workflows.run"), same cookie-auth router): there's no
+// separate "cancel" capability in can.ts, and cancelling a run you could
+// have started needs no finer gate. The actual authorization check is done
+// inside the RPC itself (private.is_member(v_org_id), 0017's
+// cancel_workflow_run) against the caller's own req.supabase session — this
+// route does no separate ownership resolution first, unlike GET
+// /:id/run/stream, since the RPC's own org-membership check already covers
+// it and a stale/foreign runId just surfaces as the RPC's "not authorized"
+// or "not found" exception via Postgres, mapped by asyncHandler like any
+// other supabase-js error. Workflow id in the URL is unused past routing/
+// validation symmetry with the other two routes; the RPC only needs runId.
+runsRouter.post(
+  "/workflows/:id/run/cancel",
+  requireCapability("workflows.run"),
+  validate({ params: workflowParamsSchema, body: runCancelBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const { data, error } = await req.supabase.rpc("cancel_workflow_run", { p_run_id: req.body.runId });
+    if (error) throw new AppError(409, "CANCEL_FAILED", error.message);
+    res.status(200).json({ run: data });
+  }),
+);
+
 const runStreamQuerySchema = z.object({
   runId: z.string().uuid(),
   // Reconnect-resume, same semantics as GET /chat/stream's ?after=.
@@ -95,7 +121,7 @@ runsRouter.get(
           listKey,
           afterSeq: after,
           signal: controller.signal,
-          isTerminal: (event) => event.type === "done" || event.type === "error",
+          isTerminal: (event) => event.type === "done" || event.type === "error" || event.type === "cancel",
           onEnvelope: (envelope) => {
             const parsed = RunStreamEvent.safeParse(envelope.event);
             if (!parsed.success) return; // malformed event — drop, don't crash the stream

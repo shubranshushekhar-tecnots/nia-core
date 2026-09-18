@@ -35,15 +35,37 @@ export async function startRun(runId: string, workflowId: string, orgId: string)
  * enqueues the next after it finishes — see runEtl.ts), never concurrent,
  * so a plain read-then-write increment is safe here without a DB-level
  * atomic increment.
+ *
+ * Phase 6 Block 3.5: `cursorJson` is written in this SAME update as
+ * `rows_processed` — this row is the "Redis is transport, Postgres is
+ * checkpoint truth" checkpoint (see 0017_run_checkpoints.sql's header
+ * comment). Only reached after the chunk's destination write has already
+ * succeeded (runEtl.ts's `fail()` short-circuits before this call), so
+ * cursor_json only ever advances past a chunk that's durably landed.
  */
-export async function recordChunkProgress(runId: string, rowsWrittenThisChunk: number): Promise<number> {
+export async function recordChunkProgress(runId: string, rowsWrittenThisChunk: number, cursorJson: string): Promise<number> {
   const { data } = await supabase.from("workflow_runs").select("rows_processed").eq("id", runId).maybeSingle();
   const total = (data?.rows_processed ?? 0) + rowsWrittenThisChunk;
-  await supabase.from("workflow_runs").update({ rows_processed: total }).eq("id", runId);
+  await supabase.from("workflow_runs").update({ rows_processed: total, cursor_json: cursorJson }).eq("id", runId);
   return total;
 }
 
-export async function finishRun(runId: string, status: "succeeded" | "failed"): Promise<number> {
+export type RunCheckpoint = { status: "running" | "succeeded" | "failed" | "cancelled"; cursor: string | null };
+
+/**
+ * One read, consulted at the start of every chunk (including the first,
+ * right after startRun): `cursor` is the persisted keyset checkpoint
+ * (preferred over the BullMQ job payload's own cursor field whenever
+ * non-null — see runEtl.ts), and `status` is polled here too rather than
+ * with a second round-trip, since cancel (Block 3.5) is only checked
+ * between chunks and this call already reads the same row.
+ */
+export async function getRunCheckpoint(runId: string): Promise<RunCheckpoint> {
+  const { data } = await supabase.from("workflow_runs").select("status, cursor_json").eq("id", runId).single();
+  return { status: data!.status as RunCheckpoint["status"], cursor: (data!.cursor_json as string | null) ?? null };
+}
+
+export async function finishRun(runId: string, status: "succeeded" | "failed" | "cancelled"): Promise<number> {
   const { data } = await supabase.from("workflow_runs").select("started_at").eq("id", runId).maybeSingle();
   const finishedAt = new Date();
   const durationMs = data?.started_at ? finishedAt.getTime() - new Date(data.started_at as string).getTime() : 0;

@@ -148,6 +148,15 @@ export function checkConfig(graph: GraphDoc): CheckResult[] {
       // before this field existed. `warn` (not `fail`) so existing
       // graphs/workflows don't regress from a passing/runnable state the
       // instant this check ships — see nodeConfig.ts's `entity` comment.
+      //
+      // Block 3.5 item 2 exception: preview (runPreview.ts) still honors
+      // this nudge-only stance and infers a table when unset, but the
+      // authoritative run path (runEtl.ts) does NOT — it hard-fails at run
+      // start with no persisted entity, since guessing the wrong table on
+      // a real destination write is a materially worse outcome than in a
+      // read-only preview. This check stays `warn` deliberately (existing
+      // graphs keep checking green); the Run button surfaces the run-time
+      // consequence via a tooltip instead of upgrading this to `fail`.
       if (node.type === "source" && !parsed.value.entity) {
         results.push({
           id: "config",

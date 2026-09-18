@@ -31,10 +31,10 @@ import {
 import { findUpstreamSource } from '@/lib/canvas/upstream';
 import { getWorkflowGraph, putWorkflowGraph, GraphApiError, type WorkflowGraphResult } from '@/lib/api/graphClient';
 import { runWorkflowChecks, getLatestCheckRun, listCheckRuns, ChecksApiError } from '@/lib/api/checksClient';
-import { startWorkflowRun, streamRun, RunApiError } from '@/lib/api/runsClient';
+import { startWorkflowRun, streamRun, cancelWorkflowRun, RunApiError } from '@/lib/api/runsClient';
 import { useCanvasStore } from '@/lib/canvas/store';
 import { useChatSession } from '@/lib/chat/useChatSession';
-import { buildActivityFeed } from '@/lib/canvas/activityFeed';
+import { buildActivityFeed, type ActivityItem } from '@/lib/canvas/activityFeed';
 import GraphFlowNode from './GraphFlowNode';
 import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRail';
 import NodeDrawer from './NodeDrawer';
@@ -260,11 +260,29 @@ function CanvasInner({
     | { status: 'idle' }
     | { status: 'starting' }
     | { status: 'running'; totalRowsProcessed: number }
+    | { status: 'cancelling'; totalRowsProcessed: number }
+    | { status: 'cancelled'; totalRowsProcessed: number }
     | { status: 'done'; totalRowsProcessed: number; durationMs: number }
     | { status: 'error'; message: string };
   const [runState, setRunState] = useState<RunState>({ status: 'idle' });
   const runTeardownRef = useRef<(() => void) | null>(null);
+  // Block 3.5 item 3 — the currently in-flight run's id, kept outside
+  // RunState since cancel needs it regardless of which sub-state (running
+  // vs cancelling) the UI is in; cleared on every terminal event.
+  const currentRunIdRef = useRef<string | null>(null);
   useEffect(() => () => runTeardownRef.current?.(), []);
+
+  // Block 3.5 item 4 — Logs tab's `kind: 'run'` source. Reuses the same SSE
+  // events already driving the run-status panel above rather than a
+  // separate "list past runs" read (no such endpoint exists yet); scoped
+  // to the current run session, not full historical run listing. Progress
+  // events are throttled (min 3s apart) so a fast chunk loop doesn't flood
+  // the feed — start/terminal events always log immediately.
+  const [runActivity, setRunActivity] = useState<ActivityItem[]>([]);
+  const lastProgressLogRef = useRef(0);
+  const logRunActivity = useCallback((text: string) => {
+    setRunActivity((prev) => [...prev, { time: new Date().toISOString(), text, kind: 'run' }]);
+  }, []);
 
   const destinationNodes = useMemo(() => nodes.filter((n) => n.data.graphNodeType === 'destination'), [nodes]);
   const runNodeId = destinationNodes.length === 1 ? destinationNodes[0]!.id : null;
@@ -273,18 +291,40 @@ function CanvasInner({
     if (!runNodeId) return;
     runTeardownRef.current?.();
     setRunState({ status: 'starting' });
+    lastProgressLogRef.current = 0;
     try {
       const { runId } = await startWorkflowRun(workflow.id, runNodeId);
+      currentRunIdRef.current = runId;
       runTeardownRef.current = streamRun(workflow.id, runId, {
         onEvent: (event) => {
           if (event.type === 'started') {
             setRunState({ status: 'running', totalRowsProcessed: 0 });
+            logRunActivity('Run started');
           } else if (event.type === 'progress') {
-            setRunState({ status: 'running', totalRowsProcessed: event.totalRowsProcessed });
+            setRunState((prev) => ({
+              status: prev.status === 'cancelling' ? 'cancelling' : 'running',
+              totalRowsProcessed: event.totalRowsProcessed,
+            }));
+            const now = Date.now();
+            if (now - lastProgressLogRef.current >= 3000) {
+              lastProgressLogRef.current = now;
+              logRunActivity(`Run progress — ${event.totalRowsProcessed.toLocaleString()} rows`);
+            }
           } else if (event.type === 'done') {
+            currentRunIdRef.current = null;
             setRunState({ status: 'done', totalRowsProcessed: event.totalRowsProcessed, durationMs: event.durationMs });
+            logRunActivity(`Run complete — ${event.totalRowsProcessed.toLocaleString()} rows in ${(event.durationMs / 1000).toFixed(1)}s`);
           } else if (event.type === 'error') {
+            currentRunIdRef.current = null;
             setRunState({ status: 'error', message: event.message });
+            logRunActivity(`Run failed — ${event.message}`);
+          } else if (event.type === 'cancel') {
+            currentRunIdRef.current = null;
+            setRunState((prev) => ({
+              status: 'cancelled',
+              totalRowsProcessed: prev.status === 'running' || prev.status === 'cancelling' ? prev.totalRowsProcessed : 0,
+            }));
+            logRunActivity('Run cancelled');
           }
         },
         onTransportError: () => setRunState({ status: 'error', message: 'Lost connection to the run stream.' }),
@@ -292,7 +332,27 @@ function CanvasInner({
     } catch (err) {
       setRunState({ status: 'error', message: err instanceof RunApiError ? err.message : 'Failed to start the run.' });
     }
-  }, [workflow.id, runNodeId]);
+  }, [workflow.id, runNodeId, logRunActivity]);
+
+  // Block 3.5 item 3 — cooperative cancel. Doesn't set 'cancelled' itself:
+  // the worker only actually stops between chunks (runEtl.ts's checkpoint
+  // poll), and the run stream's own `cancel` event (handled in handleRun's
+  // onEvent above) is the sole source of truth for when that's happened.
+  // This only flips workflow_runs.status and shows an interim "Cancelling…"
+  // state so the button doesn't look inert while that's in flight.
+  const handleCancel = useCallback(async () => {
+    const runId = currentRunIdRef.current;
+    if (!runId) return;
+    setRunState((prev) => ({
+      status: 'cancelling',
+      totalRowsProcessed: prev.status === 'running' || prev.status === 'cancelling' ? prev.totalRowsProcessed : 0,
+    }));
+    try {
+      await cancelWorkflowRun(workflow.id, runId);
+    } catch (err) {
+      setRunState({ status: 'error', message: err instanceof RunApiError ? err.message : 'Failed to cancel the run.' });
+    }
+  }, [workflow.id]);
 
   // Command bar's chat session (Phase 5 Session 4) — lifted up from
   // CommandBar.tsx itself so its live `messages` can also feed the Logs
@@ -313,8 +373,8 @@ function CanvasInner({
     staleTime: Infinity,
   });
   const activityFeed = useMemo(
-    () => buildActivityFeed(checkRunsHistory ?? [], chatSession.messages),
-    [checkRunsHistory, chatSession.messages],
+    () => buildActivityFeed(checkRunsHistory ?? [], chatSession.messages, runActivity),
+    [checkRunsHistory, chatSession.messages, runActivity],
   );
 
   const handleRunChecks = useCallback(async () => {
@@ -366,8 +426,17 @@ function CanvasInner({
   // sync.
   const checksStale = !latestCheckRun || latestCheckRun.graphVersion !== version;
   const failingChecks = latestCheckRun?.results.filter((r) => r.status === 'fail').length ?? 0;
-  const runInFlight = runState.status === 'starting' || runState.status === 'running';
+  const runInFlight = runState.status === 'starting' || runState.status === 'running' || runState.status === 'cancelling';
   const runEnabled = !checksStale && failingChecks === 0 && !!runNodeId && !runInFlight;
+  // Block 3.5 item 2: checkConfig's source-entity-missing case stays a
+  // `warn` (see checks.ts's amended comment), so an unset entity never
+  // blocks Run at the enabled/disabled level — but the run itself WILL
+  // hard-fail on it (runEtl.ts), unlike preview's silent inference. Surface
+  // that consequence here instead, so a passing-with-warnings run doesn't
+  // start only to immediately error.
+  const unsetEntityWarning = latestCheckRun?.results.some(
+    (r) => r.status === 'warn' && r.id === 'config' && r.message.includes('no table selected'),
+  );
   const runTooltip = checksStale
     ? 'Run checks before running the workflow.'
     : failingChecks > 0
@@ -378,7 +447,9 @@ function CanvasInner({
           : 'Only one destination node is supported per run — remove the others.'
         : runInFlight
           ? 'A run is already in progress.'
-          : 'All checks passing.';
+          : unsetEntityWarning
+            ? 'A source node has no table selected — the run will fail unless you pick one explicitly.'
+            : 'All checks passing.';
 
   const disabledRunBtnStyle = {
     fontSize: 12.5,
@@ -574,19 +645,44 @@ function CanvasInner({
               <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>
                 {runState.status === 'starting' && 'Starting run…'}
                 {runState.status === 'running' && 'Running…'}
+                {runState.status === 'cancelling' && 'Cancelling…'}
+                {runState.status === 'cancelled' && 'Run cancelled'}
                 {runState.status === 'done' && 'Run complete'}
                 {runState.status === 'error' && 'Run failed'}
               </span>
-              <button
-                type="button"
-                aria-label="Dismiss"
-                onClick={() => setRunState({ status: 'idle' })}
-                style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 12, padding: 0 }}
-              >
-                {'\u2715'}
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {runState.status === 'running' && (
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    style={{
+                      border: '1px solid var(--line2)',
+                      background: 'none',
+                      color: 'var(--ink3)',
+                      cursor: 'pointer',
+                      fontSize: 11.5,
+                      fontWeight: 600,
+                      borderRadius: 5,
+                      padding: '2px 8px',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={() => setRunState({ status: 'idle' })}
+                  style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                >
+                  {'\u2715'}
+                </button>
+              </div>
             </div>
-            {(runState.status === 'running' || runState.status === 'done') && (
+            {(runState.status === 'running' ||
+              runState.status === 'cancelling' ||
+              runState.status === 'cancelled' ||
+              runState.status === 'done') && (
               <span style={{ fontSize: 12, color: 'var(--ink3)' }}>
                 {runState.totalRowsProcessed.toLocaleString()} row{runState.totalRowsProcessed === 1 ? '' : 's'} written
                 {runState.status === 'done' ? ` in ${(runState.durationMs / 1000).toFixed(1)}s` : ''}

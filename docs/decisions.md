@@ -395,3 +395,27 @@ mapping); `FlowCanvas.tsx`'s Run button now calls `startWorkflowRun` +
 renders a live bottom-right status panel (`starting` /
 `running` with running row count / `done` with row count + duration /
 `error` with message), dismissible independently of stream lifecycle.
+
+## Phase 6 Block 3.5 ledger hygiene: naming Block 3's two scope cuts' destinations
+
+Block 3's "Scope cuts" list above left both cuts open-ended ("future work" /
+"`EtlRunJob` has no personal-workspace scope yet"). Per the Block 3.5
+kickoff's ledger-hygiene item, both now name where the cut work actually
+lands:
+
+- **Multi-destination fan-out** (a run targeting more than one destination
+  node in the same graph) → **Phase 6, a later session**, not this one.
+  Requires deciding how a single source chunk's read fans out to N
+  destination writes (independent per-destination cursors? one shared
+  cursor gated on the slowest destination?) before `runEtl.ts`'s single-
+  `nodeId`-per-job shape can be generalized — deliberately not scoped into
+  Block 3.5, which is checkpoint-soundness-only.
+- **Personal-workspace execution** (`EtlRunJob.orgId: string` — plain,
+  non-`WorkspaceScope`-union, per `jobs.ts`'s own header comment on that
+  field) → tracked, not forgotten: extending it to accept the same
+  `WorkspaceScope` union `ChatQueryJob`/`CheckRunJob` already use is a
+  **named future-session task** (not this Block 3.5 session — checkpoint
+  soundness, cancel, and the runner test suite were this session's scope),
+  to be picked up whenever personal-workspace workflow execution is
+  prioritized. `services/runs.ts`'s `startWorkflowRun` continues to reject
+  a personal-workspace actor with a clean 400 until then.

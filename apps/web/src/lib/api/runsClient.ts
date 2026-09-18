@@ -37,6 +37,24 @@ export async function startWorkflowRun(workflowId: string, destNodeId: string): 
 }
 
 /**
+ * Block 3.5 item 3 — cooperative cancel. Fire-and-forget from the UI's
+ * perspective: the actual stop happens between chunks in the worker
+ * (runEtl.ts's checkpoint poll), surfaced back to the caller as a `cancel`
+ * stream event on the same run/stream this function doesn't touch.
+ */
+export async function cancelWorkflowRun(workflowId: string, runId: string): Promise<void> {
+  const res = await fetch(`/api/backend/workflows/${workflowId}/run/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ runId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new RunApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+  }
+}
+
+/**
  * Opens the SSE stream for one run and wires it to the given callbacks.
  * Returns a teardown function the caller MUST invoke on unmount / before
  * opening a new stream — mirrors chatClient.ts's streamChat() exactly,
@@ -77,7 +95,7 @@ export function streamRun(
     const result = RunStreamEnvelope.safeParse(parsed);
     if (!result.success) return;
     const { seq, event } = result.data;
-    if (event.type === 'done' || event.type === 'error') {
+    if (event.type === 'done' || event.type === 'error' || event.type === 'cancel') {
       gotTerminalEvent = true;
     }
     handlers.onEvent(event, seq);

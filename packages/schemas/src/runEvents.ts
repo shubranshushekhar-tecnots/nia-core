@@ -35,6 +35,11 @@ export const RunStreamEvent = z.discriminatedUnion("type", [
     nodeId: z.string().optional(),
     message: z.string(),
   }),
+  /** Phase 6 Block 3.5 — terminal, published once the runner observes workflow_runs.status = 'cancelled' at a between-chunk poll and stops (see runEtl.ts). */
+  z.object({
+    type: z.literal("cancel"),
+    nodeId: z.string(),
+  }),
 ]);
 export type RunStreamEvent = z.infer<typeof RunStreamEvent>;
 

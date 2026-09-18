@@ -19,23 +19,25 @@ import { dispatch } from "../dispatch.js";
 import { dispatchWrite } from "../writeDispatch.js";
 import { findSourcePath } from "../preview/runPreview.js";
 import { buildEtlReadQuery, MAX_CHUNK_ROWS } from "./queryBuilder.js";
-import { startRun, recordChunkProgress, finishRun } from "./workflowRuns.js";
+import { startRun, recordChunkProgress, finishRun, getRunCheckpoint } from "./workflowRuns.js";
 import { publishRunEvent } from "./publish.js";
 import type { WorkspaceScope } from "../workspaceScope.js";
 
-type Cursor = { offset: number };
+/** Block 3.5: keyset cursor — the last key value read so far, or null before the first chunk. Deliberately not `{offset}` anymore (see queryBuilder.ts's header comment). */
+type Cursor = { lastKey: string | number | null };
 
 function parseCursor(raw: string | null): Cursor {
-  if (!raw) return { offset: 0 };
+  if (!raw) return { lastKey: null };
   try {
     const parsed = JSON.parse(raw) as Partial<Cursor>;
-    return { offset: typeof parsed.offset === "number" && parsed.offset >= 0 ? parsed.offset : 0 };
+    const lastKey = parsed.lastKey;
+    return { lastKey: typeof lastKey === "string" || typeof lastKey === "number" ? lastKey : null };
   } catch {
-    return { offset: 0 };
+    return { lastKey: null };
   }
 }
 
-export type RunEtlResult = { status: "done" | "chunk" | "failed"; nextOffset?: number; message?: string };
+export type RunEtlResult = { status: "done" | "chunk" | "failed" | "cancelled"; nextCursor?: string | number | null; message?: string };
 
 /**
  * Fails the run cleanly: marks `workflow_runs` failed, publishes an `error`
@@ -52,16 +54,19 @@ async function fail(scope: WorkspaceScope, runId: string, nodeId: string, messag
 }
 
 /**
- * Phase 6 Block 3 — the real ETL runner. Chunked, checkpointed (offset
- * cursor persisted in the next BullMQ job's payload, not in Postgres —
- * `workflow_runs` only tracks aggregate progress/status), resumable (a
- * fresh job with the same runId/cursor re-derives everything from the
- * graph + connections, no in-memory state carried between chunks), and
- * idempotent on its one stateful write (`workflow_runs` row creation, via
- * startRun's upsert) — a BullMQ stalled-job retry redelivering the exact
- * same job is safe to fully re-run (the destination upsert is itself
- * idempotent by upsertKeys, and the read is a pure re-fetch of the same
- * offset window).
+ * Phase 6 Block 3 (chunked/resumable shape) / Block 3.5 (checkpoint
+ * soundness) — the real ETL runner. Chunked, checkpointed (keyset cursor
+ * persisted in `workflow_runs.cursor_json` in the same step as progress —
+ * see workflowRuns.ts's recordChunkProgress/getRunCheckpoint and
+ * 0017_run_checkpoints.sql's header comment: "Redis is transport, Postgres
+ * is checkpoint truth"), resumable (a fresh job with the same runId
+ * re-derives everything from the graph + connections, consulting the
+ * persisted Postgres cursor rather than trusting its own payload's cursor
+ * hint), and idempotent on its one stateful write (`workflow_runs` row
+ * creation, via startRun's upsert) — a BullMQ stalled-job retry
+ * redelivering the exact same job is safe to fully re-run (the destination
+ * upsert is itself idempotent by upsertKeys, and the read re-fetches from
+ * whichever cursor Postgres says is truth, never further back).
  *
  * `queue` is the caller's own heavy-queue BullMQ Queue instance (index.ts's
  * `heavyQueue`), used to self-enqueue the next chunk's job — passed in
@@ -75,6 +80,17 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     await startRun(job.runId, job.workflowId, job.orgId);
     await publishRunEvent(scope, job.runId, { type: "started", nodeId: job.nodeId });
   }
+
+  // Block 3.5: one read, consulted for both cancel (cooperative, checked
+  // between every chunk) and checkpoint truth (persisted cursor always
+  // wins over the job payload's own cursor when present — see
+  // workflowRuns.ts's getRunCheckpoint doc comment for why that's safe).
+  const checkpoint = await getRunCheckpoint(job.runId);
+  if (checkpoint.status === "cancelled") {
+    await publishRunEvent(scope, job.runId, { type: "cancel", nodeId: job.nodeId });
+    return { status: "cancelled" };
+  }
+  const effectiveCursorRaw = checkpoint.cursor ?? job.cursor;
 
   const graph = await resolveGraph(job.workflowId, scope);
   if (!graph) return fail(scope, job.runId, job.nodeId, "Workflow not found in the given workspace.");
@@ -111,7 +127,19 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
 
   const parsedSource = parseNodeConfig(source.type, source.config);
   const persistedEntity = !parsedSource.unrecognized && parsedSource.type !== "transform" ? parsedSource.value.entity : undefined;
-  let entity = persistedEntity ? findPersistedEntity(sourceSchema.value, persistedEntity) : undefined;
+  // Block 3.5 item 2: unlike preview (runPreview.ts), which happily infers
+  // the source table from the mapping's field names when no entity is
+  // persisted, the authoritative run path hard-fails instead of guessing —
+  // restores the Block 1a(1) ledger line ("source entity is required to
+  // run") that checkConfig's own entity check never actually enforced (see
+  // packages/schemas/src/checks.ts's amended comment on that check: it
+  // stays a pre-flight `warn`, this is the real gate). Checked before
+  // findPersistedEntity/resolveSourceEntity below even run, so a run never
+  // silently succeeds against an inferred table the user never picked.
+  if (!persistedEntity) {
+    return fail(scope, job.runId, job.nodeId, `Source node "${source.id}" has no target table/collection selected yet.`);
+  }
+  let entity = findPersistedEntity(sourceSchema.value, persistedEntity);
   if (!entity) {
     const entityResult = resolveSourceEntity(sourceSchema.value, mapping.entries.map((e) => e.from));
     if (!entityResult.ok) return fail(scope, job.runId, job.nodeId, entityResult.message);
@@ -121,6 +149,19 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   const dialect = manifestDialect(source.manifestId);
   if (!dialect) {
     return fail(scope, job.runId, job.nodeId, `Source connector "${source.manifestId ?? "unknown"}" has no supported query dialect.`);
+  }
+
+  // Block 3.5 item 1a: SQL keyset pagination requires a verified single-
+  // column unique key (IntrospectResponse.primaryKey — contract.ts). Mongo
+  // always keys off `_id` (queryBuilder.ts), so this only gates SQL
+  // dialects. Mirrors the upsertKeys-missing precondition above.
+  if (dialect !== "mongo" && !entity.primaryKey) {
+    return fail(
+      scope,
+      job.runId,
+      job.nodeId,
+      `Source table "${entity.namespace}.${entity.name}" has no single-column primary/unique key — the ETL runner requires one for reliable pagination. Add a primary key (or a unique constraint on one column) to this table to run this workflow.`,
+    );
   }
 
   // Same >1-transform-node degrade-to-residual boundary as runPreview.ts's
@@ -143,15 +184,18 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     }
   }
 
-  const { offset } = parseCursor(job.cursor);
+  const { lastKey } = parseCursor(effectiveCursorRaw);
   const requestedLimit = Math.min(job.chunkSize, MAX_CHUNK_ROWS);
-  const orderColumn = entity.fields[0]?.name;
-  const query = buildEtlReadQuery(dialect, entity, dialectQuery, orderColumn, offset, requestedLimit);
+  const keyColumn = dialect === "mongo" ? "_id" : entity.primaryKey!;
+  const query = buildEtlReadQuery(dialect, entity, dialectQuery, dialect === "mongo" ? undefined : keyColumn, lastKey, requestedLimit);
 
   const result = await dispatch(sourceConnectionId, query, scope, job.triggeredByUserId, { rowCap: requestedLimit });
   if (!result.ok) return fail(scope, job.runId, job.nodeId, `Source read failed: ${result.error.message}`);
 
   const sourceRowsFetched = result.value.rows.length;
+  const keyColumnIndex = result.value.columns.findIndex((c) => c.name === keyColumn);
+  const lastRow = sourceRowsFetched > 0 ? result.value.rows[sourceRowsFetched - 1] : undefined;
+  const nextKey = lastRow && keyColumnIndex !== -1 ? (lastRow[keyColumnIndex] as string | number) : lastKey;
   const { columns: residualColumns, rows: residualRows } = applyResidualTransforms(
     result.value.columns.map((c) => c.name),
     result.value.rows,
@@ -178,8 +222,7 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     rowsWritten = writeResult.value.written;
   }
 
-  const totalRowsProcessed = await recordChunkProgress(job.runId, rowsWritten);
-  const nextOffset = offset + sourceRowsFetched;
+  const totalRowsProcessed = await recordChunkProgress(job.runId, rowsWritten, JSON.stringify({ lastKey: nextKey } satisfies Cursor));
   const isLastChunk = sourceRowsFetched < requestedLimit;
 
   if (isLastChunk) {
@@ -201,7 +244,7 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     totalRowsProcessed,
   });
 
-  const nextJob: EtlRunJob = { ...job, cursor: JSON.stringify({ offset: nextOffset } satisfies Cursor) };
+  const nextJob: EtlRunJob = { ...job, cursor: JSON.stringify({ lastKey: nextKey } satisfies Cursor) };
   await queue.add("etl_run", nextJob, { jobId: randomUUID() });
-  return { status: "chunk", nextOffset };
+  return { status: "chunk", nextCursor: nextKey };
 }
