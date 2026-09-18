@@ -27,49 +27,34 @@ import {
 } from '@/components/app/styles';
 
 /**
- * Floating "Ask or command…" bar for the canvas (Phase 5 Session 4) — reuses
+ * "Ask or command…" chat surface for the canvas (Phase 5 Session 4) — reuses
  * the same useChatSession pipeline /app/chat's ChatClient.tsx drives, but
  * takes a merged multi-connection scope (selection ∪ @-pins, falling back to
  * every connection wired into the canvas) instead of a single selection.
  *
- * Positioned above ChecksDock (zIndex 30) and below any modal (zIndex 60);
- * this sits at 35. `checksDockExpanded` shifts the bar up when the dock's
- * body is open so the two never overlap.
+ * Restyled (Task 2, decision 1) from a floating bottom-center bar into the
+ * live-chat portion of CopilotSidebar.tsx's docked 344px right panel — this
+ * component keeps its exact prior behavior/props (thread, @-mentions, scope
+ * chips, send/retry/reset) and is now a vertical flex column that fills the
+ * sidebar's remaining height below the panel's header/mock section, instead
+ * of an absolutely-positioned overlay sized against ChecksDock's height.
  */
 
-const CHECKS_DOCK_COLLAPSED_HEIGHT = 40;
-const CHECKS_DOCK_EXPANDED_HEIGHT = 300;
-const BAR_MARGIN = 16;
-
-function wrapStyle(checksDockExpanded: boolean): CSSProperties {
-  const dockHeight = checksDockExpanded ? CHECKS_DOCK_EXPANDED_HEIGHT : CHECKS_DOCK_COLLAPSED_HEIGHT;
-  return {
-    position: 'absolute',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    bottom: dockHeight + BAR_MARGIN,
-    zIndex: 35,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-    width: 620,
-    maxWidth: 'calc(100% - 48px)',
-    // The column's default alignItems:stretch makes every child (even a
-    // short fallback-text row) stretch to the full 620px width, which
-    // would otherwise create an invisible click-intercepting rectangle
-    // over the canvas content beneath it (nodes/handles can render lower
-    // than expected). Disable hit-testing on the wrap itself and opt each
-    // real interactive child back in below.
-    pointerEvents: 'none',
-  };
-}
+const wrapStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+};
 
 const chipsRowStyle: CSSProperties = {
+  flex: 'none',
   display: 'flex',
   flexWrap: 'wrap',
   alignItems: 'center',
   gap: 6,
-  pointerEvents: 'none',
+  padding: '10px 16px',
+  borderBottom: '1px solid var(--panel-line)',
 };
 
 function scopeChipStyle(): CSSProperties {
@@ -87,7 +72,6 @@ function scopeChipStyle(): CSSProperties {
     background: 'var(--surface)',
     border: '1px solid var(--acc-bd)',
     boxShadow: 'var(--amb)',
-    pointerEvents: 'auto',
   };
 }
 
@@ -108,7 +92,7 @@ const scopeFallbackTextStyle: CSSProperties = {
   padding: '0 4px',
 };
 
-const barPositionStyle: CSSProperties = { position: 'relative', pointerEvents: 'auto' };
+const barPositionStyle: CSSProperties = { position: 'relative', flex: 'none', padding: '10px 16px' };
 
 const barShellStyle: CSSProperties = {
   position: 'relative',
@@ -192,17 +176,13 @@ const commandHintStyle: CSSProperties = {
 
 const threadStyle: CSSProperties = {
   boxSizing: 'border-box',
-  maxHeight: 380,
+  flex: 1,
+  minHeight: 0,
   overflowY: 'auto',
   display: 'flex',
   flexDirection: 'column',
   gap: 16,
   padding: '16px 18px',
-  borderRadius: 14,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
-  boxShadow: 'var(--drop)',
-  pointerEvents: 'auto',
 };
 
 const threadHeaderStyle: CSSProperties = {
@@ -243,7 +223,6 @@ export default function CommandBar({
   send,
   retry,
   resetConversation,
-  checksDockExpanded,
 }: {
   connections: Connection[];
   /** Every connectionId currently wired into the canvas (source + destination nodes), deduped. */
@@ -257,7 +236,6 @@ export default function CommandBar({
   send: (connectionIds: string[], message: string) => Promise<void>;
   retry: () => void;
   resetConversation: () => void;
-  checksDockExpanded: boolean;
 }) {
   const [draft, setDraft] = useState('');
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -314,7 +292,7 @@ export default function CommandBar({
   }
 
   return (
-    <div style={wrapStyle(checksDockExpanded)} data-testid="command-bar">
+    <div style={wrapStyle} data-testid="command-bar">
       {threadOpen && messages.length > 0 && (
         <div style={threadStyle} data-testid="command-bar-thread">
           <div style={threadHeaderStyle}>

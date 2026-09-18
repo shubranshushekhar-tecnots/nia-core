@@ -170,6 +170,25 @@ describe("proposeMapping", () => {
     expect(userMsg!.content).toContain('"email","name"'); // scoped list, not the flat union including legacy_id
   });
 
+  it("resolves the upstream source through an intervening transform node (Source -> Transform -> Destination)", async () => {
+    resolveGraphMock.mockResolvedValueOnce({
+      nodes: [
+        { id: "src", type: "source", manifestId: "mysql", connectionId: SOURCE_CONN, position: { x: 0, y: 0 }, config: {} },
+        { id: "xform", type: "transform", position: { x: 0, y: 0 }, config: {} },
+        { id: "dest", type: "destination", manifestId: "supabase", connectionId: DEST_CONN, position: { x: 0, y: 0 }, config: {} },
+      ],
+      edges: [
+        { id: "e1", source: "src", target: "xform" },
+        { id: "e2", source: "xform", target: "dest" },
+      ],
+    });
+    completeMock.mockResolvedValueOnce('{"entries":[{"from":"email","to":"email_address"}]}');
+
+    const result = await proposeMapping("wf-1", "dest", SCOPE);
+
+    expect(result).toEqual({ ok: true, value: { entries: [{ from: "email", to: "email_address" }] } });
+  });
+
   it("fails with homogeneous-path when source and destination share a manifest", async () => {
     resolveGraphMock.mockResolvedValueOnce({
       nodes: [

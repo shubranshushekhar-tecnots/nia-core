@@ -3,6 +3,7 @@ import { resolveGraph } from "../checks/runWorkflowChecks.js";
 import { resolveConnection } from "../resolveConnection.js";
 import { getSchema } from "../introspection.js";
 import { completeJson, JsonExtractionError } from "../llm/parseHelpers.js";
+import { findSourcePath } from "../preview/runPreview.js";
 import type { WorkspaceScope } from "../workspaceScope.js";
 
 /**
@@ -51,8 +52,13 @@ export async function proposeMapping(workflowId: string, destNodeId: string, sco
     return { ok: false, error: { kind: "dest-node-not-found", message: `No destination node "${destNodeId}" with a connection selected exists in this workflow.` } };
   }
 
-  const incomingSourceIds = new Set(graph.edges.filter((e) => e.target === destNodeId).map((e) => e.source));
-  const source = graph.nodes.find((n) => incomingSourceIds.has(n.id) && n.type === "source" && n.connectionId);
+  // Walks back through any transform nodes between source and destination
+  // (findSourcePath, runPreview.ts) rather than requiring a direct edge —
+  // a Source -> Transform -> Destination chain is the normal shape, not an
+  // edge case, and the old direct-edge-only lookup here failed on it even
+  // though runEtl.ts/runPreview.ts both already resolve through transforms.
+  const path = findSourcePath(destNodeId, graph);
+  const source = path?.source;
   if (!source?.connectionId) {
     return { ok: false, error: { kind: "no-upstream-source", message: "Destination node has no upstream source node with a connection selected." } };
   }
