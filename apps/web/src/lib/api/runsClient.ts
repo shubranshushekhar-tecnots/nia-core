@@ -1,0 +1,94 @@
+import { RunStreamEnvelope } from '@nia/schemas';
+
+/**
+ * Browser-side calls for Phase 6 Block 3 execution. Both hit the same
+ * cookie-authenticated `/api/backend/:path*` rewrite as chatClient.ts (not
+ * the Bearer-auth pattern previewClient.ts/checksClient.ts use) — see
+ * apps/api/src/routes/runs.ts's header comment: GET .../run/stream is
+ * consumed via EventSource, which can never attach a custom Authorization
+ * header, only same-origin cookies, and POST .../run is kept on the same
+ * cookie-authed router so both halves of "start a run, then stream it"
+ * share one consistent auth story.
+ */
+
+export class RunApiError extends Error {
+  status: number;
+  code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = 'RunApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export async function startWorkflowRun(workflowId: string, destNodeId: string): Promise<{ runId: string }> {
+  const res = await fetch(`/api/backend/workflows/${workflowId}/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ destNodeId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new RunApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+  }
+  return res.json() as Promise<{ runId: string }>;
+}
+
+/**
+ * Opens the SSE stream for one run and wires it to the given callbacks.
+ * Returns a teardown function the caller MUST invoke on unmount / before
+ * opening a new stream — mirrors chatClient.ts's streamChat() exactly,
+ * including its no-auto-retry rationale (a terminal event always closes
+ * the connection itself; a transport-level error surfaces once via
+ * onTransportError for a manual retry instead of blind reconnection).
+ */
+export function streamRun(
+  workflowId: string,
+  runId: string,
+  handlers: {
+    onEvent: (event: RunStreamEnvelope['event'], seq: number) => void;
+    onTransportError: () => void;
+  },
+  options?: {
+    afterSeq?: number;
+  },
+): () => void {
+  const params = new URLSearchParams({ runId });
+  if (options?.afterSeq !== undefined) params.set('after', String(options.afterSeq));
+  const source = new EventSource(`/api/backend/workflows/${workflowId}/run/stream?${params.toString()}`);
+  let closed = false;
+  let gotTerminalEvent = false;
+
+  const teardown = () => {
+    if (closed) return;
+    closed = true;
+    source.close();
+  };
+
+  source.onmessage = (raw) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw.data);
+    } catch {
+      return; // malformed frame — drop, don't crash the stream
+    }
+    const result = RunStreamEnvelope.safeParse(parsed);
+    if (!result.success) return;
+    const { seq, event } = result.data;
+    if (event.type === 'done' || event.type === 'error') {
+      gotTerminalEvent = true;
+    }
+    handlers.onEvent(event, seq);
+    if (gotTerminalEvent) teardown();
+  };
+
+  source.onerror = () => {
+    if (gotTerminalEvent || closed) return; // benign: fires after our own teardown() in some browsers
+    teardown();
+    handlers.onTransportError();
+  };
+
+  return teardown;
+}

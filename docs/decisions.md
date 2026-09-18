@@ -339,3 +339,59 @@ negotiation, no blocking/refusing dispatch when a route is missing (a raw
 404 still surfaces from the real call — the warning just makes the cause
 obvious in logs instead of leaving it a mystery). Full version handshake
 deferred to Phase 9 hardening.
+
+## Phase 6 Block 3: ETL runner — scope cuts and the run-stream auth fix
+
+Landed the actual workflow-execution path against the pre-existing
+`workflow_runs` table (`0002_projects_workflows.sql`, org/personal-scoped
+since `0005_individual_workspace.sql` — no new migration needed this
+block), `apps/worker/src/lib/etl/runEtl.ts`'s
+chunked/checkpointed/resumable job chain (self-requeuing BullMQ jobs,
+`MAX_CHUNK_ROWS = 1000` per the guardrails clamp), `packages/schemas/src/
+runEvents.ts`'s `RunStreamEvent`/`RunStreamEnvelope` types, and
+`POST /workflows/:id/run` + `GET /workflows/:id/run/stream` on the API
+side, mirroring chat's enqueue-then-SSE-replay shape
+(`apps/api/src/lib/runChannel.ts`, `apps/api/src/lib/runQueue.ts`,
+`apps/api/src/services/runs.ts`).
+
+**Scope cuts, all deliberate:**
+- **Single destination node per run.** A run targets exactly one
+  destination (`destNodeId`); a graph with zero or multiple destination
+  nodes can't be run at all yet (`FlowCanvas.tsx`'s `runNodeId` is `null`
+  in both cases, surfaced via the Run button's tooltip, not a silent
+  no-op). Multi-destination fan-out is future work.
+- **Org-only execution.** `services/runs.ts`'s `startWorkflowRun` rejects
+  a personal-workspace actor with a clean 400 — `EtlRunJob` has no
+  personal-workspace scope yet.
+- **No mapping/entity/upsert-key re-validation in the UI.** `runEtl.ts`
+  itself validates all of that (approved field mapping, resolved entity,
+  non-empty `upsertKeys`, source path) and publishes a clean `error`
+  stream event on failure rather than throwing an HTTP error — the Run
+  button only gates on the structural single-destination constraint above
+  and lets the stream surface anything deeper, rather than duplicating
+  that validation client-side as a second place to keep in sync.
+- **Best-effort pagination ordering, raw-fetch-then-in-process-transform.**
+  Consistent with the connector dispatch path's existing constraints
+  (Phase 1/Block 2) — not re-litigated here.
+
+**Auth bug caught and fixed before shipping to the UI:** the two run
+routes were initially placed on `workflowsRouter`, which applies
+Bearer-only `requireAuth`. Since `GET /:id/run/stream` is consumed by a
+browser `EventSource` — which cannot attach a custom `Authorization`
+header, only same-origin cookies — that would have made the stream route
+always 401 in real use. Fixed by extracting both routes into a new
+`apps/api/src/routes/runs.ts`, using `requireCookieAuth` +
+`attachActor` exactly like `routes/chat.ts` (see this file's "API auth:
+Bearer is the default" entry above), mounted at `/` in `index.ts`
+alongside `chatRouter`. `apps/web/src/lib/api/runsClient.ts` mirrors
+`chatClient.ts`'s plain-`fetch`/`EventSource`-with-no-custom-headers
+pattern accordingly (not `previewClient.ts`/`checksClient.ts`'s explicit
+Bearer-header pattern, which targets the Bearer-only routers).
+
+**UI:** `MappingEditor.tsx` gained an "Upsert keys" checkbox section
+(scoped to only the destination fields present in the current field
+mapping); `FlowCanvas.tsx`'s Run button now calls `startWorkflowRun` +
+`streamRun` for real (replacing the earlier Phase 6 stub modal) and
+renders a live bottom-right status panel (`starting` /
+`running` with running row count / `done` with row count + duration /
+`error` with message), dismissible independently of stream lifecycle.

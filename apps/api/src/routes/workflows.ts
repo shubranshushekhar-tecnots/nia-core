@@ -167,3 +167,10 @@ workflowsRouter.post(
     res.status(201).json(data);
   }),
 );
+
+// POST /:id/run and GET /:id/run/stream (Phase 6 Block 3) live in
+// routes/runs.ts, not here — the stream side is consumed via a browser
+// EventSource, which can never attach a Bearer Authorization header, only
+// same-origin cookies, so both routes are cookie-authenticated (mirroring
+// chat.ts's split from this Bearer-only router) rather than gated by this
+// router's requireAuth.

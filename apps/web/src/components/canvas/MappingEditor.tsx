@@ -198,6 +198,14 @@ export default function MappingEditor({
 
   const mappedDestFields = new Set(mapping.entries.map((e) => e.to));
   const unmappedDestFields = destFields.filter((f) => !mappedDestFields.has(f));
+  const mappedDestFieldsList = Array.from(mappedDestFields).filter((f) => f !== '').sort();
+  const upsertKeys = config.upsertKeys ?? [];
+
+  /** Destination-only, see nodeConfig.ts's SourceDestConfig comment — the runner (runEtl.ts) upserts on these dest field names, required for this node to actually run. */
+  function toggleUpsertKey(field: string) {
+    const next = upsertKeys.includes(field) ? upsertKeys.filter((f) => f !== field) : [...upsertKeys, field];
+    onChange({ ...config, upsertKeys: next });
+  }
   const isApproved = !!mapping.approvedAt;
   // Preview requires an approved mapping + a passing config check for this
   // path — reuses the same persisted check-run results the ChecksDock
@@ -317,6 +325,28 @@ export default function MappingEditor({
       >
         Approve
       </button>
+
+      <div style={{ borderTop: '1px solid var(--line2)', marginTop: 16, paddingTop: 16 }}>
+        <div style={sectionHeaderStyle}>Upsert keys</div>
+        <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 8 }}>
+          Destination fields a run matches existing rows on. Required to run this destination.
+        </div>
+        {mappedDestFieldsList.length === 0 ? (
+          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 12 }}>Map at least one field first.</div>
+        ) : (
+          <div style={{ marginBottom: 12 }}>
+            {mappedDestFieldsList.map((field) => (
+              <label
+                key={field}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--ink)', marginBottom: 4, cursor: 'pointer' }}
+              >
+                <input type="checkbox" checked={upsertKeys.includes(field)} onChange={() => toggleUpsertKey(field)} />
+                <span style={{ fontFamily: 'var(--font-data)' }}>{field}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div style={{ borderTop: '1px solid var(--line2)', marginTop: 16, paddingTop: 16 }}>
         <button

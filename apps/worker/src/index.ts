@@ -14,6 +14,7 @@ import { refreshSchema } from "./lib/schema/refreshSchema.js";
 import { runGoldenSuite } from "./lib/eval/runGoldenSuite.js";
 import { registerNightlyEvalSchedule } from "./lib/eval/schedule.js";
 import { shutdownLangfuse } from "./lib/observability/langfuse.js";
+import { runEtl } from "./lib/etl/runEtl.js";
 
 /**
  * Nia worker — the execution spine.
@@ -107,16 +108,14 @@ const heavy = new Worker(
     const payload = HeavyJob.parse(job.data);
     switch (payload.kind) {
       case "etl_run":
-        // TODO: read chunk from source via connector service, apply in-stream
-        // transforms not compiled into the dialect, upsert into sink (idempotent),
-        // persist checkpoint cursor to Postgres, enqueue next chunk.
-        // TODO: the source-side read query must go through @nia/guardrails's
-        // validateBeforeDispatch (manifestId, query, connectionScope) before
-        // it's sent to the source connector service's /execute endpoint.
+        // Block 3 — runEtl.ts owns the full chunked/checkpointed/resumable
+        // read-transform-write cycle and self-enqueues the next chunk onto
+        // this same heavyQueue instance; this handler only logs and hands
+        // off, same no-persistence-in-index.ts shape as every other case.
         console.log(
           `[heavy] etl_run ${payload.runId} node ${payload.nodeId} cursor=${payload.cursor}`,
         );
-        return { status: "stub" };
+        return await runEtl(payload, heavyQueue);
       case "eval_run": {
         console.log("[heavy] eval_run: running golden-set suite");
         const report = await runGoldenSuite();

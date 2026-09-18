@@ -64,6 +64,21 @@ const EnvSchema = z.object({
    * than hanging the HTTP request indefinitely.
    */
   SCHEMA_REFRESH_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  /**
+   * Upper bound on a single GET /:id/run/stream connection (Phase 6 Block
+   * 3). Deliberately its own var, not a reuse of CHAT_SSE_MAX_DURATION_MS:
+   * a chat turn is one worker job, but one ETL run is many self-requeued
+   * chunk jobs (runEtl.ts) that can span far longer wall-clock time than a
+   * single chat turn — 2 minutes would routinely cut a real run's stream
+   * off mid-flight. Past this, the SSE lifecycle force-emits a terminal
+   * `error` event and closes, same client-side guarantee chat's stream
+   * makes; the run itself keeps going server-side regardless (the worker
+   * has no idea a client stopped watching), so this only bounds how long
+   * one HTTP connection stays open, never the run's own duration.
+   */
+  RUN_SSE_MAX_DURATION_MS: z.coerce.number().int().positive().default(1_800_000),
+  /** Comment-only keep-alive so intermediary proxies don't time out an idle SSE connection — same rationale as CHAT_SSE_HEARTBEAT_MS, its own var since the two features' cadence has no reason to stay coupled. */
+  RUN_SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(15_000),
 });
 
 export const env = EnvSchema.parse(process.env);

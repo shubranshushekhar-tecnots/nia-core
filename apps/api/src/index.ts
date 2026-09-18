@@ -10,6 +10,7 @@ import { connectorsRouter } from "./routes/connectors.js";
 import { connectionsRouter } from "./routes/connections.js";
 import { grantsRouter } from "./routes/grants.js";
 import { chatRouter } from "./routes/chat.js";
+import { runsRouter } from "./routes/runs.js";
 
 const app = express();
 
@@ -40,10 +41,13 @@ app.use("/connectors", connectorsRouter);
 app.use("/connections", connectionsRouter);
 app.use("/connections/:connectionId/grants", grantsRouter);
 
-// POST /chat, GET /chat/stream — cookie-authenticated (not Bearer, unlike
+// POST /chat, GET /chat/stream, POST /workflows/:id/run, GET
+// /workflows/:id/run/stream — cookie-authenticated (not Bearer, unlike
 // everything above), reached same-origin through apps/web's
-// /api/backend/:path* rewrite. See routes/chat.ts for the full rationale.
+// /api/backend/:path* rewrite. See routes/chat.ts / routes/runs.ts for the
+// full rationale (EventSource can't attach a Bearer header).
 app.use("/", chatRouter);
+app.use("/", runsRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

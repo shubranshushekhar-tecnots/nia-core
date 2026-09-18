@@ -92,13 +92,22 @@ export type EntityRef = z.infer<typeof EntityRef>;
  * proposeMapping, runWorkflowChecks, runPreview) falls back to the prior
  * flat-union/inference behavior when it's absent, so nothing about existing
  * graphs' check/preview/mapping behavior changes just because this field now
- * exists. Not used on destination nodes today (destination entity/writes are
- * out of Block-0 scope).
+ * exists. Also used on destination nodes as of Phase 6 Block 2 — the same
+ * drawer entity picker now selects a destination's write target table too
+ * (NodeDrawer.tsx), resolved the same way via findPersistedEntity against
+ * the destination connection's own introspected schema.
+ *
+ * `upsertKeys` (Phase 6 Block 3): destination-only, the field names (from
+ * the mapping's `to` side) the ETL runner upserts on — required for a
+ * destination node to actually run (see apps/worker/src/lib/etl/runEtl.ts),
+ * optional here for the same drafting-state reason `entity` is: the drawer
+ * autosaves before a user has picked any keys yet.
  */
 export const SourceDestConfig = z.object({
   operation: Operation.default("read"),
   mapping: FieldMapping.optional(),
   entity: EntityRef.optional(),
+  upsertKeys: z.array(z.string()).optional(),
 });
 export type SourceDestConfig = z.infer<typeof SourceDestConfig>;
 

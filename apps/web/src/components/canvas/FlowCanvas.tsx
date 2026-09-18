@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -31,6 +31,7 @@ import {
 import { findUpstreamSource } from '@/lib/canvas/upstream';
 import { getWorkflowGraph, putWorkflowGraph, GraphApiError, type WorkflowGraphResult } from '@/lib/api/graphClient';
 import { runWorkflowChecks, getLatestCheckRun, listCheckRuns, ChecksApiError } from '@/lib/api/checksClient';
+import { startWorkflowRun, streamRun, RunApiError } from '@/lib/api/runsClient';
 import { useCanvasStore } from '@/lib/canvas/store';
 import { useChatSession } from '@/lib/chat/useChatSession';
 import { buildActivityFeed } from '@/lib/canvas/activityFeed';
@@ -39,15 +40,7 @@ import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRa
 import NodeDrawer from './NodeDrawer';
 import ChecksDock from './ChecksDock';
 import CommandBar from './CommandBar';
-import {
-  brandTextStyle,
-  breadcrumbSepStyle,
-  modalOverlayStyle,
-  modalCardStyle,
-  modalTitleStyle,
-  modalActionsStyle,
-  modalBtnGhostStyle,
-} from '@/components/app/styles';
+import { brandTextStyle, breadcrumbSepStyle } from '@/components/app/styles';
 
 const nodeTypes = { source: GraphFlowNode, transform: GraphFlowNode, destination: GraphFlowNode };
 const AUTOSAVE_DELAY_MS = 800;
@@ -258,7 +251,48 @@ function CanvasInner({
   const [checksError, setChecksError] = useState<string | null>(null);
   const [checksDockExpanded, setChecksDockExpanded] = useState(false);
   const [checksDockTab, setChecksDockTab] = useState<'checks' | 'logs'>('checks');
-  const [showPhase6Stub, setShowPhase6Stub] = useState(false);
+
+  // Execution (Phase 6 Block 3). Scoped to exactly one destination node per
+  // run (see docs/decisions.md) — runNodeId below is null whenever the
+  // graph doesn't have exactly one, which the Run button's tooltip
+  // surfaces directly rather than guessing which destination to run.
+  type RunState =
+    | { status: 'idle' }
+    | { status: 'starting' }
+    | { status: 'running'; totalRowsProcessed: number }
+    | { status: 'done'; totalRowsProcessed: number; durationMs: number }
+    | { status: 'error'; message: string };
+  const [runState, setRunState] = useState<RunState>({ status: 'idle' });
+  const runTeardownRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => runTeardownRef.current?.(), []);
+
+  const destinationNodes = useMemo(() => nodes.filter((n) => n.data.graphNodeType === 'destination'), [nodes]);
+  const runNodeId = destinationNodes.length === 1 ? destinationNodes[0]!.id : null;
+
+  const handleRun = useCallback(async () => {
+    if (!runNodeId) return;
+    runTeardownRef.current?.();
+    setRunState({ status: 'starting' });
+    try {
+      const { runId } = await startWorkflowRun(workflow.id, runNodeId);
+      runTeardownRef.current = streamRun(workflow.id, runId, {
+        onEvent: (event) => {
+          if (event.type === 'started') {
+            setRunState({ status: 'running', totalRowsProcessed: 0 });
+          } else if (event.type === 'progress') {
+            setRunState({ status: 'running', totalRowsProcessed: event.totalRowsProcessed });
+          } else if (event.type === 'done') {
+            setRunState({ status: 'done', totalRowsProcessed: event.totalRowsProcessed, durationMs: event.durationMs });
+          } else if (event.type === 'error') {
+            setRunState({ status: 'error', message: event.message });
+          }
+        },
+        onTransportError: () => setRunState({ status: 'error', message: 'Lost connection to the run stream.' }),
+      });
+    } catch (err) {
+      setRunState({ status: 'error', message: err instanceof RunApiError ? err.message : 'Failed to start the run.' });
+    }
+  }, [workflow.id, runNodeId]);
 
   // Command bar's chat session (Phase 5 Session 4) — lifted up from
   // CommandBar.tsx itself so its live `messages` can also feed the Logs
@@ -321,19 +355,30 @@ function CanvasInner({
     [setSelectedNodeId, setNodes, getNode, setCenter],
   );
 
-  // Run (workflow execution) has no backing route yet (Phase 6) — clicking
-  // it while enabled shows a stub modal instead of creating any run rows.
-  // The gate itself is real: enabled only when the latest persisted check
-  // run is all-pass AND matches the live graph_version (checksStale below),
-  // proving the gate works even though execution itself doesn't exist yet.
+  // Run (workflow execution, Phase 6 Block 3). Enabled only when the latest
+  // persisted check run is all-pass AND matches the live graph_version
+  // (checksStale below), AND the graph has exactly one destination node
+  // (runNodeId, single-destination-per-run scope cut — see
+  // docs/decisions.md). Mapping/entity/upsert-key completeness is NOT
+  // re-validated here — the worker validates all of that itself and
+  // surfaces a clean `error` stream event rather than silently failing, so
+  // duplicating that check here would just be a second place to keep in
+  // sync.
   const checksStale = !latestCheckRun || latestCheckRun.graphVersion !== version;
   const failingChecks = latestCheckRun?.results.filter((r) => r.status === 'fail').length ?? 0;
-  const runEnabled = !checksStale && failingChecks === 0;
+  const runInFlight = runState.status === 'starting' || runState.status === 'running';
+  const runEnabled = !checksStale && failingChecks === 0 && !!runNodeId && !runInFlight;
   const runTooltip = checksStale
     ? 'Run checks before running the workflow.'
     : failingChecks > 0
       ? `${failingChecks} check${failingChecks === 1 ? '' : 's'} failing — fix before running.`
-      : 'All checks passing.';
+      : !runNodeId
+        ? destinationNodes.length === 0
+          ? 'Add a destination node before running.'
+          : 'Only one destination node is supported per run — remove the others.'
+        : runInFlight
+          ? 'A run is already in progress.'
+          : 'All checks passing.';
 
   const disabledRunBtnStyle = {
     fontSize: 12.5,
@@ -419,22 +464,18 @@ function CanvasInner({
           <button type="button" onClick={handleRunChecks} disabled={checksRunning} style={runChecksBtnStyle}>
             {checksRunning ? 'Running…' : 'Run checks'}
           </button>
-          {/* Execution (Phase 6) has no backing route yet. Enabled only
-              when the latest check run is all-pass and matches the live
-              graph version; clicking while enabled shows a stub — no run
-              rows are created. Disabled states keep honest tooltips. */}
+          {/* Execution (Phase 6 Block 3). Enabled only when the latest check
+              run is all-pass, up to date, and the graph has exactly one
+              destination node; clicking enqueues a real run and streams its
+              progress into the panel below. Disabled states keep honest
+              tooltips. */}
           {runEnabled ? (
-            <button
-              type="button"
-              onClick={() => setShowPhase6Stub(true)}
-              title={runTooltip}
-              style={enabledRunBtnStyle}
-            >
+            <button type="button" onClick={handleRun} title={runTooltip} style={enabledRunBtnStyle}>
               Run
             </button>
           ) : (
-            <button type="button" disabled title={runTooltip} style={disabledRunBtnStyle}>
-              Run
+            <button type="button" disabled title={runTooltip} style={runInFlight ? enabledRunBtnStyle : disabledRunBtnStyle}>
+              {runInFlight ? 'Running…' : 'Run'}
             </button>
           )}
         </div>
@@ -510,20 +551,48 @@ function CanvasInner({
           />
         )}
 
-        {showPhase6Stub && (
-          <div style={modalOverlayStyle} onClick={() => setShowPhase6Stub(false)}>
-            <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
-              <span style={modalTitleStyle}>Execution arrives in Phase 6</span>
-              <p style={{ fontSize: 13.5, color: 'var(--text-3)', margin: 0 }}>
-                Checks are passing and up to date, so the Run gate is open — but workflow execution itself isn&apos;t
-                built yet. No run was started.
-              </p>
-              <div style={modalActionsStyle}>
-                <button type="button" style={modalBtnGhostStyle} onClick={() => setShowPhase6Stub(false)}>
-                  Got it
-                </button>
-              </div>
+        {runState.status !== 'idle' && (
+          <div
+            style={{
+              position: 'absolute',
+              right: 16,
+              bottom: 16,
+              zIndex: 30,
+              width: 300,
+              boxSizing: 'border-box',
+              padding: '14px 16px',
+              borderRadius: 10,
+              background: 'var(--surface)',
+              border: `1px solid ${runState.status === 'error' ? 'var(--bad)' : 'var(--line2)'}`,
+              boxShadow: 'var(--shadow)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>
+                {runState.status === 'starting' && 'Starting run…'}
+                {runState.status === 'running' && 'Running…'}
+                {runState.status === 'done' && 'Run complete'}
+                {runState.status === 'error' && 'Run failed'}
+              </span>
+              <button
+                type="button"
+                aria-label="Dismiss"
+                onClick={() => setRunState({ status: 'idle' })}
+                style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+              >
+                {'\u2715'}
+              </button>
             </div>
+            {(runState.status === 'running' || runState.status === 'done') && (
+              <span style={{ fontSize: 12, color: 'var(--ink3)' }}>
+                {runState.totalRowsProcessed.toLocaleString()} row{runState.totalRowsProcessed === 1 ? '' : 's'} written
+                {runState.status === 'done' ? ` in ${(runState.durationMs / 1000).toFixed(1)}s` : ''}
+              </span>
+            )}
+            {runState.status === 'error' && <span style={{ fontSize: 12, color: 'var(--bad)' }}>{runState.message}</span>}
           </div>
         )}
       </div>
