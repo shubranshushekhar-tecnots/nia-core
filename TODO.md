@@ -108,12 +108,19 @@
     `MAX_CHUNK_ROWS` (1000 output rows) with `isLastChunk` forced `true`
     — the runner's keyset-pagination model is keyed on the source
     primary key, which GROUP BY collapses, so there's no cursor to
-    paginate over post-aggregation. A workflow whose grouped output
-    would exceed 1000 rows silently truncates today. No truncation
-    warning surfaces in the UI yet. Revisit if/when large-cardinality
-    group-bys become a real workload (proper fix would need an
-    aggregate-aware cursor, e.g. keyset over the group-by columns
-    themselves, or a hard pre-flight row-count check).
+    paginate over post-aggregation. UPDATED (Block 6 addendum): a
+    workflow whose grouped output would exceed 1000 rows no longer
+    silently truncates — `runEtl.ts` now hard-fails the run (before
+    `dispatchWrite`, zero destination rows written) whenever the fetched
+    row count exactly hits the cap, publishing an `error` run-stream
+    event with a clear "aggregate result may exceed N groups" message.
+    This guard is the honest v1 stopgap, not the real fix: it can't
+    distinguish "exactly N groups, no truncation" from "truncated at N",
+    so a legitimately-N-group workflow will false-positive fail and must
+    raise the cap or reduce cardinality. The real fix remains an
+    aggregate-aware pagination cursor (e.g. keyset over the group-by
+    columns themselves) so large-cardinality group-bys can page like any
+    other query — revisit if/when that becomes a real workload.
   - **Residual (non-pushed) aggregation buffers all per-group state in
     memory** (`residualTransform.ts`) — a `Map` of group-key → running
     accumulators, plus a `Set` per `count_distinct` aggregation. Fine at
