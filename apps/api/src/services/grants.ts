@@ -97,24 +97,33 @@ export async function createWriteGrant(
 }
 
 /**
- * Second step: attaches the write credential's Vault ref. Fails (RPC
- * raises) if the grant is already confirmed or already revoked — 0016's
- * deliberate non-idempotence; rotation is revoke + create a new grant, not
- * re-confirm.
+ * Second step: stores the write credential in Vault (same
+ * `create_connector_secret` RPC connections.ts's createConnection already
+ * uses for read credentials) and attaches the resulting ref. Takes the raw
+ * `{ user, password }` credential, not a pre-existing vault ref — the
+ * browser never talks to Vault directly, same boundary as connection
+ * creation. Fails (RPC raises) if the grant is already confirmed or already
+ * revoked — 0016's deliberate non-idempotence; rotation is revoke + create
+ * a new grant, not re-confirm.
  */
 export async function confirmWriteGrant(
   supabase: SupabaseClient,
   scope: WorkspaceScope,
   connectionId: string,
   grantId: string,
-  writeCredentialVaultRef: string,
+  credential: { user: string; password: string },
 ): Promise<WriteGrant> {
   const connection = await getConnection(supabase, scope, connectionId);
   if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
+  const { data: vaultRef, error: vaultError } = await supabase.rpc("create_connector_secret", { p_secret: credential });
+  if (vaultError || !vaultRef) {
+    throw new AppError(500, "VAULT_WRITE_FAILED", vaultError?.message ?? "Failed to store write credential.");
+  }
+
   const { data, error } = await supabase.rpc("confirm_write_grant", {
     p_grant_id: grantId,
-    p_write_credential_vault_ref: writeCredentialVaultRef,
+    p_write_credential_vault_ref: vaultRef as string,
   });
   if (error) throw new AppError(409, "CONFIRM_FAILED", error.message);
   return toWriteGrant(data as WriteGrantRow);

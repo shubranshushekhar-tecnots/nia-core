@@ -1,10 +1,10 @@
 'use client';
 
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, parseNodeConfig, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
+import { useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildGrantStatementText, parseNodeConfig, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
-import { getConnectionSchema, getWriteGrants } from '@/lib/api/connectionsClient';
+import { confirmWriteGrant, createWriteGrant, getConnectionSchema, getWriteGrants, type WriteGrant } from '@/lib/api/connectionsClient';
 import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
 
@@ -101,16 +101,25 @@ function useConnectionEntities(connectionId?: string): { namespace: string; name
  * grant with a scope that isn't `{ schemas: [...] }`-shaped, or with no
  * schemas array at all, covers nothing.
  */
-function useGrantedNamespaces(connectionId?: string): Set<string> {
+function useWriteGrants(connectionId?: string): WriteGrant[] {
   const { data: grants } = useQuery({
     queryKey: ['connection-write-grants', connectionId],
     queryFn: () => getWriteGrants(connectionId!),
     enabled: !!connectionId,
     staleTime: 30_000,
   });
+  return grants ?? [];
+}
+
+function grantScopeHasNamespace(grant: WriteGrant, namespace: string): boolean {
+  const schemas = (grant.scope as { schemas?: unknown } | null)?.schemas;
+  return Array.isArray(schemas) && schemas.some((s) => s === namespace);
+}
+
+function useGrantedNamespaces(grants: WriteGrant[]): Set<string> {
   return useMemo(() => {
     const namespaces = new Set<string>();
-    for (const grant of grants ?? []) {
+    for (const grant of grants) {
       if (!grant.confirmedAt || grant.revokedAt) continue;
       const schemas = (grant.scope as { schemas?: unknown } | null)?.schemas;
       if (Array.isArray(schemas)) {
@@ -121,24 +130,183 @@ function useGrantedNamespaces(connectionId?: string): Set<string> {
   }, [grants]);
 }
 
+const grantPanelStyle = {
+  marginTop: 10,
+  padding: 10,
+  border: '1px solid var(--line2)',
+  borderRadius: 8,
+  background: 'var(--surface2)',
+} as const;
+
+const grantButtonStyle = {
+  fontSize: 12,
+  fontWeight: 600,
+  color: 'var(--ink)',
+  background: 'var(--surface)',
+  border: '1px solid var(--line2)',
+  borderRadius: 6,
+  padding: '5px 10px',
+  cursor: 'pointer',
+} as const;
+
+/** Random, identifier-safe: `nia_write_` + 8 lowercase-hex chars from crypto.randomUUID(). */
+function randomWriteRoleUser(): string {
+  return `nia_write_${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
+}
+
+function randomWriteRolePassword(): string {
+  return crypto.randomUUID().replace(/-/g, '');
+}
+
+/**
+ * Phase 6 Block 5 — the grant-creation UI Block 2 never shipped (see
+ * PHASE6_SESSION_NOTES.md's Block 4 correction / docs/decisions.md). Two
+ * steps, matching 0016_write_grants.sql's model exactly:
+ *   1. Generate a role user/password, mint a grant scoped to `namespace`
+ *      (createWriteGrant), and show copy-ready CREATE ROLE/GRANT statement
+ *      text for the user to run against their own database.
+ *   2. Once they've run it, "Confirm access" sends that same credential to
+ *      confirmWriteGrant, which stores it in Vault server-side and attaches
+ *      the ref — unlocking the write verbs above.
+ * A grant already created-but-not-confirmed for this namespace (e.g. the
+ * user navigated away mid-flow) resumes at step 2 instead of minting a
+ * second grant, using the same generated statement text so the credential
+ * shown still matches what confirm will send (nothing is persisted client-
+ * side beyond this component's state — re-mounting loses it, which is
+ * acceptable for a one-time setup flow, not a recurring one).
+ */
+function GrantAccessPanel({
+  connectionId,
+  connectorId,
+  namespace,
+  pendingGrant,
+}: {
+  connectionId: string;
+  connectorId?: string;
+  namespace: string;
+  pendingGrant?: WriteGrant;
+}) {
+  const queryClient = useQueryClient();
+  const [credential] = useState(() => ({ user: randomWriteRoleUser(), password: randomWriteRolePassword() }));
+  const [grant, setGrant] = useState<WriteGrant | undefined>(pendingGrant);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const statementText = connectorId ? buildGrantStatementText(connectorId, namespace, credential.user, credential.password) : null;
+
+  async function handleCreate() {
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createWriteGrant(connectionId, { schemas: [namespace] });
+      setGrant(created);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create write grant.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleConfirm() {
+    if (!grant) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await confirmWriteGrant(connectionId, grant.id, credential);
+      await queryClient.invalidateQueries({ queryKey: ['connection-write-grants', connectionId] });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to confirm write grant.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCopy() {
+    if (!statementText) return;
+    await navigator.clipboard.writeText(statementText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <div style={grantPanelStyle}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', marginBottom: 6 }}>Grant write access to &quot;{namespace}&quot;</div>
+      {!grant ? (
+        <>
+          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 8 }}>
+            Mints a role/password for this schema and shows a statement to run against your database.
+          </div>
+          <button type="button" style={grantButtonStyle} disabled={busy} onClick={handleCreate}>
+            {busy ? 'Creating…' : 'Grant write access'}
+          </button>
+        </>
+      ) : !grant.confirmedAt ? (
+        <>
+          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 6 }}>
+            Run this against the connection&apos;s database, then confirm below.
+          </div>
+          {statementText ? (
+            <>
+              <pre
+                style={{
+                  fontFamily: 'var(--font-data)',
+                  fontSize: 11,
+                  background: 'var(--surface)',
+                  border: '1px solid var(--line2)',
+                  borderRadius: 6,
+                  padding: 8,
+                  whiteSpace: 'pre-wrap',
+                  overflowX: 'auto',
+                  marginBottom: 8,
+                }}
+              >
+                {statementText}
+              </pre>
+              <button type="button" style={{ ...grantButtonStyle, marginRight: 8 }} onClick={handleCopy}>
+                {copied ? 'Copied' : 'Copy statement'}
+              </button>
+            </>
+          ) : (
+            <div style={{ fontSize: 11.5, color: 'var(--warn)', marginBottom: 8 }}>No statement text for this connector yet — ask your database admin.</div>
+          )}
+          <button type="button" style={grantButtonStyle} disabled={busy} onClick={handleConfirm}>
+            {busy ? 'Confirming…' : "I've run this — confirm access"}
+          </button>
+        </>
+      ) : (
+        <div style={{ fontSize: 11.5, color: 'var(--ok)' }}>Confirmed.</div>
+      )}
+      {error && <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>{error}</div>}
+    </div>
+  );
+}
+
 function SourceDestForm({
   config,
   operations,
   nodeType,
   connectionId,
+  manifestId,
   onChange,
 }: {
   config: SourceDestConfig;
   operations: Operation[];
   nodeType: 'source' | 'destination';
   connectionId?: string;
+  manifestId?: string;
   onChange: (next: SourceDestConfig) => void;
 }) {
   const entities = useConnectionEntities(connectionId);
-  const grantedNamespaces = useGrantedNamespaces(connectionId);
+  const grants = useWriteGrants(connectionId);
+  const grantedNamespaces = useGrantedNamespaces(grants);
   const selectedKey = config.entity ? entityKey(config.entity) : '';
   const namespace = config.entity?.namespace;
   const grantCovers = namespace !== undefined && grantedNamespaces.has(namespace);
+  const pendingGrant =
+    namespace !== undefined
+      ? grants.find((g) => !g.revokedAt && !g.confirmedAt && grantScopeHasNamespace(g, namespace))
+      : undefined;
 
   return (
     <div>
@@ -189,6 +357,10 @@ function SourceDestForm({
           </select>
         )}
       </div>
+
+      {nodeType === 'destination' && connectionId && namespace !== undefined && !grantCovers && (
+        <GrantAccessPanel connectionId={connectionId} connectorId={manifestId} namespace={namespace} pendingGrant={pendingGrant} />
+      )}
     </div>
   );
 }
@@ -242,6 +414,7 @@ export default function NodeDrawer({
           operations={manifest?.operations ?? ['read']}
           nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
           connectionId={data.connectionId}
+          manifestId={data.manifestId}
           onChange={(next) => onConfigChange(next)}
         />
       )}

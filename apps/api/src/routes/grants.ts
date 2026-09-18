@@ -43,12 +43,15 @@ grantsRouter.post(
 
 const grantParamsSchema = connectionParamsSchema.extend({ grantId: z.string().uuid() });
 
-// Phase 6 Block 2 — the second step of the two-step grant model
-// (0016_write_grants.sql): attaches the write credential's Vault ref,
-// unlocking the connector /write path + checkGrants for this grant's
-// scope. Reuses grants.create's capability (same DECISION-C bucket: any
-// role can mint or complete a grant it's already allowed to create).
-const confirmBodySchema = z.object({ writeCredentialVaultRef: z.string().min(1) });
+// Phase 6 Block 2/5 — the second step of the two-step grant model
+// (0016_write_grants.sql): takes the raw write credential (the same
+// user/password the client just showed the user in the generated
+// CREATE ROLE/GRANT statement), stores it in Vault server-side, and
+// attaches the resulting ref — unlocking the connector /write path +
+// checkGrants for this grant's scope. Reuses grants.create's capability
+// (same DECISION-C bucket: any role can mint or complete a grant it's
+// already allowed to create).
+const confirmBodySchema = z.object({ credential: z.object({ user: z.string().min(1), password: z.string().min(1) }) });
 
 grantsRouter.post(
   "/:grantId/confirm",
@@ -61,7 +64,7 @@ grantsRouter.post(
       scopeFromActor(req.actor),
       req.params.connectionId!,
       req.params.grantId!,
-      req.body.writeCredentialVaultRef,
+      req.body.credential,
     );
     res.json(data);
   }),

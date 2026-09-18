@@ -244,6 +244,16 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     totalRowsProcessed,
   });
 
+  // Block 4 kill-test instrumentation only: an optional, env-gated pause in
+  // exactly the window Block 3.5's own race note flagged — cursor already
+  // persisted (recordChunkProgress above), next chunk's job not yet
+  // enqueued. Unset (every real deployment, and every other test) this is a
+  // no-op; apps/worker/scripts/kill-test.ts sets it to give a `kill -9` a
+  // wide, deterministic target instead of guessing when a sub-millisecond
+  // in-memory hop happens to land.
+  const raceDelayMs = Number(process.env.ETL_KILL_TEST_RACE_DELAY_MS ?? 0);
+  if (raceDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, raceDelayMs));
+
   const nextJob: EtlRunJob = { ...job, cursor: JSON.stringify({ lastKey: nextKey } satisfies Cursor) };
   await queue.add("etl_run", nextJob, { jobId: randomUUID() });
   return { status: "chunk", nextCursor: nextKey };

@@ -419,3 +419,30 @@ lands:
   to be picked up whenever personal-workspace workflow execution is
   prioritized. `services/runs.ts`'s `startWorkflowRun` continues to reject
   a personal-workspace actor with a clean 400 until then.
+
+## Phase 6 Block 4 correction: the grant-creation UI never shipped in Block 2
+
+Block 2's kickoff spec included a UI requirement — the grant flow should
+display copy-ready `CREATE ROLE` / `GRANT` statements per dialect,
+accept a write credential, and drive the two-step create/confirm — and
+Block 2's closing report (`ecbc225`) listed "NodeDrawer.tsx /
+connectionsClient.ts: UI unlock for confirming/revoking write grants"
+as delivered. That line is accurate only for the **read side**: the
+verb-lock/unlock display in `NodeDrawer.tsx`'s `SourceDestForm`, driven
+by `getWriteGrants()`. It was never accurate for a **creation** UI —
+no component anywhere in `apps/web` calls `create_write_grant` or
+`confirm_write_grant`, generates any `CREATE ROLE`/`GRANT` SQL text, or
+accepts a write credential. `ConnectionsClient.tsx`'s own comment
+concedes this directly ("Write-grants (mint/revoke) are deliberately
+not surfaced here yet, per the fixed Step 5 scope") and its "Manage"
+button is a disabled `title="Coming soon"` placeholder. This was
+discovered during Block 4's E2E test build, not fixed in place (Block 4
+is a proof block, not new product surface) — the E2E instead drives
+grant creation/confirmation via the same RPC calls `write-smoke.ts`
+already uses, and only exercises real UI for the read side (verb
+lock/unlock, `checkGrants` pass/fail) and everything downstream (run,
+status panel, Logs). The grant-creation UI itself (statement display +
+credential entry + two-step confirm) now explicitly lands in **Block 5
+(write-path generalization)**, where mysql/mongo destination dialects
+make the per-dialect statement text a real requirement anyway rather
+than a supabase-only stub.

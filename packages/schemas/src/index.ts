@@ -19,3 +19,4 @@ export * from "./connectors/mysql.js";
 export * from "./connectors/mongodb.js";
 export * from "./connectors/supabase.js";
 export * from "./connectors/registry.js";
+export * from "./writeGrantStatement.js";

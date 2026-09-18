@@ -94,3 +94,51 @@ grant → confirm → revoke model described in Block 2's decision entry.
 | Direct client `SELECT` (`write_grants_select_members`) | Present in 0007 | **Unchanged** — reads still flow through the original member-scoped RLS policy; only writes were locked down |
 | RBAC (admin/owner gating) | None — all-role by omission (0007 predates `can.ts`'s capability matrix) | **Still none, explicitly** — all three RPCs stay all-role by design, matching the already-documented DECISION-C ruling (`docs/decisions.md`): work actions (including minting/confirming/revoking write grants) are not admin/owner-gated, only org-governance actions are |
 | Deprecated-but-kept columns | — | None. Every 0007 column survives unchanged in shape; 0016 is purely additive (3 new columns) plus a write-path lockdown — no column was kept-but-deprecated |
+
+## Block 4 correction to the Block 2 report: grant-creation UI was never built
+
+Block 2's report (commit `ecbc225`) listed "NodeDrawer.tsx /
+connectionsClient.ts: UI unlock for confirming/revoking write grants"
+as delivered work. Discovered while building Block 4's E2E test: that
+line describes only the **read side** — `NodeDrawer.tsx`'s
+`SourceDestForm` queries `getWriteGrants()` to lock/unlock write verbs.
+No component anywhere in `apps/web` actually **creates** or **confirms**
+a grant: there is no UI calling `create_write_grant`/`confirm_write_grant`,
+no generated `CREATE ROLE`/`GRANT` SQL text, and no write-credential
+input field, despite Block 2's kickoff spec asking for exactly that.
+`connectionsClient.ts` has only `getWriteGrants()` — no
+`createWriteGrant`/`confirmWriteGrant`/`revokeWriteGrant` wrappers exist
+even though the REST routes they'd call (`apps/api/src/routes/grants.ts`)
+are fully implemented. `ConnectionsClient.tsx`'s own comment already
+conceded this ("Write-grants (mint/revoke) are deliberately not
+surfaced here yet, per the fixed Step 5 scope") — the Block 2 report
+should have said "confirming/revoking" was itself unimplemented in the
+UI, not just unlock display.
+
+Not fixed in Block 4 (a proof block, not new UI surface) — see
+`docs/decisions.md`'s matching correction entry. The E2E test drives
+grant creation/confirmation via direct RPC calls (the `write-smoke.ts`
+pattern) and only exercises real UI for the read side (verb lock/unlock,
+`checkGrants` pass/fail) and everything downstream of a confirmed grant.
+The grant-creation UI itself is now explicitly scoped into **Block 5
+(write-path generalization)**.
+
+## Block 5: grant-creation UI shipped (Block 4's remaining proof work deferred)
+
+Per user direction, Block 4's two remaining proof artifacts (the
+Playwright E2E for the grant/run/status flow, and the 1,000,000-row
+kill -9 resilience test — `apps/worker/scripts/kill-test.ts`, already
+written but not yet run) were explicitly deferred to prioritize real
+product surface. Block 5 built the grant-creation UI Block 2 never
+shipped:
+
+- `packages/schemas/src/writeGrantStatement.ts` — pure `buildGrantStatementText(connectorId, namespace, roleUser, rolePassword)`, dialect-switched (postgres/mysql/mongodb `CREATE ROLE`/`CREATE USER`/`createUser` + grant text). Generates correct text for all three connectors even though only `supabase` is a real `etl_sink` today — see the file's header comment.
+- `apps/api/src/services/grants.ts`'s `confirmWriteGrant` now takes the raw `{ user, password }` credential (not a pre-existing vault ref) and writes it to Vault itself via `create_connector_secret`, mirroring `connections.ts`'s `createConnection` pattern — the browser never talks to Vault directly. `routes/grants.ts`'s confirm body schema updated to match.
+- `connectionsClient.ts` gained `createWriteGrant`/`confirmWriteGrant`/`revokeWriteGrant` wrappers (previously only `getWriteGrants` existed).
+- `NodeDrawer.tsx`'s `SourceDestForm` (destination nodes) renders a new `GrantAccessPanel` under the table picker whenever a namespace is selected and not yet covered by a confirmed grant: generates a role user/password client-side, mints the grant, shows copy-ready statement text, and confirms with that same credential on click — resumes at the confirm step instead of re-minting if an unconfirmed grant for that namespace already exists.
+
+Not done: actual mysql/mongodb write dispatch (both stay read-only
+connectors; the statement generator covers their dialect syntax only, not
+real execution), a revoke-from-the-UI affordance, and Block 4's two proof
+artifacts above. Not yet verified live (no browser session run this
+pass) — typecheck is clean across `@nia/schemas`/`@nia/api`/`@nia/web`.

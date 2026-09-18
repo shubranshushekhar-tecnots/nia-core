@@ -77,3 +77,53 @@ export async function getWriteGrants(connectionId: string): Promise<WriteGrant[]
   }
   return res.json() as Promise<WriteGrant[]>;
 }
+
+/**
+ * Phase 6 Block 5 — create/confirm/revoke wrappers backing the
+ * grant-creation UI (NodeDrawer.tsx's GrantAccessPanel). Mirrors
+ * apps/api/src/routes/grants.ts's contract exactly: create takes a scope,
+ * confirm takes the raw `{ user, password }` credential (the server writes
+ * it to Vault, see grants.ts's service comment), revoke takes only the
+ * grant id.
+ */
+export async function createWriteGrant(connectionId: string, scope: Record<string, unknown>): Promise<WriteGrant> {
+  const res = await fetch(`/api/backend/connections/${connectionId}/grants`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify({ scope }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ConnectionsApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+  }
+  return res.json() as Promise<WriteGrant>;
+}
+
+export async function confirmWriteGrant(
+  connectionId: string,
+  grantId: string,
+  credential: { user: string; password: string },
+): Promise<WriteGrant> {
+  const res = await fetch(`/api/backend/connections/${connectionId}/grants/${grantId}/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify({ credential }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ConnectionsApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+  }
+  return res.json() as Promise<WriteGrant>;
+}
+
+export async function revokeWriteGrant(connectionId: string, grantId: string): Promise<WriteGrant> {
+  const res = await fetch(`/api/backend/connections/${connectionId}/grants/${grantId}`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json', ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ConnectionsApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+  }
+  return res.json() as Promise<WriteGrant>;
+}
