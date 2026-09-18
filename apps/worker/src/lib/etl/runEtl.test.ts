@@ -235,6 +235,130 @@ describe("runEtl — failed write", () => {
   });
 });
 
+describe("runEtl — aggregate truncation guard", () => {
+  it("fails before dispatchWrite when a pushed aggregate's fetched rows hit the cap, writing zero rows", async () => {
+    const aggregateGraph: GraphDoc = {
+      nodes: [
+        graph().nodes[0]!,
+        {
+          id: "agg",
+          type: "transform",
+          position: { x: 200, y: 0 },
+          config: { steps: [{ kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "count", field: null, alias: "n" }] }] },
+        },
+        {
+          id: "dest",
+          type: "destination",
+          manifestId: "supabase",
+          connectionId: DEST_CONN,
+          position: { x: 400, y: 0 },
+          config: {
+            operation: "insert",
+            entity: { namespace: "public", name: "users_dest" },
+            mapping: {
+              version: 1,
+              entries: [
+                { from: "cohort", to: "cohort" },
+                { from: "n", to: "n" },
+              ],
+              approvedAt: "2026-01-01T00:00:00.000Z",
+            },
+            upsertKeys: ["cohort"],
+          },
+        },
+      ],
+      edges: [
+        { id: "e0", source: "src", target: "agg" },
+        { id: "e1", source: "agg", target: "dest" },
+      ],
+    };
+    resolveGraphMock.mockResolvedValueOnce(aggregateGraph);
+
+    const requestedLimit = 2;
+    dispatchMock.mockResolvedValueOnce(
+      tabularResult(
+        [
+          ["eng", "3"],
+          ["sales", "2"],
+        ],
+        [
+          { name: "cohort", type: "string" },
+          { name: "n", type: "string" },
+        ],
+      ),
+    );
+    const queue = queueStub();
+    const job = baseJob({ chunkSize: requestedLimit });
+
+    const result = await runEtl(job, queue);
+
+    expect(result.status).toBe("failed");
+    expect(result.message).toContain(`${requestedLimit}`);
+    expect(dispatchWriteMock).not.toHaveBeenCalled();
+    expect(recordChunkProgressMock).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
+    expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "error" }));
+  });
+
+  it("does not fail when a pushed aggregate's fetched rows are under the cap", async () => {
+    const aggregateGraph: GraphDoc = {
+      nodes: [
+        graph().nodes[0]!,
+        {
+          id: "agg",
+          type: "transform",
+          position: { x: 200, y: 0 },
+          config: { steps: [{ kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "count", field: null, alias: "n" }] }] },
+        },
+        {
+          id: "dest",
+          type: "destination",
+          manifestId: "supabase",
+          connectionId: DEST_CONN,
+          position: { x: 400, y: 0 },
+          config: {
+            operation: "insert",
+            entity: { namespace: "public", name: "users_dest" },
+            mapping: {
+              version: 1,
+              entries: [
+                { from: "cohort", to: "cohort" },
+                { from: "n", to: "n" },
+              ],
+              approvedAt: "2026-01-01T00:00:00.000Z",
+            },
+            upsertKeys: ["cohort"],
+          },
+        },
+      ],
+      edges: [
+        { id: "e0", source: "src", target: "agg" },
+        { id: "e1", source: "agg", target: "dest" },
+      ],
+    };
+    resolveGraphMock.mockResolvedValueOnce(aggregateGraph);
+
+    dispatchMock.mockResolvedValueOnce(
+      tabularResult(
+        [["eng", "3"]],
+        [
+          { name: "cohort", type: "string" },
+          { name: "n", type: "string" },
+        ],
+      ),
+    );
+    const queue = queueStub();
+    const job = baseJob({ chunkSize: 10 });
+
+    const result = await runEtl(job, queue);
+
+    expect(result.status).toBe("done");
+    expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "succeeded");
+  });
+});
+
 describe("runEtl — resume from mid-cursor", () => {
   it("prefers the persisted Postgres checkpoint cursor over the job payload's own cursor hint", async () => {
     getRunCheckpointMock.mockResolvedValueOnce({ status: "running", cursor: JSON.stringify({ lastKey: "50" }) });

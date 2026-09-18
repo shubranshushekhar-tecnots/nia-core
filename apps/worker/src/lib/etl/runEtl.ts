@@ -201,6 +201,25 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   if (!result.ok) return fail(scope, job.runId, job.nodeId, `Source read failed: ${result.error.message}`);
 
   const sourceRowsFetched = result.value.rows.length;
+
+  // Block 6 addendum: a pushed aggregate is capped at requestedLimit
+  // (MAX_CHUNK_ROWS) with no cursor to resume from (see isAggregatePushdown
+  // above) — if the fetched row count exactly hits that cap, the true
+  // (uncapped) GROUP BY result set may be larger and this chunk would
+  // silently ship a truncated, wrong answer as a "done" success. Detected
+  // here, before dispatchWrite below, so a suspected truncation writes zero
+  // destination rows rather than a partial result. The real fix is an
+  // aggregate-aware pagination cursor (keyset over the group-by columns);
+  // this hard fail is the honest v1 stopgap until that lands.
+  if (isAggregatePushdown && sourceRowsFetched === requestedLimit) {
+    return fail(
+      scope,
+      job.runId,
+      job.nodeId,
+      `Aggregate result may exceed ${requestedLimit} groups; refine group-by or raise the cap.`,
+    );
+  }
+
   const keyColumnIndex = result.value.columns.findIndex((c) => c.name === keyColumn);
   const lastRow = sourceRowsFetched > 0 ? result.value.rows[sourceRowsFetched - 1] : undefined;
   const nextKey = lastRow && keyColumnIndex !== -1 ? (lastRow[keyColumnIndex] as string | number) : lastKey;
