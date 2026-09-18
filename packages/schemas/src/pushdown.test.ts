@@ -9,6 +9,14 @@ function expr(src: string) {
   return parsed.expr;
 }
 
+/** Mirrors pushdown.ts's own quoteIdent/placeholder — kept local (not imported) since those helpers aren't exported; used to build dialect-agnostic expected-SQL strings for the describe.each blocks below, so every aggregate case runs against BOTH SQL dialects with one assertion body instead of two hand-duplicated copies. */
+function q(dialect: "mysql" | "postgres", name: string): string {
+  return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+}
+function ph(dialect: "mysql" | "postgres", n: number): string {
+  return dialect === "mysql" ? "?" : `$${n}`;
+}
+
 describe("manifestDialect", () => {
   it("maps the 3 shipped connectors to their query dialect", () => {
     expect(manifestDialect("mysql")).toBe("mysql");
@@ -237,37 +245,33 @@ describe("compilePushdown — injection-shaped identifiers", () => {
   });
 });
 
-describe("compilePushdown — aggregate, SQL dialects", () => {
-  it("mysql: GROUP BY + MAX(...) AS alias", () => {
+/**
+ * Parametrized across both SQL dialects so every aggregate case is proven
+ * identically for mysql AND postgres (addendum, docs/decisions.md Block 6):
+ * the compiler's dialect axis is ONE generic SQL emitter (compileSql,
+ * pushdown.ts) with exactly two dialect-conditional primitives —
+ * quoteIdent (backtick vs double-quote) and placeholder (`?` vs `$n`),
+ * both mirrored locally here as q()/ph(). Postgres was already a
+ * first-class emit target before this addendum (compileSql takes
+ * `dialect: SqlDialect = "mysql" | "postgres"`, not a mysql-only type) —
+ * this block only systematizes test coverage to full parity, it doesn't
+ * add new compiler capability.
+ */
+describe.each(["mysql", "postgres"] as const)("compilePushdown — aggregate, SQL dialect: %s", (dialect) => {
+  it("GROUP BY + MAX(...) AS alias", () => {
     const config: TransformConfig = {
       steps: [{ kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }] }],
     };
-    const plan = compilePushdown("mysql", config);
+    const plan = compilePushdown(dialect, config);
     expect(plan.pushedDownCount).toBe(1);
     expect(plan.residualCount).toBe(0);
     expect(plan.dialectQuery).toEqual({
-      dialect: "mysql",
+      dialect,
       whereSql: null,
-      selectSql: "`cohort`, MAX(`salary`) AS `max_salary`",
+      selectSql: `${q(dialect, "cohort")}, MAX(${q(dialect, "salary")}) AS ${q(dialect, "max_salary")}`,
       params: [],
       isAggregate: true,
-      groupBySql: "`cohort`",
-      havingSql: null,
-    });
-  });
-
-  it("postgres: same shape, double-quoted identifiers", () => {
-    const config: TransformConfig = {
-      steps: [{ kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }] }],
-    };
-    const plan = compilePushdown("postgres", config);
-    expect(plan.dialectQuery).toEqual({
-      dialect: "postgres",
-      whereSql: null,
-      selectSql: '"cohort", MAX("salary") AS "max_salary"',
-      params: [],
-      isAggregate: true,
-      groupBySql: '"cohort"',
+      groupBySql: q(dialect, "cohort"),
       havingSql: null,
     });
   });
@@ -276,11 +280,11 @@ describe("compilePushdown — aggregate, SQL dialects", () => {
     const config: TransformConfig = {
       steps: [{ kind: "aggregate", groupBy: [], aggregations: [{ fn: "count", field: null, alias: "n" }] }],
     };
-    const plan = compilePushdown("mysql", config);
+    const plan = compilePushdown(dialect, config);
     expect(plan.dialectQuery).toEqual({
-      dialect: "mysql",
+      dialect,
       whereSql: null,
-      selectSql: "COUNT(*) AS `n`",
+      selectSql: `COUNT(*) AS ${q(dialect, "n")}`,
       params: [],
       isAggregate: true,
       groupBySql: null,
@@ -302,9 +306,9 @@ describe("compilePushdown — aggregate, SQL dialects", () => {
         },
       ],
     };
-    const plan = compilePushdown("postgres", config);
+    const plan = compilePushdown(dialect, config);
     expect(plan.dialectQuery).toMatchObject({
-      selectSql: 'COUNT(*) AS "n_all", COUNT("email") AS "n_with_email", COUNT(DISTINCT "email") AS "n_distinct_email"',
+      selectSql: `COUNT(*) AS ${q(dialect, "n_all")}, COUNT(${q(dialect, "email")}) AS ${q(dialect, "n_with_email")}, COUNT(DISTINCT ${q(dialect, "email")}) AS ${q(dialect, "n_distinct_email")}`,
     });
   });
 
@@ -315,9 +319,9 @@ describe("compilePushdown — aggregate, SQL dialects", () => {
         { kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }] },
       ],
     };
-    const plan = compilePushdown("mysql", config);
+    const plan = compilePushdown(dialect, config);
     expect(plan.pushedDownCount).toBe(2);
-    expect(plan.dialectQuery).toMatchObject({ whereSql: "(`age` > ?)", params: [18], isAggregate: true });
+    expect(plan.dialectQuery).toMatchObject({ whereSql: `(${q(dialect, "age")} > ${ph(dialect, 1)})`, params: [18], isAggregate: true });
   });
 
   it("having re-embeds the aggregation's bare expression (ruling 2: alias-only reference)", () => {
@@ -331,8 +335,8 @@ describe("compilePushdown — aggregate, SQL dialects", () => {
         },
       ],
     };
-    const plan = compilePushdown("mysql", config);
-    expect(plan.dialectQuery).toMatchObject({ havingSql: "(MAX(`salary`) > ?)", params: [100000] });
+    const plan = compilePushdown(dialect, config);
+    expect(plan.dialectQuery).toMatchObject({ havingSql: `(MAX(${q(dialect, "salary")}) > ${ph(dialect, 1)})`, params: [100000] });
   });
 
   it("having can also reference a groupBy field (plain quoted column, not re-embedded)", () => {
@@ -346,8 +350,8 @@ describe("compilePushdown — aggregate, SQL dialects", () => {
         },
       ],
     };
-    const plan = compilePushdown("postgres", config);
-    expect(plan.dialectQuery).toMatchObject({ havingSql: '("cohort" <> $1)', params: ["unassigned"] });
+    const plan = compilePushdown(dialect, config);
+    expect(plan.dialectQuery).toMatchObject({ havingSql: `(${q(dialect, "cohort")} <> ${ph(dialect, 1)})`, params: ["unassigned"] });
   });
 
   it("a computed_field ahead of the aggregate blocks the aggregate into residual too (v1: no subquery layering)", () => {
@@ -357,10 +361,53 @@ describe("compilePushdown — aggregate, SQL dialects", () => {
         { kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "max", field: "adj_salary", alias: "max_salary" }] },
       ],
     };
-    const plan = compilePushdown("mysql", config);
+    const plan = compilePushdown(dialect, config);
     expect(plan.pushedDownCount).toBe(1);
     expect(plan.residualCount).toBe(1);
     expect(plan.residualTransforms.map((s) => s.kind)).toEqual(["aggregate"]);
+  });
+
+  it("ruling 1: pushes one aggregate producing sum+count sibling aliases, then computes their ratio residually", () => {
+    const config: TransformConfig = {
+      steps: [
+        {
+          kind: "aggregate",
+          groupBy: ["cohort"],
+          aggregations: [
+            { fn: "sum", field: "amount", alias: "cohort_sum" },
+            { fn: "count", field: null, alias: "cohort_count" },
+          ],
+        },
+        { kind: "computed_field", name: "cohort_avg", expression: expr("cohort_sum / cohort_count") },
+      ],
+    };
+    const plan = compilePushdown(dialect, config);
+    expect(plan.pushedDownCount).toBe(1);
+    expect(plan.residualCount).toBe(1);
+    expect(plan.residualTransforms.map((s) => s.kind)).toEqual(["computed_field"]);
+    expect(plan.dialectQuery).toEqual({
+      dialect,
+      whereSql: null,
+      selectSql: `${q(dialect, "cohort")}, SUM(${q(dialect, "amount")}) AS ${q(dialect, "cohort_sum")}, COUNT(*) AS ${q(dialect, "cohort_count")}`,
+      params: [],
+      isAggregate: true,
+      groupBySql: q(dialect, "cohort"),
+      havingSql: null,
+    });
+  });
+
+  it("ruling 1: structurally chains a second (coarser-grain) Aggregate after a pushed one as residual — multi-level rollup, not pushed twice", () => {
+    const config: TransformConfig = {
+      steps: [
+        { kind: "aggregate", groupBy: ["region", "cohort"], aggregations: [{ fn: "sum", field: "amount", alias: "subtotal" }] },
+        { kind: "aggregate", groupBy: ["region"], aggregations: [{ fn: "sum", field: "subtotal", alias: "region_total" }] },
+      ],
+    };
+    const plan = compilePushdown(dialect, config);
+    expect(plan.pushedDownCount).toBe(1);
+    expect(plan.residualCount).toBe(1);
+    expect(plan.residualTransforms.map((s) => s.kind)).toEqual(["aggregate"]);
+    expect(plan.dialectQuery).toMatchObject({ isAggregate: true, groupBySql: `${q(dialect, "region")}, ${q(dialect, "cohort")}` });
   });
 });
 
@@ -431,30 +478,97 @@ describe("compilePushdown — aggregate, mongo", () => {
       ],
     });
   });
-});
 
-/**
- * Ruling 1 (docs/decisions.md, Block 6 approval): %-of-total stays a
- * composition, not a first-class fn — proven here via a real, valid
- * composition: a pushed fine-grain Aggregate producing two sibling output
- * aliases on the same row (sum + count), followed by a residual
- * computed_field dividing those two aggregate-output aliases (-> per-cohort
- * average). This is the composition pattern the chaining contract actually
- * supports without a join/window primitive.
- *
- * Disclosed finding (see the Stage 2 report): literal broadcast-style
- * %-of-total — a row's value divided by a GRAND TOTAL visible on every row,
- * e.g. "this cohort's share of the whole table" — is NOT provably
- * expressible under the current linear TransformStep chaining model.
- * AggregateStep is reduce-only (no window/partition broadcast mode), and
- * there is no join primitive to recombine a coarser-grain aggregate's single
- * output row back onto every row of a finer-grain aggregate's output. Per
- * the ruling's own contingency, no window/join primitive was built to force
- * this — %_of_total remains parked as a composition, and the gap is
- * disclosed rather than silently promoted to first-class.
- */
-describe("compilePushdown — ruling 1: aggregate-output composition (computed_field over sibling aggregation aliases)", () => {
-  it("pushes one aggregate producing sum+count aliases, then computes their ratio residually", () => {
+  it("having can also reference a groupBy field (post-$project top-level field, not just an alias)", () => {
+    const config: TransformConfig = {
+      steps: [
+        {
+          kind: "aggregate",
+          groupBy: ["cohort"],
+          aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }],
+          having: [{ field: "cohort", operator: "neq", value: "unassigned" }],
+        },
+      ],
+    };
+    const plan = compilePushdown("mongo", config);
+    expect(plan.dialectQuery).toMatchObject({
+      pipeline: [
+        { $group: { _id: { cohort: "$cohort" }, max_salary: { $max: "$salary" } } },
+        { $addFields: { cohort: "$_id.cohort" } },
+        { $project: { _id: 0 } },
+        { $match: { cohort: { $ne: "unassigned" } } },
+      ],
+    });
+  });
+
+  it("count / count_field / count_distinct together compile to $sum / $cond / $addToSet+$size forms in one $group", () => {
+    const config: TransformConfig = {
+      steps: [
+        {
+          kind: "aggregate",
+          groupBy: [],
+          aggregations: [
+            { fn: "count", field: null, alias: "n_all" },
+            { fn: "count_field", field: "email", alias: "n_with_email" },
+            { fn: "count_distinct", field: "email", alias: "n_distinct_email" },
+          ],
+        },
+      ],
+    };
+    const plan = compilePushdown("mongo", config);
+    expect(plan.dialectQuery).toEqual({
+      dialect: "mongo",
+      isAggregate: true,
+      pipeline: [
+        {
+          $group: {
+            _id: null,
+            n_all: { $sum: 1 },
+            n_with_email: { $sum: { $cond: [{ $ne: ["$email", null] }, 1, 0] } },
+            __distinct_n_distinct_email: { $addToSet: "$email" },
+          },
+        },
+        { $addFields: { n_distinct_email: { $size: "$__distinct_n_distinct_email" } } },
+        { $project: { _id: 0, __distinct_n_distinct_email: 0 } },
+      ],
+    });
+  });
+
+  it("a filter step ahead of the aggregate pushes down as a pre-aggregate $match", () => {
+    const config: TransformConfig = {
+      steps: [
+        { kind: "filter", conditions: [{ field: "age", operator: "gt", value: 18 }] },
+        { kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }] },
+      ],
+    };
+    const plan = compilePushdown("mongo", config);
+    expect(plan.pushedDownCount).toBe(2);
+    expect(plan.dialectQuery).toEqual({
+      dialect: "mongo",
+      isAggregate: true,
+      pipeline: [
+        { $match: { age: { $gt: 18 } } },
+        { $group: { _id: { cohort: "$cohort" }, max_salary: { $max: "$salary" } } },
+        { $addFields: { cohort: "$_id.cohort" } },
+        { $project: { _id: 0 } },
+      ],
+    });
+  });
+
+  it("a computed_field ahead of the aggregate blocks it into residual too — a v1 scope cut that is dialect-independent (splitPushable, pushdown.ts), not SQL-specific: even though mongo's pipeline could structurally support $addFields before $group, the same 'no non-filter step ahead of a pushed aggregate' rule applies uniformly to all 3 dialects", () => {
+    const config: TransformConfig = {
+      steps: [
+        { kind: "computed_field", name: "adj_salary", expression: expr("salary * 2") },
+        { kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "max", field: "adj_salary", alias: "max_salary" }] },
+      ],
+    };
+    const plan = compilePushdown("mongo", config);
+    expect(plan.pushedDownCount).toBe(1);
+    expect(plan.residualCount).toBe(1);
+    expect(plan.residualTransforms.map((s) => s.kind)).toEqual(["aggregate"]);
+  });
+
+  it("ruling 1: pushes one aggregate producing sum+count sibling aliases, then computes their ratio residually", () => {
     const config: TransformConfig = {
       steps: [
         {
@@ -468,32 +582,65 @@ describe("compilePushdown — ruling 1: aggregate-output composition (computed_f
         { kind: "computed_field", name: "cohort_avg", expression: expr("cohort_sum / cohort_count") },
       ],
     };
-    const plan = compilePushdown("postgres", config);
+    const plan = compilePushdown("mongo", config);
     expect(plan.pushedDownCount).toBe(1);
     expect(plan.residualCount).toBe(1);
     expect(plan.residualTransforms.map((s) => s.kind)).toEqual(["computed_field"]);
     expect(plan.dialectQuery).toEqual({
-      dialect: "postgres",
-      whereSql: null,
-      selectSql: '"cohort", SUM("amount") AS "cohort_sum", COUNT(*) AS "cohort_count"',
-      params: [],
+      dialect: "mongo",
       isAggregate: true,
-      groupBySql: '"cohort"',
-      havingSql: null,
+      pipeline: [
+        { $group: { _id: { cohort: "$cohort" }, cohort_sum: { $sum: "$amount" }, cohort_count: { $sum: 1 } } },
+        { $addFields: { cohort: "$_id.cohort" } },
+        { $project: { _id: 0 } },
+      ],
     });
   });
 
-  it("structurally chains a second (coarser-grain) Aggregate after a pushed one as residual — multi-level rollup, not pushed twice", () => {
+  it("ruling 1: structurally chains a second (coarser-grain) Aggregate after a pushed one as residual — multi-level rollup, not pushed twice", () => {
     const config: TransformConfig = {
       steps: [
         { kind: "aggregate", groupBy: ["region", "cohort"], aggregations: [{ fn: "sum", field: "amount", alias: "subtotal" }] },
         { kind: "aggregate", groupBy: ["region"], aggregations: [{ fn: "sum", field: "subtotal", alias: "region_total" }] },
       ],
     };
-    const plan = compilePushdown("mysql", config);
+    const plan = compilePushdown("mongo", config);
     expect(plan.pushedDownCount).toBe(1);
     expect(plan.residualCount).toBe(1);
     expect(plan.residualTransforms.map((s) => s.kind)).toEqual(["aggregate"]);
-    expect(plan.dialectQuery).toMatchObject({ isAggregate: true, groupBySql: "`region`, `cohort`" });
+    expect(plan.dialectQuery).toEqual({
+      dialect: "mongo",
+      isAggregate: true,
+      pipeline: [
+        { $group: { _id: { region: "$region", cohort: "$cohort" }, subtotal: { $sum: "$amount" } } },
+        { $addFields: { region: "$_id.region", cohort: "$_id.cohort" } },
+        { $project: { _id: 0 } },
+      ],
+    });
   });
 });
+
+/**
+ * Ruling 1 (docs/decisions.md, Block 6 approval): %-of-total stays a
+ * composition, not a first-class fn — proven here via a real, valid
+ * composition: a pushed fine-grain Aggregate producing two sibling output
+ * aliases on the same row (sum + count), followed by a residual
+ * computed_field dividing those two aggregate-output aliases (-> per-cohort
+ * average). This is the composition pattern the chaining contract actually
+ * supports without a join/window primitive. The mysql/postgres cases for
+ * this composition (and the multi-level-rollup case below) now live in the
+ * describe.each block above, parametrized across both SQL dialects; the
+ * mongo-side equivalents live at the end of the "aggregate, mongo" block
+ * above. This comment stays here as the ruling's canonical writeup.
+ *
+ * Disclosed finding (see the Stage 2 report): literal broadcast-style
+ * %-of-total — a row's value divided by a GRAND TOTAL visible on every row,
+ * e.g. "this cohort's share of the whole table" — is NOT provably
+ * expressible under the current linear TransformStep chaining model.
+ * AggregateStep is reduce-only (no window/partition broadcast mode), and
+ * there is no join primitive to recombine a coarser-grain aggregate's single
+ * output row back onto every row of a finer-grain aggregate's output. Per
+ * the ruling's own contingency, no window/join primitive was built to force
+ * this — %_of_total remains parked as a composition, and the gap is
+ * disclosed rather than silently promoted to first-class.
+ */

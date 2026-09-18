@@ -593,3 +593,46 @@ per-cohort maxima, and finally verifies `workflow_runs.rows_processed
 === 3` (the aggregated output row count, not the 6 source rows). Ran
 clean on first execution, all 8 assertions passed. Full output
 captured verbatim in the Block 6 closing report.
+
+**Addendum — Postgres/Supabase as aggregate SOURCE, not just
+destination.** Closed a coverage gap raised after Block 6 shipped: the
+above smoke test only ever executed Postgres SQL as a *destination*
+verification read, never as a compiled aggregate SOURCE read. Findings:
+
+- The compiler's dialect axis is, and always was, ONE generic emitter —
+  `compileSql(steps, dialect: SqlDialect)` (`pushdown.ts`), with exactly
+  two dialect-conditional primitives: `quoteIdent` (backtick vs
+  double-quote) and `placeholder` (`?` vs `$n`) (`pushdown.ts:182-189`).
+  It is not mysql-specific; postgres was already a first-class emit
+  target for the aggregate pushdown before this addendum — no new
+  compiler code was needed, only test-coverage systematization.
+- `pushdown.test.ts`'s aggregate describe blocks were restructured into
+  `describe.each(["mysql","postgres"])` (SQL side) plus a matching
+  mongo block, giving full 3-column parity: 9 cases x 3 dialects = 27
+  aggregate tests (GROUP BY+MAX, whole-table, count/count_field/
+  count_distinct, filter-ahead, having-on-alias, having-on-groupBy-field,
+  computed_field-blocks-into-residual, and both ruling-1 composition
+  cases — sibling-alias division and multi-level rollup).
+- Disclosed finding surfaced while extending the mongo cases:
+  `splitPushable`'s "a non-filter step ahead of a pushed Aggregate blocks
+  it into residual" rule is coded with no dialect check — it applies
+  uniformly to mysql, postgres, AND mongo, even though mongo's
+  aggregation pipeline could in principle express `$addFields` before
+  `$group` as a real stage (unlike flat SQL, which cannot without a
+  subquery/CTE). The v1 scope-cut is broader than strictly necessary for
+  mongo, but intentional (one rule, one code path, easier to reason
+  about) — not something this addendum changed.
+- Confirmed `pushdown.ts`, `queryBuilder.ts`, and `runPreview.ts` all
+  implement byte-identical local `quoteIdent` logic — the aggregate
+  pushdown reuses the exact identifier/placeholder convention
+  preview/chat query-gen already established, not a third one (a minor,
+  disclosed 3-way duplication of a 4-line function, not a divergence).
+- New proof artifact —
+  `apps/worker/scripts/aggregate-smoke-postgres-source.ts`: flips the
+  original smoke test's roles (Postgres sandbox table as SOURCE,
+  `COUNT(*) GROUP BY cohort`, mysql sandbox table as DESTINATION), driven
+  through the real `runEtl()` runner. Directly asserts the compiled
+  plan's exact postgres SQL text (`selectSql: '"cohort", COUNT(*) AS
+  "n"'`, `groupBySql: '"cohort"'`) before running it, then verifies the
+  3 destination rows and `workflow_runs.rows_processed === 3`. Ran clean
+  on first execution, all 8 assertions passed.
