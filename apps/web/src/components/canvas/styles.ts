@@ -36,6 +36,17 @@ export const canvasFullscreenWrapStyle: CSSProperties = {
   flexDirection: 'row',
 };
 
+// Column holding NodeConfigPanel (fixed height, always mounted) above
+// canvasSurfaceStyle, inside canvasFullscreenWrapStyle's row — sits beside
+// CopilotSidebar as a sibling, never spans it or NodesRail/the app header.
+export const canvasColumnStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+};
+
 // ---------- docked NodesRail ----------
 
 export const railShellStyle = (wide: boolean): CSSProperties => ({
@@ -169,25 +180,160 @@ export const railCollapsedEntryLabelStyle: CSSProperties = {
   textTransform: 'uppercase',
 };
 
-// ---------- node popover (anchored, wraps NodeDrawer unchanged) ----------
+// ---------- node config panel (docked top band, replaces the old anchored popover) ----------
 
-export const nodePopoverWidth = 320;
+// Two fixed rows: a compact always-visible "ribbon" (identity + verb/table
+// controls + actions) and a reserved "detail" strip beneath it for the
+// heavier per-node-type editors (grant/revoke, field mapping, transform
+// steps). Both heights are constants (not derived from content) so the
+// panel never grows/shrinks across node types or selections — the canvas
+// below it never jumps.
+export const CONFIG_PANEL_RIBBON_HEIGHT = 44;
+export const CONFIG_PANEL_DETAIL_HEIGHT = 132;
+export const CONFIG_PANEL_HEIGHT = CONFIG_PANEL_RIBBON_HEIGHT + CONFIG_PANEL_DETAIL_HEIGHT;
 
-// zIndex 45: must beat ChecksDock (30) and the run-status floating cards
-// (30) — both are canvas-surface siblings rendered after <ReactFlow> in the
-// DOM, so without an explicit higher z-index the popover (portaled inside
-// react-flow's own renderer layer) renders BEHIND them whenever it overlaps
-// the dock's bottom strip. This was the root cause of "popover sometimes
-// not visible."
-export const nodePopoverShellStyle: CSSProperties = {
-  width: nodePopoverWidth,
+export const configPanelShellStyle: CSSProperties = {
+  flex: 'none',
+  height: CONFIG_PANEL_HEIGHT,
+  display: 'flex',
+  flexDirection: 'column',
   background: 'var(--surface)',
-  border: '1px solid var(--panel-line)',
-  borderRadius: 12,
-  boxShadow: 'var(--popover-shadow)',
-  overflowY: 'auto',
+  borderBottom: '1px solid var(--panel-line)',
   boxSizing: 'border-box',
-  zIndex: 45,
+  overflow: 'hidden',
+};
+
+// Empty/multi-select hint state — same fixed height as the populated
+// ribbon+detail rows combined, so selecting/deselecting a node never
+// resizes this container.
+export const configPanelEmptyStyle: CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 12.5,
+  color: 'var(--ink4)',
+};
+
+// Content-swap crossfade wrapper (opacity only, no layout properties) —
+// see NodeConfigPanel.tsx's FadeSwap.
+export const configPanelFadeStyle = (visible: boolean): CSSProperties => ({
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  opacity: visible ? 1 : 0,
+  transition: 'opacity 160ms ease-out',
+});
+
+export const configPanelRibbonStyle: CSSProperties = {
+  flex: 'none',
+  height: CONFIG_PANEL_RIBBON_HEIGHT,
+  display: 'flex',
+  alignItems: 'stretch',
+  padding: '0 8px',
+  borderBottom: '1px solid var(--panel-line)',
+};
+
+export const configPanelDetailStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  padding: '10px 16px',
+};
+
+export const configPanelDetailHintStyle: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--ink4)',
+};
+
+export const configPanelGroupStyle: CSSProperties = {
+  flex: 'none',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'center',
+  gap: 3,
+  padding: '0 14px',
+  minWidth: 0,
+};
+
+export const configPanelGroupLabelStyle: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 600,
+  color: 'var(--ink4)',
+  textTransform: 'uppercase',
+  letterSpacing: '.05em',
+  lineHeight: 1,
+};
+
+export const configPanelDividerStyle: CSSProperties = {
+  width: 1,
+  alignSelf: 'stretch',
+  margin: '8px 0',
+  background: 'var(--panel-line)',
+  flex: 'none',
+};
+
+export const configPanelIdentityDotStyle = (color: string): CSSProperties => ({
+  width: 7,
+  height: 7,
+  borderRadius: 999,
+  background: color,
+  flex: 'none',
+});
+
+export const segmentedControlStyle: CSSProperties = {
+  display: 'flex',
+  border: '1px solid var(--panel-line)',
+  borderRadius: 8,
+  overflow: 'hidden',
+  background: 'var(--surface2)',
+  flex: 'none',
+};
+
+export const segmentedOptionStyle = (active: boolean, disabled: boolean): CSSProperties => ({
+  border: 'none',
+  background: active ? 'var(--surface)' : 'none',
+  color: disabled ? 'var(--ink4)' : active ? 'var(--ink)' : 'var(--ink3)',
+  fontSize: 12,
+  fontWeight: 600,
+  padding: '0 10px',
+  height: 26,
+  cursor: disabled ? 'not-allowed' : 'pointer',
+  boxShadow: active ? 'inset 0 0 0 1px var(--panel-line)' : 'none',
+  whiteSpace: 'nowrap',
+});
+
+export const configPanelSelectStyle: CSSProperties = {
+  height: 26,
+  borderRadius: 6,
+  border: '1px solid var(--panel-line)',
+  padding: '0 8px',
+  fontSize: 12.5,
+  boxSizing: 'border-box',
+  color: 'var(--ink)',
+  background: 'var(--surface)',
+  maxWidth: 200,
+};
+
+export const configPanelIconBtnStyle: CSSProperties = {
+  border: '1px solid var(--panel-line)',
+  background: 'var(--surface)',
+  color: 'var(--ink3)',
+  width: 26,
+  height: 26,
+  borderRadius: 7,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  fontSize: 12,
+  flex: 'none',
+};
+
+export const configPanelDeleteBtnStyle: CSSProperties = {
+  ...configPanelIconBtnStyle,
+  color: 'var(--bad)',
 };
 
 // ---------- Copilot sidebar (docked right panel; wraps existing CommandBar) ----------

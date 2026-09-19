@@ -38,12 +38,13 @@ import { useChatSession } from '@/lib/chat/useChatSession';
 import { buildActivityFeed, type ActivityItem } from '@/lib/canvas/activityFeed';
 import GraphFlowNode from './GraphFlowNode';
 import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRail';
-import NodePopover from './NodePopover';
+import NodeConfigPanel from './NodeConfigPanel';
 import ChecksDock from './ChecksDock';
 import CopilotSidebar from './CopilotSidebar';
 import { brandTextStyle, breadcrumbSepStyle } from '@/components/app/styles';
 import {
   canvasBodyStyle,
+  canvasColumnStyle,
   canvasFullscreenWrapStyle,
   canvasSurfaceStyle,
   topBarStyle,
@@ -133,7 +134,22 @@ function CanvasInner({
         setSaveState('saving');
         const graph = flowToGraph(nextNodes, nextEdges, parkedLegacyTriggers.current);
         try {
-          const result = await putWorkflowGraph(workflow.id, { graph, expectedVersion: version });
+          // Read the freshest known version from the store at fire-time,
+          // not a React-closure value captured whenever this callback was
+          // last (re)created. onNodesChange fires for every node-change
+          // event React Flow reports — including cosmetic ones like
+          // 'dimensions' measurement, not just real edits — so two
+          // scheduleSave calls close enough together to both reference the
+          // same stale `version` (e.g. one still in flight when the other's
+          // debounce timer fires) previously raced: the first PUT would
+          // land and bump the row's version server-side, then the second
+          // — sent with the same pre-bump expectedVersion — got a 409 it
+          // never retried, silently losing that edit (real repro: dropping
+          // a source node then immediately picking its table in the
+          // drawer). Version conflicts from another session/tab are still
+          // caught correctly, since this always sends the latest value
+          // this tab has actually observed.
+          const result = await putWorkflowGraph(workflow.id, { graph, expectedVersion: useCanvasStore.getState().version });
           setVersion(result.version);
           setSaveState('saved');
           setTimeout(() => {
@@ -148,8 +164,7 @@ function CanvasInner({
         }
       }, AUTOSAVE_DELAY_MS);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [workflow.id, version],
+    [workflow.id],
   );
 
   const handleNodesChange = useCallback(
@@ -219,6 +234,26 @@ function CanvasInner({
 
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : undefined;
   const upstreamSource = selectedNode ? findUpstreamSource(selectedNode.id, nodes, edges) : undefined;
+  // React Flow's own marquee/multi-select is left fully intact (untouched)
+  // — this just counts it, purely for NodeConfigPanel's "N nodes selected"
+  // hint; no new app-level multi-select state is introduced.
+  const selectedCount = useMemo(() => nodes.filter((n) => n.selected).length, [nodes]);
+
+  // Escape deselects, but only when focus isn't inside the config panel
+  // itself (e.g. a <select> or input) — so it never fights an input's own
+  // Escape handling, and canvas-level Escape isn't swallowed when focus is
+  // on the canvas. No preventDefault/stopPropagation — other Escape
+  // handlers (e.g. an open command palette) still run normally.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.closest('[data-node-config-panel]')) return;
+      setSelectedNodeId(null);
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [setSelectedNodeId]);
 
   // Every connectionId currently wired into the canvas (source + destination
   // nodes' data.connectionId) — the command bar's scope fallback when
@@ -632,12 +667,24 @@ function CanvasInner({
         <NodesRail connections={connections} />
 
         <div ref={fullscreenRef} style={canvasFullscreenWrapStyle}>
-          <div
-            data-testid="canvas-surface"
-            style={canvasSurfaceStyle}
-            onDrop={onDrop}
-            onDragOver={(e) => e.preventDefault()}
-          >
+          <div style={canvasColumnStyle}>
+            <NodeConfigPanel
+              node={selectedNode}
+              selectedCount={selectedCount}
+              workflowId={workflow.id}
+              upstreamSource={upstreamSource}
+              checkResults={latestCheckRun?.results ?? null}
+              onConfigChange={updateSelectedNodeConfig}
+              onDelete={deleteSelectedNode}
+              onClose={onPaneClick}
+            />
+
+            <div
+              data-testid="canvas-surface"
+              style={canvasSurfaceStyle}
+              onDrop={onDrop}
+              onDragOver={(e) => e.preventDefault()}
+            >
             <ReactFlow
               nodes={nodes}
               edges={edges}
@@ -663,19 +710,6 @@ function CanvasInner({
                 maskColor="rgba(15,23,42,.06)"
                 style={{ background: 'var(--surface)', border: '1px solid var(--panel-line)', borderRadius: 10 }}
               />
-
-              {selectedNode && (
-                <NodePopover
-                  key={selectedNode.id}
-                  node={selectedNode}
-                  workflowId={workflow.id}
-                  upstreamSource={upstreamSource}
-                  checkResults={latestCheckRun?.results ?? null}
-                  onConfigChange={updateSelectedNodeConfig}
-                  onDelete={deleteSelectedNode}
-                  onClose={onPaneClick}
-                />
-              )}
             </ReactFlow>
 
             <div style={viewportToolbarStyle(checksDockExpanded)} data-testid="viewport-toolbar">
@@ -802,6 +836,7 @@ function CanvasInner({
                 ))}
               </div>
             )}
+            </div>
           </div>
 
           <CopilotSidebar

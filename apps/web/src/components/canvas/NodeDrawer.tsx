@@ -7,47 +7,39 @@ import type { CanvasNode } from '@/lib/canvas/mapping';
 import { confirmWriteGrant, createWriteGrant, getConnectionSchema, getWriteGrants, revokeWriteGrant, type WriteGrant } from '@/lib/api/connectionsClient';
 import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
+import { KIND_COLOR, KIND_LABEL } from './GraphFlowNode';
+import {
+  configPanelDeleteBtnStyle,
+  configPanelDetailHintStyle,
+  configPanelDetailStyle,
+  configPanelDividerStyle,
+  configPanelGroupLabelStyle,
+  configPanelGroupStyle,
+  configPanelIconBtnStyle,
+  configPanelIdentityDotStyle,
+  configPanelRibbonStyle,
+  configPanelSelectStyle,
+  segmentedControlStyle,
+  segmentedOptionStyle,
+} from './styles';
 
 /**
- * Node properties drawer — docked to the canvas's right edge, replacing
- * NodeConfigPanel.tsx (dead code: it imported a `CanvasNode` shape from
- * lib/dashboard/types that no longer matches this canvas's actual node
- * data at all — never wired to any click handler, confirmed via grep
- * before writing this). Content branches on the node's resolution/type:
+ * Node properties panel content — rendered inside NodeConfigPanel.tsx's
+ * docked top band (a fixed-height ribbon row + a reserved scrollable
+ * detail row beneath it), not as its own floating panel. Branches on the
+ * node's resolution/type:
  *   - unresolved ("unknown tool")  -> read-only, delete-only
  *   - source / destination         -> verb selector, write verbs locked
  *   - transform                    -> TransformEditor (filter/computed/drop)
+ *
+ * Layout-only restructure (ribbon+detail groups instead of a vertically
+ * stacked form) — every hook, onChange call, and computed value below is
+ * unchanged from the pre-restructure version; only the returned JSX
+ * arrangement differs. Kept this way deliberately: the entity/table
+ * picker below has a confirmed, unreproduced reload-persistence bug, and
+ * touching its state plumbing in the same pass as a layout change would
+ * make that bug unreproducible in isolation.
  */
-
-/* Outer box chrome (position/width/border/shadow/scroll region) now lives on
-   NodePopover.tsx's NodeToolbar wrapper (styles.ts's nodePopoverShellStyle) —
-   this component is rendered inside that shell, not as its own floating
-   panel, so this stays padding-only. Everything below this const is
-   unchanged from before the popover restructure. */
-const drawerStyle = {
-  padding: 16,
-  boxSizing: 'border-box',
-} as const;
-
-const sectionHeaderStyle = {
-  fontSize: 11.5,
-  fontWeight: 600,
-  color: 'var(--ink4)',
-  textTransform: 'uppercase',
-  letterSpacing: '.04em',
-  marginBottom: 8,
-} as const;
-
-const lockedBadgeStyle = {
-  marginLeft: 6,
-  fontSize: 10,
-  fontWeight: 600,
-  color: 'var(--warn)',
-  background: 'var(--warn-bg)',
-  border: '1px solid var(--warn-bd)',
-  borderRadius: 999,
-  padding: '1px 6px',
-} as const;
 
 /** `entity` refs have no natural single-string key (namespace+name can each contain anything) — NUL is never a valid identifier character in any of this codebase's supported dialects, so it's a safe join separator for a <select> option value. */
 const ENTITY_KEY_SEP = '\u0000';
@@ -316,7 +308,19 @@ function RevokeAccessPanel({ connectionId, grant, namespace }: { connectionId: s
   );
 }
 
+/**
+ * Mounted twice by NodeDrawer below — once per `slot` — rather than being
+ * restructured to accept a single combined render. Both instances call the
+ * exact same hooks (useConnectionEntities/useWriteGrants/useGrantedNamespaces)
+ * unconditionally, so React's rules-of-hooks stay satisfied per-instance;
+ * react-query dedupes the underlying fetches since both instances share the
+ * same query keys (`['connection-schema', connectionId]` /
+ * `['connection-write-grants', connectionId]`). This is a presentation-only
+ * duplication — every computed value and onChange call below is byte-for-
+ * byte identical to the pre-restructure single-render version.
+ */
 function SourceDestForm({
+  slot,
   config,
   operations,
   nodeType,
@@ -324,6 +328,7 @@ function SourceDestForm({
   manifestId,
   onChange,
 }: {
+  slot: 'ribbon' | 'detail';
   config: SourceDestConfig;
   operations: Operation[];
   nodeType: 'source' | 'destination';
@@ -346,45 +351,69 @@ function SourceDestForm({
       ? grants.find((g) => !g.revokedAt && g.confirmedAt && grantScopeHasNamespace(g, namespace))
       : undefined;
 
-  return (
-    <div>
-      <div style={sectionHeaderStyle}>Verb</div>
-      {operations.map((op) => {
-        // Phase 6 Block 2: a write verb unlocks once the node's connection
-        // has a confirmed, unrevoked write grant covering the selected
-        // entity's namespace — mirrors checkGrants' server-side pass
-        // condition exactly (@nia/schemas/checks.ts). This is layer 1 of
-        // the three-layer guardrail; the connector service and its actual
-        // DB privileges (layers 2/3) still enforce this independently.
-        const isWriteOp = WRITE_OPERATIONS.includes(op);
-        const locked = isWriteOp && !grantCovers;
-        const lockedReason = !namespace
-          ? 'Select a table with an active write grant to unlock this verb.'
-          : `Requires a confirmed write grant covering "${namespace}".`;
-        return (
-          <label
-            key={op}
-            title={locked ? lockedReason : undefined}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: locked ? 'var(--ink4)' : 'var(--ink)', marginBottom: 6, cursor: locked ? 'not-allowed' : 'pointer' }}
-          >
-            <input type="radio" name="operation" disabled={locked} checked={config.operation === op} onChange={() => onChange({ ...config, operation: op })} />
-            {op}
-            {locked && <span style={lockedBadgeStyle}>Locked</span>}
-          </label>
-        );
-      })}
+  if (slot === 'detail') {
+    if (nodeType !== 'destination' || !connectionId || namespace === undefined) return null;
+    if (!grantCovers) {
+      return <GrantAccessPanel connectionId={connectionId} connectorId={manifestId} namespace={namespace} pendingGrant={pendingGrant} />;
+    }
+    if (activeGrant) {
+      return <RevokeAccessPanel connectionId={connectionId} grant={activeGrant} namespace={namespace} />;
+    }
+    return null;
+  }
 
-      <div style={{ marginTop: 16 }}>
-        <div style={sectionHeaderStyle}>Table</div>
+  return (
+    <>
+      <div style={configPanelGroupStyle}>
+        <span style={configPanelGroupLabelStyle}>Verb</span>
+        <div role="radiogroup" aria-label="Verb" style={segmentedControlStyle}>
+          {operations.map((op) => {
+            // Phase 6 Block 2: a write verb unlocks once the node's connection
+            // has a confirmed, unrevoked write grant covering the selected
+            // entity's namespace — mirrors checkGrants' server-side pass
+            // condition exactly (@nia/schemas/checks.ts). This is layer 1 of
+            // the three-layer guardrail; the connector service and its actual
+            // DB privileges (layers 2/3) still enforce this independently.
+            const isWriteOp = WRITE_OPERATIONS.includes(op);
+            const locked = isWriteOp && !grantCovers;
+            const lockedReason = !namespace
+              ? 'Select a table with an active write grant to unlock this verb.'
+              : `Requires a confirmed write grant covering "${namespace}".`;
+            const active = config.operation === op;
+            return (
+              <label
+                key={op}
+                title={locked ? lockedReason : undefined}
+                style={{ ...segmentedOptionStyle(active, locked), position: 'relative' }}
+              >
+                <input
+                  type="radio"
+                  name="operation"
+                  disabled={locked}
+                  checked={active}
+                  onChange={() => onChange({ ...config, operation: op })}
+                  style={{ position: 'absolute', inset: 0, opacity: 0, margin: 0, cursor: locked ? 'not-allowed' : 'pointer' }}
+                />
+                {op}
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={configPanelDividerStyle} />
+
+      <div style={configPanelGroupStyle}>
+        <span style={configPanelGroupLabelStyle}>Table</span>
         {entities.length === 0 ? (
-          <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>
+          <span style={{ fontSize: 12, color: 'var(--ink4)', whiteSpace: 'nowrap' }}>
             {connectionId ? 'Loading tables…' : 'Select a connection first.'}
-          </div>
+          </span>
         ) : (
           <select
             value={selectedKey}
             onChange={(e) => onChange({ ...config, entity: e.target.value ? parseEntityKey(e.target.value) : undefined })}
-            style={{ width: '100%', height: 28, borderRadius: 6, border: '1px solid var(--line2)', padding: '0 8px', fontSize: 12.5, boxSizing: 'border-box', color: 'var(--ink)', background: 'var(--surface)' }}
+            style={configPanelSelectStyle}
           >
             <option value="">{nodeType === 'source' ? 'Infer from mapping…' : 'Select a table…'}</option>
             {entities.map((e) => (
@@ -395,14 +424,7 @@ function SourceDestForm({
           </select>
         )}
       </div>
-
-      {nodeType === 'destination' && connectionId && namespace !== undefined && !grantCovers && (
-        <GrantAccessPanel connectionId={connectionId} connectorId={manifestId} namespace={namespace} pendingGrant={pendingGrant} />
-      )}
-      {nodeType === 'destination' && connectionId && namespace !== undefined && grantCovers && activeGrant && (
-        <RevokeAccessPanel connectionId={connectionId} grant={activeGrant} namespace={namespace} />
-      )}
-    </div>
+    </>
   );
 }
 
@@ -427,81 +449,113 @@ export default function NodeDrawer({
   const { data } = node;
   const manifest = data.manifestId ? CONNECTOR_MANIFESTS[data.manifestId] : undefined;
   const parsed = parseNodeConfig(data.graphNodeType, data.config);
+  const identityColor = data.resolved ? KIND_COLOR[data.graphNodeType] : 'var(--warn)';
+  const identityName = data.resolved ? (data.manifestName ?? 'Unconfigured') : (data.unknownReason ?? 'Unknown');
+  const identityTitle = `${identityName}${data.connectionLabel ? ` · ${data.connectionLabel}` : ''}`;
+  const showSourceDestForm = data.resolved && data.graphNodeType !== 'transform' && !parsed.unrecognized;
 
   return (
-    <div style={drawerStyle} data-testid="node-drawer">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink)' }}>
-          {data.resolved ? (data.manifestName ?? 'Unconfigured') : (data.unknownReason ?? 'Unknown')}
-        </span>
-        <button type="button" aria-label="Close" onClick={onClose} style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 14, padding: 0 }}>
-          {'\u2715'}
-        </button>
-      </div>
-      <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 16 }}>
-        {data.graphNodeType}
-        {data.connectionLabel ? ` · ${data.connectionLabel}` : ''}
-      </div>
-
-      {!data.resolved && (
-        <div style={{ fontSize: 12.5, color: 'var(--ink3)', marginBottom: 16 }}>
-          This node references a tool or connection that no longer exists. It can only be removed.
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} data-testid="node-drawer">
+      <div style={configPanelRibbonStyle}>
+        <div style={configPanelGroupStyle}>
+          <span style={configPanelGroupLabelStyle}>{KIND_LABEL[data.graphNodeType]}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={identityTitle}>
+            <span style={configPanelIdentityDotStyle(identityColor)} aria-hidden />
+            <span
+              style={{
+                fontSize: 12.5,
+                fontWeight: 600,
+                color: data.resolved ? 'var(--ink)' : 'var(--warn)',
+                maxWidth: 160,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {identityName}
+            </span>
+          </div>
         </div>
-      )}
 
-      {data.resolved && data.graphNodeType !== 'transform' && !parsed.unrecognized && (
-        <SourceDestForm
-          config={parsed.value as SourceDestConfig}
-          operations={manifest?.operations ?? ['read']}
-          nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
-          connectionId={data.connectionId}
-          manifestId={data.manifestId}
-          onChange={(next) => onConfigChange(next)}
-        />
-      )}
+        {showSourceDestForm && (
+          <>
+            <div style={configPanelDividerStyle} />
+            <SourceDestForm
+              slot="ribbon"
+              config={parsed.value as SourceDestConfig}
+              operations={manifest?.operations ?? ['read']}
+              nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
+              connectionId={data.connectionId}
+              manifestId={data.manifestId}
+              onChange={(next) => onConfigChange(next)}
+            />
+          </>
+        )}
 
-      {data.resolved && data.graphNodeType === 'destination' && !parsed.unrecognized && (
-        <div style={{ borderTop: '1px solid var(--line2)', marginTop: 16, paddingTop: 16 }}>
-          <MappingEditor
+        <div style={{ flex: 1 }} />
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 'none' }}>
+          <button type="button" aria-label="Delete node" onClick={onDelete} style={configPanelDeleteBtnStyle}>
+            {'\u{1F5D1}'}
+          </button>
+          <button type="button" aria-label="Close" onClick={onClose} style={configPanelIconBtnStyle}>
+            {'\u2715'}
+          </button>
+        </div>
+      </div>
+
+      <div style={configPanelDetailStyle}>
+        {!data.resolved && (
+          <div style={configPanelDetailHintStyle}>
+            This node references a tool or connection that no longer exists. It can only be removed.
+          </div>
+        )}
+
+        {showSourceDestForm && (
+          <SourceDestForm
+            slot="detail"
             config={parsed.value as SourceDestConfig}
-            workflowId={workflowId}
-            destNodeId={node.id}
-            destConnectionId={data.connectionId}
-            sourceConnectionId={upstreamSource?.connectionId}
-            checkResults={checkResults}
+            operations={manifest?.operations ?? ['read']}
+            nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
+            connectionId={data.connectionId}
+            manifestId={data.manifestId}
             onChange={(next) => onConfigChange(next)}
           />
-        </div>
-      )}
+        )}
 
-      {data.resolved && data.graphNodeType === 'transform' && !parsed.unrecognized && (
-        <TransformEditor
-          config={parsed.value as TransformConfig}
-          connectionId={upstreamSource?.connectionId}
-          manifestId={upstreamSource?.manifestId}
-          onChange={(next) => onConfigChange(next)}
-        />
-      )}
-
-      {data.resolved && parsed.unrecognized && (
-        <div>
-          <div style={{ fontSize: 12.5, color: 'var(--warn)', marginBottom: 8 }}>
-            Config from an older format — shown read-only, not modified.
+        {data.resolved && data.graphNodeType === 'destination' && !parsed.unrecognized && (
+          <div style={{ marginTop: 10 }}>
+            <MappingEditor
+              config={parsed.value as SourceDestConfig}
+              workflowId={workflowId}
+              destNodeId={node.id}
+              destConnectionId={data.connectionId}
+              sourceConnectionId={upstreamSource?.connectionId}
+              checkResults={checkResults}
+              onChange={(next) => onConfigChange(next)}
+            />
           </div>
-          <pre style={{ fontFamily: 'var(--font-data)', fontSize: 11.5, background: 'var(--surface2)', border: '1px solid var(--line2)', borderRadius: 6, padding: 8, whiteSpace: 'pre-wrap', overflowX: 'auto' }}>
-            {JSON.stringify(parsed.raw, null, 2)}
-          </pre>
-        </div>
-      )}
+        )}
 
-      <div style={{ borderTop: '1px solid var(--line2)', marginTop: 20, paddingTop: 12 }}>
-        <button
-          type="button"
-          onClick={onDelete}
-          style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--bad)', background: 'var(--bad-bg)', border: '1px solid var(--bad-bd)', borderRadius: 6, padding: '6px 12px', cursor: 'pointer' }}
-        >
-          Delete node
-        </button>
+        {data.resolved && data.graphNodeType === 'transform' && !parsed.unrecognized && (
+          <TransformEditor
+            config={parsed.value as TransformConfig}
+            connectionId={upstreamSource?.connectionId}
+            manifestId={upstreamSource?.manifestId}
+            onChange={(next) => onConfigChange(next)}
+          />
+        )}
+
+        {data.resolved && parsed.unrecognized && (
+          <div>
+            <div style={{ fontSize: 12.5, color: 'var(--warn)', marginBottom: 8 }}>
+              Config from an older format — shown read-only, not modified.
+            </div>
+            <pre style={{ fontFamily: 'var(--font-data)', fontSize: 11.5, background: 'var(--surface2)', border: '1px solid var(--line2)', borderRadius: 6, padding: 8, whiteSpace: 'pre-wrap', overflowX: 'auto' }}>
+              {JSON.stringify(parsed.raw, null, 2)}
+            </pre>
+          </div>
+        )}
       </div>
     </div>
   );
