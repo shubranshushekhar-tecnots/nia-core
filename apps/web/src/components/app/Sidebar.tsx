@@ -228,21 +228,6 @@ export default function Sidebar({
           {wide && <span>Home</span>}
         </a>
 
-        {process.env.NODE_ENV !== 'production' && (
-          <a
-            href="/app/chat"
-            style={{
-              ...navItemStyle(pathname === '/app/chat' || pathname.startsWith('/app/chat/'), wide),
-              textDecoration: 'none',
-              display: 'flex',
-            }}
-            title={wide ? undefined : 'Chat (dev only \u2014 superseded by the command bar)'}
-          >
-            <span aria-hidden style={{ fontSize: 13, color: 'var(--text-3)' }}>{'\u25AC'}</span>
-            {wide && <span>Chat</span>}
-          </a>
-        )}
-
         {wide && <div style={navGroupLabelStyle}>Projects</div>}
 
         <Link

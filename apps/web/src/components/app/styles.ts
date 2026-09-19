@@ -1651,10 +1651,10 @@ export function chatMessageTextStyle(isUser: boolean): CSSProperties {
     fontSize: 13,
     lineHeight: 1.7,
     color: 'var(--text)',
-    padding: isUser ? '12px 14px' : 0,
-    borderRadius: isUser ? 12 : 0,
-    background: isUser ? 'var(--surface)' : 'transparent',
-    border: isUser ? '1px solid var(--line)' : 'none',
+    padding: isUser ? '10px 14px' : 0,
+    borderRadius: isUser ? 14 : 0,
+    background: isUser ? 'var(--surface2)' : 'transparent',
+    border: 'none',
     whiteSpace: 'pre-wrap',
   };
 }
@@ -1759,11 +1759,30 @@ function chatBannerStyle(color: string, bg: string, bd: string): CSSProperties {
   };
 }
 
+// Small inline note-with-icon (not a full banner) — CommandBar.tsx prefixes
+// this with an "!" glyph, so this style is just the compact pill/row shell
+// around that text.
+function chatNoteStyle(color: string, bg: string, bd: string): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 10px',
+    borderRadius: 8,
+    fontSize: 12,
+    lineHeight: 1.4,
+    color,
+    background: bg,
+    border: `1px solid ${bd}`,
+    alignSelf: 'flex-start',
+  };
+}
+
 // error: var(--bad); refused: var(--bad) (request-shape rejection, same
 // treatment as a hard error); conflict: var(--warn) (sources disagreed,
 // not a failure) — matches the ChatStreamEvent kind semantics in
 // packages/schemas/src/chat.ts, not the design's mocked states.
-export const chatErrorBannerStyle: CSSProperties = chatBannerStyle('var(--bad)', 'var(--bad-bg)', 'var(--bad-bd)');
+export const chatErrorBannerStyle: CSSProperties = chatNoteStyle('var(--bad)', 'var(--bad-bg)', 'var(--bad-bd)');
 export const chatRefusedBannerStyle: CSSProperties = chatBannerStyle('var(--bad)', 'var(--bad-bg)', 'var(--bad-bd)');
 export const chatConflictBannerStyle: CSSProperties = chatBannerStyle('var(--warn)', 'var(--warn-bg)', 'var(--warn-bd)');
 
@@ -1907,6 +1926,54 @@ export const chatMentionToolStyle: CSSProperties = {
 export const chatMentionEmptyStyle: CSSProperties = {
   padding: '10px 10px',
   fontSize: 12.5,
+  color: 'var(--text-3)',
+};
+
+// CommandBar's "/" suggestion menu — same visual language as the
+// chatMention* dropdown above (positioned above the bar, card rows with
+// hover state), just for example Copilot prompts instead of connections.
+export const chatSlashMenuDropdownStyle: CSSProperties = {
+  position: 'absolute',
+  left: 56,
+  right: 56,
+  bottom: '100%',
+  marginBottom: 8,
+  maxHeight: 240,
+  overflowY: 'auto',
+  boxSizing: 'border-box',
+  padding: 6,
+  borderRadius: 12,
+  background: 'var(--surface)',
+  border: '1px solid var(--line)',
+  boxShadow: 'var(--amb)',
+  zIndex: 5,
+};
+
+export function chatSlashMenuRowStyle(hovered: boolean): CSSProperties {
+  return {
+    width: '100%',
+    boxSizing: 'border-box',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 1,
+    padding: '8px 10px',
+    borderRadius: 8,
+    background: hovered ? 'var(--surface2)' : 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    textAlign: 'left',
+  };
+}
+
+export const chatSlashMenuLabelStyle: CSSProperties = {
+  fontFamily: 'var(--font-data)',
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: 'var(--text)',
+};
+
+export const chatSlashMenuHintStyle: CSSProperties = {
+  fontSize: 11.5,
   color: 'var(--text-3)',
 };
 

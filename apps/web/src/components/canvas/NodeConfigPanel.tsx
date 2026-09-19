@@ -1,17 +1,18 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CanvasNode } from '@/lib/canvas/mapping';
 import type { CheckResult } from '@nia/schemas';
 import NodeDrawer from './NodeDrawer';
-import { configPanelEmptyStyle, configPanelFadeStyle, configPanelShellStyle } from './styles';
+import { configPanelFadeStyle, configPanelMultiSelectStyle, configPanelShellStyle } from './styles';
 
 /**
- * Docked top band, replacing the old node-anchored NodePopover.tsx. Always
- * mounted with a fixed height (styles.ts's CONFIG_PANEL_HEIGHT) — selecting
- * a node never resizes this panel or the canvas surface beside it, it only
- * swaps this panel's internal content. NodeDrawer.tsx (ribbon + detail rows)
- * is rendered unchanged from here; all state/hooks live there untouched —
+ * Floating panel over the canvas surface (canvasSurfaceStyle, `position:
+ * relative`), replacing the old docked top band. Renders nothing at all
+ * when no node is selected (selectedCount === 0) so the canvas is fully
+ * unobstructed; shows a small floating multi-select pill instead when more
+ * than one node is selected. NodeDrawer.tsx (header ribbon + tabs) is
+ * rendered unchanged from here; all state/hooks live there untouched —
  * this component owns layout/empty/multi-select states only.
  *
  * `data-node-config-panel` marks the root so FlowCanvas.tsx's Escape
@@ -38,13 +39,14 @@ export default function NodeConfigPanel({
   onClose: () => void;
 }) {
   if (!node) {
-    return (
-      <div data-node-config-panel data-testid="node-config-panel" style={configPanelShellStyle}>
-        <div style={configPanelEmptyStyle}>
-          {selectedCount > 1 ? `${selectedCount} nodes selected` : 'Select a node to configure it'}
+    if (selectedCount > 1) {
+      return (
+        <div data-node-config-panel data-testid="node-config-panel" style={configPanelMultiSelectStyle}>
+          {selectedCount} nodes selected
         </div>
-      </div>
-    );
+      );
+    }
+    return null;
   }
 
   return (
@@ -74,11 +76,8 @@ export default function NodeConfigPanel({
  */
 function FadeSwap({ nodeId, children }: { nodeId: string; children: React.ReactNode }) {
   const [visible, setVisible] = useState(false);
-  const prevNodeId = useRef<string | null>(null);
 
   useEffect(() => {
-    if (prevNodeId.current === nodeId) return;
-    prevNodeId.current = nodeId;
     setVisible(false);
     const raf = requestAnimationFrame(() => setVisible(true));
     return () => cancelAnimationFrame(raf);

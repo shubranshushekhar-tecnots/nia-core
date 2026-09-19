@@ -187,9 +187,9 @@
   --ink3: var(--text-3);
   --ink4: var(--text-4);
   --line2: var(--line-strong);
-  --acc: var(--live-fill);
-  --canvas: #F8FAFC;
-  --dot: #CBD5E1;
+  --acc: #5A3FD8;
+  --canvas: #F6F6F9;
+  --dot: #D8D7E1;
 
   /* Chat surface (Home/App.html's orphaned `// ---------- chat ----------`
      view-model — never actually rendered by the design's own JSX, but its
@@ -204,22 +204,57 @@
   --acc-bd: rgba(79, 70, 229, .28);
   --acc-solid: var(--acc);
 
-  /* Workflow canvas redesign (docked rail / node popover / Copilot sidebar)
-     — new, distinctly-named tokens only. --line2 and --acc/--acc-bd/--acc-solid
+  /* Workflow canvas redesign (floating icon rail / node inspector / Copilot
+     sidebar) — new, distinctly-named tokens only. --line2 and --acc-solid
      above are shared with the Home dashboard's ChatClient.tsx (via
      apps/web/src/components/app/styles.ts's chatCitationChipStyle etc.), so
-     their values are NOT touched here; anything the redesign needs that
-     differs from those four gets its own name instead. --panel-line is the
+     --line2 is NOT touched here (though --acc itself was updated above per
+     the redesign spec, intentionally flowing through to chat too since both
+     live under this same [data-app-theme] light scope). --panel-line is the
      design's lighter card/panel border family (distinct from --line2's
-     stronger divider). --rail-w/--copilot-w are the docked-panel widths
-     agreed with the redesign spec (Copilot: 344px, explicit); --rail-w keeps
-     the builder palette's existing visual footprint now that it docks
-     instead of floats. */
-  --panel-line: #E7E6EE;
-  --rail-w: 256px;
+     stronger divider), re-extracted to the redesign's `#E6E5ED` value.
+     --rail-w is the Nodes library width (not the app sidebar's --rail-w in
+     styles.ts's own RAIL_WIDTH const); --copilot-w/-min/-max are the
+     resizable Nia AI panel's default/floor/ceiling widths. --acc-soft* are
+     the redesign's soft-accent chip family (selection rings, active tabs).
+     --edge-stroke is the canvas connector line color. */
+  --panel-line: #E6E5ED;
+  --icon-rail-w: 56px;
+  --icon-rail-bg: #FAFAFC;
+  --rail-w: 248px;
   --rail-w-collapsed: 64px;
-  --copilot-w: 344px;
+  --copilot-w: 320px;
+  --copilot-w-min: 280px;
+  --copilot-w-max: 520px;
+  --acc-soft: #EFEBFD;
+  --acc-soft-text: #4B30C4;
+  --acc-soft-bd: #E1DAFB;
+  --edge-stroke: #B3ADCF;
+  --card-line: #E4E3EB;
+  --card-shadow: 0 1px 2px rgba(22, 21, 31, .05), 0 4px 12px rgba(22, 21, 31, .05);
+  --floating-panel-shadow: 0 16px 40px rgba(22, 21, 31, .12), 0 2px 6px rgba(22, 21, 31, .05);
   --popover-shadow: 0 24px 56px rgba(15, 23, 42, .16);
+
+  /* Phase 7 Copilot ghost preview (proposed-but-not-yet-applied plan nodes/
+     edges rendered on the canvas). App shell is light-only (see this
+     block's own scoping), so no dark counterpart is needed. --copilot-accent
+     reuses --ign rather than inventing a new color — same indigo AI-accent
+     already used for Copilot elsewhere in this theme. --ghost-opacity dims
+     the whole ghost node (content + border) to read as "not real yet";
+     --provisional-border is the dashed outline distinguishing a ghost node's
+     shape from a committed GraphFlowNode's solid --line2 border. */
+  --copilot-accent: var(--ign);
+  --ghost-opacity: 0.55;
+  --provisional-border: 2px dashed var(--copilot-accent);
+
+  /* Workflow-node type colors, re-extracted for the canvas redesign.
+     Scoped here (not edited in the shared :root block above) so the
+     Landing page's node-type color chips are unaffected — GraphFlowNode.tsx
+     and NodesRail.tsx read these via var(--c-data) etc. and only ever
+     render inside [data-app-theme][data-om-theme='light']. */
+  --c-data: #1F8A9E;
+  --c-condition: #6A45E0;
+  --c-action: #2F5BEA;
 }
 
 /* ------------------------------------------------------------

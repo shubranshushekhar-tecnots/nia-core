@@ -1,7 +1,8 @@
 'use client';
 
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { CanvasNode } from '@/lib/canvas/mapping';
+import { getConnectorIcon } from './icons';
 
 // One component for all 3 GraphNodeTypes (source/transform/destination) —
 // branches on data.graphNodeType for color/handle layout, per the plan's
@@ -19,25 +20,32 @@ export const KIND_LABEL: Record<CanvasNode['data']['graphNodeType'], string> = {
   destination: 'Destination',
 };
 
-export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNode>) {
-  const { deleteElements } = useReactFlow();
+// Delete no longer lives on the card itself — it moved to the floating
+// NodeConfigPanel's header ribbon (NodeDrawer.tsx's onDelete), which is
+// already reachable the moment a node is selected. useReactFlow's
+// deleteElements is therefore no longer needed here.
+export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>) {
   const color = data.resolved ? KIND_COLOR[data.graphNodeType] : 'var(--warn)';
   const showTargetHandle = data.graphNodeType !== 'source';
   const showSourceHandle = data.graphNodeType !== 'destination';
+  const isGhost = data.isGhost === true;
+  const Icon = getConnectorIcon(data.manifestId, data.graphNodeType);
 
   return (
     <div
-      title={data.unknownReason}
+      title={isGhost ? 'Proposed by Copilot — read-only until applied' : data.unknownReason}
       style={{
         position: 'relative',
-        width: 200,
-        borderRadius: 10,
+        width: 196,
+        height: 80,
+        borderRadius: 12,
         background: data.resolved ? 'var(--surface)' : 'var(--warn-bg)',
-        border: `1.5px solid ${selected ? color : data.resolved ? 'var(--panel-line)' : 'var(--warn-bd)'}`,
-        boxShadow: selected ? `0 0 0 3px ${color}22` : 'var(--amb)',
+        border: isGhost ? 'var(--provisional-border)' : `1.5px solid ${selected ? 'var(--acc)' : data.resolved ? 'var(--card-line)' : 'var(--warn-bd)'}`,
+        boxShadow: isGhost ? 'none' : selected ? `0 0 0 3px var(--acc-soft), var(--card-shadow)` : 'var(--card-shadow)',
+        opacity: isGhost ? 'var(--ghost-opacity)' : 1,
         padding: '10px 12px',
         boxSizing: 'border-box',
-        cursor: 'grab',
+        cursor: isGhost ? 'default' : 'grab',
         userSelect: 'none',
       }}
     >
@@ -46,7 +54,9 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 999, background: color, flex: 'none' }} aria-hidden />
+        <span style={{ display: 'inline-flex', color, flex: 'none' }} aria-hidden>
+          <Icon size={13} />
+        </span>
         <span style={{ fontSize: 12, color: 'var(--ink3)' }}>{KIND_LABEL[data.graphNodeType]}</span>
         {data.writeLocked && (
           <span
@@ -65,18 +75,22 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
             Locked
           </span>
         )}
-        <button
-          type="button"
-          aria-label="Delete node"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            deleteElements({ nodes: [{ id }] });
-          }}
-          style={{ marginLeft: 'auto', width: 18, height: 18, border: 'none', background: 'none', color: 'var(--bad)', cursor: 'pointer', fontSize: 12, padding: 0 }}
-        >
-          {'\u2715'}
-        </button>
+        {isGhost && (
+          <span
+            style={{
+              marginLeft: 'auto',
+              fontSize: 10,
+              fontWeight: 600,
+              color: 'var(--copilot-accent)',
+              background: 'var(--surface)',
+              border: '1px solid var(--copilot-accent)',
+              borderRadius: 999,
+              padding: '1px 6px',
+            }}
+          >
+            Proposed
+          </span>
+        )}
       </div>
 
       <div style={{ fontSize: 13.5, fontWeight: 600, color: data.resolved ? 'var(--ink)' : 'var(--warn)', marginTop: 4 }}>

@@ -1,4 +1,5 @@
 import type { RefObject } from 'react';
+import Logo from '@/components/Logo';
 
 const FOOTER_COLS = [
   { title: 'PRODUCT', links: [{ label: 'Canvas', href: '#product' }, { label: 'Connectors', href: '#connectors' }, { label: 'Pricing', href: '#pricing' }, { label: 'Sign in', href: '/login' }] },
@@ -28,8 +29,7 @@ export default function Footer({ footRef }: { footRef: RefObject<HTMLElement> })
     >
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <span style={{ display: 'flex', alignItems: 'center' }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.svg" alt="Nia Core" style={{ height: 22, width: 'auto' }} />
+          <Logo size={22} />
         </span>
         <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>© 2026 Nia Core. Rows moved responsibly.</span>
       </div>

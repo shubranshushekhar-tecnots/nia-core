@@ -1,4 +1,5 @@
 import type { RefObject } from 'react';
+import Logo from '@/components/Logo';
 import { plexSans } from './heroFonts';
 
 // Sits above the (now light) hero, transparent at first and morphing to a
@@ -43,8 +44,7 @@ export default function Nav({ navRef }: { navRef: RefObject<HTMLElement> }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center' }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.svg" alt="Nia Core" style={{ height: 26, width: 'auto' }} />
+          <Logo size={26} />
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 26 }}>

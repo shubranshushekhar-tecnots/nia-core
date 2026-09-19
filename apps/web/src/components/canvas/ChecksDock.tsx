@@ -1,7 +1,9 @@
 'use client';
 
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type { CheckResult, CheckStatus } from '@nia/schemas';
 import type { ActivityItem } from '@/lib/canvas/activityFeed';
+import { dragHandleStyle } from './styles';
 
 /**
  * Full-width bottom dock for the canvas (Phase 5 Session 3 Task 2
@@ -29,8 +31,15 @@ const dockStyle = {
   boxShadow: '0 -4px 16px rgba(15,23,42,.08)',
 } as const;
 
+// 36px collapsed (redesign spec) — this is also the whole dock's height
+// while collapsed, since the body row below is unmounted in that state.
+const DOCK_BAR_HEIGHT = 36;
+const DOCK_BODY_DEFAULT_HEIGHT = 260;
+const DOCK_BODY_MIN_HEIGHT = 120;
+const DOCK_BODY_MAX_HEIGHT = 480;
+
 const barStyle = {
-  height: 40,
+  height: DOCK_BAR_HEIGHT,
   flex: 'none',
   display: 'flex',
   alignItems: 'center',
@@ -48,6 +57,8 @@ const tabStyle = (active: boolean) =>
     borderBottom: active ? '2px solid var(--acc)' : '2px solid transparent',
     padding: '10px 10px 8px',
     cursor: active ? 'default' : 'pointer',
+    flex: 'none',
+    whiteSpace: 'nowrap',
   }) as const;
 
 const logRowStyle = {
@@ -59,12 +70,14 @@ const logRowStyle = {
   fontSize: 12,
 } as const;
 
-const bodyStyle = {
-  maxHeight: 260,
-  overflowY: 'auto',
-  borderTop: '1px solid var(--line2)',
-  padding: '8px 16px',
-} as const;
+function bodyStyleFor(height: number) {
+  return {
+    height,
+    overflowY: 'auto',
+    borderTop: '1px solid var(--line2)',
+    padding: '8px 16px',
+  } as const;
+}
 
 const STATUS_STYLES: Record<CheckStatus, { color: string; bg: string; label: string }> = {
   pass: { color: 'var(--ok)', bg: 'var(--ok-bg)', label: 'Pass' },
@@ -134,6 +147,7 @@ export default function ChecksDock({
   activeTab,
   onTabChange,
   logs,
+  onHeightChange,
 }: {
   running: boolean;
   error: string | null;
@@ -147,7 +161,56 @@ export default function ChecksDock({
   activeTab: 'checks' | 'logs';
   onTabChange: (tab: 'checks' | 'logs') => void;
   logs: ActivityItem[];
+  /** Reports the dock's live rendered height (collapsed 36px, or 36 + the resizable body height when expanded) so FlowCanvas.tsx can keep the viewport toolbar clear of it — see styles.ts's viewportToolbarStyle. */
+  onHeightChange?: (height: number) => void;
 }) {
+  const [bodyHeight, setBodyHeight] = useState(DOCK_BODY_DEFAULT_HEIGHT);
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = dockRef.current;
+    if (!el || !onHeightChange) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) onHeightChange(entry.contentRect.height);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [onHeightChange]);
+
+  useEffect(() => {
+    function onMove(e: PointerEvent) {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const next = Math.min(DOCK_BODY_MAX_HEIGHT, Math.max(DOCK_BODY_MIN_HEIGHT, drag.startHeight + (drag.startY - e.clientY)));
+      setBodyHeight(next);
+    }
+    function onUp() {
+      if (dragRef.current) {
+        dragRef.current = null;
+        setDragging(false);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, []);
+
+  function handleDragPointerDown(e: ReactPointerEvent) {
+    e.preventDefault();
+    dragRef.current = { startY: e.clientY, startHeight: bodyHeight };
+    setDragging(true);
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  }
+
   const failingChecks = results?.filter((r) => r.status === 'fail').length ?? 0;
 
   let pillLabel: string;
@@ -174,43 +237,52 @@ export default function ChecksDock({
   const pillStyle = PILL_TONE_STYLES[pillTone];
 
   return (
-    <div style={dockStyle} data-testid="checks-dock">
-      {expanded && activeTab === 'checks' && (
-        <div style={bodyStyle} data-testid="checks-dock-body">
-          {running && <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>Running checks…</div>}
-          {!running && error && <div style={{ fontSize: 12.5, color: 'var(--bad)' }}>{error}</div>}
-          {!running && !error && results && results.length === 0 && (
-            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No checks ran.</div>
-          )}
-          {!running && !error && results && results.length > 0 && (
-            <div>
-              {results.map((r, i) => (
-                <ResultRow key={`${r.id}-${r.nodeId ?? ''}-${i}`} result={r} onSelect={onSelectNode} />
-              ))}
-              {ranAt && (
-                <div style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 8 }}>
-                  Last run {new Date(ranAt).toLocaleString()}
+    <div ref={dockRef} style={dockStyle} data-testid="checks-dock">
+      {expanded && (
+        <div style={{ position: 'relative' }}>
+          <div
+            style={dragHandleStyle('horizontal', dragging)}
+            onPointerDown={handleDragPointerDown}
+            data-testid="checks-dock-drag-handle"
+          />
+          {activeTab === 'checks' && (
+            <div style={bodyStyleFor(bodyHeight)} data-testid="checks-dock-body">
+              {running && <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>Running checks…</div>}
+              {!running && error && <div style={{ fontSize: 12.5, color: 'var(--bad)' }}>{error}</div>}
+              {!running && !error && results && results.length === 0 && (
+                <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No checks ran.</div>
+              )}
+              {!running && !error && results && results.length > 0 && (
+                <div>
+                  {results.map((r, i) => (
+                    <ResultRow key={`${r.id}-${r.nodeId ?? ''}-${i}`} result={r} onSelect={onSelectNode} />
+                  ))}
+                  {ranAt && (
+                    <div style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 8 }}>
+                      Last run {new Date(ranAt).toLocaleString()}
+                    </div>
+                  )}
                 </div>
+              )}
+              {!running && !error && !results && (
+                <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No checks have run yet.</div>
               )}
             </div>
           )}
-          {!running && !error && !results && (
-            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No checks have run yet.</div>
-          )}
-        </div>
-      )}
 
-      {expanded && activeTab === 'logs' && (
-        <div style={bodyStyle} data-testid="checks-dock-logs">
-          {logs.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No activity yet — checks, chat, and run events will appear here.</div>
-          ) : (
-            logs.map((l, i) => (
-              <div key={`${l.kind}-${l.time}-${i}`} style={logRowStyle}>
-                <span style={{ flex: 'none', color: 'var(--ink4)' }}>{new Date(l.time).toLocaleString()}</span>
-                <span style={{ color: 'var(--ink2)' }}>{l.text}</span>
-              </div>
-            ))
+          {activeTab === 'logs' && (
+            <div style={bodyStyleFor(bodyHeight)} data-testid="checks-dock-logs">
+              {logs.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No activity yet — checks, chat, and run events will appear here.</div>
+              ) : (
+                logs.map((l, i) => (
+                  <div key={`${l.kind}-${l.time}-${i}`} style={logRowStyle}>
+                    <span style={{ flex: 'none', color: 'var(--ink4)' }}>{new Date(l.time).toLocaleString()}</span>
+                    <span style={{ color: 'var(--ink2)' }}>{l.text}</span>
+                  </div>
+                ))
+              )}
+            </div>
           )}
         </div>
       )}
@@ -251,6 +323,8 @@ export default function ChecksDock({
             borderRadius: 999,
             padding: '4px 12px',
             cursor: 'pointer',
+            flex: 'none',
+            whiteSpace: 'nowrap',
           }}
         >
           {pillLabel} {expanded ? '\u2303' : '\u2304'}
