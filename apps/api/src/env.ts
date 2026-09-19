@@ -48,6 +48,18 @@ const EnvSchema = z.object({
    */
   MAPPING_PROPOSE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   /**
+   * Upper bound on planQueue.ts's synchronous await of the worker's
+   * plan_propose job (Phase 7). Same "single request/response outcome,
+   * not SSE" reasoning as MAPPING_PROPOSE_TIMEOUT_MS (runPlanPropose.ts's
+   * header comment: one graph.invoke() call, no incremental events) — but
+   * budgeted longer than a plain mappings_propose call, since generatePlan
+   * does its own LLM call AND validateFeasibility can issue one real
+   * cardinality-probe connector dispatch per proposed aggregate step on
+   * top of that. Past this, the route fails clean with a 503 naming the
+   * worker unavailable rather than hanging the HTTP request indefinitely.
+   */
+  PLAN_PROPOSE_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
+  /**
    * Upper bound on previewQueue.ts's synchronous await of the worker's
    * preview_run job. No LLM call on this path (pure pushdown compile +
    * one connector dispatch), so this sits between CHECK_RUN_TIMEOUT_MS's

@@ -75,6 +75,20 @@ export const Plan = z.object({
   edges: z.array(PlanEdge).default([]),
   /** Evidence only — see PlanAggregateProbeResult's doc comment. Always empty on LLM-generated plans; populated by validatePlanFeasibility. */
   probeResults: z.array(PlanAggregateProbeResult).default([]),
+  /**
+   * workflow_graphs.version (0012_workflow_graphs.sql's optimistic-
+   * concurrency column) as observed when this plan was generated — Session
+   * 2's staleness check. Never LLM-supplied: the prompt never mentions this
+   * field, so it's absent from every raw LLM response and falls back to
+   * this default; the plan engine (resolveScope -> runPlanPropose) always
+   * overwrites it with the server-observed value before returning the plan
+   * to a caller, the same "never trust an LLM-emitted value for anything
+   * consistency-relevant" precedent checkConnections' closed-world check
+   * already sets for connectionId. Apply (Session 2) re-fetches the graph's
+   * *current* version and refuses (no merge attempt) if it no longer
+   * matches this value — the graph changed since this plan was proposed.
+   */
+  baseGraphVersion: z.number().int().nonnegative().default(0),
 });
 export type Plan = z.infer<typeof Plan>;
 
@@ -103,6 +117,90 @@ export type PlanCheckResult = z.infer<typeof PlanCheckResult>;
 
 function planNodeLabel(node: PlanNode): string {
   return `${node.id} (${node.type})`;
+}
+
+// ---- layout (pure, deterministic) -----------------------------------------
+
+/** Horizontal gap (px) per dependency-depth column, right of the existing graph's rightmost node. Matches ghostMapping.ts's GHOST_COLUMN_GAP. */
+const GHOST_COLUMN_GAP = 280;
+/** Vertical spacing (px) between nodes stacked within the same column. Matches ghostMapping.ts's GHOST_ROW_GAP. */
+const GHOST_ROW_GAP = 140;
+
+/**
+ * Deterministic layout for a Plan's nodes, used by BOTH the client-side
+ * ghost preview (Session 2, apps/web/.../ghostMapping.ts's planToGhostFlow)
+ * and Apply's persisted GraphNode position (Session 2, apps/api's
+ * planApply.ts) — one pure function, one source of truth, so a node never
+ * visually "jumps" between what the ghost showed and what actually lands
+ * on the canvas after Apply.
+ *
+ * `PlanNode.position` (the field the LLM is prompted to fill in, see
+ * apps/worker's planGen.ts prompt) is deliberately NEVER read here — same
+ * "never trust an LLM-emitted value for anything consistency-relevant"
+ * precedent baseGraphVersion's doc comment and checkConnections' closed-
+ * world check already set. The LLM has no knowledge of the *live* canvas
+ * viewport or of edits made to the graph after generation (Session 2's own
+ * staleness check exists precisely because the graph can move between
+ * propose and apply), so its coordinates are not a reliable placement
+ * signal — only a required-by-schema placeholder so a PlanNode round-trips
+ * through the same shape a GraphNode expects.
+ *
+ * Algorithm: column = a plan node's dependency depth among plan-local edges
+ * only (an edge to/from an existing persisted node anchors that plan node
+ * at depth 0 rather than contributing to the chain). Columns sit strictly
+ * right of the existing graph's rightmost node (maxX) so a proposed node
+ * can never overlap a committed one; row = the node's index within its own
+ * column, stacked from the existing graph's topmost node (minY), so
+ * proposed nodes can never overlap each other either. Same `plan` +
+ * `existingNodePositions` always produces the same output — the "same plan
+ * must place identically every time" requirement falls out of this being a
+ * pure function of its two inputs, no randomness/Date.now.
+ *
+ * Takes bare positions rather than a full GraphDoc/CanvasNode[] so both
+ * call sites (packages/schemas has no GraphDoc-node-shape mismatch; apps/
+ * web's CanvasNode carries React Flow fields this function doesn't need)
+ * can pass their own node array's `.position` projection directly.
+ */
+export function computePlanLayout(
+  plan: Plan,
+  existingNodePositions: GraphPosition[],
+): Record<string, GraphPosition> {
+  const maxX = existingNodePositions.length ? Math.max(...existingNodePositions.map((p) => p.x)) : 0;
+  const minY = existingNodePositions.length ? Math.min(...existingNodePositions.map((p) => p.y)) : 0;
+
+  const planIds = new Set(plan.nodes.map((n) => n.id));
+  const localPreds = new Map<string, string[]>();
+  for (const edge of plan.edges) {
+    if (planIds.has(edge.source) && planIds.has(edge.target)) {
+      localPreds.set(edge.target, [...(localPreds.get(edge.target) ?? []), edge.source]);
+    }
+  }
+
+  const depthCache = new Map<string, number>();
+  function depthOf(id: string, stack: Set<string>): number {
+    const cached = depthCache.get(id);
+    if (cached !== undefined) return cached;
+    // Cycle guard — validatePlanStructure already rejects any plan that
+    // would introduce a cycle, so this should never trigger in practice;
+    // it exists purely so a malformed/unvalidated plan can never hang on a
+    // recursive depth computation.
+    if (stack.has(id)) return 0;
+    stack.add(id);
+    const preds = localPreds.get(id) ?? [];
+    const depth = preds.length === 0 ? 0 : 1 + Math.max(...preds.map((p) => depthOf(p, stack)));
+    depthCache.set(id, depth);
+    return depth;
+  }
+
+  const rowByColumn = new Map<number, number>();
+  const layout: Record<string, GraphPosition> = {};
+  for (const planNode of plan.nodes) {
+    const depth = depthOf(planNode.id, new Set());
+    const row = rowByColumn.get(depth) ?? 0;
+    rowByColumn.set(depth, row + 1);
+    layout[planNode.id] = { x: maxX + GHOST_COLUMN_GAP * (depth + 1), y: minY + row * GHOST_ROW_GAP };
+  }
+  return layout;
 }
 
 // ---- a. structure (pure) --------------------------------------------------
@@ -386,3 +484,31 @@ function resolveUpstreamEntity(
   if (parsed.unrecognized || parsed.type === "transform" || !parsed.value.entity) return undefined;
   return { connectionId: upstream.connectionId, entity: parsed.value.entity };
 }
+
+// ---- Propose outcome (worker -> API JSON contract) ---------------------
+
+/**
+ * Phase 7 Session 3 — the JSON-safe mirror of
+ * apps/worker/src/lib/plan/runPlanPropose.ts's `PlanProposeResult` TS
+ * union. runPlanPropose resolves in a single `graph.invoke()` call (no
+ * incremental per-node events — see that file's header comment), so
+ * plan_propose is a single request/response BullMQ job, same shape as
+ * mappings_propose/preview_run/schema_refresh, not an SSE-streamed one
+ * like chat_query. This schema is what crosses the worker -> API queue
+ * boundary (apps/api/src/lib/planQueue.ts parses the raw job return value
+ * against it, mirroring mappingProposal.ts's ProposeMappingOutcome
+ * pattern exactly) and is also what the API route/client hand straight to
+ * the UI, since the UI must branch on all 5 statuses (not just ok/fail).
+ */
+export const PlanProposeOutcome = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("error"), error: z.string() }),
+  z.object({ status: z.literal("no-connection"), message: z.string() }),
+  z.object({
+    status: z.literal("refused"),
+    kind: z.enum(["unsupported-operation", "partial-failure", "capacity-limit"]),
+    message: z.string(),
+  }),
+  z.object({ status: z.literal("clarify"), question: z.string() }),
+  z.object({ status: z.literal("ok"), plan: Plan, planGenAttempts: z.number().int().nonnegative() }),
+]);
+export type PlanProposeOutcome = z.infer<typeof PlanProposeOutcome>;

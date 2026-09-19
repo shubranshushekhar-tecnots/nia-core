@@ -46,6 +46,7 @@ function planWithAggregate(): Plan {
   return {
     summary: "test plan",
     probeResults: [],
+    baseGraphVersion: 0,
     nodes: [
       {
         id: "src-1",

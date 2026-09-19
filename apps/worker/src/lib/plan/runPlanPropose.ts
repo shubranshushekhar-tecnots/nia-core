@@ -42,5 +42,14 @@ export async function runPlanPropose(job: PlanProposeJob, jobId: string): Promis
   if (finalState.clarifyQuestion !== undefined) {
     return { status: "clarify", question: finalState.clarifyQuestion };
   }
-  return { status: "ok", plan: finalState.plan!, planGenAttempts: finalState.planGenAttempts };
+  // baseGraphVersion is always server-stamped here, overwriting whatever
+  // the LLM's Plan JSON happened to default to (the prompt never mentions
+  // this field) — never trust an LLM-emitted value for Session 2's
+  // staleness check, same precedent checkConnections' closed-world check
+  // sets for connectionId. See plan.ts's baseGraphVersion doc comment.
+  return {
+    status: "ok",
+    plan: { ...finalState.plan!, baseGraphVersion: finalState.graphVersion },
+    planGenAttempts: finalState.planGenAttempts,
+  };
 }
