@@ -1471,6 +1471,72 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probes 41-42 — 0019_copilot_plan_audit.sql (Phase 7 Session 2: Copilot
+-- Apply's mandatory audit event). log_plan_applied() reuses
+-- private.can_access_workflow() rather than a new authorization check —
+-- these probes prove that reuse actually gates the RPC, the same way
+-- probes 33/34 proved workflow_id-linking doesn't open a new access path.
+-- =========================================================================
+
+-- Probe 41 — an org member with access to workflow_a can call
+-- log_plan_applied(); the resulting audit_log row carries the org's id,
+-- the calling actor, and the expected action string.
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_workflow_a uuid := (select id from test_ids where key = 'workflow_a');
+  n_rows int;
+begin
+  perform pg_temp.act_as(v_member);
+  perform public.log_plan_applied(v_workflow_a, 'Add a MySQL source', 'add a source for the orders table', array[gen_random_uuid()], 2);
+  reset role;
+
+  select count(*) into n_rows
+  from public.audit_log
+  where org_id = v_org and actor = v_member and action = 'copilot_plan.applied'
+    and (detail ->> 'workflowId')::uuid = v_workflow_a;
+
+  if n_rows = 1 then
+    insert into probe_results values (41, 'org member: log_plan_applied writes exactly one audit_log row with expected org/actor/action/detail', true);
+  else
+    insert into probe_results values (41, 'org member: log_plan_applied writes exactly one audit_log row with expected org/actor/action/detail', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (41, 'log_plan_applied org-member probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 42 — cross-org: org B's owner (no access to workflow_a) is denied
+-- by log_plan_applied, and no audit_log row is written on their behalf.
+do $$
+declare
+  v_org_b_owner uuid := (select id from test_ids where key = 'org_b_owner');
+  v_workflow_a uuid := (select id from test_ids where key = 'workflow_a');
+  denied boolean := false;
+  n_rows int;
+begin
+  perform pg_temp.act_as(v_org_b_owner);
+  begin
+    perform public.log_plan_applied(v_workflow_a, 'Add a MySQL source', 'add a source for the orders table', array[gen_random_uuid()], 3);
+  exception when others then
+    denied := true;
+  end;
+  reset role;
+
+  select count(*) into n_rows from public.audit_log where actor = v_org_b_owner and action = 'copilot_plan.applied';
+
+  if denied and n_rows = 0 then
+    insert into probe_results values (42, 'cross-org actor is denied by log_plan_applied; no audit_log row written', true);
+  else
+    insert into probe_results values (42, 'cross-org actor is denied by log_plan_applied; no audit_log row written', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (42, 'log_plan_applied cross-org-denied probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$
