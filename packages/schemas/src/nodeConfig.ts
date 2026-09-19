@@ -140,10 +140,136 @@ export const FilterCondition = z.object({
 });
 export type FilterCondition = z.infer<typeof FilterCondition>;
 
+/**
+ * Phase 8b-1: a single condition's {field,operator,value} triple upcast
+ * onto the unified Expr grammar (expression.ts) — is_null/is_not_null/
+ * contains become boolean call-fns, every other operator becomes a
+ * `comparison` node. Kept private (not exported) — it's an implementation
+ * detail of the legacy-shape upcast below, not a public conversion API.
+ */
+function toComparisonExpr(cond: FilterCondition): Expr {
+  const field: Expr = { kind: "field", name: cond.field };
+  switch (cond.operator) {
+    case "is_null":
+      return { kind: "call", fn: "is_null", args: [field] };
+    case "is_not_null":
+      return { kind: "call", fn: "is_not_null", args: [field] };
+    case "contains":
+      return { kind: "call", fn: "contains", args: [field, { kind: "literal", value: String(cond.value ?? "") }] };
+    default: {
+      const opMap: Record<"eq" | "neq" | "gt" | "gte" | "lt" | "lte", Extract<Expr, { kind: "comparison" }>["op"]> = {
+        eq: "eq",
+        neq: "neq",
+        gt: "gt",
+        gte: "gte",
+        lt: "lt",
+        lte: "lte",
+      };
+      return { kind: "comparison", op: opMap[cond.operator], left: field, right: { kind: "literal", value: cond.value ?? "" } };
+    }
+  }
+}
+
+/**
+ * AND-combines a flat list of legacy FilterConditions into one boolean
+ * Expr — the exact semantics FilterStep.conditions/AggregateStep.having
+ * had before Phase 8b-1 unified them into the Expr grammar. `[]` (no
+ * conditions, i.e. "match everything") becomes the boolean literal
+ * `true` rather than an empty `logical/and` node, since `logical.args`
+ * requires at least one operand to type-check as boolean (ExprSchema's
+ * superRefine, expression.ts). Exported: reused by the legacy-shape Zod
+ * upcast below AND by the web op editors (FilterStepEditor/
+ * AggregateStepEditor) to repack their row-based UI state into an Expr.
+ */
+export function conditionsToExpr(conditions: FilterCondition[]): Expr {
+  const nodes = conditions.map(toComparisonExpr);
+  if (nodes.length === 0) return { kind: "literal", value: true };
+  if (nodes.length === 1) return nodes[0]!;
+  return { kind: "logical", op: "and", args: nodes };
+}
+
+/**
+ * Inverse of conditionsToExpr, best-effort: unpacks a boolean Expr back
+ * into a flat FilterCondition[] IF it's exactly the flat
+ * (comparison|is_null|is_not_null|contains call)+ AND-combined shape this
+ * module ever produces — the shape the row-based FilterStepEditor/
+ * AggregateStepEditor UI can edit. Returns null for anything else (an
+ * `or`/nested `conditional`/etc — not producible by these editors, only
+ * by hand-authored or Copilot-proposed configs), signaling the caller to
+ * fall back to a read-only "expression too complex for this editor"
+ * notice, same pattern as parseNodeConfig's `unrecognized: true`.
+ */
+export function exprToConditions(expr: Expr): FilterCondition[] | null {
+  if (expr.kind === "literal" && expr.value === true) return [];
+  const flat = expr.kind === "logical" && expr.op === "and" ? expr.args : [expr];
+  const out: FilterCondition[] = [];
+  for (const node of flat) {
+    if (node.kind === "comparison" && node.left.kind === "field" && node.right.kind === "literal") {
+      const opMap: Record<Extract<Expr, { kind: "comparison" }>["op"], "eq" | "neq" | "gt" | "gte" | "lt" | "lte"> = {
+        eq: "eq",
+        neq: "neq",
+        gt: "gt",
+        gte: "gte",
+        lt: "lt",
+        lte: "lte",
+      };
+      out.push({ field: node.left.name, operator: opMap[node.op], value: node.right.value });
+      continue;
+    }
+    if (node.kind === "call" && (node.fn === "is_null" || node.fn === "is_not_null") && node.args[0]?.kind === "field") {
+      out.push({ field: node.args[0].name, operator: node.fn });
+      continue;
+    }
+    if (node.kind === "call" && node.fn === "contains" && node.args[0]?.kind === "field" && node.args[1]?.kind === "literal") {
+      out.push({ field: node.args[0].name, operator: "contains", value: node.args[1].value });
+      continue;
+    }
+    return null;
+  }
+  return out;
+}
+
+/**
+ * Accepts either the current Expr shape or the pre-8b-1 legacy
+ * `FilterCondition[]` shape, upcasting the latter via conditionsToExpr —
+ * a parse-time upcast (not a SQL/data migration; workflow_graphs.graph is
+ * JSONB, validated on every read via GraphDoc.parse(), so there's no
+ * persisted schema to migrate). Existing saved workflows keep working
+ * with zero data rewrite; the next save from the UI persists the new Expr
+ * shape (editors always emit the new shape going forward), so legacy JSON
+ * self-heals to the new shape the first time a user touches the node.
+ */
+const ExprOrLegacyConditions = z.union([ExprSchema, z.array(FilterCondition).transform(conditionsToExpr)]);
+
+/**
+ * Pre-8b-1 FilterStep persisted its conditions under the key `conditions`,
+ * not `expr` — the key itself was renamed, not just its value shape. A
+ * plain `expr: ExprOrLegacyConditions` on the new key can only upcast the
+ * *value* shape (array of FilterCondition -> Expr); it never sees data
+ * still filed under the old key name, and z.object's default "strip
+ * unknown keys" behavior would silently drop `conditions` and fall back
+ * to `expr`'s default (`[]` -> "match everything"), turning a real
+ * persisted filter into a silent no-op. This step-level preprocess
+ * renames `conditions` -> `expr` (only when `expr` is absent) before the
+ * object schema runs, so genuinely legacy-shaped raw JSON keeps its
+ * original filtering semantics with zero data rewrite, matching Decision
+ * 2's guarantee. Kept as a preprocess on the array element (in
+ * TransformConfig below), not wrapped around the exported `FilterStep`
+ * itself, so `FilterStep` stays a plain ZodObject usable inside
+ * `TransformStep`'s discriminatedUnion.
+ */
+function upcastLegacyFilterKey(raw: unknown): unknown {
+  if (raw && typeof raw === "object" && (raw as Record<string, unknown>).kind === "filter" && !("expr" in (raw as Record<string, unknown>)) && "conditions" in (raw as Record<string, unknown>)) {
+    const { conditions, ...rest } = raw as Record<string, unknown>;
+    return { ...rest, expr: conditions };
+  }
+  return raw;
+}
+
 export const FilterStep = z.object({
   kind: z.literal("filter"),
-  /** AND-composed only — no OR groups this session, per the plan's explicit scope cut. */
-  conditions: z.array(FilterCondition).default([]),
+  /** "Keep rows where this boolean Expr is true." AND-of-comparisons is one shape it can take, not the only one, since Phase 8b-1. */
+  expr: ExprOrLegacyConditions.default([]),
 });
 export type FilterStep = z.infer<typeof FilterStep>;
 
@@ -196,12 +322,13 @@ export type AggregationSpec = z.infer<typeof AggregationSpec>;
  * common case (e.g. "total row count"), not treated as "no grouping
  * configured yet" by any consumer.
  *
- * `having` reuses FilterCondition (AND-composed, same as FilterStep) rather
- * than inventing a parallel condition shape — but per ruling 2 (docs/
- * decisions.md), its `field` may reference ONLY an aggregation alias or a
- * groupBy field name, never a raw upstream (pre-aggregate) field; checkConfig
- * enforces that distinction, since FilterCondition's own schema can't tell
- * the difference (it's just a string).
+ * `having` is a boolean Expr (same unified grammar as FilterStep.expr,
+ * since Phase 8b-1) rather than a parallel condition shape — but per
+ * ruling 2 (docs/decisions.md), the field names it references may
+ * reference ONLY an aggregation alias or a groupBy field name, never a raw
+ * upstream (pre-aggregate) field; checkConfig enforces that distinction via
+ * collectFieldRefs (expression.ts), since Expr's own schema can't tell the
+ * difference (a `field` node is just a string).
  *
  * `%_of_total` and top-N-per-group are deliberately NOT first-class members
  * of this shape — see TODO.md's Block 6 ledger entries. Ruling 1 (docs/
@@ -223,7 +350,7 @@ export const AggregateStep = z.object({
   kind: z.literal("aggregate"),
   groupBy: z.array(z.string()).default([]),
   aggregations: z.array(AggregationSpec).default([]),
-  having: z.array(FilterCondition).optional(),
+  having: ExprOrLegacyConditions.optional(),
   /**
    * Phase 7 Session 2 — Copilot Apply's cardinality-probe evidence
    * (plan.ts's PlanAggregateProbeResult), stamped onto this exact step once
@@ -244,7 +371,7 @@ export type TransformStep = z.infer<typeof TransformStep>;
 
 export const TransformConfig = z.object({
   /** Applied in array order — a later step sees the previous step's output shape (e.g. a drop_fields before a filter on a dropped field is a user-visible ordering choice, not validated here). */
-  steps: z.array(TransformStep).default([]),
+  steps: z.array(z.preprocess(upcastLegacyFilterKey, TransformStep)).default([]),
 });
 export type TransformConfig = z.infer<typeof TransformConfig>;
 

@@ -17,7 +17,15 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   if (!project) redirect('/app');
 
   return (
-    <AppShell topBar={<TopBar orgName={user.org?.name ?? null} email={user.email} />}>
+    <AppShell
+      topBar={
+        <TopBar
+          orgName={user.org?.name ?? null}
+          email={user.email}
+          crumbs={[{ label: 'Projects', href: '/app/projects' }, { label: project.name }]}
+        />
+      }
+    >
       <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
       <div style={mainColStyle}>
         <div style={projectScrollStyle}>

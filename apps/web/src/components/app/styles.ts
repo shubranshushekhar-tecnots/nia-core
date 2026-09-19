@@ -535,21 +535,6 @@ export function sidebarUserRowStyle(wide: boolean = true): CSSProperties {
   };
 }
 
-export const sidebarUserAvatarStyle: CSSProperties = {
-  width: 24,
-  height: 24,
-  flex: 'none',
-  borderRadius: '50%',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line)',
-  color: 'var(--text-2)',
-  fontSize: 11,
-  fontWeight: 600,
-};
-
 export const sidebarUserTextColStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -679,6 +664,39 @@ export const settingsEmailRowStyle: CSSProperties = {
   color: 'var(--text-3)',
   height: 'auto',
   padding: '4px 8px 8px',
+};
+
+// Top bar profile dropdown (avatar → email + Sign out) — the header-right
+// counterpart to the old sidebar-footer sign-out row.
+export const profileEmailRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '4px 8px 8px',
+};
+
+export const profileAvatarStyle: CSSProperties = {
+  width: 24,
+  height: 24,
+  flex: 'none',
+  borderRadius: '50%',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: 'var(--surface2)',
+  border: '1px solid var(--line)',
+  color: 'var(--text-2)',
+  fontSize: 11,
+  fontWeight: 600,
+};
+
+export const profileEmailTextStyle: CSSProperties = {
+  fontSize: 12.5,
+  fontWeight: 500,
+  color: 'var(--text)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 };
 
 // Modal / dialog shared with create-project and create-workflow
@@ -816,25 +834,9 @@ export const primaryBtnStyle: CSSProperties = {
   cursor: 'pointer',
 };
 
-// Project detail page (/app/projects/[id]) — header row with breadcrumb +
-// rename/delete kebab menu, plus its workflow list rows.
-export const pageHeaderRowStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 14,
-};
-
-// Page-level breadcrumb — "Projects / <project name>" only. The app-shell
-// TopBar already renders "Nia Core / <workspace>"; this must not repeat
-// it (ported from the design's isProject breadcrumb div, distinct from
-// the TopBar's own brand crumb).
-export const pageCrumbRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 7,
-  fontSize: 13,
-};
-
+// Page-path breadcrumb pieces — rendered by the shared TopBar (see its
+// `crumbs` prop), not by individual pages, so there's only ever one path
+// shown, in the header.
 export const pageCrumbLinkStyle: CSSProperties = {
   padding: 0,
   fontSize: 13,
@@ -846,7 +848,6 @@ export const pageCrumbLinkStyle: CSSProperties = {
   textDecoration: 'none',
 };
 
-export const pageCrumbSepStyle: CSSProperties = { color: 'var(--text-4)' };
 export const pageCrumbCurrentStyle: CSSProperties = { color: 'var(--text-2)' };
 
 // Header row below the breadcrumb: project name (display type) + meta
@@ -1167,6 +1168,10 @@ export function connectionsProviderRowStyle(bordered: boolean, dashed = false): 
   };
 }
 
+// Holds either a real connector brand logo (own fixed colors) or, for ids
+// without one yet, initials text — background is a plain neutral tile
+// either way so a colored logo reads true (no tint) and initials still
+// have contrast (var(--ign-text) still applies to the text fallback).
 export const connectionsProviderIconStyle: CSSProperties = {
   width: 36,
   height: 36,
@@ -1175,7 +1180,8 @@ export const connectionsProviderIconStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  background: 'var(--ign-bg)',
+  background: '#fff',
+  border: '1px solid rgba(203,213,225,.6)',
   color: 'var(--ign-text)',
   fontSize: 13,
   fontWeight: 700,
@@ -1343,6 +1349,23 @@ export const connectionsConnectorIndexStyle: CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
   color: 'var(--text-4)',
+};
+
+// Real-brand logo chip, top of the connector card (above the index/name),
+// on a plain white tile so the vendor's own logo colors read true instead
+// of tinting against the card's frosted-indigo background.
+export const connectionsConnectorLogoStyle: CSSProperties = {
+  position: 'relative',
+  width: 40,
+  height: 40,
+  flex: 'none',
+  borderRadius: 10,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: '#fff',
+  border: '1px solid rgba(203,213,225,.6)',
+  boxShadow: 'rgba(15,23,42,.05) 0 1px 3px',
 };
 
 export const connectionsConnectorNameStyle: CSSProperties = {

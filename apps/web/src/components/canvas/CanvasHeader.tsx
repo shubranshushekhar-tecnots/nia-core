@@ -1,7 +1,15 @@
 'use client';
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { breadcrumbSepStyle, dropdownItemStyle, dropdownStyle, orgSwitcherBtnStyle } from '@/components/app/styles';
+import {
+  breadcrumbSepStyle,
+  dropdownItemStyle,
+  dropdownStyle,
+  orgSwitcherBtnStyle,
+  pageCrumbCurrentStyle,
+  pageCrumbLinkStyle,
+  topBarStyle,
+} from '@/components/app/styles';
 import CommandPalette from '@/components/app/CommandPalette';
 import Logo from '@/components/Logo';
 import {
@@ -11,14 +19,13 @@ import {
   headerSearchInputStyle,
   headerSearchKbdStyle,
   headerSearchLabelStyle,
-  topBarStyle,
 } from './styles';
 
 /**
  * 48px merged header for the workflow canvas (canvasredesign.html) —
  * relocates FlowCanvas.tsx's previous inline `<header>` JSX verbatim: same
  * handlers/props, no new logic. Rendered inside FlowCanvas.tsx (not
- * page-level, unlike CanvasIconRail — see FlowCanvas.tsx's own comment).
+ * page-level, unlike the shared Sidebar — see FlowCanvas.tsx's own comment).
  */
 export default function CanvasHeader({
   orgName,
@@ -96,11 +103,15 @@ export default function CanvasHeader({
       </div>
 
       <span style={breadcrumbSepStyle}>/</span>
-      <a href={projectHref} style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', textDecoration: 'none' }}>
+      <a href="/app/projects" style={pageCrumbLinkStyle}>
+        Projects
+      </a>
+      <span style={breadcrumbSepStyle}>/</span>
+      <a href={projectHref} style={pageCrumbLinkStyle}>
         {projectName}
       </a>
       <span style={breadcrumbSepStyle}>/</span>
-      <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink)' }}>{workflowName}</span>
+      <span style={pageCrumbCurrentStyle}>{workflowName}</span>
       {saveState !== 'conflict' && saveState !== 'idle' && (
         <>
           <span style={breadcrumbSepStyle}>·</span>

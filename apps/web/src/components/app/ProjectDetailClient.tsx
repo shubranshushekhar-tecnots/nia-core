@@ -8,11 +8,6 @@ import {
   dropdownItemStyle,
   dropdownStyle,
   kebabBtnStyle,
-  pageCrumbCurrentStyle,
-  pageCrumbLinkStyle,
-  pageCrumbRowStyle,
-  pageCrumbSepStyle,
-  pageHeaderRowStyle,
   primaryBtnStyle,
   projectHeaderRowStyle,
   projectMetaStyle,
@@ -28,11 +23,9 @@ import CreateWorkflowDialog from './CreateWorkflowDialog';
 import RenameDialog from './RenameDialog';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
 
-// Breadcrumb is page-level only — "Projects / <project name>" — since the
-// app-shell TopBar already renders "Nia Core / <workspace>" above this;
-// repeating that here was the duplicated-breadcrumb bug. Ported from the
-// design's `isProject` section (designs/Nia Core App.html): a `Projects`
-// link in --text-3, a --text-4 separator, and the current name in --text-2.
+// The "Projects / <project name>" breadcrumb lives in the shared TopBar
+// (passed via its `crumbs` prop from page.tsx) — rendering a second one
+// here was the duplicated-breadcrumb bug.
 export default function ProjectDetailClient({
   orgId,
   orgName,
@@ -54,54 +47,44 @@ export default function ProjectDetailClient({
 
   return (
     <>
-      <div style={pageHeaderRowStyle}>
-        <div style={pageCrumbRowStyle}>
-          <Link href="/app/projects" style={pageCrumbLinkStyle}>
-            Projects
-          </Link>
-          <span style={pageCrumbSepStyle}>/</span>
-          <span style={pageCrumbCurrentStyle}>{project.name}</span>
+      <div style={projectHeaderRowStyle}>
+        <div style={projectTitleColStyle}>
+          <span style={projectTitleStyle}>{project.name}</span>
+          <span style={projectMetaStyle}>{metaText}</span>
         </div>
 
-        <div style={projectHeaderRowStyle}>
-          <div style={projectTitleColStyle}>
-            <span style={projectTitleStyle}>{project.name}</span>
-            <span style={projectMetaStyle}>{metaText}</span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button type="button" style={primaryBtnStyle} onClick={() => setShowCreateWorkflow(true)}>
-              New workflow
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button type="button" style={primaryBtnStyle} onClick={() => setShowCreateWorkflow(true)}>
+            New workflow
+          </button>
+          <div style={{ position: 'relative' }}>
+            <button type="button" style={kebabBtnStyle} onClick={() => setMenuOpen((v) => !v)} aria-label="Project actions">
+              {'\u22EF'}
             </button>
-            <div style={{ position: 'relative' }}>
-              <button type="button" style={kebabBtnStyle} onClick={() => setMenuOpen((v) => !v)} aria-label="Project actions">
-                {'\u22EF'}
-              </button>
-              {menuOpen && (
-                <div style={{ ...dropdownStyle, right: 0, left: 'auto', minWidth: 176 }} onMouseLeave={() => setMenuOpen(false)}>
-                  <button
-                    type="button"
-                    style={dropdownItemStyle}
-                    onClick={() => {
-                      setMenuOpen(false);
-                      setShowRename(true);
-                    }}
-                  >
-                    Rename project
-                  </button>
-                  <button
-                    type="button"
-                    style={{ ...dropdownItemStyle, color: 'var(--bad)' }}
-                    onClick={() => {
-                      setMenuOpen(false);
-                      setShowDelete(true);
-                    }}
-                  >
-                    Delete project
-                  </button>
-                </div>
-              )}
-            </div>
+            {menuOpen && (
+              <div style={{ ...dropdownStyle, right: 0, left: 'auto', minWidth: 176 }} onMouseLeave={() => setMenuOpen(false)}>
+                <button
+                  type="button"
+                  style={dropdownItemStyle}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setShowRename(true);
+                  }}
+                >
+                  Rename project
+                </button>
+                <button
+                  type="button"
+                  style={{ ...dropdownItemStyle, color: 'var(--bad)' }}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setShowDelete(true);
+                  }}
+                >
+                  Delete project
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

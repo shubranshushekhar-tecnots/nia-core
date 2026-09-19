@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compilePushdown, manifestDialect } from "./pushdown.js";
+import { compilePushdown, manifestDialect, transformOutputFields } from "./pushdown.js";
 import type { TransformConfig } from "./nodeConfig.js";
 import { parseExpression } from "./expression.js";
 
@@ -31,7 +31,7 @@ describe("manifestDialect", () => {
 
 describe("compilePushdown — no dialect / empty config", () => {
   it("is entirely residual when dialect is null", () => {
-    const config: TransformConfig = { steps: [{ kind: "filter", conditions: [{ field: "age", operator: "gt", value: 30 }] }] };
+    const config: TransformConfig = { steps: [{ kind: "filter", expr: expr("age > 30") }] };
     const plan = compilePushdown(null, config);
     expect(plan.dialectQuery).toBeNull();
     expect(plan.pushedDownCount).toBe(0);
@@ -49,7 +49,7 @@ describe("compilePushdown — no dialect / empty config", () => {
 
 describe("compilePushdown — filter, both SQL dialects", () => {
   const config: TransformConfig = {
-    steps: [{ kind: "filter", conditions: [{ field: "age", operator: "gt", value: 30 }, { field: "name", operator: "eq", value: "Ada" }] }],
+    steps: [{ kind: "filter", expr: expr('age > 30 and name = "Ada"') }],
   };
 
   it("mysql: backtick-quoted identifiers, ? placeholders", () => {
@@ -90,7 +90,7 @@ describe("compilePushdown — filter, both SQL dialects", () => {
   });
 
   it("contains -> LIKE %..% (sql) / escaped $regex (mongo)", () => {
-    const containsConfig: TransformConfig = { steps: [{ kind: "filter", conditions: [{ field: "email", operator: "contains", value: "a.b+c" }] }] };
+    const containsConfig: TransformConfig = { steps: [{ kind: "filter", expr: expr('contains(email, "a.b+c")') }] };
     const mysqlPlan = compilePushdown("mysql", containsConfig);
     expect(mysqlPlan.dialectQuery).toEqual({
       dialect: "mysql",
@@ -111,7 +111,7 @@ describe("compilePushdown — filter, both SQL dialects", () => {
   });
 
   it("is_null / is_not_null carry no param", () => {
-    const config2: TransformConfig = { steps: [{ kind: "filter", conditions: [{ field: "deleted_at", operator: "is_null" }] }] };
+    const config2: TransformConfig = { steps: [{ kind: "filter", expr: expr("is_null(deleted_at)") }] };
     const plan = compilePushdown("postgres", config2);
     expect(plan.dialectQuery).toEqual({
       dialect: "postgres",
@@ -198,9 +198,9 @@ describe("compilePushdown — order-stopping semantics", () => {
   it("a non-pushable step blocks every later step from pushing down too, on SQL dialects", () => {
     const config: TransformConfig = {
       steps: [
-        { kind: "filter", conditions: [{ field: "age", operator: "gt", value: 18 }] },
+        { kind: "filter", expr: expr("age > 18") },
         { kind: "drop_fields", fields: ["ssn"] }, // blocks here for mysql/postgres
-        { kind: "filter", conditions: [{ field: "name", operator: "eq", value: "Ada" }] },
+        { kind: "filter", expr: expr('name = "Ada"') },
       ],
     };
     const plan = compilePushdown("mysql", config);
@@ -221,9 +221,9 @@ describe("compilePushdown — order-stopping semantics", () => {
   it("the same config pushes everything down on mongo (no blocking step)", () => {
     const config: TransformConfig = {
       steps: [
-        { kind: "filter", conditions: [{ field: "age", operator: "gt", value: 18 }] },
+        { kind: "filter", expr: expr("age > 18") },
         { kind: "drop_fields", fields: ["ssn"] },
-        { kind: "filter", conditions: [{ field: "name", operator: "eq", value: "Ada" }] },
+        { kind: "filter", expr: expr('name = "Ada"') },
       ],
     };
     const plan = compilePushdown("mongo", config);
@@ -235,7 +235,7 @@ describe("compilePushdown — order-stopping semantics", () => {
 describe("compilePushdown — injection-shaped identifiers", () => {
   it("escapes a backtick/quote-laden field name instead of breaking out of the identifier", () => {
     const config: TransformConfig = {
-      steps: [{ kind: "filter", conditions: [{ field: "a`b\"c", operator: "eq", value: 1 }] }],
+      steps: [{ kind: "filter", expr: { kind: "comparison", op: "eq", left: { kind: "field", name: 'a`b"c' }, right: { kind: "literal", value: 1 } } }],
     };
     const mysqlPlan = compilePushdown("mysql", config);
     expect(mysqlPlan.dialectQuery).toMatchObject({ whereSql: "(`a``b\"c` = ?)" });
@@ -315,7 +315,7 @@ describe.each(["mysql", "postgres"] as const)("compilePushdown — aggregate, SQ
   it("a filter step ahead of the aggregate pushes down as a pre-aggregate WHERE", () => {
     const config: TransformConfig = {
       steps: [
-        { kind: "filter", conditions: [{ field: "age", operator: "gt", value: 18 }] },
+        { kind: "filter", expr: expr("age > 18") },
         { kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }] },
       ],
     };
@@ -331,7 +331,7 @@ describe.each(["mysql", "postgres"] as const)("compilePushdown — aggregate, SQ
           kind: "aggregate",
           groupBy: ["cohort"],
           aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }],
-          having: [{ field: "max_salary", operator: "gt", value: 100000 }],
+          having: expr("max_salary > 100000"),
         },
       ],
     };
@@ -346,7 +346,7 @@ describe.each(["mysql", "postgres"] as const)("compilePushdown — aggregate, SQ
           kind: "aggregate",
           groupBy: ["cohort"],
           aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }],
-          having: [{ field: "cohort", operator: "neq", value: "unassigned" }],
+          having: expr('cohort != "unassigned"'),
         },
       ],
     };
@@ -464,7 +464,7 @@ describe("compilePushdown — aggregate, mongo", () => {
           kind: "aggregate",
           groupBy: ["cohort"],
           aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }],
-          having: [{ field: "max_salary", operator: "gt", value: 100000 }],
+          having: expr("max_salary > 100000"),
         },
       ],
     };
@@ -486,7 +486,7 @@ describe("compilePushdown — aggregate, mongo", () => {
           kind: "aggregate",
           groupBy: ["cohort"],
           aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }],
-          having: [{ field: "cohort", operator: "neq", value: "unassigned" }],
+          having: expr('cohort != "unassigned"'),
         },
       ],
     };
@@ -537,7 +537,7 @@ describe("compilePushdown — aggregate, mongo", () => {
   it("a filter step ahead of the aggregate pushes down as a pre-aggregate $match", () => {
     const config: TransformConfig = {
       steps: [
-        { kind: "filter", conditions: [{ field: "age", operator: "gt", value: 18 }] },
+        { kind: "filter", expr: expr("age > 18") },
         { kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }] },
       ],
     };
@@ -644,3 +644,64 @@ describe("compilePushdown — aggregate, mongo", () => {
  * this — %_of_total remains parked as a composition, and the gap is
  * disclosed rather than silently promoted to first-class.
  */
+
+describe("transformOutputFields", () => {
+  it("returns null when the config has no aggregate step (callers should keep using raw source fields)", () => {
+    const config: TransformConfig = { steps: [{ kind: "filter", expr: expr("id = 1") }] };
+    expect(transformOutputFields(config)).toBeNull();
+  });
+
+  it("returns groupBy fields + aggregation aliases for a single aggregate step", () => {
+    const config: TransformConfig = {
+      steps: [
+        {
+          kind: "aggregate",
+          groupBy: ["region"],
+          aggregations: [
+            { fn: "count", field: null, alias: "order_count" },
+            { fn: "sum", field: "amount", alias: "total_amount" },
+          ],
+        },
+      ],
+    };
+    expect(transformOutputFields(config)).toEqual(["order_count", "region", "total_amount"]);
+  });
+
+  it("reflects a whole-table aggregate (empty groupBy) as just the aggregation aliases", () => {
+    const config: TransformConfig = {
+      steps: [{ kind: "aggregate", groupBy: [], aggregations: [{ fn: "count", field: null, alias: "row_count" }] }],
+    };
+    expect(transformOutputFields(config)).toEqual(["row_count"]);
+  });
+
+  it("adds a residual computed_field's output name when it follows an aggregate step", () => {
+    const config: TransformConfig = {
+      steps: [
+        { kind: "aggregate", groupBy: ["region"], aggregations: [{ fn: "sum", field: "amount", alias: "total" }] },
+        { kind: "computed_field", name: "total_doubled", expression: { kind: "binary", op: "+", left: { kind: "field", name: "total" }, right: { kind: "field", name: "total" } } },
+      ],
+    };
+    expect(transformOutputFields(config)).toEqual(["region", "total", "total_doubled"]);
+  });
+
+  it("removes a residual drop_fields' target from the aggregate's output shape", () => {
+    const config: TransformConfig = {
+      steps: [
+        { kind: "aggregate", groupBy: ["region"], aggregations: [{ fn: "count", field: null, alias: "order_count" }] },
+        { kind: "drop_fields", fields: ["region"] },
+      ],
+    };
+    expect(transformOutputFields(config)).toEqual(["order_count"]);
+  });
+
+  it("ignores computed_field/drop_fields steps that appear before any aggregate step", () => {
+    const config: TransformConfig = {
+      steps: [
+        { kind: "computed_field", name: "doubled", expression: { kind: "literal", value: 1 } },
+        { kind: "aggregate", groupBy: ["region"], aggregations: [{ fn: "count", field: null, alias: "order_count" }] },
+      ],
+    };
+    // "doubled" was computed pre-aggregate and never survives the GROUP BY collapse — not part of the output shape.
+    expect(transformOutputFields(config)).toEqual(["order_count", "region"]);
+  });
+});

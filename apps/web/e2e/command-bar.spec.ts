@@ -163,7 +163,12 @@ test.describe.serial('command bar: scope precedence, chat, / hint, reload persis
     const slashMenu = page.getByTestId('command-bar-slash-menu');
     await expect(slashMenu).toBeVisible();
     await expect(slashMenu.getByRole('button')).toHaveCount(6);
-    await slashMenu.getByRole('button').first().click();
+    // dispatchEvent (not .click()) — same technique dragPaletteItemOnto uses
+    // above — bypasses Playwright's viewport-actionability gate, which the
+    // unrelated concurrent CanvasHeader/CanvasIconRail WIP layout currently
+    // trips (extra header chrome leaves too little room above the bar for
+    // this upward-opening dropdown).
+    await slashMenu.getByRole('button').first().dispatchEvent('mousedown');
     await expect(input).toHaveValue(/^\/Add a source node reading a table/);
     await expect(slashMenu).not.toBeVisible();
 

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildGrantStatementText, parseNodeConfig, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildGrantStatementText, parseNodeConfig, transformOutputFields, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
 import { confirmWriteGrant, createWriteGrant, getConnectionSchema, getWriteGrants, revokeWriteGrant, type WriteGrant } from '@/lib/api/connectionsClient';
 import TransformEditor from './TransformEditor';
@@ -442,7 +442,7 @@ export default function NodeDrawer({
 }: {
   node: CanvasNode;
   workflowId: string;
-  upstreamSource?: { connectionId?: string; manifestId?: string };
+  upstreamSource?: { connectionId?: string; manifestId?: string; transformConfigs?: Record<string, unknown>[] };
   /** Latest persisted check-run results, forwarded to MappingEditor to gate Preview. See MappingEditor.tsx's prop comment. */
   checkResults?: CheckResult[] | null;
   onConfigChange: (config: Record<string, unknown>) => void;
@@ -459,6 +459,23 @@ export default function NodeDrawer({
   const showSourceDestForm = data.resolved && data.graphNodeType !== 'transform' && !parsed.unrecognized;
   const showTabs = data.graphNodeType === 'destination' && showSourceDestForm;
   const [activeTab, setActiveTab] = useState<'setup' | 'mapping'>('setup');
+
+  // Only override the mapping dropdown's source-field list when exactly one
+  // transform node sits on the path — 0 transforms means nothing to
+  // override (raw fields are already correct), 2+ degrades to "unknown"
+  // rather than guessing, same conservative convention runPreview.ts's
+  // pushdown chaining uses (transforms.length === 1). transformOutputFields
+  // itself returns null when that one transform has no aggregate step, so
+  // the override only ever kicks in for an actual Aggregate transform.
+  const upstreamTransformConfigs = upstreamSource?.transformConfigs ?? [];
+  const sourceFieldsOverride =
+    upstreamTransformConfigs.length === 1
+      ? (() => {
+          const parsedTransform = parseNodeConfig('transform', upstreamTransformConfigs[0]!);
+          const transformConfig = !parsedTransform.unrecognized && parsedTransform.type === 'transform' ? parsedTransform.value : undefined;
+          return transformConfig ? (transformOutputFields(transformConfig) ?? undefined) : undefined;
+        })()
+      : undefined;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} data-testid="node-drawer">
@@ -563,6 +580,7 @@ export default function NodeDrawer({
             destNodeId={node.id}
             destConnectionId={data.connectionId}
             sourceConnectionId={upstreamSource?.connectionId}
+            sourceFieldsOverride={sourceFieldsOverride}
             checkResults={checkResults}
             onChange={(next) => onConfigChange(next)}
           />

@@ -14,7 +14,21 @@
  * for all three dialects here so the UI's copy is correct the day a
  * connector's `operations` grows write verbs, without this file needing a
  * second pass — see docs/decisions.md's Block 4->5 correction entry.
+ *
+ * Phase 8a: identifier quoting for postgres/mysql now delegates to
+ * mysqlAdapter/postgresAdapter's quoteIdent (packages/schemas/src/ops/
+ * dialects/*) instead of this file's own quotePgIdent/quoteMysqlIdent
+ * duplicates — same quoting bodies, one fewer copy. quoteLiteral (DDL
+ * string-literal quoting for password text) stays local: it's specific to
+ * copy-paste DDL generation, not a general op-emission primitive, so it's
+ * not part of SqlDialectAdapter. WriteGrantStatementDialect stays its own
+ * enum (not unified with SourceDialect/manifestDialect's "mongo" naming)
+ * — flagged as a possible follow-up rename in the Phase 8a plan, not
+ * executed here since it touches this otherwise-unrelated, currently-
+ * passing file.
  */
+import { mysqlAdapter } from "./ops/dialects/mysql.js";
+import { postgresAdapter } from "./ops/dialects/postgres.js";
 
 export type WriteGrantStatementDialect = "postgres" | "mysql" | "mongodb";
 
@@ -23,20 +37,6 @@ function dialectForConnector(connectorId: string): WriteGrantStatementDialect | 
   if (connectorId === "mysql") return "mysql";
   if (connectorId === "mongodb") return "mongodb";
   return undefined;
-}
-
-/**
- * Quotes a Postgres identifier by doubling embedded `"` — namespace/role
- * names here are either server-generated (`roleUser`) or came back from a
- * real schema introspection (`namespace`), never raw user free-text, but
- * this is cheap insurance against either containing a `"`.
- */
-function quotePgIdent(ident: string): string {
-  return `"${ident.replace(/"/g, '""')}"`;
-}
-
-function quoteMysqlIdent(ident: string): string {
-  return `\`${ident.replace(/`/g, "``")}\``;
 }
 
 /** Single-quoted SQL string literal, doubling embedded `'` — used for password literals only (never interpolated as an identifier). */
@@ -59,8 +59,8 @@ export function buildGrantStatementText(
   if (!dialect) return null;
 
   if (dialect === "postgres") {
-    const role = quotePgIdent(roleUser);
-    const schema = quotePgIdent(namespace);
+    const role = postgresAdapter.quoteIdent(roleUser);
+    const schema = postgresAdapter.quoteIdent(namespace);
     return [
       `-- Run against the target database with an admin/owner credential.`,
       `CREATE ROLE ${role} WITH LOGIN PASSWORD ${quoteLiteral(rolePassword)};`,
@@ -71,8 +71,8 @@ export function buildGrantStatementText(
   }
 
   if (dialect === "mysql") {
-    const role = quoteMysqlIdent(roleUser);
-    const db = quoteMysqlIdent(namespace);
+    const role = mysqlAdapter.quoteIdent(roleUser);
+    const db = mysqlAdapter.quoteIdent(namespace);
     return [
       `-- Run against the target database with an admin credential.`,
       `CREATE USER ${role}@'%' IDENTIFIED BY ${quoteLiteral(rolePassword)};`,

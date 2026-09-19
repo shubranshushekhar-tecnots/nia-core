@@ -42,7 +42,9 @@ export default function HomeContent({
   return (
     <div style={homeScrollStyle}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <span style={greetingStyle}>{greeting}{firstName ? `, ${firstName}` : ''}</span>
+        <span style={{ ...greetingStyle, fontWeight: 500 }}>
+          {greeting}{firstName ? `, ${firstName}` : ''}
+        </span>
         <span style={greetingLineStyle}>
           Your workspace {'\u00b7'} {stats.projectCount} projects {'\u00b7'} {stats.workflowCount} workflows
         </span>

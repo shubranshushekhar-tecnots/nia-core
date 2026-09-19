@@ -2,8 +2,9 @@ import type { IconComponent } from './icons';
 
 /**
  * Chrome/nav icon set — separate from icons.tsx (which is explicitly scoped
- * to connector/category icons for graph nodes). Used by CanvasIconRail.tsx's
- * nav items and CanvasHeader.tsx/FlowCanvas.tsx's Copilot panel toggle.
+ * to connector/category icons for graph nodes). Used by the shared
+ * Sidebar.tsx's nav items and CanvasHeader.tsx/FlowCanvas.tsx's Copilot
+ * panel toggle.
  * Same convention as icons.tsx: monochrome inline SVG, `currentColor`,
  * viewBox 24x24, 1.6 stroke, round caps/joins.
  */

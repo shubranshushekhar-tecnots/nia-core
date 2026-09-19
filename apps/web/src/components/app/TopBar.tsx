@@ -1,13 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import Logo from '@/components/Logo';
+import Link from 'next/link';
 import { logout } from '@/lib/auth/actions';
 import {
   breadcrumbSepStyle,
   dropdownItemStyle,
   dropdownStyle,
   orgSwitcherBtnStyle,
+  pageCrumbCurrentStyle,
+  pageCrumbLinkStyle,
+  profileAvatarStyle,
+  profileEmailRowStyle,
+  profileEmailTextStyle,
   topBarAvatarBtnStyle,
   topBarIconBtnStyle,
   topBarKbdStyle,
@@ -17,16 +22,27 @@ import {
 } from './styles';
 import CommandPalette from './CommandPalette';
 
-export default function TopBar({ orgName, email }: { orgName: string | null; email: string }) {
+// Optional page-path crumbs (e.g. "Projects / <project name>") rendered
+// right after the org switcher, in the same header row — pages must not
+// also render their own duplicate breadcrumb below this one.
+export type TopBarCrumb = { label: string; href?: string };
+
+export default function TopBar({
+  orgName,
+  email,
+  crumbs,
+}: {
+  orgName: string | null;
+  email: string;
+  crumbs?: TopBarCrumb[];
+}) {
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const initials = email.slice(0, 2).toUpperCase();
 
   return (
     <header style={topBarStyle}>
-      <Logo size={20} />
-      <span style={breadcrumbSepStyle}>/</span>
-
       <div style={{ position: 'relative' }}>
         <button type="button" style={orgSwitcherBtnStyle} onClick={() => setOrgMenuOpen((v) => !v)}>
           <span>{orgName ?? 'Personal workspace'}</span>
@@ -51,6 +67,19 @@ export default function TopBar({ orgName, email }: { orgName: string | null; ema
         )}
       </div>
 
+      {crumbs?.map((crumb, i) => (
+        <span key={crumb.label} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={breadcrumbSepStyle}>/</span>
+          {crumb.href && i < crumbs.length - 1 ? (
+            <Link href={crumb.href} style={pageCrumbLinkStyle}>
+              {crumb.label}
+            </Link>
+          ) : (
+            <span style={pageCrumbCurrentStyle}>{crumb.label}</span>
+          )}
+        </span>
+      ))}
+
       <span style={topBarSpacerStyle} />
 
       <button type="button" style={topBarSearchBtnStyle} onClick={() => setPaletteOpen(true)}>
@@ -68,11 +97,30 @@ export default function TopBar({ orgName, email }: { orgName: string | null; ema
         <span aria-hidden>{'\u25D4'}</span>
       </button>
 
-      <form action={logout}>
-        <button type="submit" style={topBarAvatarBtnStyle} title="Sign out">
+      <div style={{ position: 'relative' }}>
+        <button
+          type="button"
+          style={topBarAvatarBtnStyle}
+          onClick={() => setProfileMenuOpen((v) => !v)}
+          title={email}
+        >
           {initials}
         </button>
-      </form>
+        {profileMenuOpen && (
+          <div style={{ ...dropdownStyle, right: 0, left: 'auto' }} onMouseLeave={() => setProfileMenuOpen(false)}>
+            <div style={profileEmailRowStyle}>
+              <span style={profileAvatarStyle} aria-hidden>{initials}</span>
+              <span style={profileEmailTextStyle}>{email}</span>
+            </div>
+            <div style={{ height: 1, background: 'var(--line)', margin: '4px 0' }} />
+            <form action={logout}>
+              <button type="submit" style={{ ...dropdownItemStyle, color: 'var(--bad)' }}>
+                Sign out
+              </button>
+            </form>
+          </div>
+        )}
+      </div>
 
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
     </header>
