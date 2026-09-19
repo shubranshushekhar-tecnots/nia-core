@@ -224,6 +224,18 @@ export const AggregateStep = z.object({
   groupBy: z.array(z.string()).default([]),
   aggregations: z.array(AggregationSpec).default([]),
   having: z.array(FilterCondition).optional(),
+  /**
+   * Phase 7 Session 2 — Copilot Apply's cardinality-probe evidence
+   * (plan.ts's PlanAggregateProbeResult), stamped onto this exact step once
+   * a proposed node carrying it is applied to the real graph. Optional and
+   * absent on every hand-authored/pre-Copilot node; never read as
+   * validation input by checkConfig or checkDag — purely a record for
+   * humans (and a future pagination pass, Block 6) of what was measured and
+   * when. Never re-derived/re-probed once set; Apply writes it exactly
+   * once, at apply time.
+   */
+  observedCount: z.number().int().nonnegative().optional(),
+  probedAt: z.string().datetime().optional(),
 });
 export type AggregateStep = z.infer<typeof AggregateStep>;
 

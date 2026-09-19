@@ -1,6 +1,6 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
-import { GraphDoc } from "@nia/schemas";
+import { GraphDoc, Plan } from "@nia/schemas";
 import { requireAuth } from "../middleware/auth.js";
 import { attachActor } from "../middleware/actor.js";
 import { requireCapability } from "../middleware/requireCapability.js";
@@ -10,6 +10,8 @@ import { AppError } from "../lib/appError.js";
 import { scopeFromActor } from "../lib/workspaceScope.js";
 import { getWorkflowDetail } from "../services/workflows.js";
 import { getWorkflowGraph, putWorkflowGraph } from "../services/workflowGraphs.js";
+import { applyPlan } from "../services/copilotApply.js";
+import { proposePlanForWorkflow } from "../services/copilotPropose.js";
 import { getLatestCheckRun, listCheckRuns, runAndRecordChecks } from "../services/checks.js";
 import { proposeMappingForWorkflow } from "../services/mappings.js";
 import { previewWorkflowDestination } from "../services/preview.js";
@@ -56,6 +58,60 @@ workflowsRouter.put(
   asyncHandler(async (req, res) => {
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await putWorkflowGraph(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body);
+    res.json(data);
+  }),
+);
+
+const proposePlanBodySchema = z.object({
+  message: z.string().min(1),
+  conversationId: z.string().uuid().optional(),
+});
+
+// Phase 7 Session 3 — Copilot "propose". Gated the same as
+// /mappings/propose and /plan/apply (workflows.updateDefinition, not
+// workflows.run): a proposal is a config-editing assist, nothing is
+// persisted until Apply. Always 200 — refused/clarify/no-connection/error
+// are legitimate PlanProposeOutcome statuses the UI must render distinctly,
+// not HTTP-level failures; only genuine infra failure (worker unreachable,
+// malformed worker response, workflow/conversation not found) throws via
+// AppError. See services/copilotPropose.ts's header comment for why this
+// is a plain request/response route, not SSE, despite the original plan
+// doc's Session 3 wording assuming otherwise.
+workflowsRouter.post(
+  "/:id/plan",
+  requireCapability("workflows.updateDefinition"),
+  validate({ params: workflowParamsSchema, body: proposePlanBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await proposePlanForWorkflow(
+      req.supabase,
+      scopeFromActor(req.actor),
+      req.params.id!,
+      req.actor.userId,
+      req.body.message,
+      req.body.conversationId,
+    );
+    res.json(data);
+  }),
+);
+
+const applyPlanBodySchema = z.object({
+  plan: Plan,
+  prompt: z.string().optional().default(""),
+});
+
+// Phase 7 Session 2.2 — Copilot "Apply". Same capability as PUT /:id/graph
+// (this route is, structurally, still just a graph write — see
+// copilotApply.ts's header comment) and no new authorization check of its
+// own: req.supabase is the RLS-scoped client putWorkflowGraph() writes
+// through, exactly like the plain PUT route above.
+workflowsRouter.post(
+  "/:id/plan/apply",
+  requireCapability("workflows.updateDefinition"),
+  validate({ params: workflowParamsSchema, body: applyPlanBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await applyPlan(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body);
     res.json(data);
   }),
 );

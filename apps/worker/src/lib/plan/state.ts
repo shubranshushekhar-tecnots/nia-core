@@ -25,6 +25,8 @@ export const PlanState = Annotation.Root({
   existingGraph: Annotation<GraphDoc | undefined>({ default: () => undefined, reducer: (_, b) => b }),
   /** WorkspaceScope-filtered connection list (listConnections.ts) — both the LLM's candidate context and checkConnections' closed-world check draw from this same fetch. */
   connections: Annotation<VisibleConnection[]>({ default: () => [], reducer: (_, b) => b }),
+  /** workflow_graphs.version as observed by resolveScopeNode's fetch — stamped onto the returned Plan's baseGraphVersion by runPlanPropose.ts, never by the LLM. See plan.ts's baseGraphVersion doc comment. */
+  graphVersion: Annotation<number>({ default: () => 0, reducer: (_, b) => b }),
 
   plan: Annotation<Plan | undefined>({ default: () => undefined, reducer: (_, b) => b }),
   clarifyQuestion: Annotation<string | undefined>({ default: () => undefined, reducer: (_, b) => b }),
