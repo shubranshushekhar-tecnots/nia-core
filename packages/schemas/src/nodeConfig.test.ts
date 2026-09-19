@@ -44,13 +44,10 @@ describe("TransformConfig", () => {
   });
 
   it("round-trips a filter step (AND-composed conditions)", () => {
-    const step: FilterStep = {
-      kind: "filter",
-      conditions: [
-        { field: "status", operator: "eq", value: "active" },
-        { field: "deleted_at", operator: "is_null" },
-      ],
-    };
+    const exprResult = parseExpression('status = "active" and is_null(deleted_at)');
+    expect(exprResult.ok).toBe(true);
+    if (!exprResult.ok) return;
+    const step: FilterStep = { kind: "filter", expr: exprResult.expr };
     const parsed = TransformConfig.parse({ steps: [step] });
     const roundTripped = TransformConfig.parse(JSON.parse(JSON.stringify(parsed)));
     expect(roundTripped).toEqual(parsed);
@@ -73,11 +70,14 @@ describe("TransformConfig", () => {
   });
 
   it("round-trips an aggregate step with groupBy, aggregations, and having", () => {
+    const exprResult = parseExpression("max_salary > 1000");
+    expect(exprResult.ok).toBe(true);
+    if (!exprResult.ok) return;
     const step: AggregateStep = {
       kind: "aggregate",
       groupBy: ["cohort"],
       aggregations: [{ fn: "max", field: "salary", alias: "max_salary" }],
-      having: [{ field: "max_salary", operator: "gt", value: 1000 }],
+      having: exprResult.expr,
     };
     const parsed = TransformConfig.parse({ steps: [step] });
     const roundTripped = TransformConfig.parse(JSON.parse(JSON.stringify(parsed)));

@@ -26,6 +26,9 @@ export const KIND_LABEL: Record<CanvasNode['data']['graphNodeType'], string> = {
 // deleteElements is therefore no longer needed here.
 export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>) {
   const color = data.resolved ? KIND_COLOR[data.graphNodeType] : 'var(--warn)';
+  // Handle ring color is a simpler 2-bucket scheme than KIND_COLOR's 3
+  // icon colors — source vs. everything downstream of it.
+  const handleColor = data.graphNodeType === 'source' ? 'var(--handle-ring-source)' : 'var(--handle-ring-sink)';
   const showTargetHandle = data.graphNodeType !== 'source';
   const showSourceHandle = data.graphNodeType !== 'destination';
   const isGhost = data.isGhost === true;
@@ -40,7 +43,13 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
         height: 80,
         borderRadius: 12,
         background: data.resolved ? 'var(--surface)' : 'var(--warn-bg)',
-        border: isGhost ? 'var(--provisional-border)' : `1.5px solid ${selected ? 'var(--acc)' : data.resolved ? 'var(--card-line)' : 'var(--warn-bd)'}`,
+        border: isGhost
+          ? 'var(--provisional-border)'
+          : selected
+            ? '1.5px solid var(--acc)'
+            : data.resolved
+              ? '1px solid var(--card-line)'
+              : '1.5px solid var(--warn-bd)',
         boxShadow: isGhost ? 'none' : selected ? `0 0 0 3px var(--acc-soft), var(--card-shadow)` : 'var(--card-shadow)',
         opacity: isGhost ? 'var(--ghost-opacity)' : 1,
         padding: '10px 12px',
@@ -50,7 +59,7 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
       }}
     >
       {showTargetHandle && (
-        <Handle type="target" position={Position.Left} style={{ width: 10, height: 10, background: 'var(--surface)', border: `2px solid ${color}` }} />
+        <Handle type="target" position={Position.Left} style={{ width: 8, height: 8, background: 'var(--surface)', border: `1.5px solid ${handleColor}` }} />
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -101,7 +110,7 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
       )}
 
       {showSourceHandle && (
-        <Handle type="source" position={Position.Right} style={{ width: 10, height: 10, background: 'var(--surface)', border: `2px solid ${color}` }} />
+        <Handle type="source" position={Position.Right} style={{ width: 8, height: 8, background: 'var(--surface)', border: `1.5px solid ${handleColor}` }} />
       )}
     </div>
   );

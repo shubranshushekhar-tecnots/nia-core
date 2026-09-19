@@ -679,3 +679,99 @@ filter) has no precedent anywhere in this codebase and was not built for
 Phase 7 — deferred, not attempted, consistent with "don't invent a new
 access-control pattern, reuse the one every other worker job already
 trusts."
+
+## Phase 8a: op registry + dialect adapter seam — shipped, behavior-preserving
+
+Collapsed the ~8-10 inline per-op registration points (`isPushable`,
+`splitPushable`, `compileSql`, `compileMongo`, `transformOutputFields`,
+`checkConfig`, `residualTransform`, `TransformEditor`'s kind-branches) and
+3 duplicate `quoteIdent`/`placeholder` implementations
+(`pushdown.ts`/`queryBuilder.ts`/`writeGrantStatement.ts`) into one op
+module per kind (`packages/schemas/src/ops/{filter,computedField,
+dropFields,aggregate}.ts`, `OP_REGISTRY`) plus one `SqlDialectAdapter`
+(mysql, postgres — 7 primitives: `quoteIdent`, `placeholder`,
+`compileExpr`, `compileCondition`, `compileConditionAgainstTarget`,
+`compileAggAccumulator`, `combineAnd`) and one `MongoDialectAdapter`
+(mongo — 4 primitives, no `quoteIdent`/`placeholder`: `$project` already
+flattens field names before `$match` runs). No new ops, no new SQL/Mongo
+capability — a pure refactor.
+
+**Behavior-preservation proof, every layer:** `pushdown.test.ts`,
+`residualTransform.test.ts`, `checks.test.ts` ran unchanged (no test file
+edits) and stayed green throughout (`@nia/schemas`: 340 tests passing,
+up from 294 pre-refactor only because of the new conformance suite
+below — no existing test was touched). `runEtl.test.ts` (`@nia/worker`,
+248 tests) proves `queryBuilder.ts`'s adapter swap emits byte-identical
+SQL/params to the old inline `quoteIdent`. Two live DB-execution smoke
+scripts re-run clean against real docker-compose sandbox infra post-
+refactor: `dispatch-smoke.ts` (mysql/mongodb/supabase dispatch,
+14/14 assertions) and `aggregate-smoke.ts` (real mysql→Postgres
+`runEtl()` GROUP BY, 8/8 assertions) — both were already the DB-backed
+proof for the 4 existing ops pre-refactor and needed no changes.
+`@nia/web`'s `next build` also ran clean, including `/app/workflows/[id]`
+(mounts the migrated `TransformEditor`).
+
+**TypeScript "calling a union of function types" limitation, worked
+around once, not per call site.** Indexing `OP_REGISTRY[step.kind]` where
+`step: TransformStep` (a discriminated union) and then calling a method
+on the result collapses the parameter type to `never` — TS computes the
+intersection of every union member's parameter type for a call through a
+union of function types, and each op's `kind` literal conflicts. Fixed
+with one helper, `opForStep<T extends TransformStep>(step: T): OpModule<T>`
+(`ops/registry.ts`), doing a single internal cast, used at all 5
+call sites (`pushdown.ts` ×3, `checks.ts`, `residualTransform.ts`)
+instead of scattering ad-hoc casts.
+
+**`@nia/schemas` resolves via `dist/`, not source — a build-before-
+downstream-typecheck gotcha, hit twice this phase.** `apps/worker`'s and
+`apps/web`'s typecheck both read `@nia/schemas`'s compiled `dist/`
+output per its `package.json`, not its TS source. Every source-level
+export addition (the new adapters, later `OpKind`/`OP_REGISTRY`) required
+an explicit `pnpm --filter @nia/schemas build` before downstream
+typecheck would see it — worth remembering for any future cross-package
+edit in this monorepo, not specific to this refactor.
+
+**`apps/web`'s editor registry needed a second, targeted public export
+beyond the plan's original `OpKind` snippet.** The plan's migration step
+for `TransformEditor.tsx`'s `addStep` explicitly calls for
+`OP_REGISTRY[kind].createDefault()`, which requires `apps/web` to reach
+the registry object itself, not just the `OpKind` type — added
+`export { OP_REGISTRY } from "./ops/registry.js";` to
+`packages/schemas/src/index.ts` alongside the already-planned
+`export type { OpKind }`. Both are targeted (`export type`/named
+`export`) rather than a blanket `export * from "./ops/types.js"`, to
+avoid risking an ES-module ambiguous-export collision with
+`SqlDialect`/`SourceDialect` (already re-exported via `pushdown.js`).
+
+**`writeGrantStatement.ts`'s dialect-enum naming mismatch — flagged, not
+executed, exactly as the plan specified.** `WriteGrantStatementDialect =
+"postgres"|"mysql"|"mongodb"` still diverges from `pushdown.ts`'s
+`SourceDialect` (`"mongo"`, not `"mongodb"`); this file now consumes
+`mysqlAdapter`/`postgresAdapter` for identifier quoting but keeps its own
+enum and `quoteLiteral` (DDL string-literal quoting, deliberately not
+added to `SqlDialectAdapter` — specific to copy-paste `CREATE ROLE`
+generation, not a general op-emission primitive). No rename was made;
+this stays an open, named recommendation for a future small,
+behavior-neutral cleanup.
+
+**Conformance suite — Deliverable 3, done; the Phase 8b DB-execution
+harness — named blocking prerequisite, not built here.**
+`packages/schemas/src/ops/__conformance__/` (`fixtures.ts`: 10
+`OpFixture` records ported verbatim from `pushdown.test.ts`'s existing
+assertions — 3 filter, 3 computed_field, 1 drop_fields (mongo-only),
+3 aggregate, across mysql/postgres/mongo; `ops.conformance.test.ts`:
+registry-driven, iterates `OP_REGISTRY` × every dialect each op declares
+pushable via `op.isPushable(dialect)`, asserting ≥1 fixture per pair —
+fails by omission for a future 5th op with no fixture — then compiles
+every fixture through the real public `compilePushdown` and asserts
+exact `dialectQuery` shape; 20/20 passing) is what this phase delivers.
+**Must be built before the first new op lands in Phase 8b, named here in
+exactly those terms per the plan:** a shared DB-execution harness that
+runs each fixture's compiled query against a seeded sandbox DB and
+asserts real result rows, generalizing the existing per-op smoke scripts
+(`aggregate-smoke.ts`, `dispatch-smoke.ts`) which remain the DB-backed
+proof for the 4 existing ops in the meantime. Since fixtures are already
+data (`OP_FIXTURES`, not test-body-embedded assertions), the 8b harness
+consumes the same array and adds result-row assertions rather than
+duplicating fixture authoring. This is a blocking prerequisite for
+op #5, not a someday item — see matching `TODO.md` entry.

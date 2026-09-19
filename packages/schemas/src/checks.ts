@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { GraphDoc, GraphNode } from "./graph.js";
 import { parseNodeConfig } from "./nodeConfig.js";
 import { WRITE_OPERATIONS } from "./manifest.js";
+import { opForStep } from "./ops/registry.js";
 
 /**
  * Checks engine v1 — Phase 5 Session 3. Pure, no I/O, importable by both
@@ -82,82 +83,14 @@ export function checkConfig(graph: GraphDoc): CheckResult[] {
     }
 
     if (parsed.type === "transform") {
+      // Phase 8a: per-op checkConfig (ops/registry.ts) replaces the
+      // hand-written filter/computed_field/aggregate if/else-if chain that
+      // used to live here — same messages, same "Node X: " wrapping,
+      // sourced from each op module instead.
       for (const [i, step] of parsed.value.steps.entries()) {
-        if (step.kind === "filter") {
-          for (const cond of step.conditions) {
-            if (cond.field === "") {
-              results.push({
-                id: "config",
-                status: "fail",
-                message: `Node ${nodeLabel(node)}: filter step ${i + 1} has a condition with no field selected.`,
-                nodeId: node.id,
-              });
-            }
-          }
-        } else if (step.kind === "computed_field") {
-          if (step.name === "") {
-            results.push({
-              id: "config",
-              status: "fail",
-              message: `Node ${nodeLabel(node)}: computed field step ${i + 1} has no output name.`,
-              nodeId: node.id,
-            });
-          }
-        } else if (step.kind === "aggregate") {
-          // Ruling 4 (docs/decisions.md): alias collisions must be checked
-          // against groupBy field names too, not just sibling aggregation
-          // aliases — an aggregation aliased to the same name as a groupBy
-          // field would silently overwrite it in the output row shape both
-          // the pushdown compiler and residualTransform.ts produce.
-          const seenNames = new Set<string>(step.groupBy);
-          for (const agg of step.aggregations) {
-            if (agg.alias === "") {
-              results.push({
-                id: "config",
-                status: "fail",
-                message: `Node ${nodeLabel(node)}: aggregate step ${i + 1} has an aggregation with no output alias.`,
-                nodeId: node.id,
-              });
-              continue;
-            }
-            if (agg.fn !== "count" && !agg.field) {
-              results.push({
-                id: "config",
-                status: "fail",
-                message: `Node ${nodeLabel(node)}: aggregate step ${i + 1}'s "${agg.alias}" aggregation (${agg.fn}) has no field selected.`,
-                nodeId: node.id,
-              });
-            }
-            if (seenNames.has(agg.alias)) {
-              results.push({
-                id: "config",
-                status: "fail",
-                message: `Node ${nodeLabel(node)}: aggregate step ${i + 1} has more than one output named "${agg.alias}" (aggregation alias or groupBy field).`,
-                nodeId: node.id,
-              });
-            }
-            seenNames.add(agg.alias);
-          }
-
-          // Ruling 2: a having condition may reference ONLY an aggregation
-          // alias or a groupBy field — never a raw upstream (pre-aggregate)
-          // field, since having runs against the aggregate's OUTPUT row
-          // (pushdown.ts's havingClauseToSql / residualTransform.ts's
-          // matchesCondition both operate on that output shape, not the
-          // input rows).
-          if (step.having) {
-            const allowedNames = new Set<string>([...step.groupBy, ...step.aggregations.map((a) => a.alias)]);
-            for (const cond of step.having) {
-              if (!allowedNames.has(cond.field)) {
-                results.push({
-                  id: "config",
-                  status: "fail",
-                  message: `Node ${nodeLabel(node)}: aggregate step ${i + 1}'s having condition references "${cond.field}", which is neither an aggregation alias nor a groupBy field on this step.`,
-                  nodeId: node.id,
-                });
-              }
-            }
-          }
+        const messages = opForStep(step).checkConfig?.(step, { index: i }) ?? [];
+        for (const message of messages) {
+          results.push({ id: "config", status: "fail", message: `Node ${nodeLabel(node)}: ${message}`, nodeId: node.id });
         }
       }
     } else if (node.type === "source" || node.type === "destination") {

@@ -134,3 +134,19 @@
     pushed per node — a second Aggregate step always falls to residual
     (the proven multi-level-rollup composition case above). Both are
     disclosed v1 limitations, not bugs.
+- **Phase 8a (op registry + dialect adapter seam) — shipped, see
+  `docs/decisions.md`'s matching entry for the full writeup.** One
+  remaining item is a **named blocking prerequisite, not a someday
+  item**: a shared DB-execution harness
+  (`packages/schemas/src/ops/__conformance__/fixtures.ts`'s `OP_FIXTURES`
+  run against a seeded sandbox DB, asserting real result rows, not just
+  emitted query shape) **must be built before the first new op (Phase
+  8b) lands** — shape-only conformance tests can't catch a wrong-but-
+  internally-consistent emission. Until then, `aggregate-smoke.ts` /
+  `aggregate-smoke-postgres-source.ts` / `dispatch-smoke.ts` remain the
+  DB-backed proof for the 4 existing ops.
+  Also flagged, not executed: `writeGrantStatement.ts`'s
+  `WriteGrantStatementDialect` (`"mongodb"`) still diverges from
+  `pushdown.ts`'s `SourceDialect` (`"mongo"`) — a small, behavior-neutral
+  rename onto the shared enum, recommended but deliberately left
+  untouched since it wasn't required by this phase's scope.

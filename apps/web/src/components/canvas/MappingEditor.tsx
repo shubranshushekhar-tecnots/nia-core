@@ -154,6 +154,7 @@ export default function MappingEditor({
   destNodeId,
   destConnectionId,
   sourceConnectionId,
+  sourceFieldsOverride,
   checkResults,
   onChange,
 }: {
@@ -162,12 +163,26 @@ export default function MappingEditor({
   destNodeId: string;
   destConnectionId?: string;
   sourceConnectionId?: string;
+  /**
+   * When a single Aggregate transform sits between the source and this
+   * destination, NodeDrawer.tsx computes the transform's actual output
+   * field names (pushdown.ts's transformOutputFields — groupBy columns +
+   * aggregation aliases) and passes them here, overriding the raw
+   * introspected source columns below: those raw columns don't exist in
+   * the query result once GROUP BY has run, so offering them in the "from"
+   * dropdown would let the user pick a field the run can never produce.
+   * Undefined (not just empty) means "no override" — falls back to
+   * useEntityFields(sourceConnectionId) unchanged, same as before this
+   * prop existed.
+   */
+  sourceFieldsOverride?: string[];
   /** Latest persisted check-run results (FlowCanvas's latestCheckRun.results), or null if none has run yet. Reused as-is to gate Preview — no new validation logic, see runPreview.ts's header comment. */
   checkResults?: CheckResult[] | null;
   onChange: (next: SourceDestConfig) => void;
 }) {
   const mapping = config.mapping ?? emptyMapping;
-  const sourceFields = useEntityFields(sourceConnectionId);
+  const rawSourceFields = useEntityFields(sourceConnectionId);
+  const sourceFields = sourceFieldsOverride ?? rawSourceFields;
   const destFields = useEntityFields(destConnectionId);
 
   const [proposing, setProposing] = useState(false);

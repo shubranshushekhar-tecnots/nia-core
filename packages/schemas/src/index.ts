@@ -7,6 +7,8 @@ export * from "./graph.js";
 export * from "./expression.js";
 export * from "./nodeConfig.js";
 export * from "./pushdown.js";
+export type { OpKind } from "./ops/types.js";
+export { OP_REGISTRY } from "./ops/registry.js";
 export * from "./residualTransform.js";
 export * from "./runEvents.js";
 export * from "./checks.js";

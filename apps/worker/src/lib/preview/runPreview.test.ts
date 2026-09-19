@@ -295,6 +295,40 @@ describe("runPreview", () => {
     expect(query.sql).not.toContain("WHERE"); // dialectQuery was never compiled across multiple nodes
   });
 
+  it("wraps a pushed aggregate step's GROUP BY/HAVING into a subquery and applies the mapping projection on top (regression: buildPreviewQuery used to drop groupBySql/havingSql entirely)", async () => {
+    const g = graph({
+      transforms: ["t1"],
+      mapping: approvedMapping([
+        { from: "region", to: "region" },
+        { from: "order_count", to: "order_count" },
+      ]),
+    });
+    g.nodes.find((n) => n.id === "src")!.config = { entity: { namespace: "public", name: "orders" } };
+    g.nodes.find((n) => n.id === "t1")!.config = {
+      steps: [
+        {
+          kind: "aggregate",
+          groupBy: ["region"],
+          aggregations: [{ fn: "count", field: null, alias: "order_count" }],
+          having: [{ field: "order_count", operator: "gte", value: 20 }],
+        },
+      ],
+    };
+    getSchemaMock.mockResolvedValueOnce(schema(["id", "region", "total"], "orders"));
+    resolveGraphMock.mockResolvedValueOnce(g);
+
+    const result = await runPreview(baseJob());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const [, query] = dispatchMock.mock.calls[0]!;
+    expect(query.sql).toBe(
+      "SELECT `region` AS `region`, `order_count` AS `order_count` FROM " +
+        "(SELECT `region`, COUNT(*) AS `order_count` FROM `public`.`orders` GROUP BY `region` HAVING (COUNT(*) >= ?)) AS agg",
+    );
+    expect(query.params).toEqual([20]);
+  });
+
   it("fails with dispatch-failed when dispatch() reports an error", async () => {
     dispatchMock.mockResolvedValueOnce({ ok: false, error: { kind: "guardrail-rejected", message: "boom" } });
 

@@ -113,6 +113,18 @@ function quoteIdent(name: string, dialect: "mysql" | "postgres"): string {
  * fragment the pushdown compiler produced. Never includes anything beyond
  * SELECT/aggregation-read stages — see isReadShaped's defense-in-depth
  * check at the call site.
+ *
+ * Aggregate branch (`sqlQuery.isAggregate`): `selectSql` is a FULL
+ * REPLACEMENT list (groupBy columns + `agg AS alias` expressions — see
+ * pushdown.ts's SqlDialectQuery.selectSql doc comment), and GROUP BY/HAVING
+ * must run before the mapping's projection can apply — unlike the
+ * non-aggregate branch below, the mapping can't just be spliced onto one
+ * flat SELECT. Wrapped as a subquery instead: the inner statement mirrors
+ * buildEtlReadQuery's real-run aggregate shape (queryBuilder.ts) exactly
+ * (SELECT/FROM/WHERE/GROUP BY/HAVING, no LIMIT — the outer dispatch() call
+ * already caps rowCap), and the outer SELECT applies the mapping's from->to
+ * projection against the inner query's own column names (groupBy fields /
+ * aggregation aliases), same as the flat non-aggregate case.
  */
 function buildPreviewQuery(
   dialect: SourceDialect,
@@ -128,10 +140,20 @@ function buildPreviewQuery(
     return { kind: "mongo", collection: entity.name, pipeline };
   }
 
-  const selectParts = mappingEntries.map((e) => `${quoteIdent(e.from, dialect)} AS ${quoteIdent(e.to, dialect)}`);
   const sqlQuery = dialectQuery && dialectQuery.dialect !== "mongo" ? dialectQuery : null;
-  if (sqlQuery?.selectSql) selectParts.push(sqlQuery.selectSql);
   const from = `${quoteIdent(entity.namespace, dialect)}.${quoteIdent(entity.name, dialect)}`;
+
+  if (sqlQuery?.isAggregate) {
+    const where = sqlQuery.whereSql ? ` WHERE ${sqlQuery.whereSql}` : "";
+    const groupBy = sqlQuery.groupBySql ? ` GROUP BY ${sqlQuery.groupBySql}` : "";
+    const having = sqlQuery.havingSql ? ` HAVING ${sqlQuery.havingSql}` : "";
+    const inner = `SELECT ${sqlQuery.selectSql} FROM ${from}${where}${groupBy}${having}`;
+    const outerParts = mappingEntries.map((e) => `${quoteIdent(e.from, dialect)} AS ${quoteIdent(e.to, dialect)}`);
+    return { kind: "sql", sql: `SELECT ${outerParts.join(", ")} FROM (${inner}) AS agg`, params: sqlQuery.params };
+  }
+
+  const selectParts = mappingEntries.map((e) => `${quoteIdent(e.from, dialect)} AS ${quoteIdent(e.to, dialect)}`);
+  if (sqlQuery?.selectSql) selectParts.push(sqlQuery.selectSql);
   const where = sqlQuery?.whereSql ? ` WHERE ${sqlQuery.whereSql}` : "";
   return { kind: "sql", sql: `SELECT ${selectParts.join(", ")} FROM ${from}${where}`, params: sqlQuery?.params ?? [] };
 }

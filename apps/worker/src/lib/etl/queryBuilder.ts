@@ -1,4 +1,4 @@
-import type { DialectQuery, QueryPayload, SourceDialect } from "@nia/schemas";
+import { mysqlAdapter, postgresAdapter, type DialectQuery, type QueryPayload, type SourceDialect, type SqlDialectAdapter } from "@nia/schemas";
 
 /**
  * Phase 6 Block 3 (offset pagination) / Block 3.5 (keyset pagination) —
@@ -35,9 +35,8 @@ import type { DialectQuery, QueryPayload, SourceDialect } from "@nia/schemas";
 /** Guardrails cap every query's effective row count at 1000 regardless of what's requested (packages/guardrails/src/sql/validator.ts and mongodb.ts) — clamping here makes that explicit instead of silently truncated downstream. */
 export const MAX_CHUNK_ROWS = 1000;
 
-function quoteIdent(name: string, dialect: "mysql" | "postgres"): string {
-  if (dialect === "mysql") return `\`${name.replace(/`/g, "``")}\``;
-  return `"${name.replace(/"/g, '""')}"`;
+function sqlAdapterFor(dialect: "mysql" | "postgres"): SqlDialectAdapter {
+  return dialect === "mysql" ? mysqlAdapter : postgresAdapter;
 }
 
 export function buildEtlReadQuery(
@@ -61,8 +60,9 @@ export function buildEtlReadQuery(
     return { kind: "mongo", collection: entity.name, pipeline };
   }
 
+  const adapter = sqlAdapterFor(dialect);
   const sqlQuery = dialectQuery && dialectQuery.dialect !== "mongo" ? dialectQuery : null;
-  const from = `${quoteIdent(entity.namespace, dialect)}.${quoteIdent(entity.name, dialect)}`;
+  const from = `${adapter.quoteIdent(entity.namespace)}.${adapter.quoteIdent(entity.name)}`;
 
   if (sqlQuery?.isAggregate) {
     // No keyset pagination — GROUP BY has already collapsed the source primary key. Single non-paginated run, capped by limit (see this file's header comment).
@@ -82,14 +82,14 @@ export function buildEtlReadQuery(
   }
   const selectParts = ["*"];
   if (sqlQuery?.selectSql) selectParts.push(sqlQuery.selectSql);
-  const quotedKey = quoteIdent(keyColumn, dialect);
+  const quotedKey = adapter.quoteIdent(keyColumn);
   const params = [...(sqlQuery?.params ?? [])];
   const conditions = sqlQuery?.whereSql ? [sqlQuery.whereSql] : [];
   if (cursor !== null) {
     // params are positional (?/$n resolved downstream per-dialect by the
     // connector, same convention as sqlQuery.params) — the cursor param is
     // appended last since it's added last to `conditions`.
-    conditions.push(`${quotedKey} > ${dialect === "mysql" ? "?" : `$${params.length + 1}`}`);
+    conditions.push(`${quotedKey} > ${adapter.placeholder(params.length + 1)}`);
     params.push(cursor);
   }
   const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";

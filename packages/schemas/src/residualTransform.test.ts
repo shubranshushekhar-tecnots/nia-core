@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { applyResidualTransforms } from "./residualTransform.js";
+import { parseExpression } from "./expression.js";
 import type { AggregateStep } from "./nodeConfig.js";
+
+function expr(src: string) {
+  const parsed = parseExpression(src);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return parsed.expr;
+}
 
 describe("applyResidualTransforms — aggregate", () => {
   const columns = ["cohort", "salary", "dept"];
@@ -99,7 +106,7 @@ describe("applyResidualTransforms — aggregate", () => {
       kind: "aggregate",
       groupBy: ["cohort"],
       aggregations: [{ fn: "sum", field: "salary", alias: "total" }],
-      having: [{ field: "total", operator: "gt", value: 300 }],
+      having: expr("total > 300"),
     };
 
     const result = applyResidualTransforms(columns, rows, [step]);
@@ -112,7 +119,7 @@ describe("applyResidualTransforms — aggregate", () => {
       kind: "aggregate",
       groupBy: ["cohort"],
       aggregations: [{ fn: "count", field: null, alias: "n" }],
-      having: [{ field: "cohort", operator: "eq", value: "sales" }],
+      having: expr('cohort = "sales"'),
     };
 
     const result = applyResidualTransforms(columns, rows, [step]);
@@ -122,7 +129,7 @@ describe("applyResidualTransforms — aggregate", () => {
 
   it("chains after a filter step (residual composition)", () => {
     const result = applyResidualTransforms(columns, rows, [
-      { kind: "filter", conditions: [{ field: "dept", operator: "eq", value: "core" }] },
+      { kind: "filter", expr: expr('dept = "core"') },
       {
         kind: "aggregate",
         groupBy: ["cohort"],

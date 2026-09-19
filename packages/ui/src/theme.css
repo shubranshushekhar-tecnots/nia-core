@@ -169,7 +169,7 @@
   --warn-bg: rgba(245, 158, 11, .08);
   --warn-bd: rgba(245, 158, 11, .28);
   --info: #0EA5E9;
-  --font-display: 'Satoshi', system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-geist), system-ui, -apple-system, sans-serif;
   --font-ui: 'Satoshi', system-ui, -apple-system, sans-serif;
   --shadow: 0 20px 48px rgba(15, 23, 42, .12);
   --drop: 0 12px 28px rgba(15, 23, 42, .10);
@@ -188,8 +188,9 @@
   --ink4: var(--text-4);
   --line2: var(--line-strong);
   --acc: #5A3FD8;
-  --canvas: #F6F6F9;
-  --dot: #D8D7E1;
+  --canvas: #F4F4F7;
+  --canvas-dot: #C3C7D1;
+  --canvas-gap: 20px;
 
   /* Chat surface (Home/App.html's orphaned `// ---------- chat ----------`
      view-model — never actually rendered by the design's own JSX, but its
@@ -229,9 +230,11 @@
   --acc-soft: #EFEBFD;
   --acc-soft-text: #4B30C4;
   --acc-soft-bd: #E1DAFB;
-  --edge-stroke: #B3ADCF;
-  --card-line: #E4E3EB;
-  --card-shadow: 0 1px 2px rgba(22, 21, 31, .05), 0 4px 12px rgba(22, 21, 31, .05);
+  --edge-stroke: #B9BCC7;
+  --handle-ring-source: #14B8A6;
+  --handle-ring-sink: #6366F1;
+  --card-line: rgba(17, 24, 39, .07);
+  --card-shadow: 0 1px 2px rgba(16, 18, 27, .08), 0 12px 28px rgba(16, 18, 27, .10);
   --floating-panel-shadow: 0 16px 40px rgba(22, 21, 31, .12), 0 2px 6px rgba(22, 21, 31, .05);
   --popover-shadow: 0 24px 56px rgba(15, 23, 42, .16);
 
@@ -292,7 +295,7 @@
   --bad: #EF4444;
   --bad-bg: rgba(239, 68, 68, .08);
   --bad-bd: rgba(239, 68, 68, .28);
-  --font-display: 'Satoshi', system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-geist), system-ui, -apple-system, sans-serif;
   --font-ui: 'Satoshi', system-ui, -apple-system, sans-serif;
   --font-data: 'JetBrains Mono', ui-monospace, monospace;
   --shadow: 0 12px 32px -12px rgba(15, 23, 42, .10);
@@ -400,6 +403,21 @@ button, a { font-family: inherit; }
 .reveal { transition: opacity .6s cubic-bezier(.2, .7, .2, 1), transform .6s cubic-bezier(.2, .7, .2, 1); }
 body.armed .reveal { opacity: 0; transform: translateY(18px); }
 body.armed .reveal.in { opacity: 1; transform: none; }
+
+/* ------------------------------------------------------------
+   Workflow canvas — React Flow surface overrides. The dot-grid's ground
+   color is set via <Background>'s own `bgColor` prop (FlowCanvas.tsx),
+   NOT a `.react-flow__pane` CSS override — .react-flow__pane sits at
+   z-index 1, above .react-flow__background's z-index -1 dots layer, so
+   giving the pane an opaque background paints over and completely hides
+   the dots. This class only ever renders inside FlowCanvas.tsx, and that
+   page root already sets data-app-theme/data-om-theme="light", so no
+   extra scoping is needed.
+   ------------------------------------------------------------ */
+.react-flow__edge-path {
+  stroke: var(--edge-stroke);
+  stroke-width: 1.5px;
+}
 
 @media (max-width: 1200px) { .orings { transform: scale(.82); } }
 @media (max-width: 960px) { .orings { transform: scale(.62); } }

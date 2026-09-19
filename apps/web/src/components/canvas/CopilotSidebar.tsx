@@ -65,7 +65,11 @@ export default function CopilotSidebar({
       const drag = dragRef.current;
       if (!drag) return;
       // Panel is right-anchored — dragging left (negative deltaX) grows it.
-      const next = Math.min(COPILOT_WIDTH_MAX, Math.max(COPILOT_WIDTH_MIN, drag.startWidth + (drag.startX - e.clientX)));
+      // Also cap against the viewport (leave at least 320px for the canvas
+      // itself) so COPILOT_WIDTH_MAX doesn't overflow on narrower screens.
+      const viewportCap = Math.max(COPILOT_WIDTH_MIN, window.innerWidth - 320);
+      const max = Math.min(COPILOT_WIDTH_MAX, viewportCap);
+      const next = Math.min(max, Math.max(COPILOT_WIDTH_MIN, drag.startWidth + (drag.startX - e.clientX)));
       setWidth(next);
     }
     function onUp() {

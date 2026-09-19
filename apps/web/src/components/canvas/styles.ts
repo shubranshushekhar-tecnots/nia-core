@@ -9,18 +9,32 @@ import type { CSSProperties } from 'react';
  * applying to new work, not a retroactive refactor of frozen files.
  */
 
-// ---------- page root (icon rail | FlowCanvas column) ----------
+// ---------- page root (header on top, icon rail | FlowCanvas below) ----------
 
-// Replaces AppShell.tsx's shellRootStyle for this one route only — full
-// viewport, icon rail + FlowCanvas as a row. See page.tsx's doc comment.
+// Mirrors AppShell.tsx's shellRootStyle/shellBodyStyle split exactly (full-
+// width header strip on top, Sidebar + content row below it) so the rail
+// sits in the same place on every /app/* route — this route used to put
+// the header only above the content column (row: rail | header+canvas),
+// leaving the rail's own logo flush with the viewport top instead of
+// sitting below the header like everywhere else. Column now, not row; see
+// canvasShellRowStyle for the row underneath.
 export const canvasPageRootStyle: CSSProperties = {
   position: 'fixed',
   inset: 0,
   display: 'flex',
-  flexDirection: 'row',
+  flexDirection: 'column',
   background: 'var(--canvas)',
   color: 'var(--ink)',
   fontFamily: 'var(--font-ui)',
+};
+
+// Sidebar + canvasBodyStyle row, below CanvasHeader — the canvas-route
+// equivalent of app/styles.ts's shellBodyStyle.
+export const canvasShellRowStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'row',
 };
 
 // ---------- shell row (rail | canvas-surface | copilot) ----------
@@ -71,23 +85,17 @@ export const canvasColumnStyle: CSSProperties = {
   position: 'relative',
 };
 
-// ---------- app icon rail (page-level, sibling of FlowCanvas — CanvasIconRail.tsx) ----------
+// ---------- icon rail chrome (shared by app/Sidebar.tsx everywhere, including the canvas route) ----------
 
-// 56px collapsed / 200px expanded max — session-only `railW` state in
-// CanvasIconRail.tsx, no persistence. Draggable via a handle on the rail's
-// right edge (mirrors app/Sidebar.tsx's railW/RAIL_COLLAPSE_THRESHOLD
-// pattern, just at this rail's own narrower scale) as well as a footer
-// toggle button for a plain click-to-expand/collapse. Every row stays
-// icon-first; expanding only reveals a label alongside each icon rather than
-// restructuring row layout.
-export const ICON_RAIL_WIDTH_COLLAPSED = 56;
-export const ICON_RAIL_WIDTH_EXPANDED = 200;
-// Below this live drag width the rail commits to fully collapsed rather
-// than continuing to shrink further.
-export const ICON_RAIL_COLLAPSE_THRESHOLD = 130;
-
-export const iconRailStyle = (width: number, dragging: boolean): CSSProperties => {
-  const expanded = width > ICON_RAIL_COLLAPSE_THRESHOLD;
+// Originally canvas-route-only (CanvasIconRail.tsx); app/Sidebar.tsx is now
+// the single sidebar used on every /app/* route, including the canvas
+// builder, and imports these for its visual chrome (Logo header, compact
+// icon nav rows, footer) while keeping its own Projects tree/org-gating
+// logic. `width`/`dragging` still come from the shared app/store.ts
+// useAppShellStore, and `expanded` mirrors Sidebar's own
+// `wide = railW >= RAIL_MIN_WIDTH` — there's only one rail now, so there's
+// nothing left to fall out of sync.
+export const iconRailStyle = (width: number, dragging: boolean, expanded: boolean): CSSProperties => {
   return {
     flex: 'none',
     width,
@@ -163,15 +171,21 @@ export const iconRailExpandToggleStyle: CSSProperties = {
   marginTop: 4,
 };
 
-export const iconRailScrollStyle: CSSProperties = {
+// `alignItems` must mirror iconRailStyle's own expanded/collapsed switch:
+// centered so the 36px icon-only buttons stay centered when collapsed, but
+// stretched when expanded — otherwise flex children with no explicit width
+// (navGroupLabelStyle, projectsNestStyle) shrink-to-fit and center instead
+// of spanning the rail, which is what produced the floating/indented
+// "PROJECTS" label and project-tree rows bug.
+export const iconRailScrollStyle = (expanded: boolean = true): CSSProperties => ({
   flex: 1,
   minHeight: 0,
   display: 'flex',
   flexDirection: 'column',
-  alignItems: 'center',
+  alignItems: expanded ? 'stretch' : 'center',
   overflowY: 'auto',
   width: '100%',
-};
+});
 
 export const iconRailFooterStyle: CSSProperties = {
   flex: 'none',
@@ -581,7 +595,7 @@ export const configPanelDeleteBtnStyle: CSSProperties = {
 
 export const COPILOT_WIDTH_DEFAULT = 320;
 export const COPILOT_WIDTH_MIN = 280;
-export const COPILOT_WIDTH_MAX = 520;
+export const COPILOT_WIDTH_MAX = 920;
 
 // Curved on its left edge only — top/right/bottom stay flush with the
 // screen/app edge (full height, no margin, square corners there), matching
@@ -656,17 +670,12 @@ export const copilotChatAreaStyle: CSSProperties = {
 };
 
 // ---------- top bar ----------
-
-export const topBarStyle: CSSProperties = {
-  flex: 'none',
-  height: 48,
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-  padding: '0 16px',
-  borderBottom: '1px solid var(--panel-line)',
-  background: 'var(--surface)',
-};
+//
+// CanvasHeader now imports the shared `topBarStyle` from app/styles.ts
+// instead of a local copy — this file used to define its own (48px,
+// `--panel-line` border) which drifted from the app shell's TopBar (52px,
+// `--line` border), producing a visible header height/border jump when
+// navigating between /app pages and the workflow canvas.
 
 // ---------- header action buttons (Run checks / Run) ----------
 

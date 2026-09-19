@@ -5,56 +5,66 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { SidebarProject } from '@/lib/dashboard/types';
 import type { ActorRole } from '@nia/schemas';
+import Logo from '@/components/Logo';
 import {
-  createWorkflowBtnStyle,
   dropdownItemStyle,
-  dropdownStyle,
   dropdownStyleUp,
-  navChevronStyle,
   navGroupLabelStyle,
-  navItemStyle,
-  navScrollStyle,
   newProjectRowStyle,
   projectChevronStyle,
   projectRowStyle,
   projectsNestStyle,
-  projectsParentRowStyle,
-  railHandleStyle,
   RAIL_COLLAPSE_THRESHOLD,
   RAIL_COLLAPSED_WIDTH,
   RAIL_MAX_WIDTH,
   RAIL_MIN_WIDTH,
   settingsEmailRowStyle,
-  sidebarFooterStyle,
-  sidebarStyle,
-  sidebarUserAvatarStyle,
-  sidebarUserEmailStyle,
-  sidebarUserRoleStyle,
-  sidebarUserRowStyle,
-  sidebarUserTextColStyle,
   statusDotStyle,
   treeLabelStyle,
   workflowRowStyle,
 } from './styles';
+import {
+  iconRailBtnLabelStyle,
+  iconRailBtnStyle,
+  iconRailExpandToggleStyle,
+  iconRailFooterStyle,
+  iconRailHandleStyle,
+  iconRailScrollStyle,
+  iconRailStyle,
+} from '@/components/canvas/styles';
+import {
+  BillingIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ConnectionsIcon,
+  HomeIcon,
+  PlusIcon,
+  ProjectsIcon,
+  SettingsIcon,
+} from '@/components/canvas/navIcons';
 import { useAppShellStore } from './store';
 import CreateProjectDialog from './CreateProjectDialog';
 import CreateWorkflowDialog from './CreateWorkflowDialog';
 
-// Nav structure mirrors designs/Nia Core App.html's `NAV` array exactly:
-// Org dashboard, Home, Projects (tree), Platform group (Connections,
-// Members & roles, Audit log). "Run history" / "Recently deleted" only
-// live in the design's command palette, never in this sidebar.
-// Org dashboard / Members & roles / Audit log pages are Step 3 work not
-// yet built, so — like the design's own "soon"-suffixed demo items — they
-// render disabled for now; Connections and Billing already have real
-// pages so those are live links.
-const ROLE_LABEL: Record<ActorRole, string> = {
-  individual: 'Individual',
-  member: 'Member',
-  admin: 'Admin',
-  owner: 'Owner',
-};
-
+/**
+ * The ONE sidebar used everywhere under /app/*, including the workflow
+ * canvas — previously the canvas route rendered its own separate
+ * CanvasIconRail.tsx, which had drifted both visually (no logo, unicode nav
+ * glyphs, unicode Sign out avatar overlapping its own label — a real
+ * layout bug) and functionally (no Projects tree, no org-governance
+ * placeholder items) from this component. Per UI feedback ("keep only one,
+ * use the Canvas one — it looks better, but keep the tree/org items"),
+ * this now carries CanvasIconRail's visual chrome (Logo header, compact
+ * icon "+New" button, SVG nav icons, footer Sign-out + Collapse toggle)
+ * while keeping this file's own Projects tree, org-governance gating, and
+ * railSnapping drag animation — nothing lost by consolidating.
+ *
+ * Nav structure mirrors designs/Nia Core App.html's `NAV` array: Org
+ * dashboard, Home, Projects (tree), Platform group (Connections, Members &
+ * roles, Audit log). Org dashboard / Members & roles / Audit log pages are
+ * Step 3 work not yet built, so they render disabled; Connections and
+ * Billing already have real pages so those are live links.
+ */
 export default function Sidebar({
   orgId,
   role,
@@ -167,21 +177,33 @@ export default function Sidebar({
   // billing.view capability in packages/schemas/src/can.ts, which is a
   // deeper permission check, not sidebar-visibility.)
   const canBilling = role !== 'member';
-  const initials = email.slice(0, 2).toUpperCase();
 
   return (
-    <nav style={sidebarStyle(railW, railDrag && !railSnapping)} aria-label="Primary">
-      <div style={{ position: 'relative', margin: '14px 14px 12px' }}>
+    <nav style={iconRailStyle(railW, railDrag && !railSnapping, wide)} aria-label="Primary">
+      <div
+        onPointerDown={handleRailPointerDown}
+        onDoubleClick={handleRailDoubleClick}
+        title="Drag to resize \u00b7 double-click to toggle"
+        style={iconRailHandleStyle(railDrag)}
+      />
+
+      <div style={{ padding: wide ? '0 8px 12px' : '0 0 12px', display: 'flex' }}>
+        <Logo size={24} showWordmark={wide} />
+      </div>
+
+      <div style={{ position: 'relative', width: wide ? '100%' : 'auto' }}>
         <button
           type="button"
-          style={{ ...createWorkflowBtnStyle, margin: 0, width: '100%' }}
+          style={iconRailBtnStyle(showCreateMenu, wide)}
           onClick={() => setShowCreateMenu((v) => !v)}
+          aria-label="New"
+          title="New workflow or project"
         >
-          <span aria-hidden>+</span>
-          {wide && <span>New workflow</span>}
+          <PlusIcon size={16} />
+          {wide && <span style={iconRailBtnLabelStyle}>New</span>}
         </button>
         {showCreateMenu && (
-          <div style={{ ...dropdownStyle, left: 0, minWidth: 196 }} onMouseLeave={() => setShowCreateMenu(false)}>
+          <div style={{ ...dropdownStyleUp, left: wide ? 8 : 44, top: 'auto', bottom: 0, minWidth: 196 }} onMouseLeave={() => setShowCreateMenu(false)}>
             <button
               type="button"
               style={dropdownItemStyle}
@@ -206,26 +228,22 @@ export default function Sidebar({
         )}
       </div>
 
-      <div style={navScrollStyle}>
+      <div style={iconRailScrollStyle(wide)}>
         {canManageOrg && (
           <button
             type="button"
-            style={{ ...navItemStyle(false, wide), color: 'var(--text-4)', cursor: 'default' }}
+            style={{ ...iconRailBtnStyle(false, wide), color: 'var(--ink4)', cursor: 'default', opacity: 0.6 }}
             disabled
-            title={wide ? undefined : 'Org dashboard \u2014 soon'}
+            title="Org dashboard \u2014 soon"
           >
             <span aria-hidden>{'\u25D1'}</span>
-            {wide && <span>Org dashboard {'\u2014'} soon</span>}
+            {wide && <span style={iconRailBtnLabelStyle}>Org dashboard {'\u2014'} soon</span>}
           </button>
         )}
 
-        <a
-          href="/app"
-          style={{ ...navItemStyle(pathname === '/app', wide), textDecoration: 'none', display: 'flex' }}
-          title={wide ? undefined : 'Home'}
-        >
-          <span aria-hidden>{'\u2302'}</span>
-          {wide && <span>Home</span>}
+        <a href="/app" style={{ ...iconRailBtnStyle(pathname === '/app', wide), textDecoration: 'none' }} aria-label="Home" title="Home">
+          <HomeIcon size={16} />
+          {wide && <span style={iconRailBtnLabelStyle}>Home</span>}
         </a>
 
         {wide && <div style={navGroupLabelStyle}>Projects</div>}
@@ -233,12 +251,25 @@ export default function Sidebar({
         <Link
           href="/app/projects"
           onClick={toggleNavProjectsOpen}
-          style={{ ...projectsParentRowStyle(isProjectsNavActive, wide), textDecoration: 'none' }}
-          title={wide ? undefined : 'Projects'}
+          style={{ ...iconRailBtnStyle(isProjectsNavActive, wide), textDecoration: 'none' }}
+          aria-label="Projects"
+          title="Projects"
         >
-          <span aria-hidden style={{ fontSize: 13, color: 'var(--text-3)' }}>{'\u25A4'}</span>
-          {wide && <span style={{ flex: 1 }}>Projects</span>}
-          {wide && <span aria-hidden style={navChevronStyle(navProjectsOpen)}>{'\u203A'}</span>}
+          <ProjectsIcon size={16} />
+          {wide && <span style={{ ...iconRailBtnLabelStyle, flex: 1 }}>Projects</span>}
+          {wide && (
+            <span
+              aria-hidden
+              style={{
+                flex: 'none',
+                display: 'flex',
+                transform: navProjectsOpen ? 'rotate(90deg)' : 'none',
+                transition: 'transform .16s ease',
+              }}
+            >
+              <ChevronRightIcon size={12} />
+            </span>
+          )}
         </Link>
 
         {wide && navProjectsOpen && (
@@ -280,85 +311,83 @@ export default function Sidebar({
         )}
 
         {wide && <div style={navGroupLabelStyle}>Platform</div>}
+
         <a
           href="/app/connections"
-          style={{ ...navItemStyle(pathname === '/app/connections', wide), textDecoration: 'none', display: 'flex' }}
-          title={wide ? undefined : 'Connections'}
+          style={{ ...iconRailBtnStyle(pathname === '/app/connections', wide), textDecoration: 'none' }}
+          aria-label="Connections"
+          title="Connections"
         >
-          <span aria-hidden style={{ fontSize: 13, color: 'var(--text-3)' }}>{'\u25A6'}</span>
-          {wide && <span>Connections</span>}
+          <ConnectionsIcon size={16} />
+          {wide && <span style={iconRailBtnLabelStyle}>Connections</span>}
         </a>
 
         {canManageOrg && (
           <button
             type="button"
-            style={{ ...navItemStyle(false, wide), color: 'var(--text-4)', cursor: 'default' }}
+            style={{ ...iconRailBtnStyle(false, wide), color: 'var(--ink4)', cursor: 'default', opacity: 0.6 }}
             disabled
-            title={wide ? undefined : 'Members & roles \u2014 soon'}
+            title="Members & roles \u2014 soon"
           >
             <span aria-hidden>{'\u2687'}</span>
-            {wide && <span>Members & roles {'\u2014'} soon</span>}
+            {wide && <span style={iconRailBtnLabelStyle}>Members & roles {'\u2014'} soon</span>}
           </button>
         )}
 
         {canManageOrg && (
           <button
             type="button"
-            style={{ ...navItemStyle(false, wide), color: 'var(--text-4)', cursor: 'default' }}
+            style={{ ...iconRailBtnStyle(false, wide), color: 'var(--ink4)', cursor: 'default', opacity: 0.6 }}
             disabled
-            title={wide ? undefined : 'Audit log \u2014 soon'}
+            title="Audit log \u2014 soon"
           >
             <span aria-hidden>{'\u2261'}</span>
-            {wide && <span>Audit log {'\u2014'} soon</span>}
+            {wide && <span style={iconRailBtnLabelStyle}>Audit log {'\u2014'} soon</span>}
           </button>
         )}
       </div>
 
-      <div
-        onPointerDown={handleRailPointerDown}
-        onDoubleClick={handleRailDoubleClick}
-        title="Drag to resize \u00b7 drag further to collapse"
-        style={railHandleStyle(railDrag)}
-      />
-
-      <div style={sidebarFooterStyle}>
+      <div style={iconRailFooterStyle}>
         {canBilling && (
           <a
             href="/app/billing"
-            style={{ ...navItemStyle(pathname === '/app/billing', wide), textDecoration: 'none', display: 'flex' }}
-            title={wide ? undefined : 'Billing'}
+            style={{ ...iconRailBtnStyle(pathname === '/app/billing', wide), textDecoration: 'none' }}
+            aria-label="Billing"
+            title="Billing"
           >
-            <span aria-hidden>{'\u25AD'}</span>
-            {wide && <span>Billing</span>}
+            <BillingIcon size={16} />
+            {wide && <span style={iconRailBtnLabelStyle}>Billing</span>}
           </a>
         )}
 
-        <div style={{ position: 'relative' }}>
+        <div style={{ position: 'relative', width: wide ? '100%' : 'auto' }}>
           <button
             type="button"
-            style={navItemStyle(false, wide)}
+            style={iconRailBtnStyle(showSettingsMenu, wide)}
             onClick={() => setShowSettingsMenu((v) => !v)}
-            title={wide ? undefined : 'Settings'}
+            aria-label="Settings"
+            title="Settings"
           >
-            <span aria-hidden>{'\u2699'}</span>
-            {wide && <span>Settings</span>}
+            <SettingsIcon size={16} />
+            {wide && <span style={iconRailBtnLabelStyle}>Settings</span>}
           </button>
           {showSettingsMenu && (
-            <div style={dropdownStyleUp} onMouseLeave={() => setShowSettingsMenu(false)}>
+            <div style={{ ...dropdownStyleUp, left: wide ? 8 : 44, bottom: 0 }} onMouseLeave={() => setShowSettingsMenu(false)}>
               <div style={settingsEmailRowStyle}>{email}</div>
             </div>
           )}
         </div>
 
-        <div style={sidebarUserRowStyle(wide)} title={wide ? undefined : `${email} \u00b7 ${ROLE_LABEL[role]}`}>
-          <span style={sidebarUserAvatarStyle} aria-hidden>{initials}</span>
-          {wide && (
-            <span style={sidebarUserTextColStyle}>
-              <span style={sidebarUserEmailStyle}>{email}</span>
-              <span style={sidebarUserRoleStyle}>{ROLE_LABEL[role]}</span>
-            </span>
-          )}
-        </div>
+        <button
+          type="button"
+          style={iconRailExpandToggleStyle}
+          onClick={toggleRailCollapse}
+          aria-label={wide ? 'Collapse sidebar' : 'Expand sidebar'}
+          title={wide ? 'Collapse sidebar' : 'Expand sidebar'}
+        >
+          {wide ? <ChevronLeftIcon size={14} /> : <ChevronRightIcon size={14} />}
+          {wide && <span>Collapse</span>}
+        </button>
       </div>
 
       {showCreateProject && <CreateProjectDialog orgId={orgId} onClose={() => setShowCreateProject(false)} />}

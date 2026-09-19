@@ -27,6 +27,7 @@ import {
   connectionsConnectorCardStyle,
   connectionsConnectorDescStyle,
   connectionsConnectorIndexStyle,
+  connectionsConnectorLogoStyle,
   connectionsConnectorNameStyle,
   connectionsConnectorTagStyle,
   connectionsConnectorTagsStyle,
@@ -76,6 +77,7 @@ import {
 } from './styles';
 import AddConnectionDialog from './AddConnectionDialog';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
+import { CONNECTOR_ICONS, getConnectorIcon } from '@/components/canvas/icons';
 
 type ConnectionBadge = {
   id: string;
@@ -151,6 +153,17 @@ const REAL_CONNECTOR_META: Record<string, { description: string; tags: string[];
     graphic: 'cards',
   },
 };
+
+// Real vendor logo (canvas/icons.tsx's CONNECTOR_ICONS registry — same
+// source used on canvas nodes) when one exists for this connector id;
+// falls back to initials text for ids without a real logo yet (nothing
+// today — all 3 shipped connectors have one — but future manifests may
+// land before their logo does).
+function ConnectorLogo({ id, size, fallback }: { id: string; size: number; fallback: string }) {
+  if (!CONNECTOR_ICONS[id]) return <>{fallback}</>;
+  const Icon = getConnectorIcon(id);
+  return <Icon size={size} />;
+}
 
 // Decorative bottom-right graphic ported from the design: most connectors
 // get the skewed "stacked cards" motif; AI-vector connectors get a sphere.
@@ -517,7 +530,9 @@ export default function ConnectionsClient({
           <div style={connectionsProviderListStyle}>
             {filteredProviders.map((p) => (
               <div key={p.id} style={connectionsProviderRowStyle(true)}>
-                <span style={connectionsProviderIconStyle}>{p.initials}</span>
+                <span style={connectionsProviderIconStyle}>
+                  <ConnectorLogo id={p.id} size={18} fallback={p.initials} />
+                </span>
                 <span style={connectionsProviderNameColStyle}>
                   <span style={connectionsProviderNameStyle}>{p.name}</span>
                   <span style={connectionsProviderMetaStyle}>
@@ -627,6 +642,11 @@ export default function ConnectionsClient({
                 ) : (
                   <>
                     <ConnectorGraphic type={c.graphic} />
+                    {CONNECTOR_ICONS[c.id] && (
+                      <span style={connectionsConnectorLogoStyle}>
+                        <ConnectorLogo id={c.id} size={22} fallback={c.name.slice(0, 2)} />
+                      </span>
+                    )}
                     {c.index && <span style={connectionsConnectorIndexStyle}>{c.index}</span>}
                     <span style={connectionsConnectorNameStyle}>{c.name}</span>
                     <span style={connectionsConnectorDescStyle}>{c.description}</span>

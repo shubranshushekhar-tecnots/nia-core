@@ -17,8 +17,8 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, type Plan } from '@nia/schemas';
-import type { WorkflowDetail } from '@/lib/dashboard/types';
+import { CONNECTOR_MANIFESTS, type ActorRole, type Plan } from '@nia/schemas';
+import type { SidebarProject, WorkflowDetail } from '@/lib/dashboard/types';
 import type { Connection } from '@/lib/connections/types';
 import type { ChatMessage, Conversation } from '@/lib/api/chatServer';
 import {
@@ -39,6 +39,7 @@ import { useCanvasStore } from '@/lib/canvas/store';
 import { useChatSession } from '@/lib/chat/useChatSession';
 import { buildActivityFeed, type ActivityItem } from '@/lib/canvas/activityFeed';
 import Logo from '@/components/Logo';
+import Sidebar from '@/components/app/Sidebar';
 import GraphFlowNode from './GraphFlowNode';
 import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRail';
 import NodeConfigPanel from './NodeConfigPanel';
@@ -50,6 +51,8 @@ import {
   canvasBodyStyle,
   canvasColumnStyle,
   canvasFullscreenWrapStyle,
+  canvasPageRootStyle,
+  canvasShellRowStyle,
   canvasSurfaceStyle,
   fullViewBreadcrumbStyle,
   fullViewControlsStyle,
@@ -81,14 +84,22 @@ function useMappingContext(connections: Connection[]): MappingContext {
 }
 
 function CanvasInner({
+  orgId,
   orgName,
+  role,
+  sidebarProjects,
+  email,
   workflow,
   connections,
   initialGraph,
   initialConversation,
   initialMessages,
 }: {
+  orgId: string | null;
   orgName: string | null;
+  role: ActorRole;
+  sidebarProjects: SidebarProject[];
+  email: string;
   workflow: WorkflowDetail;
   connections: Connection[];
   initialGraph: WorkflowGraphResult;
@@ -655,11 +666,11 @@ function CanvasInner({
               : 'All checks passing.';
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--canvas)' }}>
+    <div style={canvasPageRootStyle} data-app-theme="" data-om-theme="light">
       <CanvasHeader
         orgName={orgName}
         projectName={workflow.project.name}
-        projectHref="/app"
+        projectHref={`/app/projects/${workflow.project.id}`}
         workflowName={workflow.name}
         saveState={saveState}
         onReloadAfterConflict={reloadAfterConflict}
@@ -673,7 +684,10 @@ function CanvasInner({
         onToggleCopilot={() => setCopilotOpen((v) => !v)}
       />
 
-      <div style={canvasBodyStyle}>
+      <div style={canvasShellRowStyle}>
+        <Sidebar orgId={orgId} role={role} projects={sidebarProjects} email={email} />
+
+        <div style={canvasBodyStyle}>
         <NodesRail connections={connections} />
 
         <div ref={fullscreenRef} style={canvasFullscreenWrapStyle}>
@@ -713,7 +727,7 @@ function CanvasInner({
               // never starts zoomed in.
               fitViewOptions={{ maxZoom: 1 }}
             >
-              <Background variant={BackgroundVariant.Dots} gap={20} color="var(--dot)" />
+              <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} color="var(--canvas-dot)" bgColor="var(--canvas)" />
               <MiniMap
                 pannable
                 zoomable
@@ -921,6 +935,7 @@ function CanvasInner({
             )}
             </div>
           </div>
+        </div>
 
           <CopilotSidebar
             open={copilotOpen}
@@ -944,7 +959,11 @@ function CanvasInner({
 }
 
 export default function FlowCanvas(props: {
+  orgId: string | null;
   orgName: string | null;
+  role: ActorRole;
+  sidebarProjects: SidebarProject[];
+  email: string;
   workflow: WorkflowDetail;
   connections: Connection[];
   initialGraph: WorkflowGraphResult;
