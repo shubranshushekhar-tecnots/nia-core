@@ -48,6 +48,34 @@ const sectionHeaderStyle = {
   letterSpacing: '.04em',
   marginBottom: 8,
 } as const;
+const unmappedCardStyle = {
+  border: '1px solid var(--warn-bd)',
+  background: 'var(--warn-bg)',
+  borderRadius: 10,
+  padding: 10,
+  marginBottom: 12,
+} as const;
+const unmappedFilterInputStyle = {
+  ...inputStyle,
+  width: '100%',
+  marginBottom: 8,
+} as const;
+const unmappedTagListStyle = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+  maxHeight: 96,
+  overflowY: 'auto',
+} as const;
+const unmappedTagStyle = {
+  fontFamily: 'var(--font-data)',
+  fontSize: 11,
+  color: 'var(--warn)',
+  background: 'var(--surface)',
+  border: '1px solid var(--warn-bd)',
+  borderRadius: 999,
+  padding: '2px 8px',
+} as const;
 
 function FieldSelect({
   value,
@@ -147,6 +175,7 @@ export default function MappingEditor({
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState<string | undefined>(undefined);
   const [preview, setPreview] = useState<PreviewValue | undefined>(undefined);
+  const [unmappedFilter, setUnmappedFilter] = useState('');
 
   /** Any edit to entries clears approvedAt — drift honesty, per FieldMapping's header comment in nodeConfig.ts. */
   function updateEntries(entries: MappingEntry[]) {
@@ -303,8 +332,27 @@ export default function MappingEditor({
       </button>
 
       {unmappedDestFields.length > 0 && (
-        <div style={{ fontSize: 11.5, color: 'var(--warn)', marginBottom: 12 }}>
-          Unmapped destination fields: {unmappedDestFields.join(', ')}
+        <div style={unmappedCardStyle}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--warn)', marginBottom: 8 }}>
+            Unmapped destination fields ({unmappedDestFields.length})
+          </div>
+          {unmappedDestFields.length > 8 && (
+            <input
+              value={unmappedFilter}
+              onChange={(e) => setUnmappedFilter(e.target.value)}
+              placeholder="Filter fields…"
+              style={unmappedFilterInputStyle}
+            />
+          )}
+          <div style={unmappedTagListStyle}>
+            {unmappedDestFields
+              .filter((f) => f.toLowerCase().includes(unmappedFilter.toLowerCase()))
+              .map((f) => (
+                <span key={f} style={unmappedTagStyle}>
+                  {f}
+                </span>
+              ))}
+          </div>
         </div>
       )}
 

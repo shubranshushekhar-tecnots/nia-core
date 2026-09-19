@@ -8,6 +8,7 @@ import { confirmWriteGrant, createWriteGrant, getConnectionSchema, getWriteGrant
 import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
 import { KIND_COLOR, KIND_LABEL } from './GraphFlowNode';
+import { getConnectorIcon } from './icons';
 import {
   configPanelDeleteBtnStyle,
   configPanelDetailHintStyle,
@@ -16,9 +17,11 @@ import {
   configPanelGroupLabelStyle,
   configPanelGroupStyle,
   configPanelIconBtnStyle,
-  configPanelIdentityDotStyle,
+  configPanelIdentityIconStyle,
   configPanelRibbonStyle,
   configPanelSelectStyle,
+  panelTabBarStyle,
+  panelTabStyle,
   segmentedControlStyle,
   segmentedOptionStyle,
 } from './styles';
@@ -450,23 +453,29 @@ export default function NodeDrawer({
   const manifest = data.manifestId ? CONNECTOR_MANIFESTS[data.manifestId] : undefined;
   const parsed = parseNodeConfig(data.graphNodeType, data.config);
   const identityColor = data.resolved ? KIND_COLOR[data.graphNodeType] : 'var(--warn)';
+  const IdentityIcon = getConnectorIcon(data.manifestId, data.graphNodeType);
   const identityName = data.resolved ? (data.manifestName ?? 'Unconfigured') : (data.unknownReason ?? 'Unknown');
   const identityTitle = `${identityName}${data.connectionLabel ? ` · ${data.connectionLabel}` : ''}`;
   const showSourceDestForm = data.resolved && data.graphNodeType !== 'transform' && !parsed.unrecognized;
+  const showTabs = data.graphNodeType === 'destination' && showSourceDestForm;
+  const [activeTab, setActiveTab] = useState<'setup' | 'mapping'>('setup');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} data-testid="node-drawer">
+      {/* Header: icon tile + type + title + connection name + delete/close — no inline form controls here anymore, those moved into the Setup tab body below. */}
       <div style={configPanelRibbonStyle}>
         <div style={configPanelGroupStyle}>
           <span style={configPanelGroupLabelStyle}>{KIND_LABEL[data.graphNodeType]}</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={identityTitle}>
-            <span style={configPanelIdentityDotStyle(identityColor)} aria-hidden />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }} title={identityTitle}>
+            <span style={configPanelIdentityIconStyle(identityColor)} aria-hidden>
+              <IdentityIcon size={13} />
+            </span>
             <span
               style={{
                 fontSize: 12.5,
                 fontWeight: 600,
                 color: data.resolved ? 'var(--ink)' : 'var(--warn)',
-                maxWidth: 160,
+                maxWidth: 140,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -474,23 +483,23 @@ export default function NodeDrawer({
             >
               {identityName}
             </span>
+            {data.connectionLabel && (
+              <span
+                style={{
+                  fontSize: 11,
+                  color: 'var(--ink4)',
+                  maxWidth: 100,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  flex: 'none',
+                }}
+              >
+                · {data.connectionLabel}
+              </span>
+            )}
           </div>
         </div>
-
-        {showSourceDestForm && (
-          <>
-            <div style={configPanelDividerStyle} />
-            <SourceDestForm
-              slot="ribbon"
-              config={parsed.value as SourceDestConfig}
-              operations={manifest?.operations ?? ['read']}
-              nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
-              connectionId={data.connectionId}
-              manifestId={data.manifestId}
-              onChange={(next) => onConfigChange(next)}
-            />
-          </>
-        )}
 
         <div style={{ flex: 1 }} />
 
@@ -504,6 +513,17 @@ export default function NodeDrawer({
         </div>
       </div>
 
+      {showTabs && (
+        <div style={panelTabBarStyle}>
+          <button type="button" style={panelTabStyle(activeTab === 'setup')} onClick={() => setActiveTab('setup')}>
+            Setup
+          </button>
+          <button type="button" style={panelTabStyle(activeTab === 'mapping')} onClick={() => setActiveTab('mapping')}>
+            Field mapping
+          </button>
+        </div>
+      )}
+
       <div style={configPanelDetailStyle}>
         {!data.resolved && (
           <div style={configPanelDetailHintStyle}>
@@ -511,30 +531,41 @@ export default function NodeDrawer({
           </div>
         )}
 
-        {showSourceDestForm && (
-          <SourceDestForm
-            slot="detail"
-            config={parsed.value as SourceDestConfig}
-            operations={manifest?.operations ?? ['read']}
-            nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
-            connectionId={data.connectionId}
-            manifestId={data.manifestId}
-            onChange={(next) => onConfigChange(next)}
-          />
-        )}
-
-        {data.resolved && data.graphNodeType === 'destination' && !parsed.unrecognized && (
-          <div style={{ marginTop: 10 }}>
-            <MappingEditor
+        {showSourceDestForm && (!showTabs || activeTab === 'setup') && (
+          <>
+            <SourceDestForm
+              slot="ribbon"
               config={parsed.value as SourceDestConfig}
-              workflowId={workflowId}
-              destNodeId={node.id}
-              destConnectionId={data.connectionId}
-              sourceConnectionId={upstreamSource?.connectionId}
-              checkResults={checkResults}
+              operations={manifest?.operations ?? ['read']}
+              nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
+              connectionId={data.connectionId}
+              manifestId={data.manifestId}
               onChange={(next) => onConfigChange(next)}
             />
-          </div>
+            <div style={{ marginTop: 12 }}>
+              <SourceDestForm
+                slot="detail"
+                config={parsed.value as SourceDestConfig}
+                operations={manifest?.operations ?? ['read']}
+                nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
+                connectionId={data.connectionId}
+                manifestId={data.manifestId}
+                onChange={(next) => onConfigChange(next)}
+              />
+            </div>
+          </>
+        )}
+
+        {showTabs && activeTab === 'mapping' && data.resolved && !parsed.unrecognized && (
+          <MappingEditor
+            config={parsed.value as SourceDestConfig}
+            workflowId={workflowId}
+            destNodeId={node.id}
+            destConnectionId={data.connectionId}
+            sourceConnectionId={upstreamSource?.connectionId}
+            checkResults={checkResults}
+            onChange={(next) => onConfigChange(next)}
+          />
         )}
 
         {data.resolved && data.graphNodeType === 'transform' && !parsed.unrecognized && (

@@ -1,34 +1,36 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type { Connection } from '@/lib/connections/types';
 import type { LocalMessage } from '@/lib/chat/useChatSession';
+import Logo from '@/components/Logo';
 import CommandBar from './CommandBar';
 import {
+  COPILOT_WIDTH_DEFAULT,
+  COPILOT_WIDTH_MAX,
+  COPILOT_WIDTH_MIN,
   copilotChatAreaStyle,
-  copilotCollapsedLogoStyle,
-  copilotCollapsedRailStyle,
-  copilotComingSoonBadgeStyle,
-  copilotHeaderLogoStyle,
   copilotHeaderStyle,
-  copilotMockSectionStyle,
   copilotShellStyle,
   copilotSubtitleStyle,
   copilotTitleStyle,
   copilotToggleBtnStyle,
+  dragHandleStyle,
 } from './styles';
+import { ChevronRightIcon } from './navIcons';
 
 /**
  * Docked 344px right-panel shell (Task 2, decision 1). Owns the panel chrome
- * only — logo/title, coming-soon badge, collapse/expand toggle, and a single
- * -line mock "suggestions" caption (Phase 7 plan/ghost-preview surface; not
- * built this pass, per the scope override — no PlanSchema, no apply path,
- * nothing here calls an API or streams). The actual chat surface below is
- * the existing, still-fully-live CommandBar — unchanged behavior, just
- * restyled to fill this shell (see CommandBar.tsx's own header comment).
+ * only — logo/title, collapse/expand toggle. The actual chat + Copilot
+ * plan-propose surface below is CommandBar, which is live end-to-end as of
+ * Phase 7 Session 3 (see its own header comment) — the "Coming soon" badge
+ * and mock suggestions caption this shell used to show are gone.
  */
 
 export default function CopilotSidebar({
+  open,
+  onToggle,
+  workflowId,
   connections,
   wiredConnectionIds,
   selectedConnectionId,
@@ -40,6 +42,9 @@ export default function CopilotSidebar({
   retry,
   resetConversation,
 }: {
+  open: boolean;
+  onToggle: () => void;
+  workflowId: string;
   connections: Connection[];
   wiredConnectionIds: string[];
   selectedConnectionId: string | null;
@@ -51,53 +56,79 @@ export default function CopilotSidebar({
   retry: () => void;
   resetConversation: () => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [width, setWidth] = useState(COPILOT_WIDTH_DEFAULT);
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
+  useEffect(() => {
+    function onMove(e: PointerEvent) {
+      const drag = dragRef.current;
+      if (!drag) return;
+      // Panel is right-anchored — dragging left (negative deltaX) grows it.
+      const next = Math.min(COPILOT_WIDTH_MAX, Math.max(COPILOT_WIDTH_MIN, drag.startWidth + (drag.startX - e.clientX)));
+      setWidth(next);
+    }
+    function onUp() {
+      if (dragRef.current) {
+        dragRef.current = null;
+        setDragging(false);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, []);
+
+  function handleDragPointerDown(e: ReactPointerEvent) {
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startWidth: width };
+    setDragging(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }
+
+  // Collapsed = zero width, no visible chrome — copilotShellStyle already
+  // handles that natively. The sole reopen affordance is the Logo toggle in
+  // CanvasHeader.tsx / FlowCanvas.tsx's full-view controls, not a dedicated
+  // rail here, so there's no duplicate brand mark sitting on the canvas.
   if (!open) {
-    return (
-      <div style={copilotCollapsedRailStyle} data-testid="copilot-sidebar">
-        <img src="/splash-icon.png" alt="Nia Copilot" style={copilotCollapsedLogoStyle} />
-        <button
-          type="button"
-          style={copilotToggleBtnStyle}
-          onClick={() => setOpen(true)}
-          aria-label="Open Copilot"
-          title="Open Copilot"
-        >
-          {'\u2039'}
-        </button>
-      </div>
-    );
+    return <div style={copilotShellStyle(false, width)} data-testid="copilot-sidebar" />;
   }
 
   return (
-    <div style={copilotShellStyle(true)} data-testid="copilot-sidebar">
+    <div style={copilotShellStyle(true, width)} data-testid="copilot-sidebar">
+      <div
+        style={dragHandleStyle('vertical', dragging)}
+        onPointerDown={handleDragPointerDown}
+        data-testid="copilot-sidebar-drag-handle"
+      />
       <div style={copilotHeaderStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <img src="/splash-icon.png" alt="Nia AI" style={copilotHeaderLogoStyle} />
+          <Logo size={22} showWordmark={false} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             <span style={copilotTitleStyle}>Nia AI</span>
-            <span style={copilotSubtitleStyle}>Copilot</span>
+            <span style={copilotSubtitleStyle}>Ask anything about your workflow</span>
           </div>
-          <span style={copilotComingSoonBadgeStyle}>Coming soon</span>
         </div>
         <button
           type="button"
           style={copilotToggleBtnStyle}
-          onClick={() => setOpen(false)}
+          onClick={onToggle}
           aria-label="Collapse Copilot"
           title="Collapse Copilot"
         >
-          {'\u203a'}
+          <ChevronRightIcon size={14} />
         </button>
-      </div>
-
-      <div style={copilotMockSectionStyle}>
-        Ask Nia AI to draft a workflow change and preview it here before applying — arriving in Phase 7.
       </div>
 
       <div style={copilotChatAreaStyle}>
         <CommandBar
+          workflowId={workflowId}
           connections={connections}
           wiredConnectionIds={wiredConnectionIds}
           selectedConnectionId={selectedConnectionId}

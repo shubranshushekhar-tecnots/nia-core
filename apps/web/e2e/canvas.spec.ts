@@ -149,12 +149,15 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
 
     // Self-healing reset: delete any nodes a previous run left behind, via
     // the real UI (no raw API poke — /workflows/:id/graph requires a Bearer
-    // header the browser context can't manufacture out of band).
-    const deleteButtons = page.getByRole('button', { name: 'Delete node' });
+    // header the browser context can't manufacture out of band). Delete no
+    // longer lives on the card itself (GraphFlowNode.tsx: moved to the
+    // floating NodeConfigPanel's header ribbon, reachable once a node is
+    // selected) — select each leftover node before deleting it.
     let deletedAny = false;
-    while ((await deleteButtons.count()) > 0) {
+    while ((await page.locator('.react-flow__node').count()) > 0) {
       deletedAny = true;
-      await deleteButtons.first().click();
+      await page.locator('.react-flow__node').first().click();
+      await page.getByTestId('node-drawer').getByRole('button', { name: 'Delete node' }).click();
     }
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
     if (deletedAny) {
@@ -989,10 +992,11 @@ test.describe('canvas: personal workspace', () => {
     // command-bar.spec.ts's own personal-workspace test — this shared
     // fixture can carry a node left behind by that command-bar test (which
     // deliberately doesn't clean up after itself) from an earlier
-    // full-suite invocation.
-    const deleteButtons = page.getByRole('button', { name: 'Delete node' });
-    while ((await deleteButtons.count()) > 0) {
-      await deleteButtons.first().click();
+    // full-suite invocation. Select each node before deleting it (see the
+    // serial block's self-heal comment above for why).
+    while ((await page.locator('.react-flow__node').count()) > 0) {
+      await page.locator('.react-flow__node').first().click();
+      await page.getByTestId('node-drawer').getByRole('button', { name: 'Delete node' }).click();
     }
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
 
@@ -1015,7 +1019,9 @@ test.describe('canvas: unknown tool renders without crashing', () => {
     await expect(page.locator('.react-flow__node')).toHaveCount(1);
     await expect(page.getByText('Unknown tool "not-a-real-connector"')).toBeVisible();
     // Still selectable/deletable — no special-casing in delete/select handlers.
-    await expect(page.getByRole('button', { name: 'Delete node' })).toBeVisible();
+    // Delete lives in the floating NodeConfigPanel, reachable once selected.
+    await page.locator('.react-flow__node').first().click();
+    await expect(page.getByTestId('node-drawer').getByRole('button', { name: 'Delete node' })).toBeVisible();
   });
 });
 
@@ -1034,10 +1040,10 @@ test.describe('canvas: palette purity — Triggers moat', () => {
     await gotoWorkflow(page, 'Canvas E2E Personal Project', 'Canvas E2E Personal Workflow');
 
     // Self-healing reset — same shared fixture/rationale as the "personal
-    // workspace" describe block above.
-    const deleteButtons = page.getByRole('button', { name: 'Delete node' });
-    while ((await deleteButtons.count()) > 0) {
-      await deleteButtons.first().click();
+    // workspace" describe block above. Select each node before deleting it.
+    while ((await page.locator('.react-flow__node').count()) > 0) {
+      await page.locator('.react-flow__node').first().click();
+      await page.getByTestId('node-drawer').getByRole('button', { name: 'Delete node' }).click();
     }
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
+import Logo from '@/components/Logo';
 import AuthBackground from './AuthBackground';
 import { authCardStyle, authFooterStyle, brandRowStyle, signinRootStyle, themeToggleStyle } from './styles';
 
@@ -68,8 +69,7 @@ export default function AuthShell({
         }}
       >
         <div style={brandRowStyle}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.svg" alt="Nia Core" style={{ height: 28, width: 'auto' }} />
+          <Logo size={28} />
         </div>
 
         <div style={authCardStyle(narrow)}>{children}</div>

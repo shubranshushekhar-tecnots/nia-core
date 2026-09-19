@@ -42,12 +42,13 @@ test.describe.serial('command bar: scope precedence, chat, / hint, reload persis
   test.beforeEach(async ({ page }) => {
     await gotoWorkflow(page, 'Canvas E2E Project', 'Canvas E2E Workflow');
     // Self-healing reset, same convention as canvas.spec.ts's serial block —
-    // this file mutates the same shared seeded fixture. Node cleanup uses
-    // the on-canvas "✕" buttons directly (never selects a node), so no
-    // drawer opens here.
-    const deleteButtons = page.getByRole('button', { name: 'Delete node' });
-    while ((await deleteButtons.count()) > 0) {
-      await deleteButtons.first().click();
+    // this file mutates the same shared seeded fixture. Delete no longer
+    // lives on the card itself (GraphFlowNode.tsx: moved to the floating
+    // NodeConfigPanel's header ribbon, reachable once a node is selected) —
+    // select each leftover node before deleting it.
+    while ((await page.locator('.react-flow__node').count()) > 0) {
+      await page.locator('.react-flow__node').first().click();
+      await page.getByTestId('node-drawer').getByRole('button', { name: 'Delete node' }).click();
     }
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
 
@@ -142,13 +143,31 @@ test.describe.serial('command bar: scope precedence, chat, / hint, reload persis
     await expect(scope).toContainText('canvas (2 connections)');
     await expect(scope.getByTestId('command-bar-scope-chip')).toHaveCount(0);
 
-    // "/" is recognized as a future-command prefix, never sent as chat —
-    // Enter is a no-op, so the single citation chip from the real question
-    // above stays the only one (no second assistant message got appended).
+    // "/" now dispatches to Copilot's plan-propose flow (Phase 7 Session 3)
+    // instead of being blocked — the hint reflects that, and the send button
+    // is enabled (unlike the old "Commands arrive with Copilot" placeholder
+    // behavior this test used to assert). Real plan-propose round trips are
+    // covered by copilot.spec.ts; here we only assert the hint/enablement
+    // and back out without sending, so the single citation chip from the
+    // real question above stays the only one (no second assistant message
+    // got appended).
     await input.fill('/anything');
-    await expect(page.getByTestId('command-bar-hint')).toContainText('Commands arrive with Copilot (Phase 7)');
-    await expect(page.getByTestId('command-bar-send')).toBeDisabled();
-    await input.press('Enter');
+    await expect(page.getByTestId('command-bar-hint')).toContainText('Copilot will propose a plan');
+    await expect(page.getByTestId('command-bar-send')).toBeEnabled();
+
+    // "/" suggestion menu (this session) — appears while still composing
+    // the leading command token, offers example prompts. Picking one only
+    // fills the input (doesn't auto-send), so the user can edit specifics
+    // before hitting Send. Typing past the token (a space) closes it.
+    await input.fill('/');
+    const slashMenu = page.getByTestId('command-bar-slash-menu');
+    await expect(slashMenu).toBeVisible();
+    await expect(slashMenu.getByRole('button')).toHaveCount(6);
+    await slashMenu.getByRole('button').first().click();
+    await expect(input).toHaveValue(/^\/Add a source node reading a table/);
+    await expect(slashMenu).not.toBeVisible();
+
+    await input.fill('');
     await expect(page.getByRole('button', { name: /mysql-dev.*rows/ })).toHaveCount(1);
 
     // Reload -> the workflow's conversation (linked via conversations.workflow_id,
@@ -167,9 +186,12 @@ test.describe('command bar: personal (org-less) workspace', () => {
     test.setTimeout(120_000);
     await gotoWorkflow(page, 'Canvas E2E Personal Project', 'Canvas E2E Personal Workflow');
 
-    const deleteButtons = page.getByRole('button', { name: 'Delete node' });
-    while ((await deleteButtons.count()) > 0) {
-      await deleteButtons.first().click();
+    // Delete no longer lives on the card itself (GraphFlowNode.tsx: moved
+    // to the floating NodeConfigPanel's header ribbon, reachable once a
+    // node is selected) — select each leftover node before deleting it.
+    while ((await page.locator('.react-flow__node').count()) > 0) {
+      await page.locator('.react-flow__node').first().click();
+      await page.getByTestId('node-drawer').getByRole('button', { name: 'Delete node' }).click();
     }
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
 

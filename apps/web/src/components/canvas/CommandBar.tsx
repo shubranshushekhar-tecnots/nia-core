@@ -1,8 +1,11 @@
 'use client';
 
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import type { PlanProposeOutcome } from '@nia/schemas';
 import type { Connection } from '@/lib/connections/types';
 import { STAGE_LABEL, type LocalMessage } from '@/lib/chat/useChatSession';
+import { proposePlan, CopilotApiError } from '@/lib/api/copilotClient';
+import { useCanvasStore } from '@/lib/canvas/store';
 import {
   chatCitationChipStyle,
   chatCitationCopyBtnStyle,
@@ -21,6 +24,10 @@ import {
   chatMentionToolStyle,
   chatMessageTextStyle,
   chatMessageWrapStyle,
+  chatSlashMenuDropdownStyle,
+  chatSlashMenuHintStyle,
+  chatSlashMenuLabelStyle,
+  chatSlashMenuRowStyle,
   chatStatusDotStyle,
   chatStatusRowStyle,
   chatUnfaithfulNoteStyle,
@@ -38,7 +45,64 @@ import {
  * chips, send/retry/reset) and is now a vertical flex column that fills the
  * sidebar's remaining height below the panel's header/mock section, instead
  * of an absolutely-positioned overlay sized against ChecksDock's height.
+ *
+ * Phase 7 Session 3 — `/`-prefixed input now dispatches to Copilot's
+ * plan-propose flow (POST /workflows/:id/plan via copilotClient.ts's
+ * proposePlan()) instead of being blocked. This is a plain request/response
+ * call, not SSE (see copilotClient.ts's header comment on why) — sending
+ * disables the input until the single response comes back. A successful
+ * "ok" outcome calls the canvas store's setGhostPlan() so FlowCanvas.tsx's
+ * ghost overlay picks it up; every other outcome (clarify/refused/
+ * no-connection/error) renders as an assistant-style bubble in this same
+ * thread. Plan turns are deliberately NOT persisted (no insertUserMessage
+ * call anywhere in this path, mirroring copilotPropose.ts's service-layer
+ * decision) — they live only in this component's own `planMessages` state,
+ * merged into the thread display alongside the real (persisted) chat
+ * `messages` prop, and reset on New chat same as everything else.
  */
+
+/**
+ * Display-only fix: `m.content` streams down as a plain string, so literal
+ * `**text**` markers (Copilot/answer-gen output uses them for emphasis)
+ * showed up as raw asterisks instead of bold. Splits on the marker and
+ * wraps matches in <strong> — no change to the underlying message data.
+ */
+function renderInlineBold(text: string): ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) =>
+    part.startsWith('**') && part.endsWith('**') && part.length > 4 ? <strong key={i}>{part.slice(2, -2)}</strong> : part,
+  );
+}
+
+function outcomeToLocalMessage(outcome: PlanProposeOutcome): LocalMessage {
+  const id = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  switch (outcome.status) {
+    case 'ok':
+      return { id, role: 'assistant', content: `Proposed: ${outcome.plan.summary}`, citations: [], status: 'complete', createdAt };
+    case 'clarify':
+      return { id, role: 'assistant', content: outcome.question, citations: [], status: 'complete', createdAt };
+    case 'no-connection':
+      return { id, role: 'assistant', content: outcome.message, citations: [], status: 'error', createdAt };
+    case 'refused':
+      return { id, role: 'assistant', content: outcome.message, citations: [], status: 'refused', createdAt };
+    case 'error':
+      return { id, role: 'assistant', content: outcome.error, citations: [], status: 'error', createdAt };
+  }
+}
+
+// Static example prompts for the "/" suggestion menu. Copilot's
+// plan-propose flow has no distinct command sub-types (every "/" message
+// is free-text NL routed through the same proposePlan() call) — these are
+// just starting points a user can pick and then edit before sending.
+const SLASH_SUGGESTIONS: string[] = [
+  'Add a source node reading a table from my connection.',
+  'Add a filter on a column.',
+  'Group and aggregate by a column.',
+  'Add a computed field.',
+  'Connect two nodes together.',
+  'Add a destination node writing to a table.',
+];
 
 const wrapStyle: CSSProperties = {
   flex: 1,
@@ -213,6 +277,7 @@ const threadActionBtnStyle: CSSProperties = {
 };
 
 export default function CommandBar({
+  workflowId,
   connections,
   wiredConnectionIds,
   selectedConnectionId,
@@ -224,6 +289,7 @@ export default function CommandBar({
   retry,
   resetConversation,
 }: {
+  workflowId: string;
   connections: Connection[];
   /** Every connectionId currently wired into the canvas (source + destination nodes), deduped. */
   wiredConnectionIds: string[];
@@ -237,11 +303,25 @@ export default function CommandBar({
   retry: () => void;
   resetConversation: () => void;
 }) {
+  const setGhostPlan = useCanvasStore((s) => s.setGhostPlan);
+  const clearGhost = useCanvasStore((s) => s.clearGhost);
   const [draft, setDraft] = useState('');
   const [mentionOpen, setMentionOpen] = useState(false);
+  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
+  const [planMessages, setPlanMessages] = useState<LocalMessage[]>([]);
+  const [planPending, setPlanPending] = useState(false);
+  const [planConversationId, setPlanConversationId] = useState<string | undefined>(undefined);
   const [threadOpen, setThreadOpen] = useState(messages.length > 0);
   const [expandedCitation, setExpandedCitation] = useState<string | null>(null);
+
+  // Merges real (persisted) chat messages with local-only plan turns into
+  // one chronological thread — see this file's header comment on why plan
+  // turns aren't persisted.
+  const allMessages = useMemo(
+    () => [...messages, ...planMessages].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    [messages, planMessages],
+  );
 
   // Scope-precedence rule: dedupe(selectedNode's connection, ...pins). Empty
   // → fall back to every connection wired into the canvas.
@@ -260,7 +340,7 @@ export default function CommandBar({
   );
 
   const isCommand = draft.trim().startsWith('/');
-  const sendDisabled = !draft.trim() || isCommand || effectiveScope.length === 0 || sending;
+  const sendDisabled = !draft.trim() || sending || planPending || (!isCommand && effectiveScope.length === 0);
 
   function pickMention(connection: Connection) {
     setDraft((d) => d.replace(/@[^\s]*$/, ''));
@@ -272,13 +352,60 @@ export default function CommandBar({
     setPinnedIds((ids) => ids.filter((x) => x !== id));
   }
 
+  function pickSlashSuggestion(text: string) {
+    setDraft('/' + text);
+    setSlashMenuOpen(false);
+  }
+
   function handlePlusClick() {
-    setDraft((d) => (d.trimStart().startsWith('/') ? d : '/' + d));
+    setDraft((d) => {
+      const next = d.trimStart().startsWith('/') ? d : '/' + d;
+      setSlashMenuOpen(/^\/[^\s]*$/.test(next.trimStart()));
+      return next;
+    });
+  }
+
+  async function handlePlanCommand(trimmed: string) {
+    const message = trimmed.replace(/^\/+\s*/, '');
+    if (!message) return;
+    const userMsg: LocalMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: trimmed,
+      citations: [],
+      status: 'complete',
+      createdAt: new Date().toISOString(),
+    };
+    setPlanMessages((prev) => [...prev, userMsg]);
+    setDraft('');
+    setMentionOpen(false);
+    setSlashMenuOpen(false);
+    setThreadOpen(true);
+    setPlanPending(true);
+    try {
+      const { conversationId, outcome } = await proposePlan(workflowId, { message, conversationId: planConversationId });
+      setPlanConversationId(conversationId);
+      setPlanMessages((prev) => [...prev, outcomeToLocalMessage(outcome)]);
+      if (outcome.status === 'ok') setGhostPlan(outcome.plan);
+    } catch (err) {
+      const text = err instanceof CopilotApiError ? err.message : 'Copilot is unavailable right now.';
+      setPlanMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: 'assistant', content: text, citations: [], status: 'error', createdAt: new Date().toISOString() },
+      ]);
+    } finally {
+      setPlanPending(false);
+    }
   }
 
   async function handleSend() {
     const trimmed = draft.trim();
-    if (!trimmed || trimmed.startsWith('/') || sending || effectiveScope.length === 0) return;
+    if (!trimmed || sending || planPending) return;
+    if (trimmed.startsWith('/')) {
+      await handlePlanCommand(trimmed);
+      return;
+    }
+    if (effectiveScope.length === 0) return;
     setDraft('');
     setMentionOpen(false);
     setThreadOpen(true);
@@ -289,11 +416,14 @@ export default function CommandBar({
     resetConversation();
     setPinnedIds([]);
     setThreadOpen(false);
+    setPlanMessages([]);
+    setPlanConversationId(undefined);
+    clearGhost();
   }
 
   return (
     <div style={wrapStyle} data-testid="command-bar">
-      {threadOpen && messages.length > 0 && (
+      {threadOpen && allMessages.length > 0 && (
         <div style={threadStyle} data-testid="command-bar-thread">
           <div style={threadHeaderStyle}>
             <span style={threadTitleStyle}>Thread</span>
@@ -306,18 +436,21 @@ export default function CommandBar({
               </button>
             </div>
           </div>
-          {messages.map((m) => {
+          {allMessages.map((m) => {
             const isUser = m.role === 'user';
             return (
               <div key={m.id} style={chatMessageWrapStyle(isUser)}>
                 {m.status === 'error' || m.status === 'refused' ? (
-                  <div style={chatErrorBannerStyle}>{m.content}</div>
+                  <div style={chatErrorBannerStyle}>
+                    <span aria-hidden>{'\u26A0'}</span>
+                    <span>{renderInlineBold(m.content)}</span>
+                  </div>
                 ) : m.status === 'conflict' ? (
                   <div style={chatConflictBannerStyle}>{m.content}</div>
                 ) : (
                   <>
                     <div style={chatMessageTextStyle(isUser)} data-testid="command-bar-message-text">
-                      {m.content || (m.status === 'streaming' ? '\u2026' : '')}
+                      {m.content ? renderInlineBold(m.content) : m.status === 'streaming' ? '\u2026' : ''}
                     </div>
                     {m.faithful === false && (
                       <span style={chatUnfaithfulNoteStyle}>This answer may not be fully supported by the source data.</span>
@@ -369,12 +502,21 @@ export default function CommandBar({
               <span>{STAGE_LABEL[streamStage as keyof typeof STAGE_LABEL] ?? streamStage}</span>
             </div>
           )}
+          {planPending && (
+            <div style={chatStatusRowStyle} data-testid="command-bar-plan-pending">
+              <span style={chatStatusDotStyle} />
+              <span>Copilot is drafting a plan…</span>
+            </div>
+          )}
           {transportError && (
             <div style={chatErrorBannerStyle}>
-              Connection to the answer stream dropped.{' '}
-              <button type="button" style={chatCitationCopyBtnStyle} onClick={retry}>
-                Retry
-              </button>
+              <span aria-hidden>{'\u26A0'}</span>
+              <span>
+                Connection to the answer stream dropped.{' '}
+                <button type="button" style={chatCitationCopyBtnStyle} onClick={retry}>
+                  Retry
+                </button>
+              </span>
             </div>
           )}
         </div>
@@ -411,6 +553,14 @@ export default function CommandBar({
       )}
 
       <div style={barPositionStyle}>
+        {slashMenuOpen && (
+          <div style={{ ...chatSlashMenuDropdownStyle, left: 0, right: 0 }} data-testid="command-bar-slash-menu">
+            {SLASH_SUGGESTIONS.map((s) => (
+              <SlashMenuRow key={s} text={s} onPick={() => pickSlashSuggestion(s)} />
+            ))}
+          </div>
+        )}
+
         {mentionOpen && (
           <div style={{ ...chatMentionDropdownStyle, left: 0, right: 0 }} data-testid="command-bar-mention-dropdown">
             {mentionable.length === 0 ? (
@@ -425,7 +575,7 @@ export default function CommandBar({
           <button
             type="button"
             style={iconBtnStyle}
-            title="Commands arrive with Copilot (Phase 7)"
+            title="Ask Copilot to propose a workflow change"
             onClick={handlePlusClick}
           >
             +
@@ -438,7 +588,9 @@ export default function CommandBar({
             onChange={(e) => {
               const val = e.target.value;
               setDraft(val);
-              setMentionOpen(val.includes('@'));
+              const isSlashToken = /^\/[^\s]*$/.test(val.trimStart());
+              setSlashMenuOpen(isSlashToken);
+              setMentionOpen(!isSlashToken && val.includes('@'));
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleSend();
@@ -454,13 +606,36 @@ export default function CommandBar({
             onClick={handleSend}
             data-testid="command-bar-send"
           >
-            Send
+            {planPending ? 'Working…' : 'Send'}
           </button>
         </div>
 
-        {isCommand && <div style={commandHintStyle} data-testid="command-bar-hint">Commands arrive with Copilot (Phase 7)</div>}
+        {isCommand && !planPending && (
+          <div style={commandHintStyle} data-testid="command-bar-hint">
+            Copilot will propose a plan — review the ghost preview on the canvas before applying.
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+function SlashMenuRow({ text, onPick }: { text: string; onPick: () => void }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      type="button"
+      style={chatSlashMenuRowStyle(hovered)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        onPick();
+      }}
+    >
+      <span style={chatSlashMenuLabelStyle}>{text}</span>
+      <span style={chatSlashMenuHintStyle}>Copilot</span>
+    </button>
   );
 }
 

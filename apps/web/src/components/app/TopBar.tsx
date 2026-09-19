@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Logo from '@/components/Logo';
 import { logout } from '@/lib/auth/actions';
 import {
   breadcrumbSepStyle,
@@ -23,8 +24,7 @@ export default function TopBar({ orgName, email }: { orgName: string | null; ema
 
   return (
     <header style={topBarStyle}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/logo.svg" alt="Nia Core" style={{ height: 20, width: 'auto' }} />
+      <Logo size={20} />
       <span style={breadcrumbSepStyle}>/</span>
 
       <div style={{ position: 'relative' }}>

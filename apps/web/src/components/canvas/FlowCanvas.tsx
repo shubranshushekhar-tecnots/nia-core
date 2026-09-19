@@ -17,7 +17,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, type Plan } from '@nia/schemas';
 import type { WorkflowDetail } from '@/lib/dashboard/types';
 import type { Connection } from '@/lib/connections/types';
 import type { ChatMessage, Conversation } from '@/lib/api/chatServer';
@@ -29,25 +29,38 @@ import {
   type CanvasEdge,
   type MappingContext,
 } from '@/lib/canvas/mapping';
+import { planToGhostFlow } from '@/lib/canvas/ghostMapping';
 import { findUpstreamSource } from '@/lib/canvas/upstream';
 import { getWorkflowGraph, putWorkflowGraph, GraphApiError, type WorkflowGraphResult } from '@/lib/api/graphClient';
+import { applyPlan, CopilotApiError } from '@/lib/api/copilotClient';
 import { runWorkflowChecks, getLatestCheckRun, listCheckRuns, ChecksApiError } from '@/lib/api/checksClient';
 import { startWorkflowRun, streamRun, cancelWorkflowRun, RunApiError } from '@/lib/api/runsClient';
 import { useCanvasStore } from '@/lib/canvas/store';
 import { useChatSession } from '@/lib/chat/useChatSession';
 import { buildActivityFeed, type ActivityItem } from '@/lib/canvas/activityFeed';
+import Logo from '@/components/Logo';
 import GraphFlowNode from './GraphFlowNode';
 import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRail';
 import NodeConfigPanel from './NodeConfigPanel';
 import ChecksDock from './ChecksDock';
 import CopilotSidebar from './CopilotSidebar';
-import { brandTextStyle, breadcrumbSepStyle } from '@/components/app/styles';
+import CanvasHeader from './CanvasHeader';
+import { breadcrumbSepStyle } from '@/components/app/styles';
 import {
   canvasBodyStyle,
   canvasColumnStyle,
   canvasFullscreenWrapStyle,
   canvasSurfaceStyle,
-  topBarStyle,
+  fullViewBreadcrumbStyle,
+  fullViewControlsStyle,
+  headerCopilotToggleBtnStyle,
+  headerRunBtnStyle,
+  headerRunChecksBtnStyle,
+  planBannerApplyBtnStyle,
+  planBannerDiscardBtnStyle,
+  planBannerErrorStyle,
+  planBannerStyle,
+  planBannerTextStyle,
   viewportFullscreenBtnStyle,
   viewportToolbarBtnStyle,
   viewportToolbarDividerStyle,
@@ -68,12 +81,14 @@ function useMappingContext(connections: Connection[]): MappingContext {
 }
 
 function CanvasInner({
+  orgName,
   workflow,
   connections,
   initialGraph,
   initialConversation,
   initialMessages,
 }: {
+  orgName: string | null;
   workflow: WorkflowDetail;
   connections: Connection[];
   initialGraph: WorkflowGraphResult;
@@ -81,6 +96,7 @@ function CanvasInner({
   initialMessages: ChatMessage[];
 }) {
   const ctx = useMappingContext(connections);
+  const [copilotOpen, setCopilotOpen] = useState(true);
   const { screenToFlowPosition, setCenter, getNode, zoomIn, zoomOut, fitView } = useReactFlow();
   // Wraps canvas-surface + CopilotSidebar (not just the canvas) so "full
   // view" keeps Copilot visible/usable instead of it disappearing along
@@ -113,6 +129,31 @@ function CanvasInner({
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdge>(initial.edges);
   const parkedLegacyTriggers = useRef(data!.graph.parkedLegacyTriggers);
+  const ghostPlan = useCanvasStore((s) => s.ghostPlan);
+  const clearGhost = useCanvasStore((s) => s.clearGhost);
+
+  // Phase 7 Session 2 — Copilot ghost overlay. `ghost` is purely a display
+  // concern: it is layered on top of (never merged into) `nodes`/`edges`
+  // state, so it can never reach handleNodesChange/scheduleSave/
+  // flowToGraph and can never be accidentally autosaved. Placement is
+  // delegated to plan.ts's computePlanLayout (via planToGhostFlow) against
+  // the live canvas's current node positions — same function Apply uses
+  // server-side, so nothing ever visually "jumps" between preview and
+  // applied state.
+  const ghost = useMemo(
+    () => (ghostPlan ? planToGhostFlow(ghostPlan, nodes.map((n) => n.position), ctx) : null),
+    [ghostPlan, nodes, ctx],
+  );
+  const displayNodes = useMemo(() => (ghost ? [...nodes, ...ghost.nodes] : nodes), [nodes, ghost]);
+  const displayEdges = useMemo(() => (ghost ? [...edges, ...ghost.edges] : edges), [edges, ghost]);
+  // Bring newly-proposed ghost nodes into view without disturbing the
+  // user's existing pan/zoom when there's nothing new to show.
+  const lastFitGhostPlanRef = useRef<Plan | null>(null);
+  useEffect(() => {
+    if (!ghost || !ghostPlan || lastFitGhostPlanRef.current === ghostPlan) return;
+    lastFitGhostPlanRef.current = ghostPlan;
+    fitView({ nodes: ghost.nodes.map((n) => ({ id: n.id })), duration: 400, maxZoom: 1, padding: 0.3 });
+  }, [ghost, ghostPlan, fitView]);
 
   const saveState = useCanvasStore((s) => s.saveState);
   const setSaveState = useCanvasStore((s) => s.setSaveState);
@@ -227,7 +268,13 @@ function CanvasInner({
   );
 
   const onNodeClick: NodeMouseHandler = useCallback(
-    (_, node) => setSelectedNodeId(node.id),
+    (_, node) => {
+      // Ghost nodes are a read-only preview (see ghostMapping.ts) — clicking
+      // one must not open NodeConfigPanel or disturb whatever real node is
+      // currently selected.
+      if ((node.data as { isGhost?: boolean }).isGhost) return;
+      setSelectedNodeId(node.id);
+    },
     [setSelectedNodeId],
   );
   const onPaneClick = useCallback(() => setSelectedNodeId(null), [setSelectedNodeId]);
@@ -300,6 +347,40 @@ function CanvasInner({
     setSaveState('idle');
   }, [workflow.id, queryClient, queryKey, ctx, setNodes, setEdges, setVersion, setSaveState]);
 
+  // Phase 7 Session 3 — Apply. applyPlan() already returns the merged
+  // GraphDoc + its new version (services/copilotApply.ts's putWorkflowGraph
+  // call), so this mirrors reloadAfterConflict's remap-and-set-state shape
+  // without a second fetch. Ghost is only cleared on success — a failure
+  // (most notably 409 PLAN_STALE) leaves it in place so the user can retry
+  // or explicitly discard (copilotClient.ts's applyPlan doc comment).
+  const [applyingPlan, setApplyingPlan] = useState(false);
+  const [applyPlanError, setApplyPlanError] = useState<string | null>(null);
+  const handleApplyPlan = useCallback(async () => {
+    if (!ghostPlan) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setApplyingPlan(true);
+    setApplyPlanError(null);
+    try {
+      const result = await applyPlan(workflow.id, { plan: ghostPlan });
+      queryClient.setQueryData(queryKey, result);
+      const remapped = graphToFlow(result.graph, ctx);
+      setNodes(remapped.nodes);
+      setEdges(remapped.edges);
+      setVersion(result.version);
+      setSaveState('idle');
+      clearGhost();
+    } catch (err) {
+      setApplyPlanError(err instanceof CopilotApiError ? err.message : 'Apply failed — try again.');
+    } finally {
+      setApplyingPlan(false);
+    }
+  }, [ghostPlan, workflow.id, queryClient, queryKey, ctx, setNodes, setEdges, setVersion, setSaveState, clearGhost]);
+
+  const handleDiscardPlan = useCallback(() => {
+    setApplyPlanError(null);
+    clearGhost();
+  }, [clearGhost]);
+
   // Checks (Phase 5 Session 3 Task 2). Latest persisted run is fetched once
   // on mount (GET .../checks/latest, never re-runs anything); "Run checks"
   // POSTs a fresh run and blocks (see checksClient.ts's header comment on
@@ -313,6 +394,7 @@ function CanvasInner({
   const [checksRunning, setChecksRunning] = useState(false);
   const [checksError, setChecksError] = useState<string | null>(null);
   const [checksDockExpanded, setChecksDockExpanded] = useState(false);
+  const [checksDockHeight, setChecksDockHeight] = useState(36);
   const [checksDockTab, setChecksDockTab] = useState<'checks' | 'logs'>('checks');
 
   // Execution (Phase 6 Block 3; Block 5 — multi-destination fan-out). Each
@@ -572,96 +654,24 @@ function CanvasInner({
               ? `Runs all ${runNodeIds.length} destinations.`
               : 'All checks passing.';
 
-  const disabledRunBtnStyle = {
-    fontSize: 12.5,
-    fontWeight: 600,
-    color: 'var(--ink4)',
-    background: 'var(--surface2)',
-    border: '1px solid var(--line2)',
-    borderRadius: 6,
-    padding: '6px 12px',
-    cursor: 'not-allowed',
-  } as const;
-
-  const enabledRunBtnStyle = {
-    fontSize: 12.5,
-    fontWeight: 600,
-    color: 'var(--onacc)',
-    background: 'var(--acc)',
-    border: '1px solid var(--acc)',
-    borderRadius: 6,
-    padding: '6px 12px',
-    cursor: 'pointer',
-  } as const;
-
-  const runChecksBtnStyle = {
-    fontSize: 12.5,
-    fontWeight: 600,
-    color: 'var(--ink)',
-    background: 'var(--surface2)',
-    border: '1px solid var(--line2)',
-    borderRadius: 6,
-    padding: '6px 12px',
-    cursor: checksRunning ? 'wait' : 'pointer',
-    opacity: checksRunning ? 0.6 : 1,
-  } as const;
-
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--canvas)' }}>
-      <header style={topBarStyle}>
-        <a href="/app" style={brandTextStyle}>
-          {workflow.project.name}
-        </a>
-        <span style={breadcrumbSepStyle}>/</span>
-        <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink)' }}>{workflow.name}</span>
-        {saveState !== 'conflict' && saveState !== 'idle' && (
-          <>
-            <span style={breadcrumbSepStyle}>·</span>
-            <span style={{ fontSize: 12, color: 'var(--ink4)' }}>
-              {saveState === 'saving' ? 'Saving…' : 'Saved'}
-            </span>
-          </>
-        )}
-
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
-          {saveState === 'conflict' && (
-            <button
-              type="button"
-              onClick={reloadAfterConflict}
-              style={{
-                fontSize: 12.5,
-                fontWeight: 600,
-                color: 'var(--bad)',
-                background: 'var(--warn-bg)',
-                border: '1px solid var(--warn-bd)',
-                borderRadius: 6,
-                padding: '5px 10px',
-                cursor: 'pointer',
-              }}
-            >
-              Saved elsewhere — reload
-            </button>
-          )}
-          <button type="button" onClick={handleRunChecks} disabled={checksRunning} style={runChecksBtnStyle}>
-            {checksRunning ? 'Running…' : 'Run checks'}
-          </button>
-          {/* Execution (Phase 6 Block 3; Block 5 — multi-destination
-              fan-out). Enabled only when the latest check run is all-pass,
-              up to date, and the graph has at least one destination node;
-              clicking enqueues one real run per destination and streams
-              each one's progress into its own card below. Disabled states
-              keep honest tooltips. */}
-          {runEnabled ? (
-            <button type="button" onClick={handleRun} title={runTooltip} style={enabledRunBtnStyle}>
-              Run
-            </button>
-          ) : (
-            <button type="button" disabled title={runTooltip} style={runInFlight ? enabledRunBtnStyle : disabledRunBtnStyle}>
-              {runInFlight ? 'Running…' : 'Run'}
-            </button>
-          )}
-        </div>
-      </header>
+      <CanvasHeader
+        orgName={orgName}
+        projectName={workflow.project.name}
+        projectHref="/app"
+        workflowName={workflow.name}
+        saveState={saveState}
+        onReloadAfterConflict={reloadAfterConflict}
+        checksRunning={checksRunning}
+        onRunChecks={handleRunChecks}
+        runEnabled={runEnabled}
+        runInFlight={runInFlight}
+        runTooltip={runTooltip}
+        onRun={handleRun}
+        copilotOpen={copilotOpen}
+        onToggleCopilot={() => setCopilotOpen((v) => !v)}
+      />
 
       <div style={canvasBodyStyle}>
         <NodesRail connections={connections} />
@@ -686,8 +696,8 @@ function CanvasInner({
               onDragOver={(e) => e.preventDefault()}
             >
             <ReactFlow
-              nodes={nodes}
-              edges={edges}
+              nodes={displayNodes}
+              edges={displayEdges}
               nodeTypes={nodeTypes}
               onNodesChange={handleNodesChange}
               onEdgesChange={handleEdgesChange}
@@ -712,7 +722,79 @@ function CanvasInner({
               />
             </ReactFlow>
 
-            <div style={viewportToolbarStyle(checksDockExpanded)} data-testid="viewport-toolbar">
+            {ghostPlan && (
+              <div style={planBannerStyle} data-testid="plan-banner">
+                <span style={planBannerTextStyle}>{ghostPlan.summary}</span>
+                {applyPlanError && <span style={planBannerErrorStyle}>{applyPlanError}</span>}
+                <button
+                  type="button"
+                  style={planBannerDiscardBtnStyle}
+                  onClick={handleDiscardPlan}
+                  disabled={applyingPlan}
+                  data-testid="plan-banner-discard"
+                >
+                  Discard
+                </button>
+                <button
+                  type="button"
+                  style={planBannerApplyBtnStyle}
+                  onClick={handleApplyPlan}
+                  disabled={applyingPlan}
+                  data-testid="plan-banner-apply"
+                >
+                  {applyingPlan ? 'Applying…' : 'Apply'}
+                </button>
+              </div>
+            )}
+
+            {/* Full-view floating controls — the merged header (and the icon
+                rail) live outside fullscreenRef, so both disappear once the
+                Fullscreen API is engaged. Mirrors CanvasHeader's breadcrumb
+                and copilot/checks/run actions in a minimal floating form so
+                the workflow stays fully operable in full view. Exiting full
+                view is already covered by the viewport toolbar's fullscreen
+                toggle below. */}
+            {isFullscreen && (
+              <div style={fullViewBreadcrumbStyle} data-testid="full-view-breadcrumb">
+                <span>{workflow.project.name}</span>
+                <span style={breadcrumbSepStyle}>/</span>
+                <span style={{ fontWeight: 600 }}>{workflow.name}</span>
+                {saveState !== 'conflict' && saveState !== 'idle' && (
+                  <>
+                    <span style={breadcrumbSepStyle}>·</span>
+                    <span style={{ color: 'var(--ink4)' }}>{saveState === 'saving' ? 'Saving…' : 'Saved'}</span>
+                  </>
+                )}
+              </div>
+            )}
+
+            {isFullscreen && (
+              <div style={fullViewControlsStyle} data-testid="full-view-controls">
+                <button
+                  type="button"
+                  style={headerCopilotToggleBtnStyle(copilotOpen)}
+                  onClick={() => setCopilotOpen((v) => !v)}
+                  aria-pressed={copilotOpen}
+                  title={copilotOpen ? 'Hide Nia AI' : 'Show Nia AI'}
+                >
+                  <Logo size={16} showWordmark={false} />
+                </button>
+                <button type="button" onClick={handleRunChecks} disabled={checksRunning} style={headerRunChecksBtnStyle(checksRunning)}>
+                  {checksRunning ? 'Running…' : 'Run checks'}
+                </button>
+                {runEnabled ? (
+                  <button type="button" onClick={handleRun} title={runTooltip} style={headerRunBtnStyle(true, runInFlight)}>
+                    Run
+                  </button>
+                ) : (
+                  <button type="button" disabled title={runTooltip} style={headerRunBtnStyle(false, runInFlight)}>
+                    {runInFlight ? 'Running…' : 'Run'}
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div style={viewportToolbarStyle(checksDockHeight)} data-testid="viewport-toolbar">
               <button type="button" style={viewportToolbarBtnStyle} onClick={() => zoomOut()} aria-label="Zoom out" title="Zoom out">
                 {'\u2212'}
               </button>
@@ -749,6 +831,7 @@ function CanvasInner({
               stale={checksStale}
               expanded={checksDockExpanded}
               onToggleExpanded={() => setChecksDockExpanded((v) => !v)}
+              onHeightChange={setChecksDockHeight}
               onSelectNode={handleSelectCheckNode}
               activeTab={checksDockTab}
               onTabChange={setChecksDockTab}
@@ -840,6 +923,9 @@ function CanvasInner({
           </div>
 
           <CopilotSidebar
+            open={copilotOpen}
+            onToggle={() => setCopilotOpen((v) => !v)}
+            workflowId={workflow.id}
             connections={connections}
             wiredConnectionIds={wiredConnectionIds}
             selectedConnectionId={selectedNode?.data.connectionId ?? null}
@@ -858,6 +944,7 @@ function CanvasInner({
 }
 
 export default function FlowCanvas(props: {
+  orgName: string | null;
   workflow: WorkflowDetail;
   connections: Connection[];
   initialGraph: WorkflowGraphResult;

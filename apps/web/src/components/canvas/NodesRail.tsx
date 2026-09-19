@@ -7,19 +7,18 @@ import type { GraphNodeType } from '@nia/schemas';
 import {
   railBodyStyle,
   railCollapseBtnStyle,
-  railCollapsedDividerStyle,
-  railCollapsedEntryDotStyle,
-  railCollapsedEntryLabelStyle,
-  railCollapsedEntryStyle,
-  railCollapsedListStyle,
-  railCollapsedToggleStyle,
+  railEntryIconTileStyle,
   railEntryStyle,
   railHeaderStyle,
+  railReopenBtnCountStyle,
+  railReopenBtnStyle,
   railSearchInputStyle,
   railSearchWrapStyle,
   railSectionHeaderStyle,
   railShellStyle,
 } from './styles';
+import { getConnectorIcon, TriggerIcon } from './icons';
+import { PanelToggleIcon } from './navIcons';
 
 // Same source of truth as GraphFlowNode.tsx's KIND_COLOR — kept local since
 // it's a single 3-entry map and importing it would couple this file to the
@@ -29,16 +28,6 @@ const NODE_TYPE_COLOR: Record<GraphNodeType, string> = {
   transform: 'var(--c-condition)',
   destination: 'var(--c-action)',
 };
-
-// Two-letter avatar for the icon-only collapsed rail, e.g. "Postgres Prod" -> "PP".
-function initials(label: string): string {
-  const words = label.trim().split(/\s+/).filter(Boolean);
-  const first = words[0];
-  if (!first) return '??';
-  const second = words[1];
-  if (!second) return first.slice(0, 2).toUpperCase();
-  return (first.charAt(0) + second.charAt(0)).toUpperCase();
-}
 
 export type PaletteDragPayload = {
   graphNodeType: GraphNodeType;
@@ -98,43 +87,19 @@ export default function NodesRail({ connections }: { connections: Connection[] }
   const groups = ['Sources', 'Transforms', 'Destinations'].filter((g) => entries.some((e) => e.group === g));
   const q = search.trim().toLowerCase();
 
+  // Collapsed: the rail itself renders nothing (width 0, see railShellStyle)
+  // — a small floating "Nodes N · +" button re-expands it instead of the
+  // old icon-only strip. Positioned relative to this wrapper (which sits at
+  // the very left edge of the canvas body, in the same spot the rail used
+  // to occupy) so it reads as anchored to the top-left of the canvas area.
   if (!wide) {
     return (
-      <div style={railShellStyle(false)} data-testid="nodes-rail">
-        <button type="button" aria-label="Expand nodes panel" onClick={() => setWide(true)} style={railCollapsedToggleStyle}>
-          {'\u2192'}
+      <div style={{ position: 'relative', flex: 'none', width: 0, height: '100%' }} data-testid="nodes-rail">
+        <button type="button" onClick={() => setWide(true)} style={railReopenBtnStyle} title="Show nodes" aria-label="Show nodes">
+          <PanelToggleIcon size={14} />
+          Nodes
+          <span style={railReopenBtnCountStyle}>{entries.length}</span>
         </button>
-
-        <div style={railCollapsedListStyle}>
-          <div style={railCollapsedEntryStyle(false)} title="Trigger — requires a trigger manifest, coming soon">
-            <span style={railCollapsedEntryLabelStyle}>TG</span>
-          </div>
-
-          {groups.map((group) => {
-            const groupEntries = entries.filter((e) => e.group === group);
-            if (groupEntries.length === 0) return null;
-            return (
-              <div key={group} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                <div style={railCollapsedDividerStyle} />
-                {groupEntries.map((entry, i) => (
-                  <div
-                    key={`${entry.graphNodeType}-${entry.manifestId ?? 'none'}-${entry.connectionId ?? i}`}
-                    draggable
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData(PALETTE_DRAG_MIME, JSON.stringify(entry));
-                      e.dataTransfer.effectAllowed = 'move';
-                    }}
-                    title={`${entry.label} (${group.slice(0, -1)})`}
-                    style={railCollapsedEntryStyle(true)}
-                  >
-                    <span style={railCollapsedEntryLabelStyle}>{initials(entry.label)}</span>
-                    <span style={railCollapsedEntryDotStyle(NODE_TYPE_COLOR[entry.graphNodeType])} />
-                  </div>
-                ))}
-              </div>
-            );
-          })}
-        </div>
       </div>
     );
   }
@@ -163,6 +128,9 @@ export default function NodesRail({ connections }: { connections: Connection[] }
           <div>
             <div style={railSectionHeaderStyle}>Triggers</div>
             <div style={railEntryStyle(false)} title="Requires a trigger manifest — Phase 6">
+              <span style={railEntryIconTileStyle('var(--ink4)')}>
+                <TriggerIcon size={13} />
+              </span>
               <span style={{ flex: 1 }}>Trigger</span>
               <span
                 style={{
@@ -197,7 +165,15 @@ export default function NodesRail({ connections }: { connections: Connection[] }
                   }}
                   style={railEntryStyle(true)}
                 >
-                  {entry.label}
+                  <span style={railEntryIconTileStyle(NODE_TYPE_COLOR[entry.graphNodeType])}>
+                    {(() => {
+                      const Icon = getConnectorIcon(entry.manifestId, entry.graphNodeType);
+                      return <Icon size={13} />;
+                    })()}
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {entry.label}
+                  </span>
                 </div>
               ))}
               {!q && groupEntries.length === 0 && (

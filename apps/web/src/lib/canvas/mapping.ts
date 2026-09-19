@@ -35,6 +35,8 @@ export type CanvasNodeData = {
   /** Display-only, resolved here so node components never need their own manifest/connections lookup. */
   manifestName?: string;
   connectionLabel?: string;
+  /** True only for ghostMapping.ts's Plan-derived overlay nodes — never set by graphToFlow/buildCanvasNode. Drives GraphFlowNode's read-only dashed/translucent styling; never persisted (flowToGraph doesn't read this field back). */
+  isGhost?: boolean;
 };
 
 export type CanvasNode = Node<CanvasNodeData, GraphNode["type"]>;
