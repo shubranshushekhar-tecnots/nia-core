@@ -7,13 +7,13 @@ import type { CanvasNode } from '@/lib/canvas/mapping';
 // branches on data.graphNodeType for color/handle layout, per the plan's
 // "one GraphFlowNode.tsx branching on data.graphNodeType" option (chosen
 // over 3 near-identical components).
-const KIND_COLOR: Record<CanvasNode['data']['graphNodeType'], string> = {
+export const KIND_COLOR: Record<CanvasNode['data']['graphNodeType'], string> = {
   source: 'var(--c-data)',
   transform: 'var(--c-condition)',
   destination: 'var(--c-action)',
 };
 
-const KIND_LABEL: Record<CanvasNode['data']['graphNodeType'], string> = {
+export const KIND_LABEL: Record<CanvasNode['data']['graphNodeType'], string> = {
   source: 'Source',
   transform: 'Transform',
   destination: 'Destination',
