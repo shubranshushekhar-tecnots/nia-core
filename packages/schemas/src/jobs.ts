@@ -160,11 +160,37 @@ export const SchemaRefreshJob = z.object({
 });
 export type SchemaRefreshJob = z.infer<typeof SchemaRefreshJob>;
 
+/**
+ * Phase 7 Session 1 — Copilot plan-propose. Same
+ * scope/workflowId/triggeredByUserId contract as ProposeMappingJob/PreviewJob
+ * (the plan engine dispatches real cardinality-probe reads via dispatch(),
+ * so it needs an attributable actor same as any other execution). Carries
+ * `conversationId` (not a destNodeId) since a plan proposal isn't anchored
+ * to one existing node — it's a free-form NL request that may add an
+ * entirely new source/destination pair. `message` is the user's raw NL
+ * request; the worker resolves the current GraphDoc and per-connection
+ * schema context itself (see apps/worker/src/lib/plan/graph.ts), never
+ * trusting client-supplied graph state for a scope-sensitive generation.
+ * Explicitly on QUEUE_INTERACTIVE, not QUEUE_HEAVY — must never sit behind
+ * a backfill (see Phase 7 plan's Session 1.2).
+ */
+export const PlanProposeJob = z.object({
+  kind: z.literal("plan_propose"),
+  scope: WorkspaceScope,
+  userId: z.string().uuid(),
+  workflowId: z.string().uuid(),
+  conversationId: z.string().uuid(),
+  message: z.string(),
+  triggeredByUserId: z.string().uuid(),
+});
+export type PlanProposeJob = z.infer<typeof PlanProposeJob>;
+
 export const InteractiveJob = z.discriminatedUnion("kind", [
   ChatQueryJob,
   CheckRunJob,
   ProposeMappingJob,
   PreviewJob,
   SchemaRefreshJob,
+  PlanProposeJob,
 ]);
 export type InteractiveJob = z.infer<typeof InteractiveJob>;

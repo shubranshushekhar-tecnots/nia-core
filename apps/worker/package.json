@@ -17,6 +17,7 @@
     "diagnose:count": "tsx scripts/chat-count-diagnose.ts",
     "bootstrap": "tsx scripts/dev-bootstrap.ts",
     "eval:golden": "tsx scripts/run-golden-eval.ts",
+    "eval:golden:plan": "tsx scripts/run-plan-golden-eval.ts",
     "kill-test": "tsx scripts/kill-test.ts"
   },
   "dependencies": {

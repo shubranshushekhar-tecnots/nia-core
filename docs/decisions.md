@@ -636,3 +636,46 @@ verification read, never as a compiled aggregate SOURCE read. Findings:
   "n"'`, `groupBySql: '"cohort"'`) before running it, then verifies the
   3 destination rows and `workflow_runs.rows_processed === 3`. Ran clean
   on first execution, all 8 assertions passed.
+
+## Phase 7 Session 1: plan_propose's WorkspaceScope provenance is a known divergence, not a resolved question
+
+`PlanProposeJob.scope: WorkspaceScope` follows the same substitute-for-RLS
+pattern every other worker job already relies on (`resolveConnection.ts`'s
+service_role client + mandatory scope filter — see that file's header
+comment: "this scope filter is the ONLY thing standing between the worker
+resolved someone else's connection and refused it"). This is not a fresh
+design choice for Phase 7; it's the existing, established pattern, reused
+rather than reinvented (see this plan's Context section, resolution 2).
+
+**Traced live, end-to-end, for where `scope` will actually come from once a
+route exists:** there is currently no `POST .../plan/propose`-shaped route
+in `apps/api/src/routes` at all — the only caller of `PlanProposeJob` today
+is the golden suite (`runPlanGoldenSuite.ts`), which constructs the payload
+directly in-process and is not reachable from any HTTP surface. So there is
+no active cross-tenant hole: nothing client-facing can supply `scope`
+today. But the established, correct pattern for when that route IS built
+(`scope = scopeFromActor(req.actor)`, `apps/api/src/lib/workspaceScope.ts:
+10-13`, fully server-derived from the Supabase-JWT-verified actor —
+`chat.ts`, the checks route, and the mappings route all already do exactly
+this, never from the request body) has **not yet been implemented or
+verified for `plan_propose`**, because the route doesn't exist yet. Record
+this explicitly as a known divergence/gap to close in Session 3 (when
+`CopilotSidebar.tsx`/`CommandBar.tsx` go live and the real enqueue route is
+built), not a silently-assumed-safe resolved question: **the Session 3
+route MUST derive `scope` via `scopeFromActor(req.actor)` (plus
+`assertWorkflowInScope`, the same mandatory pre-enqueue check every
+analogous route already performs), never from client-supplied body/query
+fields.** If a future session builds that route without this, that
+would be the actual cross-tenant hole the original review question was
+probing for — this entry exists so that isn't rediscovered from scratch.
+
+Also recorded per the same review: this whole scope-derivation chain is
+itself the codebase's standing substitute for true row-level RLS
+enforcement inside the worker (the worker's Supabase client is
+service_role, which bypasses RLS entirely — see `resolveConnection.ts`'s
+and `listVisibleConnections`'s header comments). A user-JWT-scoped worker
+client (real RLS enforcement inside the worker, not a manually-reimplemented
+filter) has no precedent anywhere in this codebase and was not built for
+Phase 7 — deferred, not attempted, consistent with "don't invent a new
+access-control pattern, reuse the one every other worker job already
+trusts."
