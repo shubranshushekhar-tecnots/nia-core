@@ -15,6 +15,7 @@ import { runGoldenSuite } from "./lib/eval/runGoldenSuite.js";
 import { registerNightlyEvalSchedule } from "./lib/eval/schedule.js";
 import { shutdownLangfuse } from "./lib/observability/langfuse.js";
 import { runEtl } from "./lib/etl/runEtl.js";
+import { runPlanPropose } from "./lib/plan/runPlanPropose.js";
 
 /**
  * Nia worker — the execution spine.
@@ -95,6 +96,16 @@ const interactive = new Worker(
         // why this is a separate half from apps/api's own cache-bust.
         console.log(`[interactive] schema_refresh for connection ${payload.connectionId}`);
         return await refreshSchema(payload);
+      case "plan_propose":
+        // Phase 7 Session 1 — runPlanPropose.ts owns the LangGraph
+        // plan-propose pipeline (resolveScope -> generatePlan ->
+        // checkConnections -> validateStructure -> validateFeasibility),
+        // same no-persistence-in-index.ts shape as every other case: this
+        // handler only computes the proposed Plan (or a refusal/clarify/
+        // no-connection outcome), it never persists a graph mutation —
+        // that's Session 2's Apply route, a separate explicit write.
+        console.log(`[interactive] plan_propose for workflow ${payload.workflowId}`);
+        return await runPlanPropose(payload, job.id!);
     }
   },
   { connection, concurrency: 10 },
