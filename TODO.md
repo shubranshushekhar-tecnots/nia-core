@@ -211,3 +211,28 @@
   not discover it after silently getting rounded numbers back. Not a
   bug to fix (see decisions.md for why the alternatives are worse) —
   just needs to be documented for customers.
+- **Golden corpus collection — start now (added 2026-09-21).** Phase 13
+  (router + coercion/missing-value specialists) cannot be evaluated
+  without a labeled corpus of real question→expected-behavior examples;
+  building that corpus after Phase 13 starts means evaluating against
+  data collected too late to catch early router mistakes. Start
+  collecting labeled examples now, ahead of Phase 13, so the corpus
+  exists and has some depth by the time it's needed.
+- **Rename the original roadmap's Phase 8 (Console + audit) and Phase 9
+  (hardening + self-host) as named milestones (added 2026-09-21).** The
+  Phase numbering has drifted from the original roadmap (this session's
+  work, e.g., is also informally "Phase 8" in decisions.md/PHASE8_EXIT.md
+  but is unrelated to the roadmap's original Phase 8 Console+audit
+  scope) — rename the roadmap's Phase 8/Phase 9 to named milestones
+  (e.g. "Console + audit" / "Hardening + self-host") to remove the
+  numbering collision. Console + audit is mandatory before Phase 15.
+- **Shape-only conformance fixtures for `regex_extract`, `regex_replace`,
+  `canonicalize`, `strip_accents` (added 2026-09-21).** §4 of
+  `PHASE8_EXIT.md` notes these 4 functions are proven only via the live
+  cross-evaluator agreement suite (real docker-sandbox execution), with
+  no entries in `packages/schemas/src/ops/__conformance__/fixtures.ts`'s
+  shape-only conformance suite at all — a real coverage gap for the
+  faster, non-live test path. Add fixtures for all 4, including their
+  non-default-pushability skip arms (`regex_extract`'s mysql skip,
+  `regex_replace`/`canonicalize`'s mongo skip, `strip_accents`'s
+  all-dialects skip).

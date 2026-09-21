@@ -12,6 +12,7 @@ node_modules/
 dist/
 .next/
 .turbo/
+*.tsbuildinfo
 
 # generated eval run artifacts
 apps/worker/eval-reports/
