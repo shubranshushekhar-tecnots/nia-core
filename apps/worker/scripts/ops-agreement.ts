@@ -45,6 +45,7 @@
  */
 import {
   compilePushdown,
+  compileFailurePreChecks,
   applyResidualTransforms,
   parseExpression,
   OnFailureAbortError,
@@ -57,6 +58,8 @@ import {
   provisionPostgresFixture,
   provisionMongoFixture,
   runCompiledQuery,
+  runPagedAggregateQuery,
+  runFailurePreCheck,
   diffRows,
   parseDateShapedString,
   type ProvisionedFixture,
@@ -75,9 +78,10 @@ async function provisionFor(
   dialect: SourceDialect,
   seedRows: Record<string, unknown>[],
   dateColumns: readonly string[] = [],
+  decimalColumns: readonly string[] = [],
 ): Promise<ProvisionedFixture> {
-  if (dialect === "mysql") return provisionMysqlFixture(seedRows, dateColumns);
-  if (dialect === "postgres") return provisionPostgresFixture(seedRows, dateColumns);
+  if (dialect === "mysql") return provisionMysqlFixture(seedRows, dateColumns, decimalColumns);
+  if (dialect === "postgres") return provisionPostgresFixture(seedRows, dateColumns, decimalColumns);
   return provisionMongoFixture(seedRows, dateColumns);
 }
 
@@ -175,7 +179,7 @@ async function main(): Promise<void> {
     let pushedCountAssertionFailed = false;
     for (const dialect of DIALECTS) {
       try {
-        const provisioned = await provisionFor(dialect, testCase.seedRows, testCase.dateColumns);
+        const provisioned = await provisionFor(dialect, testCase.seedRows, testCase.dateColumns, testCase.decimalColumns);
         cleanups.push(provisioned.cleanup);
         const plan = compilePushdown(dialect, config);
         if (testCase.expectedPushedResidualCount !== undefined) {
@@ -192,7 +196,32 @@ async function main(): Promise<void> {
           log(`    WARN  ${dialect}: filter not fully pushed down (${plan.residualCount} residual step(s)) — skipping this arm`);
           continue;
         }
-        results[dialect] = await runCompiledQuery(dialect, provisioned, plan.dialectQuery);
+        results[dialect] = testCase.pageSize
+          ? await runPagedAggregateQuery(dialect, provisioned, config, testCase.pageSize)
+          : await runCompiledQuery(dialect, provisioned, plan.dialectQuery);
+
+        if (testCase.expectedPreCheckFailures) {
+          // Phase 9 Part 4: live-proves compileFailurePreChecks + the
+          // buildFailurePreCheckQuery/dispatch pair runEtl.ts calls before
+          // extraction produce the correct failure count on a real DB —
+          // independent of (and never merged with) the row-diff above.
+          const checks = compileFailurePreChecks(dialect, config);
+          const actual = await Promise.all(
+            checks.map(async (check) => ({
+              label: check.label,
+              fns: check.fns,
+              count: await runFailurePreCheck(dialect, provisioned, check.dialectQuery),
+            })),
+          );
+          if (JSON.stringify(actual) === JSON.stringify(testCase.expectedPreCheckFailures)) {
+            log(`    PASS  ${dialect}: pushed pre-check counts match: ${JSON.stringify(actual)}`);
+          } else {
+            log(
+              `    FAIL  ${dialect}: pushed pre-check counts mismatch — expected ${JSON.stringify(testCase.expectedPreCheckFailures)}, got ${JSON.stringify(actual)}`,
+            );
+            pushedCountAssertionFailed = true;
+          }
+        }
       } catch (err) {
         log(`    ERROR  ${dialect}: ${err instanceof Error ? err.message : String(err)}`);
         erroredArms.push(dialect);

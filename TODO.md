@@ -103,54 +103,31 @@
     `%_of_total` fn (or a window/broadcast primitive) is parked, not
     scheduled — revisit only if real user friction shows up, per the
     Stage 1 digest's original framing.
-  - **Aggregate pushdown never paginates.** `runEtl.ts` executes a
-    pushed-down aggregate as a single non-paginated query capped at
-    `MAX_CHUNK_ROWS` (1000 output rows) with `isLastChunk` forced `true`
-    — the runner's keyset-pagination model is keyed on the source
-    primary key, which GROUP BY collapses, so there's no cursor to
-    paginate over post-aggregation. UPDATED (Block 6 addendum): a
-    workflow whose grouped output would exceed 1000 rows no longer
-    silently truncates — `runEtl.ts` now hard-fails the run (before
-    `dispatchWrite`, zero destination rows written) whenever the fetched
-    row count exactly hits the cap, publishing an `error` run-stream
-    event with a clear "aggregate result may exceed N groups" message.
-    This guard is the honest v1 stopgap, not the real fix: it can't
-    distinguish "exactly N groups, no truncation" from "truncated at N",
-    so a legitimately-N-group workflow will false-positive fail and must
-    raise the cap or reduce cardinality. The real fix remains an
-    aggregate-aware pagination cursor (e.g. keyset over the group-by
-    columns themselves) so large-cardinality group-bys can page like any
-    other query — revisit if/when that becomes a real workload.
-    **Named prerequisite for that work (Follow-up 1 / Condition 4, see
-    docs/decisions.md's Follow-up 1 entry for the full trace):**
-    `queryBuilder.ts`'s `buildEtlReadQuery` appends the keyset-cursor
-    condition/placeholder AFTER `compilePushdown`'s `ParamSink` resolve
-    pass has already run and returned final, real placeholders — safe
-    only because today's aggregate branch (`sqlQuery?.isAggregate`) never
-    adds a keyset condition at all, so keyset and `havingSql` never
-    coexist in the same query. Whenever aggregate pagination is built, if
-    the keyset condition is appended into `WHERE` the same way the
-    non-aggregate branch does (`conditions.push(...)`, `params.push(cursor)`
-    onto the END of the already-resolved `sqlQuery.params` array), it
-    reintroduces the exact arg(n)-desync bug class Follow-up 1 fixed,
-    through a door outside `compileSql`'s protection: for mysql, the
-    keyset placeholder would land TEXTUALLY inside `WHERE` (before
-    `GROUP BY`/`HAVING` in the final SQL string) while its bound value
-    sits NUMERICALLY LAST in the flat params array (after `HAVING`'s own
-    params) — mysql binds `?` by left-to-right scan of the final text, so
-    this silently swaps the keyset value into a `HAVING` placeholder's
-    slot and vice versa. (Postgres is unaffected by this specific shape,
-    since its `$N` binds by explicit number, not text position — but
-    don't rely on that per-dialect asymmetry, fix it generically.) Do NOT
-    hand-splice a keyset placeholder into `WHERE` after the fact. Either
-    (a) route the keyset condition through `ParamSink`/`resolveParamSink`
-    itself — i.e. push it inside `compileSql`, before the resolve pass
-    runs, so it participates in the same exactly-once scan-order
-    resolution as every other literal — or (b) if it must stay appended
-    downstream in `queryBuilder.ts`, prove (with a permanent mysql
-    agreement-style regression case, per Condition 3's precedent) that it
-    is always textually last in the assembled SQL, with no exceptions.
-    Not fixed now — no aggregate pagination exists yet to fix it in.
+  - **Aggregate pushdown pagination — DONE (Phase 9 Part 3).** `runEtl.ts`
+    now pages a pushed aggregate's output by group-key keyset, page size
+    `MAX_CHUNK_ROWS`, ordered by the group-by columns (`orderBySql` on
+    `SqlDialectQuery`; a trailing `$sort` in the compiled Mongo pipeline).
+    The keyset predicate is applied before grouping (`WHERE`/pre-`$group`
+    `$match`) via `SqlGroupKeyCursor`, resolved through the same
+    `ParamSink`/`resolveParamSink` pass as every other literal — never
+    hand-appended after the resolve pass (see the arg(n)-desync warning
+    this entry used to carry; that door is now closed the same way Part 2
+    closed it for the row-keyset cursor). NULL group keys sort first on
+    every dialect (`NULLS FIRST` forced on postgres). The old fail-at-cap
+    guard (hard-fail when fetched rows exactly hit the cap) is removed;
+    pagination supersedes it — hitting the cap now just means "there's
+    another page," exactly like row-keyset. One known gap: a pushed
+    aggregate prefix feeding a *further* residual stateful op (chained
+    aggregates, e.g. group-by-A pushed then group-by-B residual) is not
+    paginated inside `runStatefulResidual`'s internal loop — that path
+    still treats a pushed aggregate prefix as always single-page
+    (`isAggregatePushdown ||` short-circuit on its `isLastChunk`, with no
+    loud guard anymore since the guard was removed everywhere). This
+    combination is expected to be vanishingly rare (pushdown normally
+    removes an aggregate step from `residualSteps` entirely), so building
+    full duplicate group-keyset pagination machinery for it was skipped;
+    revisit if a real workflow ever hits it — until then it risks a
+    silent under-feed of the accumulator rather than a loud failure.
   - **Residual (non-pushed) aggregation buffers all per-group state in
     memory** (`residualTransform.ts`) — a `Map` of group-key → running
     accumulators, plus a `Set` per `count_distinct` aggregation. Fine at
@@ -259,6 +236,16 @@
   non-default-pushability skip arms (`regex_extract`'s mysql skip,
   `regex_replace`/`canonicalize`'s mongo skip, `strip_accents`'s
   all-dialects skip).
+- **Phase 10: scope MySQL's `HEX(BINARY col)` pagination cursor to string
+  group keys only, once the profiler provides column types (added
+  2026-09-21).** The Phase 9 close-out fix (`docs/decisions.md`) applies
+  byte-order pagination to every mysql group-by key type unconditionally,
+  since no column-type metadata is available at compile time to gate it —
+  correct, but pays a `HEX(BINARY ...)` hidden-column cost even for keys
+  where a native numeric/date comparison would already agree with a plain
+  `ORDER BY`. Once the profiler surfaces real column types, restrict the
+  `BINARY`/`HEX(BINARY)` treatment to string-typed group keys and let
+  other types use a native, type-matched cursor comparison.
 - **Phase 9: pre-check query per pushed fallible step, to restore
   failure visibility (added 2026-09-21).** Today a pushed
   `filter`/`computed_field`/`aggregate`-`having` step with a fallible

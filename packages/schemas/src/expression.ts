@@ -1033,10 +1033,63 @@ export const FALLIBLE_CALL_FNS: ReadonlySet<CallFn> = new Set([
  * adjacency), but `is_null(to_number(x))` and `coalesce(to_number(x), 0)`
  * do. This matches the Phase 13 missing-value specialist's expected
  * `coalesce(to_number(x), default)` output shape.
+ *
+ * Phase 9 follow-up (numeric group-key pagination session) — this
+ * "coalesce always handles" rule was too broad: `coalesce(parse_date(x,
+ * f1), parse_date(x, f2))` marked BOTH calls handled, so a value matching
+ * neither format silently became NULL with no failure ever counted. Fixed
+ * below: a `coalesce` only handles its nested fallible calls when its LAST
+ * argument is itself non-fallible (a literal, a column, or an expression
+ * containing no fallible calls anywhere — see `collectFallibleCallsDeep`)
+ * — i.e. it has a guaranteed non-null fallback. When the last argument is
+ * itself fallible, the coalesce as a whole is treated as ONE compound
+ * fallible unit instead (see `collectFallibleCalls`'s `coalesce` branch and
+ * `buildFailureExpr`'s matching branch): it fails when every nested
+ * fallible call's own inputs were non-null (each one genuinely ran, not
+ * skipped on a null input) AND the coalesce's overall result is still
+ * NULL (every argument, fallible or not, resolved to null). `is_null` /
+ * `is_not_null` keep their original, unconditional direct-nesting
+ * exemption — unaffected by this change.
  */
 const FAILURE_HANDLING_FNS: ReadonlySet<CallFn> = new Set(["coalesce", "is_null", "is_not_null"]);
 
-/** Collects every fallible call node (not just fn names — callers need `.args` to build a failure predicate) anywhere in an expression tree, mirroring collectCallFns's recursion shape. Excludes fallible calls directly wrapped by a handling fn (see FAILURE_HANDLING_FNS). */
+/** Structural, exemption-ignoring deep collector: every call node anywhere in `expr` whose fn is in FALLIBLE_CALL_FNS, regardless of any coalesce/is_null/is_not_null wrapping. Used only (a) to decide whether a coalesce's last argument is itself capable of producing a fallible null, and (b) to gather the inner calls for that coalesce's compound failure predicate — see collectFallibleCalls's `coalesce` branch. Not a general-purpose substitute for collectFallibleCalls, which is exemption-aware. */
+function collectFallibleCallsDeep(expr: Expr): ExprCall[] {
+  const calls: ExprCall[] = [];
+  function walk(node: Expr): void {
+    switch (node.kind) {
+      case "field":
+      case "literal":
+        return;
+      case "binary":
+        walk(node.left);
+        walk(node.right);
+        return;
+      case "call":
+        if (FALLIBLE_CALL_FNS.has(node.fn)) calls.push(node);
+        node.args.forEach(walk);
+        return;
+      case "comparison":
+        walk(node.left);
+        walk(node.right);
+        return;
+      case "logical":
+        node.args.forEach(walk);
+        return;
+      case "conditional":
+        node.branches.forEach((b) => {
+          walk(b.when);
+          walk(b.then);
+        });
+        walk(node.else);
+        return;
+    }
+  }
+  walk(expr);
+  return calls;
+}
+
+/** Collects every fallible call node (not just fn names — callers need `.args` to build a failure predicate) anywhere in an expression tree, mirroring collectCallFns's recursion shape. Excludes fallible calls directly wrapped by a handling fn (see FAILURE_HANDLING_FNS) — except a `coalesce` whose last argument is itself fallible, which is returned as a single compound unit (the `coalesce` call node itself) instead of its individual nested calls; see this file's `coalesce` doc comment above and `buildFailureExpr`'s matching branch. */
 export function collectFallibleCalls(expr: Expr): ExprCall[] {
   const calls: ExprCall[] = [];
   function walk(node: Expr, parentFn: CallFn | null): void {
@@ -1049,6 +1102,22 @@ export function collectFallibleCalls(expr: Expr): ExprCall[] {
         walk(node.right, null);
         return;
       case "call":
+        if (node.fn === "coalesce") {
+          const last = node.args[node.args.length - 1];
+          const lastIsFallible = last !== undefined && collectFallibleCallsDeep(last).length > 0;
+          if (lastIsFallible) {
+            // No guaranteed non-null fallback — the coalesce itself is
+            // fallible. Recorded as one compound unit; its nested calls'
+            // fallibility is fully captured by that unit, so they are
+            // deliberately NOT also walked/collected individually here.
+            calls.push(node);
+            return;
+          }
+          // Last argument is safe: original "coalesce always handles"
+          // behavior for its directly-nested fallible calls.
+          node.args.forEach((arg) => walk(arg, node.fn));
+          return;
+        }
         if (FALLIBLE_CALL_FNS.has(node.fn) && !(parentFn !== null && FAILURE_HANDLING_FNS.has(parentFn))) {
           calls.push(node);
         }
@@ -1091,6 +1160,19 @@ export function buildFailureExpr(expr: Expr): Expr | null {
   const calls = collectFallibleCalls(expr);
   if (calls.length === 0) return null;
   const perCall: Expr[] = calls.map((call) => {
+    if (call.fn === "coalesce") {
+      // Compound unit (see collectFallibleCalls's `coalesce` branch): using
+      // the generic branch below (call.args.map(is_not_null)) would be
+      // wrong here — `call.args` ARE the fallible sub-calls, so requiring
+      // them "non-null" would directly contradict `is_null(call)` and this
+      // branch would never fire. Instead: every fallible call nested
+      // anywhere inside this coalesce must have run on a non-null input,
+      // AND the coalesce as a whole must still be NULL.
+      const inner = collectFallibleCallsDeep(call);
+      const argsNonNull: Expr[] = inner.flatMap((c) => c.args.map((arg): Expr => ({ kind: "call", fn: "is_not_null", args: [arg] })));
+      const resultIsNull: Expr = { kind: "call", fn: "is_null", args: [call] };
+      return argsNonNull.length > 0 ? { kind: "logical", op: "and", args: [resultIsNull, ...argsNonNull] } : resultIsNull;
+    }
     const argsNonNull: Expr[] = call.args.map((arg) => ({ kind: "call", fn: "is_not_null", args: [arg] }));
     const resultIsNull: Expr = { kind: "call", fn: "is_null", args: [call] };
     return argsNonNull.length > 0

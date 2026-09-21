@@ -21,6 +21,22 @@ function ph(dialect: "mysql" | "postgres", n: number): string {
 function phStr(dialect: "mysql" | "postgres", n: number): string {
   return dialect === "mysql" ? `BINARY ${ph(dialect, n)}` : ph(dialect, n);
 }
+/** Phase 9 adversarial-case follow-up: mysql's default column collation is case-insensitive for GROUP BY/ORDER BY too (confirmed live — "a"/"A" silently merged into one group), so aggregate.ts's emitSql casts every groupBy column BINARY for both clauses on mysql; postgres is unaffected. */
+function gcol(dialect: "mysql" | "postgres", name: string): string {
+  return dialect === "mysql" ? `BINARY ${q(dialect, name)}` : q(dialect, name);
+}
+/** Companion to gcol: mysql's SELECT list can't repeat the plain column once GROUP BY uses BINARY (ONLY_FULL_GROUP_BY, verified live: error 1055), so it's wrapped in ANY_VALUE() instead; postgres keeps the plain column. */
+function scol(dialect: "mysql" | "postgres", name: string): string {
+  return dialect === "mysql" ? `ANY_VALUE(${q(dialect, name)}) AS ${q(dialect, name)}` : q(dialect, name);
+}
+/** Fix (numeric group keys under MySQL pagination): mysql-only hidden cursor SELECT fragment aggregate.ts appends per groupBy column, one per index, so the group-key keyset comparison can read the exact byte order ORDER BY uses instead of the plain (type-native-rendered) column; null on postgres (no hidden columns emitted there). */
+function cursorCol(dialect: "mysql" | "postgres", name: string, index: number): string | null {
+  return dialect === "mysql" ? `ANY_VALUE(HEX(BINARY ${q(dialect, name)})) AS ${q(dialect, `__nia_group_cursor_${index}`)}` : null;
+}
+/** Expected `groupCursorColumns` value for a non-empty groupBy list — mysql-only, one hidden alias per column in order; null on postgres. */
+function cursorCols(dialect: "mysql" | "postgres", count: number): string[] | null {
+  return dialect === "mysql" ? Array.from({ length: count }, (_, i) => `__nia_group_cursor_${i}`) : null;
+}
 
 describe("manifestDialect", () => {
   it("maps the 3 shipped connectors to their query dialect", () => {
@@ -69,6 +85,8 @@ describe("compilePushdown — filter, both SQL dialects", () => {
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     });
   });
 
@@ -82,6 +100,8 @@ describe("compilePushdown — filter, both SQL dialects", () => {
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     });
   });
 
@@ -105,6 +125,8 @@ describe("compilePushdown — filter, both SQL dialects", () => {
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     });
 
     const mongoPlan = compilePushdown("mongo", containsConfig);
@@ -126,6 +148,8 @@ describe("compilePushdown — filter, both SQL dialects", () => {
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     });
   });
 });
@@ -145,6 +169,8 @@ describe("compilePushdown — computed_field, both SQL dialects + mongo", () => 
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     });
   });
 
@@ -170,6 +196,8 @@ describe("compilePushdown — computed_field, both SQL dialects + mongo", () => 
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     });
     const mongo = compilePushdown("mongo", nested);
     expect(mongo.dialectQuery).toEqual({
@@ -220,6 +248,8 @@ describe("compilePushdown — order-stopping semantics", () => {
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     });
   });
 
@@ -312,11 +342,15 @@ describe.each(["mysql", "postgres"] as const)("compilePushdown — aggregate, SQ
     expect(plan.dialectQuery).toEqual({
       dialect,
       whereSql: null,
-      selectSql: `${q(dialect, "cohort")}, MAX(${q(dialect, "salary")}) AS ${q(dialect, "max_salary")}`,
+      selectSql: [scol(dialect, "cohort"), `MAX(${q(dialect, "salary")}) AS ${q(dialect, "max_salary")}`, cursorCol(dialect, "cohort", 0)]
+        .filter((s): s is string => s !== null)
+        .join(", "),
       params: [],
       isAggregate: true,
-      groupBySql: q(dialect, "cohort"),
+      groupBySql: gcol(dialect, "cohort"),
       havingSql: null,
+      orderBySql: dialect === "postgres" ? `${q(dialect, "cohort")} NULLS FIRST` : gcol(dialect, "cohort"),
+      groupCursorColumns: cursorCols(dialect, 1),
     });
   });
 
@@ -333,6 +367,8 @@ describe.each(["mysql", "postgres"] as const)("compilePushdown — aggregate, SQ
       isAggregate: true,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     });
   });
 
@@ -432,11 +468,20 @@ describe.each(["mysql", "postgres"] as const)("compilePushdown — aggregate, SQ
     expect(plan.dialectQuery).toEqual({
       dialect,
       whereSql: null,
-      selectSql: `${q(dialect, "cohort")}, SUM(${q(dialect, "amount")}) AS ${q(dialect, "cohort_sum")}, COUNT(*) AS ${q(dialect, "cohort_count")}`,
+      selectSql: [
+        scol(dialect, "cohort"),
+        `SUM(${q(dialect, "amount")}) AS ${q(dialect, "cohort_sum")}`,
+        `COUNT(*) AS ${q(dialect, "cohort_count")}`,
+        cursorCol(dialect, "cohort", 0),
+      ]
+        .filter((s): s is string => s !== null)
+        .join(", "),
       params: [],
       isAggregate: true,
-      groupBySql: q(dialect, "cohort"),
+      groupBySql: gcol(dialect, "cohort"),
       havingSql: null,
+      orderBySql: dialect === "postgres" ? `${q(dialect, "cohort")} NULLS FIRST` : gcol(dialect, "cohort"),
+      groupCursorColumns: cursorCols(dialect, 1),
     });
   });
 
@@ -451,7 +496,7 @@ describe.each(["mysql", "postgres"] as const)("compilePushdown — aggregate, SQ
     expect(plan.pushedDownCount).toBe(1);
     expect(plan.residualCount).toBe(1);
     expect(plan.residualTransforms.map((s) => s.kind)).toEqual(["aggregate"]);
-    expect(plan.dialectQuery).toMatchObject({ isAggregate: true, groupBySql: `${q(dialect, "region")}, ${q(dialect, "cohort")}` });
+    expect(plan.dialectQuery).toMatchObject({ isAggregate: true, groupBySql: `${gcol(dialect, "region")}, ${gcol(dialect, "cohort")}` });
   });
 });
 
@@ -469,6 +514,7 @@ describe("compilePushdown — aggregate, mongo", () => {
         { $group: { _id: { cohort: "$cohort" }, max_salary: { $max: "$salary" } } },
         { $addFields: { cohort: "$_id.cohort" } },
         { $project: { _id: 0 } },
+        { $sort: { cohort: 1 } },
       ],
     });
   });
@@ -519,6 +565,7 @@ describe("compilePushdown — aggregate, mongo", () => {
         { $addFields: { cohort: "$_id.cohort" } },
         { $project: { _id: 0 } },
         { $match: { max_salary: { $gt: 100000 } } },
+        { $sort: { cohort: 1 } },
       ],
     });
   });
@@ -541,6 +588,7 @@ describe("compilePushdown — aggregate, mongo", () => {
         { $addFields: { cohort: "$_id.cohort" } },
         { $project: { _id: 0 } },
         { $match: { cohort: { $ne: "unassigned" } } },
+        { $sort: { cohort: 1 } },
       ],
     });
   });
@@ -595,6 +643,7 @@ describe("compilePushdown — aggregate, mongo", () => {
         { $group: { _id: { cohort: "$cohort" }, max_salary: { $max: "$salary" } } },
         { $addFields: { cohort: "$_id.cohort" } },
         { $project: { _id: 0 } },
+        { $sort: { cohort: 1 } },
       ],
     });
   });
@@ -637,6 +686,7 @@ describe("compilePushdown — aggregate, mongo", () => {
         { $group: { _id: { cohort: "$cohort" }, cohort_sum: { $sum: "$amount" }, cohort_count: { $sum: 1 } } },
         { $addFields: { cohort: "$_id.cohort" } },
         { $project: { _id: 0 } },
+        { $sort: { cohort: 1 } },
       ],
     });
   });
@@ -659,6 +709,7 @@ describe("compilePushdown — aggregate, mongo", () => {
         { $group: { _id: { region: "$region", cohort: "$cohort" }, subtotal: { $sum: "$amount" } } },
         { $addFields: { region: "$_id.region", cohort: "$_id.cohort" } },
         { $project: { _id: 0 } },
+        { $sort: { region: 1, cohort: 1 } },
       ],
     });
   });

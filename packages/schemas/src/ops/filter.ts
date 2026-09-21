@@ -8,6 +8,7 @@ import { computeFailureReport, fallibleStepIsPushable, quarantineMessage, resolv
 export const filterOp: OpModule<FilterStepT> = {
   kind: "filter",
   schema: FilterStep,
+  residualExecution: "row-local",
 
   createDefault(): FilterStepT {
     return { kind: "filter", expr: { kind: "literal", value: true } };
@@ -17,13 +18,13 @@ export const filterOp: OpModule<FilterStepT> = {
     // Phase 8b-3: a fallible call's NULL result already excludes the row
     // via the WHERE clause under three-valued logic (null ≡ drop for
     // filter — see nodeConfig.ts's OnFailurePolicy doc comment), so
-    // "null"/"drop" push normally with zero extra code — no separate
-    // failure count is available for a pushed filter (only a residually
-    // executed step counts failures; see onFailure.ts's top doc comment
-    // and docs/decisions.md's 8b-3 entry for this documented v1
-    // trade-off). "fail"/"quarantine" are always forced residual
-    // (fallibleStepIsPushable) since they need to inspect every row to
-    // report/abort, not just exclude non-matching ones.
+    // "null"/"drop" push normally with zero extra code. "fail" pushes too
+    // (Phase 9 Part 4): pushdown.ts's compileFailurePreChecks runs a
+    // separate pre-check query for every pushed fallible step, giving
+    // "fail" (and "null"/"drop") a real failure count without this op
+    // needing to inspect every row itself. Only "quarantine" is still
+    // always forced residual (fallibleStepIsPushable) — it has no sink yet
+    // (Phase 11) so it always throws once it would matter.
     if (!fallibleStepIsPushable(step, step.expr)) return false;
     return exprFnsPushable(step.expr, dialect);
   },

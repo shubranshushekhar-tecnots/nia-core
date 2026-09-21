@@ -78,6 +78,18 @@ export interface AgreementCase {
    */
   dateColumns?: string[];
   /**
+   * Fix (numeric group keys under MySQL pagination) — opt-in list of
+   * seedRows keys that should be provisioned as a real DECIMAL(10,2)
+   * (mysql) / numeric(10,2) (postgres) column instead of the default
+   * DOUBLE/double precision dbHarness.ts would otherwise infer for a
+   * numeric value. Needed to genuinely exercise the driver-level rendering
+   * distinction the fix's cursor-column change is proving is now handled
+   * (mysql2 returns DECIMAL columns as JS strings, e.g. "10.00", but
+   * DOUBLE columns as JS numbers) — see dbHarness.ts's inferSqlType doc
+   * comment.
+   */
+  decimalColumns?: string[];
+  /**
    * Item 1 (pre-batch-5 hardening) — marks this case as a KNOWN, DECLARED
    * divergence/error rather than an untriaged one, mirroring
    * `OpFixture.knownFailure` (packages/schemas/src/ops/__conformance__/
@@ -110,12 +122,17 @@ export interface AgreementCase {
    */
   expectedResidualFailures?: { label: string; fns: string[]; count: number }[];
   /**
-   * Phase 8b-3 — for an onFailure: "fail" case: every fallible expression
-   * forces its step residual (fallibleStepIsPushable), so every SQL/mongo
-   * pushdown arm is expected to WARN-skip (plan.residualCount > 0) and the
-   * residual arm is expected to throw OnFailureAbortError with a message
-   * containing this substring — asserted instead of the ordinary row-diff
-   * outcome, which never runs for this case (no arm ever returns rows).
+   * Phase 8b-3 — for an onFailure: "fail" case: asserts the residual arm
+   * throws OnFailureAbortError with a message containing this substring
+   * (residual's in-process semantics are unaffected by pushability).
+   * Originally (Phase 8b-3) this always meant every SQL/mongo pushdown arm
+   * WARN-skipped too (fallibleStepIsPushable forced every "fail" case
+   * fully residual). Phase 9 Part 4 changed that: only "quarantine" still
+   * forces residual, so a "fail" case now typically also carries
+   * `expectedPushedResidualCount: 0` and `expectedPreCheckFailures` — the
+   * pushdown arms stay pushed, run normally, and get row-diffed like any
+   * other case, while this field only ever asserts the residual arm's
+   * abort behavior.
    */
   expectAbort?: string;
   /**
@@ -136,6 +153,33 @@ export interface AgreementCase {
    * writeup of why this is NOT treated as a bug to fix.
    */
   expectedPushedResidualCount?: number;
+  /**
+   * Phase 9 Part 4 — for a case whose fallible step now stays PUSHED
+   * (paired with `expectedPushedResidualCount: 0`): asserts the live
+   * failure count `pushdown.ts`'s `compileFailurePreChecks` produces for
+   * each pushed dialect, run via `buildFailurePreCheckQuery` +
+   * `dispatch()` (the exact pair `runEtl.ts` calls before extraction).
+   * Proves the pre-check mechanism itself reports the correct count on a
+   * real DB — for policy "fail" this is the count that drives a real
+   * run's abort-before-any-write; for "null"/"drop" it's the count a real
+   * run reports in its "done" event, replacing the old v1 gap.
+   */
+  expectedPreCheckFailures?: { label: string; fns: string[]; count: number }[];
+  /**
+   * Phase 9 Part 4 test list — when set, ops-agreement.ts runs every pushed
+   * SQL/Mongo arm through `dbHarness.ts`'s `runPagedAggregateQuery` (a real
+   * multi-page loop threading `SqlGroupKeyCursor`, mirroring runEtl.ts's own
+   * per-chunk resume logic) instead of the ordinary single-shot
+   * `runCompiledQuery`, using this value as the page size. The residual arm
+   * is unaffected (it has no pagination concept — `applyResidualTransforms`
+   * always sees the whole dataset in one call) and still serves as the
+   * ground-truth group set every paginated pushdown arm's diffRows result
+   * is compared against. Only meaningful for a case whose `steps` contain
+   * exactly one `aggregate` step that stays fully pushed
+   * (`expectedPushedResidualCount: 0`) — `runPagedAggregateQuery` itself
+   * throws if that's not true.
+   */
+  pageSize?: number;
 }
 
 /** Parses a bare expression string for use inside a hand-built `steps` array (see `AgreementCase.steps`'s doc comment above) — throws at module load if the string doesn't parse, matching ops-agreement.ts's own buildConfig behavior for the ordinary filterExpr path. */
@@ -1523,22 +1567,40 @@ export const AGREEMENT_CASES: AgreementCase[] = [
     // i.e. the "fail" default) still fully pushable across all 3 dialects,
     // since fallibleStepIsPushable only forces residual for an UNHANDLED
     // fallible call under "fail"/"quarantine".
-    description: 'Phase 8b-3 — onFailure: "null" on computed_field(to_number(x)): failing row keeps its place with a NULL, count=1. Also carries a coalesce(to_number(x), 0)-handled column (z) with no explicit onFailure, proving a handled fallible call is excluded from the failure report and stays pushable under the "fail" default.',
+    //
+    // Phase 9 close-out follow-up: a third computed_field column,
+    // `w = coalesce(parse_date(note, "YYYY-MM-DD"), parse_date(note,
+    // "MM/DD/YYYY"))`, proves the refined coalesce rule live: unlike `z`
+    // above, `w`'s LAST argument is itself a fallible call, so the whole
+    // coalesce becomes one compound fallible unit instead of being
+    // exempt — it fails on `note: "not-a-date"` (non-null input, matches
+    // neither format, coalesce result NULL) but not on rows matching
+    // either format.
+    description: 'Phase 8b-3 — onFailure: "null" on computed_field(to_number(x)): failing row keeps its place with a NULL, count=1. Also carries a coalesce(to_number(x), 0)-handled column (z) with no explicit onFailure, proving a handled fallible call is excluded from the failure report and stays pushable under the "fail" default. Phase 9 follow-up: also carries a two-format coalesce(parse_date(note, f1), parse_date(note, f2)) column (w) whose fallible last argument makes the coalesce itself one compound fallible unit — it fails on a value matching neither format.',
     seedRows: [
-      { x: "10" }, // valid -> y = 10, z = 10, not a failure
-      { x: "abc" }, // non-null arg, NULL result -> a failure for y; z = coalesce(NULL, 0) = 0, not a failure (handled)
-      { x: null }, // NULL arg -> NOT a failure, y = NULL, z = coalesce(NULL, 0) = 0
+      { x: "10", note: "2024-01-15" }, // valid -> y = 10, z = 10, not a failure; note matches format 1 -> w not a failure
+      { x: "abc", note: "01/15/2024" }, // non-null arg, NULL result -> a failure for y; z = coalesce(NULL, 0) = 0, not a failure (handled); note matches format 2 -> w not a failure
+      { x: null, note: "not-a-date" }, // NULL arg -> NOT a failure, y = NULL, z = coalesce(NULL, 0) = 0; note matches neither format, non-null input -> w IS a failure
     ],
     filterExpr: "to_number(x) > -1", // unused (steps set below), required by the type
     steps: [
       { kind: "computed_field", name: "y", expression: parseExpr("to_number(x)"), onFailure: "null" },
       { kind: "computed_field", name: "z", expression: parseExpr("coalesce(to_number(x), 0)") },
+      {
+        kind: "computed_field",
+        name: "w",
+        expression: parseExpr('coalesce(parse_date(note, "YYYY-MM-DD"), parse_date(note, "MM/DD/YYYY"))'),
+        onFailure: "null",
+      },
     ],
     tag: "onfailure",
-    expectedResidualFailures: [{ label: 'computed_field "y"', fns: ["to_number"], count: 1 }],
+    expectedResidualFailures: [
+      { label: 'computed_field "y"', fns: ["to_number"], count: 1 },
+      { label: 'computed_field "w"', fns: ["coalesce"], count: 1 },
+    ],
   },
   {
-    description: 'Phase 8b-3 — onFailure: "drop" on computed_field(to_number(x)): failing row is removed entirely, count=1',
+    description: 'Phase 8b-3 / Phase 9 Part 4 — onFailure: "drop" on computed_field(to_number(x)): failing row is removed entirely, count=1; stays PUSHED (residualCount 0), and the live pushed pre-check reports the same count the residual arm does.',
     seedRows: [
       { x: "10" },
       { x: "abc" },
@@ -1548,9 +1610,11 @@ export const AGREEMENT_CASES: AgreementCase[] = [
     steps: [{ kind: "computed_field", name: "y", expression: parseExpr("to_number(x)"), onFailure: "drop" }],
     tag: "onfailure",
     expectedResidualFailures: [{ label: 'computed_field "y"', fns: ["to_number"], count: 1 }],
+    expectedPushedResidualCount: 0,
+    expectedPreCheckFailures: [{ label: 'computed_field "y"', fns: ["to_number"], count: 1 }],
   },
   {
-    description: 'Phase 8b-3 — onFailure: "fail" on computed_field(to_number(x)): every pushdown arm is forced residual, residual arm aborts naming the step/function/count',
+    description: 'Phase 8b-3 / Phase 9 Part 4 — onFailure: "fail" on computed_field(to_number(x)): the step now stays PUSHED (residualCount 0) on all 3 dialects, since only "quarantine" forces residual (fallibleStepIsPushable) — the residual arm still independently aborts naming the step/function/count (its pure in-process semantics are unaffected by pushability), and the live pushed pre-check (compileFailurePreChecks + buildFailurePreCheckQuery, the exact pair runEtl.ts calls) reports the same failing-row count that drives a real run\'s abort-before-any-write.',
     seedRows: [
       { x: "10" },
       { x: "abc" },
@@ -1560,6 +1624,8 @@ export const AGREEMENT_CASES: AgreementCase[] = [
     steps: [{ kind: "computed_field", name: "y", expression: parseExpr("to_number(x)"), onFailure: "fail" }],
     tag: "onfailure",
     expectAbort: 'computed_field "y": to_number failed on 1 row(s).',
+    expectedPushedResidualCount: 0,
+    expectedPreCheckFailures: [{ label: 'computed_field "y"', fns: ["to_number"], count: 1 }],
   },
   {
     // A `filter` step, not `computed_field`, is required here:
@@ -1595,12 +1661,134 @@ export const AGREEMENT_CASES: AgreementCase[] = [
     tag: "onfailure",
     expectedResidualFailures: [{ label: "filter", fns: ["to_number"], count: 1 }],
     // Item 3 follow-up: pins that this composition stays FULLY pushed
-    // (residualCount 0) under "drop" on all 3 dialects — i.e. a real run
-    // (runEtl.ts) reports no failure count at all for this case (the
-    // `expectedResidualFailures` above only proves the pure reference
-    // implementation's count is correct, not what a real pushed run
-    // returns). This is the documented v1 trade-off, not a bug — see
-    // docs/decisions.md's 8b-3 entry.
+    // (residualCount 0) under "drop" on all 3 dialects. Originally (Phase
+    // 8b-3) a real run (runEtl.ts) reported NO failure count at all for a
+    // fully-pushed "drop"/"null" composition — documented as a v1
+    // trade-off, not a bug (see docs/decisions.md's 8b-3 entry). Phase 9
+    // Part 4 resolved that gap: `expectedPreCheckFailures` below proves
+    // the live pushed pre-check (compileFailurePreChecks +
+    // buildFailurePreCheckQuery/dispatch, the exact pair runEtl.ts calls
+    // before extraction) now reports the same count the residual arm
+    // does, on a real DB, with the step still fully pushed.
     expectedPushedResidualCount: 0,
+    expectedPreCheckFailures: [{ label: "filter", fns: ["to_number"], count: 1 }],
+  },
+  {
+    // Phase 9 Part 4 test list — the one required adversarial live
+    // pagination case: a 2-column GROUP BY, a HAVING referencing a param
+    // (literal), a NULL group key, and string keys differing only by case
+    // ("a"/"A") in the same group-by column, paged at size 2 (5 distinct
+    // groups -> 3 pages) so a real multi-page resume (dbHarness.ts's
+    // runPagedAggregateQuery, mirroring runEtl.ts's own per-chunk
+    // SqlGroupKeyCursor threading) is actually exercised, not just a
+    // single-page compile. The ordinary pairwise diffRows below (already
+    // order-independent) is enough to assert "the exact group set": if any
+    // pushed arm split, duplicated, or dropped a group across pages, or if
+    // mysql's GROUP BY collapsed "a"/"A" into one group while
+    // postgres/mongo/residual kept them separate, that shows up as a row
+    // count / content mismatch against the other arms.
+    //
+    // CONFIRMED LIVE (initial run): mysql merged "a"/"A" into one group (4
+    // groups, one "a"-keyed row with total 30) while postgres/mongo/residual
+    // agreed with each other on 5 distinct groups — a real bug, not a shape
+    // artifact (pagination itself was never the bug: all 4 evaluators
+    // correctly walked every page with no dropped/duplicated group at their
+    // own group count). FIXED in aggregate.ts's emitSql: mysql's GROUP
+    // BY/ORDER BY column list is now BINARY-cast (byte-wise grouping/
+    // ordering) with the SELECT-list groupBy columns wrapped in
+    // ANY_VALUE(...) AS <col> to stay compatible with this sandbox's
+    // ONLY_FULL_GROUP_BY sql_mode without corrupting the returned column
+    // name — see that file's comment for the full rationale. Re-run live
+    // after the fix: all 4 arms agree on 5 distinct groups, XPASS (no
+    // divergence) — see docs/decisions.md's Phase 9 entry. Known residual
+    // risk (not exercised by this case, which only has string groupBy
+    // columns): the fix forces BINARY unconditionally on every mysql
+    // groupBy column regardless of type, which would flip ORDER BY's sort
+    // semantics for a NUMERIC groupBy column from numeric to
+    // lexicographic-byte, while the WHERE-side group-key keyset cursor
+    // comparison (compileCondition's Fix 1) stays numeric for that same
+    // column — a theoretical duplicate/skipped-group pagination risk for a
+    // numeric groupBy column, flagged as an open risk, not reproduced or
+    // fixed here (out of this phase's scope).
+    description: 'Phase 9 Part 4 — adversarial paginated aggregate: GROUP BY (g1, g2), HAVING total > 0 (param), a NULL group key, "a"/"A" case-differing group keys, page size 2',
+    seedRows: [
+      { g1: "a", g2: "x", v: 10 },
+      { g1: "A", g2: "x", v: 20 },
+      { g1: null, g2: "x", v: 5 },
+      { g1: "b", g2: "y", v: 7 },
+      { g1: "b", g2: "y", v: 3 },
+      { g1: "c", g2: "z", v: 1 },
+    ],
+    filterExpr: "true",
+    steps: [
+      {
+        kind: "aggregate",
+        groupBy: ["g1", "g2"],
+        aggregations: [{ fn: "sum", field: "v", alias: "total" }],
+        having: parseExpr("total > 0"),
+      },
+    ],
+    tag: "aggregate-pagination",
+    expectedPushedResidualCount: 0,
+    pageSize: 2,
+  },
+  {
+    // Fix (numeric group keys under MySQL pagination) — the residual risk
+    // flagged (and deliberately not reproduced/fixed) by the case above:
+    // mysql's GROUP BY/ORDER BY forces byte-wise ordering on every groupBy
+    // column regardless of type, so an INT groupBy column with values
+    // 9/10/100 sorts as "10" < "100" < "9" (byte order), not 9 < 10 < 100
+    // (numeric order). Page size 2 with 3 distinct groups forces a real
+    // multi-page resume: page 1 (BINARY-ordered) returns the "10" and "100"
+    // groups; the cursor becomes n=100. Pre-fix, the WHERE-side keyset
+    // compared the cursor NUMERICALLY (`n > 100`), which is false for every
+    // remaining group (9 is not > 100 numerically) — silently DROPPING the
+    // n=9 group entirely. Fixed: the cursor is read from and compared
+    // against the same HEX(BINARY n) byte-order encoding ORDER BY sorts
+    // by, so `HEX(BINARY n) > HEX(BINARY '100')` correctly matches "9"
+    // (byte-wise "9" > "100") and page 2 returns it.
+    //
+    // A second groupBy column, `d` (DECIMAL(10,2)), is included specifically
+    // to prove the cursor is read from the hidden HEX(BINARY col) column,
+    // never the plain returned value: mysql2 renders a DECIMAL(10,2) as a
+    // JS STRING ("10.00"), not a number, so a cursor naively built from the
+    // returned row would fail to even round-trip through a JSON-persisted
+    // checkpoint, independently of the byte-order-vs-numeric-order issue
+    // above.
+    //
+    // The ordinary pairwise diffRows below (order-independent) is enough to
+    // assert "the exact group set": a dropped/duplicated group on any pushed
+    // arm shows up as a row-count/content mismatch against the other 3 arms.
+    // CONFIRMED LIVE: all 4 arms agree on the same 3 groups (n=9 total=3,
+    // n=10 total=3, n=100 total=9) across both pages — no dropped/duplicated
+    // group. The only per-row mismatch is `d`'s own JS type (mysql2 returns
+    // "1.50" as a string; postgres/mongo/residual return 1.5 as a number) —
+    // declared below via expectedDivergence, unrelated to pagination.
+    description: "Fix — adversarial paginated aggregate: GROUP BY (n INT, d DECIMAL(10,2)) with n = 9, 10, 100 (byte order != numeric order), page size 2",
+    seedRows: [
+      { n: 9, d: 1.5, v: 1 },
+      { n: 9, d: 1.5, v: 2 },
+      { n: 10, d: 2.5, v: 3 },
+      { n: 100, d: 3.5, v: 4 },
+      { n: 100, d: 3.5, v: 5 },
+    ],
+    filterExpr: "true",
+    steps: [
+      {
+        kind: "aggregate",
+        groupBy: ["n", "d"],
+        aggregations: [{ fn: "sum", field: "v", alias: "total" }],
+      },
+    ],
+    decimalColumns: ["d"],
+    tag: "aggregate-pagination-numeric",
+    expectedPushedResidualCount: 0,
+    pageSize: 2,
+    expectedDivergence: {
+      reason:
+        'mysql renders the DECIMAL(10,2) groupBy column `d` as a JS string (e.g. "1.50"), while postgres/mongo/residual render it as a JS number (1.5) — a pre-existing mysql2 driver type-shape quirk, unrelated to pagination. The group SET itself (which `n` values exist, with correct `total` sums) agrees across all 4 evaluators on every page; only `d`\'s own JS type differs.',
+      decisionsRef:
+        "docs/decisions.md — \"Phase 9 close-out fix: MySQL group-key pagination cursor must match ORDER BY's byte order, not the column's own type\"",
+    },
   },
 ];

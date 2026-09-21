@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyResidualTransforms } from "./residualTransform.js";
+import { applyResidualTransforms, applyResidualTransformsChunk } from "./residualTransform.js";
 import { parseExpression } from "./expression.js";
 import type { AggregateStep, ComputedFieldStep, FilterStep } from "./nodeConfig.js";
 import { OnFailureAbortError } from "./ops/onFailure.js";
@@ -223,5 +223,49 @@ describe("applyResidualTransforms — onFailure failure reporting (Phase 8b-3)",
     const result = applyResidualTransforms(cols, rowsWithOneFailure, steps);
     expect(result.failures.map((f) => f.label)).toEqual(['computed_field "y"', 'computed_field "z"']);
     expect(result.failures.every((f) => f.count === 1)).toBe(true);
+  });
+});
+
+describe("applyResidualTransformsChunk — stateful-op guard (Phase 9 Part 1)", () => {
+  const columns = ["cohort", "salary"];
+  const rows: unknown[][] = [
+    ["eng", 100],
+    ["sales", 80],
+  ];
+
+  it("rejects a stateful residual op (aggregate) run against a single chunk", () => {
+    const step: AggregateStep = {
+      kind: "aggregate",
+      groupBy: ["cohort"],
+      aggregations: [{ fn: "sum", field: "salary", alias: "total" }],
+    };
+
+    expect(() => applyResidualTransformsChunk(columns, rows, [step])).toThrow(
+      /stateful residual op/,
+    );
+  });
+
+  it("rejects even when the stateful op is preceded by row-local steps", () => {
+    const steps = [
+      { kind: "filter", expr: expr("salary > 0") } as FilterStep,
+      {
+        kind: "aggregate",
+        groupBy: ["cohort"],
+        aggregations: [{ fn: "sum", field: "salary", alias: "total" }],
+      } as AggregateStep,
+    ];
+
+    expect(() => applyResidualTransformsChunk(columns, rows, steps)).toThrow(
+      /stateful residual op/,
+    );
+  });
+
+  it("runs normally (same output as applyResidualTransforms) when every step is row-local", () => {
+    const steps = [{ kind: "filter", expr: expr('cohort = "eng"') } as FilterStep];
+
+    const chunkResult = applyResidualTransformsChunk(columns, rows, steps);
+    const fullResult = applyResidualTransforms(columns, rows, steps);
+    expect(chunkResult).toEqual(fullResult);
+    expect(chunkResult.rows).toEqual([["eng", 100]]);
   });
 });

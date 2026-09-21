@@ -69,6 +69,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [
@@ -96,6 +98,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [
@@ -146,6 +150,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [
@@ -169,6 +175,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [
@@ -213,6 +221,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [
@@ -238,6 +248,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [
@@ -286,6 +298,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [{ status: "active" }, { status: "inactive" }],
@@ -311,6 +325,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [{ status: "active" }, { status: "inactive" }],
@@ -373,11 +389,13 @@ export const OP_FIXTURES: OpFixture[] = [
     expectedDialectQuery: {
       dialect: "mysql",
       whereSql: null,
-      selectSql: "`cohort`, MAX(`salary`) AS `max_salary`",
+      selectSql: "ANY_VALUE(`cohort`) AS `cohort`, MAX(`salary`) AS `max_salary`, ANY_VALUE(HEX(BINARY `cohort`)) AS `__nia_group_cursor_0`",
       params: [],
       isAggregate: true,
-      groupBySql: "`cohort`",
+      groupBySql: "BINARY `cohort`",
       havingSql: null,
+      orderBySql: "BINARY `cohort`",
+      groupCursorColumns: ["__nia_group_cursor_0"],
     },
     dbCase: {
       seedRows: [
@@ -404,6 +422,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: true,
       groupBySql: '"cohort"',
       havingSql: null,
+      orderBySql: '"cohort" NULLS FIRST',
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [
@@ -429,6 +449,7 @@ export const OP_FIXTURES: OpFixture[] = [
         { $group: { _id: { cohort: "$cohort" }, max_salary: { $max: "$salary" } } },
         { $addFields: { cohort: "$_id.cohort" } },
         { $project: { _id: 0 } },
+        { $sort: { cohort: 1 } },
       ],
     },
     dbCase: {
@@ -462,11 +483,14 @@ export const OP_FIXTURES: OpFixture[] = [
     expectedDialectQuery: {
       dialect: "mysql",
       whereSql: null,
-      selectSql: "`cohort`, MAX(`salary`) AS `max_salary`",
+      selectSql:
+        "ANY_VALUE(`cohort`) AS `cohort`, MAX(`salary`) AS `max_salary`, ANY_VALUE(HEX(BINARY `cohort`)) AS `__nia_group_cursor_0`",
       params: [100000],
       isAggregate: true,
-      groupBySql: "`cohort`",
+      groupBySql: "BINARY `cohort`",
       havingSql: "(MAX(`salary`) > ?)",
+      orderBySql: "BINARY `cohort`",
+      groupCursorColumns: ["__nia_group_cursor_0"],
     },
     dbCase: {
       seedRows: [
@@ -500,6 +524,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: true,
       groupBySql: '"cohort"',
       havingSql: '(MAX("salary") > $1)',
+      orderBySql: '"cohort" NULLS FIRST',
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [
@@ -533,6 +559,7 @@ export const OP_FIXTURES: OpFixture[] = [
         { $addFields: { cohort: "$_id.cohort" } },
         { $project: { _id: 0 } },
         { $match: { max_salary: { $gt: 100000 } } },
+        { $sort: { cohort: 1 } },
       ],
     },
     dbCase: {
@@ -562,11 +589,14 @@ export const OP_FIXTURES: OpFixture[] = [
     expectedDialectQuery: {
       dialect: "mysql",
       whereSql: null,
-      selectSql: "`cohort`, MAX(`salary`) AS `max_salary`",
+      selectSql:
+        "ANY_VALUE(`cohort`) AS `cohort`, MAX(`salary`) AS `max_salary`, ANY_VALUE(HEX(BINARY `cohort`)) AS `__nia_group_cursor_0`",
       params: ["unassigned"],
       isAggregate: true,
-      groupBySql: "`cohort`",
+      groupBySql: "BINARY `cohort`",
       havingSql: "(`cohort` <> BINARY ?)",
+      orderBySql: "BINARY `cohort`",
+      groupCursorColumns: ["__nia_group_cursor_0"],
     },
     dbCase: {
       seedRows: [
@@ -598,6 +628,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: true,
       groupBySql: '"cohort"',
       havingSql: '("cohort" <> $1)',
+      orderBySql: '"cohort" NULLS FIRST',
+      groupCursorColumns: null,
     },
     dbCase: {
       seedRows: [
@@ -629,6 +661,7 @@ export const OP_FIXTURES: OpFixture[] = [
         { $addFields: { cohort: "$_id.cohort" } },
         { $project: { _id: 0 } },
         { $match: { cohort: { $ne: "unassigned" } } },
+        { $sort: { cohort: 1 } },
       ],
     },
     dbCase: {
@@ -663,6 +696,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
   },
   {
@@ -680,6 +715,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
   },
   {
@@ -697,6 +734,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
   },
   {
@@ -791,6 +830,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
   },
   {
@@ -807,6 +848,8 @@ export const OP_FIXTURES: OpFixture[] = [
       isAggregate: false,
       groupBySql: null,
       havingSql: null,
+      orderBySql: null,
+      groupCursorColumns: null,
     },
   },
 ];

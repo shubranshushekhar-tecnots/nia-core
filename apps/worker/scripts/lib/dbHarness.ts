@@ -48,9 +48,10 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { MongoClient } from "mongodb";
 import { createClient } from "@supabase/supabase-js";
-import type { DialectQuery, SourceDialect } from "@nia/schemas";
+import type { DialectQuery, FailurePreCheck, SourceDialect, SqlGroupKeyCursor, TransformConfig } from "@nia/schemas";
+import { compilePushdown } from "@nia/schemas";
 import { dispatch } from "../../src/lib/dispatch.js";
-import { buildEtlReadQuery, MAX_CHUNK_ROWS } from "../../src/lib/etl/queryBuilder.js";
+import { buildEtlReadQuery, buildFailurePreCheckQuery, MAX_CHUNK_ROWS } from "../../src/lib/etl/queryBuilder.js";
 import type { WorkspaceScope } from "../../src/lib/workspaceScope.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "http://127.0.0.1:54321";
@@ -232,6 +233,7 @@ function inferSqlType(
   seedRows: Record<string, unknown>[],
   flavor: "mysql" | "postgres",
   dateColumns: ReadonlySet<string>,
+  decimalColumns: ReadonlySet<string> = new Set(),
 ): string {
   let sawNumber = false;
   let sawString = false;
@@ -255,7 +257,17 @@ function inferSqlType(
   }
   if (!sawNonNull) return flavor === "mysql" ? "TEXT" : "text";
   if (sawBoolean && !sawNumber && !sawString) return flavor === "mysql" ? "BOOLEAN" : "boolean";
-  if (sawNumber && !sawString && !sawBoolean) return flavor === "mysql" ? "DOUBLE" : "double precision";
+  if (sawNumber && !sawString && !sawBoolean) {
+    // Opt-in only (mirrors the `dateColumns` pattern above): a plain
+    // numeric seed value is ambiguous between "integer", "double", and
+    // "decimal" — DOUBLE is the safe default. A caller that needs to prove
+    // a driver-level DECIMAL-vs-number rendering distinction (mysql2
+    // returns DECIMAL columns as JS strings, e.g. "10.00", but DOUBLE
+    // columns as JS numbers) must opt a column into `decimalColumns`
+    // explicitly.
+    if (decimalColumns.has(col)) return flavor === "mysql" ? "DECIMAL(10,2)" : "numeric(10,2)";
+    return flavor === "mysql" ? "DOUBLE" : "double precision";
+  }
   if (treatAsDate && sawString && !sawNumber && !sawBoolean && !sawNonDateString && dateShapes.size === 1) {
     const shape = [...dateShapes][0]!;
     if (flavor === "mysql") return shape === "date" ? "DATE" : "DATETIME";
@@ -311,11 +323,13 @@ function mysqlExec(sql: string): void {
 export async function provisionMysqlFixture(
   seedRows: Record<string, unknown>[],
   dateColumns: readonly string[] = [],
+  decimalColumns: readonly string[] = [],
 ): Promise<ProvisionedFixture> {
   const name = scratchName("harness_mysql");
   const cols = inferColumns(seedRows);
   const dateCols = new Set(dateColumns);
-  const colDefs = cols.map((c) => `\`${c}\` ${inferSqlType(c, seedRows, "mysql", dateCols)}`).join(", ");
+  const decimalCols = new Set(decimalColumns);
+  const colDefs = cols.map((c) => `\`${c}\` ${inferSqlType(c, seedRows, "mysql", dateCols, decimalCols)}`).join(", ");
   mysqlExec(`DROP TABLE IF EXISTS ${name};`);
   mysqlExec(`CREATE TABLE ${name} (id INT PRIMARY KEY${colDefs ? `, ${colDefs}` : ""});`);
   if (seedRows.length > 0) {
@@ -342,11 +356,13 @@ export async function provisionMysqlFixture(
 export async function provisionPostgresFixture(
   seedRows: Record<string, unknown>[],
   dateColumns: readonly string[] = [],
+  decimalColumns: readonly string[] = [],
 ): Promise<ProvisionedFixture> {
   const name = scratchName("harness_pg");
   const cols = inferColumns(seedRows);
   const dateCols = new Set(dateColumns);
-  const colDefs = cols.map((c) => `"${c}" ${inferSqlType(c, seedRows, "postgres", dateCols)}`).join(", ");
+  const decimalCols = new Set(decimalColumns);
+  const colDefs = cols.map((c) => `"${c}" ${inferSqlType(c, seedRows, "postgres", dateCols, decimalCols)}`).join(", ");
   const client = new pg.Client(HOST_PG);
   await client.connect();
   try {
@@ -469,9 +485,18 @@ export async function runCompiledQuery(
     );
   }
   const { columns, rows } = result.value;
+  // Fix (numeric group keys under MySQL pagination): mirror
+  // runPagedAggregateQuery's stripping below — an aggregate dialectQuery's
+  // mysql-only hidden byte-order cursor columns
+  // (`dialectQuery.groupCursorColumns`) exist purely for keyset pagination
+  // and must never leak into rows a fixture's `dbCase.expectedRows` diffs
+  // against.
+  const cursorCols = dialectQuery && dialectQuery.dialect !== "mongo" ? dialectQuery.groupCursorColumns : null;
+  const hiddenCols = new Set(cursorCols ?? []);
   return rows.map((row) => {
     const obj: Record<string, unknown> = {};
     columns.forEach((c, i) => {
+      if (hiddenCols.has(c.name)) return;
       obj[c.name] = row[i];
     });
     // The harness-owned key column (`id`/`_id`) exists solely to satisfy
@@ -482,6 +507,95 @@ export async function runCompiledQuery(
     delete obj[fixture.table.keyColumn];
     return obj;
   });
+}
+
+/**
+ * Phase 9 Part 3 — actually pages through a pushed aggregate's output,
+ * mirroring runEtl.ts's real per-chunk loop (compilePushdown with a
+ * SqlGroupKeyCursor folded in -> buildEtlReadQuery -> dispatch -> read the
+ * next group-key tuple off the last row) instead of `runCompiledQuery`'s
+ * single unpaginated read (which only ever sees one page, capped at
+ * MAX_CHUNK_ROWS). Used by the one adversarial live agreement case that
+ * needs to prove a small page size (2) doesn't split/duplicate/drop any
+ * group — every other aggregate case fits in one page and uses
+ * `runCompiledQuery` instead.
+ *
+ * `config` must compile fully pushed (`residualCount === 0`) and contain
+ * exactly one `aggregate` step — callers assert both themselves via
+ * `compilePushdown`'s own plan before looping.
+ */
+export async function runPagedAggregateQuery(
+  dialect: SourceDialect,
+  fixture: { connectionId: string; scope: WorkspaceScope; table: ScratchTable },
+  config: TransformConfig,
+  pageSize: number,
+): Promise<Record<string, unknown>[]> {
+  const aggregateStep = config.steps.find((s): s is Extract<TransformConfig["steps"][number], { kind: "aggregate" }> => s.kind === "aggregate");
+  if (!aggregateStep) throw new Error("runPagedAggregateQuery: config has no aggregate step");
+  const groupByColumns = aggregateStep.groupBy;
+
+  const allRows: Record<string, unknown>[] = [];
+  let groupKeyCursor: SqlGroupKeyCursor | undefined;
+  for (;;) {
+    const plan = compilePushdown(dialect, config, undefined, groupKeyCursor);
+    if (plan.residualCount > 0) throw new Error(`runPagedAggregateQuery: config is not fully pushed for ${dialect} (residualCount ${plan.residualCount})`);
+    const query = buildEtlReadQuery(dialect, { namespace: fixture.table.namespace, name: fixture.table.name }, plan.dialectQuery, undefined, null, pageSize);
+    const result = await dispatch(fixture.connectionId, query, fixture.scope, DEMO_USER_ID);
+    if (!result.ok) {
+      throw new Error(
+        `paged-aggregate dispatch failed for ${dialect} scratch table ${fixture.table.name}: ${result.error.kind} — ${result.error.message}`,
+      );
+    }
+    const { columns, rows } = result.value;
+    // Fix (numeric group keys under MySQL pagination): mirror runEtl.ts's
+    // real per-chunk handling exactly — the hidden byte-order cursor
+    // columns (mysql-only, `plan.dialectQuery.groupCursorColumns`) exist
+    // purely to compute the NEXT page's group-key tuple below and must
+    // never leak into the returned rows callers diff against `expectedRows`.
+    const cursorCols =
+      plan.dialectQuery && plan.dialectQuery.dialect !== "mongo" ? plan.dialectQuery.groupCursorColumns : null;
+    const hiddenCols = new Set(cursorCols ?? []);
+    for (const row of rows) {
+      const obj: Record<string, unknown> = {};
+      columns.forEach((c, i) => {
+        if (hiddenCols.has(c.name)) return;
+        obj[c.name] = row[i];
+      });
+      allRows.push(obj);
+    }
+    if (rows.length < pageSize || groupByColumns.length === 0) break;
+    const lastRow = rows[rows.length - 1]!;
+    const values = groupByColumns.map((col, i) => {
+      const cursorCol = cursorCols?.[i] ?? col;
+      const idx = columns.findIndex((c) => c.name === cursorCol);
+      return idx !== -1 ? (lastRow[idx] as string | number | null) : null;
+    });
+    groupKeyCursor = { columns: groupByColumns, values };
+  }
+  return allRows;
+}
+
+/**
+ * Phase 9 Part 4 — runs one already-compiled `FailurePreCheck.dialectQuery`
+ * fragment against a provisioned fixture via the real
+ * `buildFailurePreCheckQuery` + `dispatch()` production path (the exact
+ * pair `runEtl.ts` calls before extraction, mirrored from
+ * `runCompiledQuery` above), returning the parsed failure count.
+ */
+export async function runFailurePreCheck(
+  dialect: SourceDialect,
+  fixture: { connectionId: string; scope: WorkspaceScope; table: ScratchTable },
+  dialectQuery: FailurePreCheck["dialectQuery"],
+): Promise<number> {
+  const query = buildFailurePreCheckQuery(dialect, { namespace: fixture.table.namespace, name: fixture.table.name }, dialectQuery);
+  const result = await dispatch(fixture.connectionId, query, fixture.scope, DEMO_USER_ID);
+  if (!result.ok) {
+    throw new Error(
+      `pre-check dispatch failed for ${dialect} scratch table ${fixture.table.name}: ${result.error.kind} — ${result.error.message}`,
+    );
+  }
+  const raw = result.value.rows[0]?.[0];
+  return typeof raw === "number" ? raw : Number(raw ?? 0);
 }
 
 // ---- order-independent row-set diff ------------------------------------------

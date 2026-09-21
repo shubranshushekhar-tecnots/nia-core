@@ -10,21 +10,24 @@ import type { StepFailureReport } from "./types.js";
  * place so the "absent = fail", "quarantine rejected at compile time", and
  * "every policy reports a count" rules can't drift between op modules.
  *
- * One load-bearing design decision lives here: "fail" and "quarantine" are
- * always forced residual (never pushed down) whenever a step's expression
- * actually contains a fallible call — see fallibleStepIsPushable below. A
- * pushed step can't observe a per-row failure count without a flag column
- * the worker sums, and that column would need to survive an aggregate's
- * setAggregate full-select-replacement when a preceding filter step is
- * fallible — materially harder than the value it buys, per Step 2's
- * documented escape hatch (docs/decisions.md's 8b-3 entry). "null" and
+ * One load-bearing design decision lives here: "quarantine" is always
+ * forced residual (never pushed down) whenever a step's expression actually
+ * contains a fallible call — see fallibleStepIsPushable below; quarantine
+ * has no sink yet (Phase 11) so it always throws once it would matter, and
+ * there's nothing to gain by pushing a step that can never actually run.
+ * "fail" DOES push now (Phase 9 Part 4): pushdown.ts's
+ * compileFailurePreChecks runs one pre-check query, before extraction,
+ * reusing the exact same upstream-pushed prefix, and runEtl.ts aborts
+ * before any write if it finds failing rows — so a pushed "fail" step gets
+ * the same "abort before any write, with an exact count" guarantee the
+ * residual path always had, without needing a flag column. "null" and
  * "drop" both still push normally: "null" is already today's behavior
  * (zero new code — a failing call is simply NULL), and "drop" either
  * collapses into existing NULL-is-not-TRUE semantics (filter, aggregate
  * having) or needs one extra WHERE-NOT/$match stage (computed_field only —
- * see computedField.ts). A documented v1 trade-off: a pushed "null"/"drop"
- * step doesn't get a failure COUNT (nothing walks every row); only a
- * residually executed step counts failures.
+ * see computedField.ts). Their failure COUNT also now comes from the same
+ * pre-check mechanism (a COUNT(*) query) instead of requiring residual
+ * execution — see compileFailurePreChecks's doc comment in pushdown.ts.
  */
 
 /** "Absent" resolves to "fail" — see nodeConfig.ts's OnFailurePolicy doc comment for why this is the right default (no saved workflow uses computed_field yet, so there's no backward-compat "null" default to preserve). */
@@ -59,16 +62,15 @@ export function quarantineMessage(step: { onFailure?: OnFailurePolicy }, expr: E
 }
 
 /**
- * isPushable-facing: false whenever the resolved policy is "fail" or
- * "quarantine" AND the expression actually contains a fallible call — see
- * this file's top doc comment for why those two policies are always
- * residual. No effect (returns true) for "null"/"drop", or for any policy
- * on an expression with no fallible calls — the op's normal
+ * isPushable-facing: false only when the resolved policy is "quarantine"
+ * AND the expression actually contains a fallible call — see this file's
+ * top doc comment for why quarantine is always residual. "fail" (Phase 9
+ * Part 4), "null", and "drop" all return true here — the op's normal
  * exprFnsPushable check still governs pushability in every other case.
  */
 export function fallibleStepIsPushable(step: { onFailure?: OnFailurePolicy }, expr: Expr): boolean {
   const policy = resolveOnFailure(step.onFailure);
-  if ((policy === "fail" || policy === "quarantine") && exprHasFallibleCalls(expr)) {
+  if (policy === "quarantine" && exprHasFallibleCalls(expr)) {
     return false;
   }
   return true;

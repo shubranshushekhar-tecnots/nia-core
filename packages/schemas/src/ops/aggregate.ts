@@ -1,9 +1,148 @@
 import { AggregateStep, type AggregateStep as AggregateStepT, type AggregationSpec, exprToConditions } from "../nodeConfig.js";
 import { collectFieldRefs, type Expr } from "../expression.js";
-import type { OpKind, OpModule, SqlEmitContext } from "./types.js";
+import type { OpKind, OpModule, ResidualAccumulator, SqlEmitContext } from "./types.js";
 import { exprFnsPushable } from "./types.js";
 import { evalExpr } from "./residualEval.js";
 import { computeFailureReport, fallibleStepIsPushable, quarantineMessage, resolveOnFailure } from "./onFailure.js";
+
+/**
+ * Phase 9 Part 1: the cross-chunk accumulator backing aggregateOp's
+ * `residualExecution: "stateful"` contract. `feed` may be called once per
+ * fetched chunk — group state (`groups`) lives in this closure, not in
+ * `applyResidual`'s call stack, so multiple `feed` calls correctly combine
+ * into one running total per group instead of each starting fresh (the
+ * exact bug this accumulator replaces: see runEtl.ts and ResidualAccumulator's
+ * doc comment in types.ts). `applyResidual` itself is unchanged in
+ * behavior — it still builds a fresh accumulator, feeds it the entire
+ * input in one call, and finalizes immediately — so every existing
+ * complete-dataset caller (ops-agreement.ts, residualTransform.test.ts,
+ * collation-probe.ts) is unaffected.
+ */
+function createAggregateAccumulator(step: AggregateStepT): ResidualAccumulator {
+  type GroupState = {
+    groupValues: Record<string, unknown>;
+    count: number;
+    fieldCounts: Map<string, number>;
+    sums: Map<string, number>;
+    mins: Map<string, number>;
+    maxs: Map<string, number>;
+    distinctSets: Map<string, Set<unknown>>;
+  };
+
+  const groups = new Map<string, GroupState>();
+
+  function feed(rows: Record<string, unknown>[]): void {
+    for (const row of rows) {
+      const groupValues: Record<string, unknown> = {};
+      for (const field of step.groupBy) groupValues[field] = row[field] ?? null;
+      const key = JSON.stringify(step.groupBy.map((f) => groupValues[f]));
+
+      let state = groups.get(key);
+      if (!state) {
+        state = { groupValues, count: 0, fieldCounts: new Map(), sums: new Map(), mins: new Map(), maxs: new Map(), distinctSets: new Map() };
+        groups.set(key, state);
+      }
+      state.count += 1;
+
+      for (const agg of step.aggregations) {
+        const value = agg.field ? row[agg.field] : undefined;
+        const present = value !== null && value !== undefined;
+        switch (agg.fn) {
+          case "count":
+            break; // uses state.count directly below
+          case "count_field":
+            if (present) state.fieldCounts.set(agg.alias, (state.fieldCounts.get(agg.alias) ?? 0) + 1);
+            break;
+          case "count_distinct":
+            if (present) {
+              const set = state.distinctSets.get(agg.alias) ?? new Set<unknown>();
+              set.add(value);
+              state.distinctSets.set(agg.alias, set);
+            }
+            break;
+          case "sum":
+            state.sums.set(agg.alias, (state.sums.get(agg.alias) ?? 0) + Number(value ?? 0));
+            break;
+          case "avg":
+            state.sums.set(agg.alias, (state.sums.get(agg.alias) ?? 0) + Number(value ?? 0));
+            if (present) state.fieldCounts.set(agg.alias, (state.fieldCounts.get(agg.alias) ?? 0) + 1);
+            break;
+          case "min": {
+            const num = Number(value);
+            if (!Number.isNaN(num)) {
+              const cur = state.mins.get(agg.alias);
+              if (cur === undefined || num < cur) state.mins.set(agg.alias, num);
+            }
+            break;
+          }
+          case "max": {
+            const num = Number(value);
+            if (!Number.isNaN(num)) {
+              const cur = state.maxs.get(agg.alias);
+              if (cur === undefined || num > cur) state.maxs.set(agg.alias, num);
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  function finalize(): { cols: string[]; rows: Record<string, unknown>[]; failures?: import("./types.js").StepFailureReport[] } {
+    const cols = [...step.groupBy, ...step.aggregations.map((a) => a.alias)];
+    let outRows: Record<string, unknown>[] = [];
+    for (const state of groups.values()) {
+      const outRow: Record<string, unknown> = { ...state.groupValues };
+      for (const agg of step.aggregations) {
+        switch (agg.fn) {
+          case "count":
+            outRow[agg.alias] = state.count;
+            break;
+          case "count_field":
+            outRow[agg.alias] = state.fieldCounts.get(agg.alias) ?? 0;
+            break;
+          case "count_distinct":
+            outRow[agg.alias] = state.distinctSets.get(agg.alias)?.size ?? 0;
+            break;
+          case "sum":
+            outRow[agg.alias] = state.sums.get(agg.alias) ?? 0;
+            break;
+          case "avg": {
+            const sum = state.sums.get(agg.alias) ?? 0;
+            const count = state.fieldCounts.get(agg.alias) ?? 0;
+            outRow[agg.alias] = count > 0 ? sum / count : null;
+            break;
+          }
+          case "min":
+            outRow[agg.alias] = state.mins.get(agg.alias) ?? null;
+            break;
+          case "max":
+            outRow[agg.alias] = state.maxs.get(agg.alias) ?? null;
+            break;
+        }
+      }
+      outRows.push(outRow);
+    }
+
+    // ruling 2: having may only reference an aggregation alias or a groupBy
+    // field — both are now plain top-level keys on outRow, so evalExpr (the
+    // same helper filter steps use) applies directly, no special-casing.
+    // Phase 8b-3: failures counted BEFORE the having-filter below removes
+    // any rows — the equivalent point to where the SQL/Mongo flag column
+    // exists (part of the same select/group HAVING filters, not excluded
+    // by it).
+    const report = step.having
+      ? computeFailureReport("aggregate having", step.having, outRows, resolveOnFailure(step.onFailure))
+      : undefined;
+    if (step.having) {
+      outRows = outRows.filter((row) => evalExpr(step.having!, row) === true);
+    }
+
+    return { cols, rows: outRows, failures: report ? [report] : undefined };
+  }
+
+  return { feed, size: () => groups.size, finalize };
+}
 
 /**
  * SQL HAVING can't portably reference a SELECT alias across mysql/postgres
@@ -69,6 +208,7 @@ function compileHavingViaSubstitution(expr: Expr, ctx: SqlEmitContext, aggregati
 export const aggregateOp: OpModule<AggregateStepT> = {
   kind: "aggregate",
   schema: AggregateStep,
+  residualExecution: "stateful",
 
   createDefault(): AggregateStepT {
     return { kind: "aggregate", groupBy: [], aggregations: [] };
@@ -85,12 +225,12 @@ export const aggregateOp: OpModule<AggregateStepT> = {
     //
     // Phase 8b-3: a fallible call inside `having` already excludes the
     // group under three-valued logic (same null≡drop collapse as
-    // filter), so "null"/"drop" push normally with zero extra code —
-    // no failure count is observable for a pushed group though (only a
-    // residually executed step counts failures; same documented v1
-    // trade-off as filter.ts — see onFailure.ts's top doc comment).
-    // "fail"/"quarantine" are always forced residual
-    // (fallibleStepIsPushable).
+    // filter), so "null"/"drop" push normally with zero extra code.
+    // "fail" pushes too (Phase 9 Part 4, via pushdown.ts's
+    // compileFailurePreChecks — a synthetic pre-check with the same
+    // `having` alias-substitution this step's own emitSql/emitMongo use,
+    // replaced with the failure predicate, counting failing GROUPS). Only
+    // "quarantine" is still always forced residual (fallibleStepIsPushable).
     if (step.having && !fallibleStepIsPushable(step, step.having)) return false;
     return step.having ? exprFnsPushable(step.having, dialect) : true;
   },
@@ -109,7 +249,75 @@ export const aggregateOp: OpModule<AggregateStepT> = {
   emitSql(step, ctx) {
     const groupByCols = step.groupBy.map((f) => ctx.adapter.quoteIdent(f));
     const aggCols = step.aggregations.map((a) => `${ctx.adapter.compileAggAccumulator(a)} AS ${ctx.adapter.quoteIdent(a.alias)}`);
-    const fullSelect = [...groupByCols, ...aggCols];
+    // Phase 9 Part 4 follow-up (adversarial pagination case): mysql's
+    // default column collation is case-insensitive for GROUP BY/ORDER BY
+    // too, not just the WHERE/HAVING literal comparisons Fix 1
+    // (sqlShared.ts) already forces BINARY on — confirmed live: "a" and
+    // "A" silently collapsed into one GROUP BY group (their aggregates
+    // summed together) while postgres/mongo/residual correctly kept them
+    // separate. Force byte-wise grouping/ordering the same way, applied to
+    // EVERY groupBy column unconditionally regardless of type: this is
+    // always a self-comparison of one column's value against itself across
+    // rows (never against a differently-typed literal or column, unlike
+    // Fix 1's guarded cases), and a given column's canonical string form is
+    // consistent row-to-row, so forcing BINARY here can't split two truly
+    // equal values apart.
+    //
+    // This sandbox's default sql_mode includes ONLY_FULL_GROUP_BY, which
+    // then rejects a plain `SELECT col` whose expression doesn't textually
+    // match the `BINARY col` GROUP BY expression (verified live: error
+    // 1055). `ANY_VALUE()` is mysql's documented escape hatch for exactly
+    // this — it tells the optimizer any row's value is acceptable, which
+    // is safe here since BINARY grouping already guarantees every row in a
+    // reported group shares the same value. Unlike the GROUP BY/ORDER BY
+    // columns, the SELECT list must NOT itself use BINARY: that would
+    // return a VARBINARY value from the driver instead of the original
+    // column's string, corrupting the row payload.
+    // Aliased back to the plain column name: without `AS`, mysql reports the
+    // result column's name as the full `ANY_VALUE(...)` expression text
+    // instead of the original field name, breaking every downstream
+    // column-name lookup (queryBuilder/runEtl/preview mapping all key rows by
+    // field name, not position).
+    const selectGroupByCols = ctx.adapter.dialect === "mysql" ? groupByCols.map((c) => `ANY_VALUE(${c}) AS ${c}`) : groupByCols;
+    const groupOrderCols = ctx.adapter.dialect === "mysql" ? groupByCols.map((c) => `BINARY ${c}`) : groupByCols;
+
+    // Fix (numeric group keys under MySQL pagination): groupOrderCols above
+    // forces byte-wise ORDER BY for every groupBy column unconditionally,
+    // regardless of type — necessary for string collation (see the comment
+    // above), but that means ORDER BY sorts a numeric column lexicographically
+    // ("10" before "9"). The WHERE-side keyset comparison
+    // (pushdown.ts's buildGroupKeysetWhereSql) must compare using that exact
+    // same byte order or a small page size can skip/duplicate groups. Since
+    // we have no column-type metadata here (Phase 10 TODO), the fix is
+    // type-agnostic: for mysql, additionally select each groupBy column's
+    // byte-order encoding under a hidden alias, and hand the alias list back
+    // via `cursorColumns` so pushdown.ts can read the CURSOR from these
+    // columns (not from the plain, type-native-rendered groupBy column —
+    // e.g. a DECIMAL(10,2) renders as the driver string "10.00" while a
+    // JS-side re-render of the same value could produce "10", corrupting a
+    // persisted/re-bound cursor) and compare against them using the same
+    // encoding on the next page's WHERE fragment.
+    //
+    // `HEX(BINARY col)` rather than a bare `BINARY col`: HEX-encoding is a
+    // strictly order-preserving, byte-for-byte bijection (each source byte
+    // maps to a fixed 2-uppercase-hex-char block), so comparing the HEX
+    // strings sorts identically to comparing the raw BINARY bytes that
+    // ORDER BY already sorts by — while always yielding a plain ASCII
+    // string. A raw `CAST(col AS BINARY)` returns a VARBINARY value that
+    // this project's mysql connector (no custom typeCast configured)
+    // returns as a Node Buffer, which doesn't round-trip through a
+    // JSON-persisted cursor or a re-bound string query parameter safely.
+    // `ANY_VALUE(...)`-wrapped for the same ONLY_FULL_GROUP_BY reason as
+    // selectGroupByCols above.
+    const cursorColumns =
+      ctx.adapter.dialect === "mysql" && step.groupBy.length > 0
+        ? step.groupBy.map((_, i) => `__nia_group_cursor_${i}`)
+        : null;
+    const cursorSelectCols =
+      cursorColumns && ctx.adapter.dialect === "mysql"
+        ? groupByCols.map((c, i) => `ANY_VALUE(HEX(BINARY ${c})) AS ${ctx.adapter.quoteIdent(cursorColumns[i]!)}`)
+        : [];
+    const fullSelect = [...selectGroupByCols, ...aggCols, ...cursorSelectCols];
 
     let havingSql: string | null = null;
     if (step.having) {
@@ -127,12 +335,16 @@ export const aggregateOp: OpModule<AggregateStepT> = {
       } else {
         havingSql = compileHavingViaSubstitution(step.having, ctx, step.aggregations);
       }
-      // Phase 8b-3: a fallible call inside `having`, if present, already
-      // forced this step residual (isPushable's fallibleStepIsPushable
-      // check) — nothing further to emit here.
+      // Phase 8b-3 / Phase 9 Part 4: `having` compiles the same way here
+      // regardless of whether it contains a fallible call — isPushable's
+      // fallibleStepIsPushable check only blocks pushdown for policy
+      // "quarantine" now, so a fallible "fail"/"null"/"drop" having reaches
+      // this emit path same as any other. Its failure-counting concern is
+      // handled separately, before extraction, by pushdown.ts's
+      // compileFailurePreChecks — nothing further to do here.
     }
 
-    ctx.setAggregate(fullSelect, groupByCols.length ? groupByCols : null, havingSql);
+    ctx.setAggregate(fullSelect, groupOrderCols.length ? groupOrderCols : null, havingSql, cursorColumns);
   },
 
   emitMongo(step, ctx) {
@@ -161,9 +373,11 @@ export const aggregateOp: OpModule<AggregateStepT> = {
     ctx.push({ $project: projectDrop });
 
     if (step.having) {
-      // Phase 8b-3: a fallible call inside `having`, if present, already
-      // forced this step residual (isPushable's fallibleStepIsPushable
-      // check) — nothing further to emit here, matching emitSql.
+      // Phase 8b-3 / Phase 9 Part 4: `having` compiles the same way here
+      // regardless of whether it contains a fallible call, matching emitSql
+      // — see that comment for why (only "quarantine" still forces
+      // residual; failure counting for a pushed having is handled
+      // separately by pushdown.ts's compileFailurePreChecks).
       const conditions = exprToConditions(step.having);
       if (conditions) {
         if (conditions.length > 0) {
@@ -186,124 +400,14 @@ export const aggregateOp: OpModule<AggregateStepT> = {
     return next;
   },
 
+  createAccumulator(step) {
+    return createAggregateAccumulator(step);
+  },
+
   applyResidual(input, step) {
-    type GroupState = {
-      groupValues: Record<string, unknown>;
-      count: number;
-      fieldCounts: Map<string, number>;
-      sums: Map<string, number>;
-      mins: Map<string, number>;
-      maxs: Map<string, number>;
-      distinctSets: Map<string, Set<unknown>>;
-    };
-
-    const groups = new Map<string, GroupState>();
-
-    for (const row of input.rows) {
-      const groupValues: Record<string, unknown> = {};
-      for (const field of step.groupBy) groupValues[field] = row[field] ?? null;
-      const key = JSON.stringify(step.groupBy.map((f) => groupValues[f]));
-
-      let state = groups.get(key);
-      if (!state) {
-        state = { groupValues, count: 0, fieldCounts: new Map(), sums: new Map(), mins: new Map(), maxs: new Map(), distinctSets: new Map() };
-        groups.set(key, state);
-      }
-      state.count += 1;
-
-      for (const agg of step.aggregations) {
-        const value = agg.field ? row[agg.field] : undefined;
-        const present = value !== null && value !== undefined;
-        switch (agg.fn) {
-          case "count":
-            break; // uses state.count directly below
-          case "count_field":
-            if (present) state.fieldCounts.set(agg.alias, (state.fieldCounts.get(agg.alias) ?? 0) + 1);
-            break;
-          case "count_distinct":
-            if (present) {
-              const set = state.distinctSets.get(agg.alias) ?? new Set<unknown>();
-              set.add(value);
-              state.distinctSets.set(agg.alias, set);
-            }
-            break;
-          case "sum":
-            state.sums.set(agg.alias, (state.sums.get(agg.alias) ?? 0) + Number(value ?? 0));
-            break;
-          case "avg":
-            state.sums.set(agg.alias, (state.sums.get(agg.alias) ?? 0) + Number(value ?? 0));
-            if (present) state.fieldCounts.set(agg.alias, (state.fieldCounts.get(agg.alias) ?? 0) + 1);
-            break;
-          case "min": {
-            const num = Number(value);
-            if (!Number.isNaN(num)) {
-              const cur = state.mins.get(agg.alias);
-              if (cur === undefined || num < cur) state.mins.set(agg.alias, num);
-            }
-            break;
-          }
-          case "max": {
-            const num = Number(value);
-            if (!Number.isNaN(num)) {
-              const cur = state.maxs.get(agg.alias);
-              if (cur === undefined || num > cur) state.maxs.set(agg.alias, num);
-            }
-            break;
-          }
-        }
-      }
-    }
-
-    const cols = [...step.groupBy, ...step.aggregations.map((a) => a.alias)];
-    let outRows: Record<string, unknown>[] = [];
-    for (const state of groups.values()) {
-      const outRow: Record<string, unknown> = { ...state.groupValues };
-      for (const agg of step.aggregations) {
-        switch (agg.fn) {
-          case "count":
-            outRow[agg.alias] = state.count;
-            break;
-          case "count_field":
-            outRow[agg.alias] = state.fieldCounts.get(agg.alias) ?? 0;
-            break;
-          case "count_distinct":
-            outRow[agg.alias] = state.distinctSets.get(agg.alias)?.size ?? 0;
-            break;
-          case "sum":
-            outRow[agg.alias] = state.sums.get(agg.alias) ?? 0;
-            break;
-          case "avg": {
-            const sum = state.sums.get(agg.alias) ?? 0;
-            const count = state.fieldCounts.get(agg.alias) ?? 0;
-            outRow[agg.alias] = count > 0 ? sum / count : null;
-            break;
-          }
-          case "min":
-            outRow[agg.alias] = state.mins.get(agg.alias) ?? null;
-            break;
-          case "max":
-            outRow[agg.alias] = state.maxs.get(agg.alias) ?? null;
-            break;
-        }
-      }
-      outRows.push(outRow);
-    }
-
-    // ruling 2: having may only reference an aggregation alias or a groupBy
-    // field — both are now plain top-level keys on outRow, so evalExpr (the
-    // same helper filter steps use) applies directly, no special-casing.
-    // Phase 8b-3: failures counted BEFORE the having-filter below removes
-    // any rows — the equivalent point to where the SQL/Mongo flag column
-    // exists (part of the same select/group HAVING filters, not excluded
-    // by it).
-    const report = step.having
-      ? computeFailureReport("aggregate having", step.having, outRows, resolveOnFailure(step.onFailure))
-      : undefined;
-    if (step.having) {
-      outRows = outRows.filter((row) => evalExpr(step.having!, row) === true);
-    }
-
-    return { cols, rows: outRows, failures: report ? [report] : undefined };
+    const acc = createAggregateAccumulator(step);
+    acc.feed(input.rows);
+    return acc.finalize();
   },
 
   checkConfig(step, ctx) {

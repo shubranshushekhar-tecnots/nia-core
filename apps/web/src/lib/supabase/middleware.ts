@@ -1,7 +1,10 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PREFIXES = ["/login", "/signup", "/forgot-password", "/reset-password", "/auth"];
+// "/dev" is a temporary, no-auth allowance for isolated component preview
+// routes (e.g. /dev/hero-preview) — no sensitive data is ever rendered
+// there. Remove this prefix once those routes are deleted or gated.
+const PUBLIC_PREFIXES = ["/login", "/signup", "/forgot-password", "/reset-password", "/auth", "/dev"];
 
 function isPublicPath(pathname: string): boolean {
   if (pathname === "/") return true;

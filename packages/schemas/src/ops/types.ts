@@ -223,15 +223,15 @@ export interface MongoDialectAdapter {
   combineAnd(clauses: Record<string, unknown>[]): Record<string, unknown> | null;
 }
 
-// ---- Failure reporting (Phase 8b-3) ---------------------------------------
+// ---- Failure reporting (Phase 8b-3; pushed pre-checks added Phase 9 Part 4) --
 //
-// "fail" and "quarantine" are always forced residual whenever a step's
-// expression actually contains a fallible call (expression.ts's
-// FALLIBLE_CALL_FNS) — see onFailure.ts's top doc comment for why. That
-// means no pushed-SQL/Mongo flag-column mechanism is needed at all: only a
-// residually executed step ever counts failures. "null"/"drop" still push
-// normally but don't get a failure count (documented v1 trade-off — see
-// onFailure.ts).
+// "quarantine" is always forced residual whenever a step's expression
+// actually contains a fallible call (expression.ts's FALLIBLE_CALL_FNS) —
+// see onFailure.ts's top doc comment for why. "fail"/"null"/"drop" all push
+// normally: pushdown.ts's compileFailurePreChecks runs one pre-check query
+// per pushed fallible step, before extraction, giving "fail" its
+// abort-before-any-write guarantee and "null"/"drop" their failure counts
+// without needing a flag column walked row-by-row.
 
 export interface StepFailureReport {
   /** Human-readable step identity for the abort error, e.g. `computed_field "discount"`. */
@@ -252,8 +252,17 @@ export interface SqlEmitContext {
    * Aggregate-only: REPLACES the select list (full-replacement semantics)
    * and sets GROUP BY/HAVING. splitPushable's blocksFollowingPushdown
    * guarantees this is called at most once per compile.
+   *
+   * `cursorColumns` (Phase 9 Part 3 follow-up): mysql-only optional list of
+   * hidden SELECT alias names, one per groupBy column in the same order,
+   * carrying that column's byte-order-encoded value (see aggregate.ts's
+   * emitSql) for group-key keyset pagination to read the cursor from
+   * instead of the plain (type-native-rendered) groupBy column — see
+   * pushdown.ts's SqlDialectQuery.groupCursorColumns doc comment for why.
+   * `null`/omitted for postgres and for a whole-table aggregate (empty
+   * groupBy).
    */
-  setAggregate(select: string[], groupBy: string[] | null, having: string | null): void;
+  setAggregate(select: string[], groupBy: string[] | null, having: string | null, cursorColumns?: string[] | null): void;
 }
 
 export interface MongoEmitContext {
@@ -262,10 +271,47 @@ export interface MongoEmitContext {
   markAggregate(): void;
 }
 
+// ---- Residual execution shape (Phase 9 Part 1) ---------------------------
+//
+// A residual step (one the pushdown compiler couldn't push into the source
+// query) runs in-process against fetched rows. runEtl.ts fetches rows in
+// bounded chunks (queryBuilder.ts's MAX_CHUNK_ROWS), so every op must
+// declare whether its residual logic is safe to run independently per
+// chunk ("row-local" — output for a row depends only on that row, e.g.
+// filter/computed_field/drop_fields) or needs to see every input row
+// before it can emit correct output ("stateful" — today only aggregate,
+// since a group's correct total isn't known until the last row in that
+// group has been seen, and a group's rows can span multiple chunks).
+// Running a stateful op chunk-by-chunk and writing each chunk's partial
+// result was the Phase 9 Part 1 bug: later chunks' partial aggregates
+// silently overwrote earlier ones instead of combining with them. See
+// residualTransform.ts's applyResidualTransformsChunk (hard-errors on a
+// stateful op) and runEtl.ts (splits residual steps at the first stateful
+// op, accumulates it across every chunk before writing).
+export type ResidualExecution = "row-local" | "stateful";
+
+/**
+ * Cross-chunk accumulator for a stateful residual op. `feed` may be called
+ * any number of times (once per fetched chunk, after any row-local steps
+ * ahead of the stateful op have already been applied to that chunk's
+ * rows); `size()` reports the current number of distinct groups so the
+ * caller can enforce a cap without waiting for `finalize()`; `finalize()`
+ * is called exactly once, after the last chunk has been fed, and produces
+ * the same shape `applyResidual` would have produced had it seen the
+ * entire dataset in one call.
+ */
+export interface ResidualAccumulator {
+  feed(rows: Record<string, unknown>[]): void;
+  size(): number;
+  finalize(): { cols: string[]; rows: Record<string, unknown>[]; failures?: StepFailureReport[] };
+}
+
 // ---- Op module (the WHAT) ------------------------------------------------
 
 export interface OpModule<TStep extends TransformStep = TransformStep> {
   readonly kind: TStep["kind"];
+  /** See ResidualExecution's doc comment above. */
+  readonly residualExecution: ResidualExecution;
   /**
    * Input type intentionally loosened to `any`: zod's `.default(...)` makes
    * a schema's actual parse-input type (pre-default) narrower/optional
@@ -321,6 +367,13 @@ export interface OpModule<TStep extends TransformStep = TransformStep> {
     input: { cols: string[]; rows: Record<string, unknown>[] },
     step: TStep,
   ): { cols: string[]; rows: Record<string, unknown>[]; failures?: StepFailureReport[] };
+
+  /**
+   * Required iff `residualExecution === "stateful"` (today: aggregate
+   * only). Builds a fresh cross-chunk accumulator for a single residual
+   * run of `step` — see ResidualAccumulator's doc comment.
+   */
+  createAccumulator?(step: TStep): ResidualAccumulator;
 
   /**
    * Strict check-time validation (checks.ts checkConfig). Plain message

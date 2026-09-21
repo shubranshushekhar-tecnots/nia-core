@@ -2,14 +2,17 @@ import type { RefObject } from 'react';
 import Logo from '@/components/Logo';
 import { plexSans } from './heroFonts';
 
-// Sits above the (now light) hero, transparent at first and morphing to a
-// frosted surface once scrolled past it — driven by the CSS custom
-// properties --nav-bg/--nav-blur that LandingPage.tsx's onScroll handler
-// sets imperatively. Text stays a constant dark color throughout (the hero
-// behind it is light in both states now), so it's hardcoded here rather
-// than routed through a --nav-fg custom property. Stays a DOM sibling of
-// Hero (not nested) so `position:sticky` isn't broken by Hero's
-// scroll-driven `transform`; the negative marginBottom here pulls Hero up
+// Sits above the hero, which is now a dark island (hero-canvas/
+// HeroCanvasSection): Nav starts transparent-on-black, goes solid black
+// while the hero is pinned, then resumes the normal frosted-light surface
+// once scrolled past it — driven by the CSS custom properties --nav-bg/
+// --nav-blur/--nav-fg that LandingPage.tsx's onScroll handler sets
+// imperatively. --nav-fg is only set while over the dark hero (falls back
+// to var(--text)/var(--secondary) once removed past the hero), and is
+// threaded into Logo's wordmarkColor prop so the mark and nav links re-skin
+// together with no other prop plumbing. Stays a DOM sibling of the hero
+// (not nested) so `position:sticky` isn't broken by the hero's own
+// scroll-driven styles; the negative marginBottom here pulls the hero up
 // underneath this nav's box instead, relying on Nav's z-index (50) for
 // correct paint order.
 export default function Nav({ navRef }: { navRef: RefObject<HTMLElement> }) {
@@ -43,8 +46,8 @@ export default function Nav({ navRef }: { navRef: RefObject<HTMLElement> }) {
           gap: 16,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <Logo size={26} />
+        <div className="nia-nav-logo" style={{ display: 'flex', alignItems: 'center' }}>
+          <Logo size={26} wordmarkColor="var(--nav-fg, var(--text))" />
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 26 }}>
@@ -76,8 +79,9 @@ export default function Nav({ navRef }: { navRef: RefObject<HTMLElement> }) {
       </div>
 
       <style>{`
-        .nia-nav-link { color: var(--secondary); transition: color .15s ease; }
-        .nia-nav-link:hover { color: var(--text); }
+        .nia-nav-link { color: var(--nav-fg, var(--secondary)); transition: color .2s ease; }
+        .nia-nav-link:hover { color: var(--nav-fg, var(--text)); }
+        .nia-nav-logo * { transition: color .2s ease; }
       `}</style>
     </nav>
   );

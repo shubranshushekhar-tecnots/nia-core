@@ -14,6 +14,7 @@ import {
 export const computedFieldOp: OpModule<ComputedFieldStepT> = {
   kind: "computed_field",
   schema: ComputedFieldStep as unknown as OpModule<ComputedFieldStepT>["schema"],
+  residualExecution: "row-local",
 
   createDefault(): ComputedFieldStepT {
     return { kind: "computed_field", name: "", expression: { kind: "literal", value: "" } };
@@ -26,9 +27,11 @@ export const computedFieldOp: OpModule<ComputedFieldStepT> = {
     // "null"'s intended behavior). "drop" pushes too, via an explicit
     // WHERE NOT/$match-$not stage below (unlike filter/aggregate's
     // having, a computed_field's failing row isn't naturally excluded by
-    // its SELECT-only shape, so this op adds that stage itself). "fail"/
-    // "quarantine" are always forced residual — see onFailure.ts's top
-    // doc comment and fallibleStepIsPushable.
+    // its SELECT-only shape, so this op adds that stage itself). "fail"
+    // pushes too (Phase 9 Part 4, via pushdown.ts's
+    // compileFailurePreChecks pre-check query — see onFailure.ts's top
+    // doc comment). Only "quarantine" is still always forced residual —
+    // see fallibleStepIsPushable.
     return fallibleStepIsPushable(step, step.expression);
   },
 

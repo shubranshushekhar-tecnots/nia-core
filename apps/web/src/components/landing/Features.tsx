@@ -56,7 +56,7 @@ export default function Features() {
   const [hovered, setHovered] = useState<string | null>(null);
 
   return (
-    <section style={{ maxWidth: 1180, margin: '0 auto', boxSizing: 'border-box', padding: '74px 24px 0' }}>
+    <section id="product" style={{ maxWidth: 1180, margin: '0 auto', boxSizing: 'border-box', padding: '74px 24px 0' }}>
       <Reveal as="h2" style={{ margin: '0 0 26px', maxWidth: 600, fontSize: 'clamp(28px,4vw,38px)', fontWeight: 700, letterSpacing: '-.03em' }}>
         Pipelines you draw, not scripts you babysit
       </Reveal>

@@ -3697,6 +3697,19 @@ re-done this round (only `--tag=onfailure`'s 4 cases plus the new unit
 coverage, per this follow-up's own scoping); re-verify before closing
 out the `PHASE8_EXIT.md` §8 follow-up item this superseded.
 
+**Amendment (Phase 9 close-out session): the `coalesce` half of this rule
+is narrower than stated above.** "`coalesce` directly wrapping a fallible
+call is excluded" is only true when `coalesce`'s *last* argument is itself
+non-fallible (a guaranteed non-null fallback) — `is_null`/`is_not_null`
+are unaffected and keep the unconditional direct-nesting exemption exactly
+as described above. When `coalesce`'s last argument is itself fallible
+(e.g. `coalesce(parse_date(x, f1), parse_date(x, f2))`), none of its
+nested fallible calls are exempt; instead the whole `coalesce` becomes one
+compound fallible unit that fails when every nested call's own input was
+non-null (it genuinely ran) and the `coalesce` result is still `NULL`. See
+"Phase 9 close-out fix"'s "Follow-up" entry below for the full rule,
+implementation, and tests.
+
 Previously, the same throwaway probe also established: exactly **12**
 pre-existing `agreementCases.ts` entries were affected — every
 `is_null(fn(x))`-shaped probe seeded with a non-null, invalid argument
@@ -3711,8 +3724,8 @@ additional pre-existing `XFAIL` case (date-shaped CASE branches vs. a
 plain TEXT column) also appeared in that full-suite run but is unrelated
 to 8b-3.
 
-**Tests.** Unit (`packages/schemas/src/ops/onFailure.test.ts`, 24
-tests, +7 this follow-up): `resolveOnFailure` default/pass-through;
+**Tests.** Unit (`packages/schemas/src/ops/onFailure.test.ts`, 26
+tests, +9 across both follow-ups): `resolveOnFailure` default/pass-through;
 `quarantineMessage`/`computeFailureReport`'s quarantine rejection (both
 the compile-time message and the runtime throw, and its "no effect
 without a fallible call" cases); `fallibleStepIsPushable`'s policy
@@ -3726,10 +3739,13 @@ each producing no failure report even under `'fail'`, a handled call
 staying pushable under `'fail'`, the direct-nesting-only boundary
 (`is_null(to_number(x) + 1)` still aborts), and an unhandled fallible
 call alongside a handled one in the same expression still being
-reported (only the unhandled one). Full `@nia/schemas` suite: 487/487
-pass (up from 481 pre-follow-up — the concurrent verification round
-this session also independently added 6 conformance fixtures; no
-regressions from either change).
+reported (only the unhandled one); plus 2 tests added by the Phase 9
+close-out amendment above: `coalesce(to_number(x), 0)` stays handled
+(re-confirms the narrower rule didn't regress the common case), and
+`coalesce(parse_date(x, f1), parse_date(x, f2))` — fallible last
+argument — reports exactly one failure, on the row matching neither
+format (not on the NULL-input row, not on either matching-format row).
+Full `@nia/schemas` suite: 514/514 pass.
 
 Live (`apps/worker/scripts/ops-agreement.ts --tag=onfailure`, added the
 `--tag=<tag>` CLI flag plus `AgreementCase.expectAbort`/
@@ -3743,7 +3759,16 @@ all pass:
    agrees with residual across all 4 evaluators, proving the handled
    exclusion holds live, not just in unit tests: `z`'s `to_number` is
    directly wrapped by `coalesce`, so it never enters the failure
-   predicate or forces residual under the `'fail'` default.
+   predicate or forces residual under the `'fail'` default. The Phase 9
+   close-out amendment added a third column to this same case,
+   `w = coalesce(parse_date(note, "YYYY-MM-DD"), parse_date(note,
+   "MM/DD/YYYY"))` with `onFailure: 'null'`, over a new `note` seed
+   field (`"2024-01-15"` / `"01/15/2024"` / `"not-a-date"`) — unlike
+   `z`, `w`'s last argument is itself fallible, so the coalesce is one
+   compound fallible unit: it reports exactly one failure (the
+   `"not-a-date"` row, which matches neither format), while `z` still
+   reports none, live-proving both halves of the amended rule in the
+   same case.
 2. `onFailure: 'drop'` on the same shape — same assertion structure,
    failing row removed.
 3. `onFailure: 'fail'` on the same shape — all 3 DB dialects WARN-skip
@@ -3816,3 +3841,291 @@ intentional property instead of an unverified assumption. Verified live
 Per Step 4's scoping, the full (~200+ case) agreement suite and smoke
 scripts were **not** re-run this phase — only the 4 new tagged cases,
 plus the full unit suite and a 4-package typecheck.
+
+## Phase 9 Part 1: local-workflow exposure check for the residual-aggregate bug
+
+Before Part 1's fix (per-chunk stateful residual ops silently overwriting,
+not combining, earlier chunks' partial aggregates — see
+`runEtl.ts`'s `runStatefulResidual` doc comment), checked every workflow
+in the local dev DB's `workflow_graphs` table (`supabase start`,
+`psql postgresql://postgres:postgres@127.0.0.1:54322/postgres`) for the
+two shapes that would have hit the bug: (a) more than one transform node
+feeding one destination (`runEtl.ts`'s `transforms.length > 1` branch
+always treats every step, including `aggregate`, as residual — never
+attempts pushdown at all for that shape), or (b) a single transform node
+whose `aggregate` step pushdown could not push (unsupported dialect
+combination), leaving it residual.
+
+Found 8 workflows locally (not 4 — TODO.md/PHASE8_EXIT.md's "4 local
+workflows" note is stale/incomplete as a workflow count, superseded by
+this count): `Canvas E2E Personal Workflow`, `Canvas E2E Unknown Tool`,
+`Canvas E2E Workflow`, `ETL kill-resume smoke`, `mysql -> supabase kill
+test`, `test workflow 1`, `Aggregate smoke`, `Aggregate pg-source smoke`.
+Every one has **at most one** transform node (max
+`jsonb_array_length` over transform-type nodes = 1) — shape (a) never
+occurs locally. Two workflows (`Aggregate smoke`, mysql source;
+`Aggregate pg-source smoke`, postgres/supabase source) have a single
+transform node whose only step is `aggregate` (`max`/`count` over a
+single `groupBy` column, no `having`). Ran `compilePushdown` directly
+against both configs (`packages/schemas/dist`, mysql and postgres
+dialects): both fully push — `dialectQuery.isAggregate: true`,
+`residualTransforms.length: 0` — so neither ever reached the residual
+executor at all, buggy or fixed. The remaining workflows either have zero
+transform nodes or a transform node with only row-local steps (e.g.
+`test workflow 1`'s lone `filter`), never `aggregate`.
+
+**Conclusion: zero live/local exposure.** No workflow in the local dev DB
+currently exercises (or ever exercised) the pre-fix multi-chunk
+residual-aggregate bug — this was a real, fixable latent bug (confirmed
+by code tracing and the new `runStatefulResidual` cross-chunk test), just
+not one any existing local workflow had triggered yet. Nothing to
+retroactively re-run or re-verify against production/live data as a
+result of this fix.
+
+## Phase 9: residual-stateful-op bug fix, keyset/pagination ParamSink hardening, pushed onFailure pre-checks — closed
+
+Covers Parts 1-5 of `docs/plans/phase9.md`; Part 1's exposure check has its
+own entry above ("Phase 9 Part 1: local-workflow exposure check"). This
+entry covers Parts 2-5 and the two bugs found along the way.
+
+### Part 1 recap (bug fix; see its own entry above for the exposure check)
+
+`runEtl.ts`'s residual executor previously ran a stateful op (aggregate is
+the only one today) independently per chunk and upserted each chunk's
+partial result, so later chunks silently overwrote earlier ones instead of
+combining with them — a live silent-wrong-results bug for any residual
+aggregate over more than one chunk. Fixed: each op module now declares
+whether it's row-local or stateful; the residual executor refuses (hard
+error) to run a stateful op on a single chunk; `runEtl.ts` splits residual
+steps at the first stateful op, runs row-local steps per chunk as before,
+accumulates the stateful op across all chunks via per-group accumulators
+(never buffered rows, `DEFAULT_RESIDUAL_GROUP_CAP = 100_000`, configurable
+via `RESIDUAL_GROUP_CAP`), and only emits/writes after the last chunk.
+Resume restarts extraction from the beginning when a stateful residual op
+is present (accumulator state is in-memory, not checkpointed) — persisted
+accumulator state is deferred, tracked in `TODO.md`. Zero live/local
+exposure confirmed (see the Part 1 entry above).
+
+### Part 2: keyset cursor through ParamSink
+
+Both the row-keyset cursor (`SqlKeysetCursor`) and the new group-key cursor
+(`SqlGroupKeyCursor`, Part 3) now resolve into `compileSql`'s `ParamSink`
+before `resolveParamSink` runs, in the same textual-order pass as every
+other literal, instead of being hand-appended to an already-resolved
+`params` array afterward. `queryBuilder.ts`'s old hand-append pattern for
+the non-aggregate cursor is deleted. This closes the same class of
+mysql text-position/param-index desync risk documented in the batch-5
+follow-up entry above ("ParamSink hardening") — the row-keyset cursor was
+the one remaining call site that predated `ParamSink` and bypassed it.
+
+### Part 3: pushed aggregate pagination
+
+A pushed aggregate's output is now paged by group-key keyset, page size
+`MAX_CHUNK_ROWS`, ordered by the group-by columns (`orderBySql` on
+`SqlDialectQuery`; a trailing `$sort` in the compiled Mongo pipeline). The
+keyset predicate is applied before grouping (`WHERE`/pre-`$group` `$match`
+via `buildGroupKeysetWhereSql`/`buildGroupKeysetMatchMongo`) — valid
+because pushed group keys are always raw columns, never a computed
+expression (`pushdownPrefixRequirement` only allows a `filter` prefix
+ahead of `aggregate`). `HAVING` stays after grouping. NULL group keys sort
+first on every dialect (`NULLS FIRST` forced on postgres; mysql/mongo sort
+NULL first natively for ascending order). The keyset predicate is expanded
+lexicographically column-by-column with explicit `IS NULL` handling, not a
+row-constructor comparison (portability across all three SQL dialects plus
+Mongo). The last page's final group-key tuple is checkpointed as the
+resume cursor the same way Extract checkpoints its own cursor. The old
+fail-at-cap guard (hard-fail when fetched rows exactly hit the cap) is
+removed; pagination supersedes it. One known, accepted gap: a pushed
+aggregate prefix feeding a *further* residual stateful op (chained
+aggregates) is not paginated inside the residual executor's own loop —
+expected vanishingly rare since pushdown normally removes the aggregate
+step from `residualSteps` entirely; see `TODO.md`'s entry.
+
+**Bug found and fixed along the way — mysql GROUP BY/ORDER BY collation.**
+The one required adversarial live agreement case (4-way, page size 2,
+2-column GROUP BY, a param'd HAVING, a NULL group key, and string group
+keys differing only by case, `"a"`/`"A"`) confirmed live that mysql's
+default column collation is case-insensitive for `GROUP BY`/`ORDER BY`
+too, not just the WHERE/HAVING literal comparisons the Phase 8b-2 batch 0
+standing rule (`sqlShared.ts`'s `BINARY`-forcing) already covered: mysql
+silently merged `"a"` and `"A"` into one group (their aggregates summed
+together, 4 groups total) while postgres/mongo/residual all agreed with
+each other on 5 distinct groups. Per the plan's explicit instruction,
+fixed rather than declared: `aggregate.ts`'s `emitSql` now forces
+byte-wise (`BINARY`) grouping/ordering on **every** mysql `GROUP BY`
+column unconditionally, regardless of type. This is safe as a *grouping*
+correctness fix for any column type because it's always a self-comparison
+of one column's value against itself across rows (never against a
+differently-typed literal, unlike Fix 1's guarded WHERE/HAVING case), and
+a column's canonical string form is consistent row-to-row, so forcing
+`BINARY` can never split two truly-equal values apart. This sandbox's
+default `sql_mode` includes `ONLY_FULL_GROUP_BY`, which then rejects a
+plain `SELECT col` whose expression no longer textually matches the
+`BINARY col` GROUP BY expression (verified live: mysql error 1055) — fixed
+by wrapping the mysql SELECT-list group-by columns in `ANY_VALUE(...) AS
+col` (mysql's documented escape hatch; safe here since BINARY grouping
+already guarantees every row in a reported group shares the same value),
+aliased back to the plain column name so downstream column-name lookups
+(`queryBuilder`/`runEtl`/preview mapping) keep working. Re-run live after
+the fix: all 4 arms agree on the same 5 groups, and the full 218-case
+`ops-agreement` suite has no new divergence.
+
+**Known residual risk, not reproduced or fixed (flagged, out of this
+phase's scope).** The fix forces `BINARY` unconditionally on every mysql
+groupBy column regardless of type. For a **numeric** groupBy column, this
+would flip `ORDER BY`'s sort semantics from numeric to lexicographic-byte
+(e.g. `2`/`10`/`20` sorting as `"10" < "2" < "20"`), while the WHERE-side
+group-key keyset cursor comparison (`compileCondition`'s Fix 1, which only
+forces `BINARY` when the compared value's JS runtime type is `string`)
+stays numeric for that same column — a theoretical duplicate/skipped-group
+pagination bug for a numeric groupBy column, worse than the one just
+fixed. Not reproduced (no numeric-groupBy pagination case exists in the
+current suite) and not fixed here: `pushdown.ts` is deliberately
+schema-agnostic (`AggregateStep.groupBy` is `z.array(z.string())` — field
+names only, no column-type info at compile time), so a fix scoped to
+"only force BINARY for string-typed groupBy columns" isn't expressible
+without threading real column-type metadata through the compiler, which is
+out of scope here. Tracked as an open risk; revisit if a real workflow
+ever pages a pushed aggregate on a numeric groupBy column.
+
+### Part 4: pushed onFailure pre-checks
+
+Each pushed fallible step (`'fail'`/`'null'`/`'drop'` policy) now runs one
+pre-check query before extraction, against the same source and upstream
+filters (`compileFailurePreChecks` + `buildFailurePreCheckQuery`/
+`dispatch`, the exact pair `runEtl.ts` calls): `'fail'` runs
+`EXISTS(failure predicate)` and aborts before any write with the same
+error the residual path raises if true — the step stays pushed and no
+longer forces itself and later steps residual just to get a failure count.
+`'null'`/`'drop'` run `COUNT(failure predicate)` and report that count the
+same way the residual path does, with the step still fully pushed. This
+resolves `PHASE8_EXIT.md` §8's "8b-3 pushed `'null'`/`'drop'` failure
+counts are silent" risk — marked resolved there, pointing back here.
+
+### Part 5: consistency (documented, not fixed, per the plan)
+
+Pages (pushed aggregate pagination), chunks (row-local Extract), and
+pre-checks (Part 4) are each separate queries against the live source, not
+a single snapshot. Rows inserted, updated, or deleted between two pages of
+the same pushed aggregate, between two chunks of the same extraction, or
+between a pre-check query and the extraction query it precedes, can shift
+which page or chunk a row lands in, or can let a row that failed a
+pre-check's predicate slip in in via a race, or vice versa — the same
+class of read-consistency gap the existing chunked, non-transactional
+Extract already has (no new mechanism introduced by Phase 9's pagination
+or pre-check queries; both just add more separate queries of the same
+kind, over the same non-snapshotted source). Accepted as a known v1
+limitation, consistent with the existing chunked-Extract precedent; no
+fix attempted, per the plan.
+
+### Tests
+
+- Worker unit tests: a residual aggregate over 3+ chunks (small
+  `chunkSize`) matches the single-chunk result; a run killed after chunk 1
+  and resumed matches the full-data result; a residual aggregate over the
+  group cap fails loudly; the residual executor rejects a stateful op run
+  on a single chunk; pushed aggregate pagination resumes from a
+  checkpointed cursor.
+- Updated onfailure agreement cases: pushed `'drop'` now asserts
+  `expectedPreCheckFailures` alongside `expectedResidualFailures`, proving
+  the two now agree on the same count with the step still fully pushed.
+  Added one case where pushed `'fail'` aborts with the correct count while
+  staying pushed (`expectedPushedResidualCount: 0`).
+- The one required adversarial live agreement case described under Part 3
+  above (`agreementCases.ts`, tag `aggregate-pagination`) — all 4
+  evaluators, page size 2, agree on the same 5 groups after the fix.
+
+### Verification (full, per the plan's close-out requirement)
+
+- Typecheck: `@nia/schemas`, `@nia/worker`, `@nia/guardrails`, `@nia/web`
+  — all clean.
+- Unit tests: `@nia/schemas` 510/510 passed (20 files); `@nia/worker`
+  143/143 passed (17 files); `@nia/guardrails` 72 passed + 1 expected-fail
+  (73 total, 4 files).
+- Full live `ops-agreement` suite (4-way, all cases, no tag filter): 218
+  cases, 0 untriaged divergences/errors. 1/218 diverged and 1/218 had an
+  errored arm, both the single pre-existing, unrelated "FALSE POSITIVE"
+  date-shape `expectedDivergence` case documented under "Phase 8b-2b:
+  Semantics homogenization" above — not new, not Phase-9-related.
+- Smoke scripts (`apps/worker/scripts/`, live, real docker-compose
+  sandbox): `smoke` (dispatch-smoke), `smoke:aggregate`,
+  `smoke:aggregate:postgres-source`, `smoke:write`,
+  `smoke:write:mysql-mongo` — all passed on first invocation. `kill-test`
+  (1,000,000-row mysql->postgres chunked run, two induced `kill -9`s)
+  failed on its first invocation — `workflow_runs.status` flipped to
+  `"failed"` after exactly 8 chunks (8,000 rows) within ~170ms, before
+  either kill even landed (`waitForRowsAtLeast`/`waitForCursorChange`
+  correctly treat any terminal status as a stop condition, which is why
+  the harness's own "KILL 1"/"KILL 2"/"RESUME confirmed" log lines still
+  printed even though nothing meaningful happened after the run had
+  already terminated — see the artifact log's `status=failed` on the very
+  first threshold check). No error message survives in `workflow_runs`
+  (only `finishRun(runId, "failed")` is called, no message column), so the
+  exact trigger is unrecovered; not reproducible on immediate rerun with
+  identical code, which strongly points to a one-off environmental hiccup
+  (e.g. connector-mysql/mysql still settling right at test start) rather
+  than an application bug — nothing in Phase 9's changes touches the
+  first-8-chunks path differently from any other chunk. Re-run
+  immediately after (per the plan's "if Docker crashes, restart and
+  rerun; discard crashed runs" allowance, treating this the same way):
+  passed cleanly end-to-end — Kill 1 (untimed) at row 389,000, Kill 2
+  (targeted, landed inside the exact post-persist/pre-enqueue race window)
+  at row 391,000, both recovered via BullMQ stalled-job redelivery +
+  persisted-cursor-wins with zero data loss or duplication; final
+  destination row count 1,000,000/1,000,000, source/destination checksums
+  match, 0 duplicate rows by upsert key, `rows_processed` matches exactly
+  (replay count 0). First (discarded) run's artifact:
+  `apps/worker/eval-reports/kill-test-2026-09-21T10-54-34-345Z.log`;
+  passing run's artifact:
+  `apps/worker/eval-reports/kill-test-2026-09-21T10-54-43-506Z.log`.
+
+## Phase 9 close-out fix: MySQL group-key pagination cursor must match ORDER BY's byte order, not the column's own type
+
+Phase 9 Part 3 forces mysql's aggregate `ORDER BY` to sort every group-by
+column byte-wise (`BINARY col`, `aggregate.ts`) — for every key type, not
+just strings — but the `WHERE`-side keyset predicate still compared using
+the column's own type, and the pagination cursor was still read from the
+plain returned value. Both diverge from the sort mysql actually performs:
+a numeric column sorts as `"10" < "100" < "9"` under `BINARY`, so a
+numeric cursor comparison (e.g. `n > 100`) stops one page too early and
+silently drops a group. A `DECIMAL(10,2)` column compounds this
+independently of the type mismatch: mysql2 returns it as a string
+(`"10.00"`), not a JS number, so a cursor built from the raw returned
+value doesn't even round-trip correctly through a JSON-persisted
+checkpoint. Fixed so mysql pagination order is byte order for every key
+type, unconditionally: mysql's aggregate emission now selects one extra
+hidden column per group-by key — `HEX(BINARY <col>)`, an order-preserving,
+JSON/param-safe re-encoding of the literal `CAST(col AS BINARY)` byte
+comparison, chosen specifically to avoid mysql2's default type-casting
+returning a raw `Buffer` for a plain `BINARY` column — stores pagination
+cursors as those hex strings, and compares `HEX(BINARY col) > ?` on the
+`WHERE` side, exactly matching what `ORDER BY` sorts on. Hidden cursor
+columns are stripped from every row before residual transforms/write
+(`runEtl.ts`). Postgres/mongo are unaffected (native type-aware ordering,
+no byte-order coercion needed). Test:
+`apps/worker/scripts/lib/agreementCases.ts` tag
+`aggregate-pagination-numeric` — `GROUP BY` an INT column (9, 10, 100) plus
+a DECIMAL(10,2) column, page size 2; all 4 evaluators agree on the same
+3-group result (same groups, same `total` sums, every page). The DECIMAL
+column's own JS type still differs by evaluator (mysql2 returns a string,
+e.g. `"1.50"`; postgres/mongo/residual return a number, `1.5`) — a
+pre-existing, unrelated mysql2 driver quirk, declared via
+`expectedDivergence` on that case rather than left untriaged.
+
+**Follow-up (same session): `coalesce` handling rule refined to depend on
+its last argument's fallibility.** The 8b-3 "coalesce always handles its
+directly-nested fallible calls" rule was too broad —
+`coalesce(parse_date(x, f1), parse_date(x, f2))` marked both calls
+handled, so a value matching neither format silently became `NULL` with
+no failure ever counted. Fixed (`expression.ts`'s `collectFallibleCalls`/
+`buildFailureExpr`): a `coalesce` only handles its nested fallible calls
+when its last argument is non-fallible (a literal, a column, or an
+expression containing no fallible calls anywhere); otherwise the coalesce
+itself becomes one compound fallible unit that fails when every nested
+fallible call's own inputs were non-null (it genuinely ran) and the
+coalesce's overall result is still `NULL`. `is_null`/`is_not_null` keep
+their original, unconditional exemption. Tests:
+`packages/schemas/src/ops/onFailure.test.ts` —
+`coalesce(to_number(x), 0)` stays handled;
+`coalesce(parse_date(x, f1), parse_date(x, f2))` reports a failure on a
+value matching neither format.

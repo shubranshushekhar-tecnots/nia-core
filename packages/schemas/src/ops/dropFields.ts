@@ -4,6 +4,7 @@ import type { OpModule, SourceDialect } from "./types.js";
 export const dropFieldsOp: OpModule<DropFieldsStepT> = {
   kind: "drop_fields",
   schema: DropFieldsStep,
+  residualExecution: "row-local",
 
   createDefault(): DropFieldsStepT {
     return { kind: "drop_fields", fields: [] };

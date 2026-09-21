@@ -190,12 +190,12 @@ describe("runEtl — chunk loop happy path", () => {
     expect(input.rows).toEqual([["a@example.com"], ["b@example.com"]]);
     expect(input.upsertKeys).toEqual(["email_address"]);
 
-    expect(recordChunkProgressMock).toHaveBeenCalledWith(job.runId, 2, JSON.stringify({ lastKey: "2" }));
+    expect(recordChunkProgressMock).toHaveBeenCalledWith(job.runId, 2, JSON.stringify({ lastKey: "2", groupKey: null }));
     expect(finishRunMock).not.toHaveBeenCalled();
 
     expect(queue.add).toHaveBeenCalledTimes(1);
     const [, nextJob] = (queue.add as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(nextJob.cursor).toBe(JSON.stringify({ lastKey: "2" }));
+    expect(nextJob.cursor).toBe(JSON.stringify({ lastKey: "2", groupKey: null }));
     expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "progress" }));
   });
 
@@ -236,8 +236,8 @@ describe("runEtl — failed write", () => {
   });
 });
 
-describe("runEtl — aggregate truncation guard", () => {
-  it("fails before dispatchWrite when a pushed aggregate's fetched rows hit the cap, writing zero rows", async () => {
+describe("runEtl — aggregate pagination (Phase 9 Part 3)", () => {
+  it("pages by group key instead of failing when a pushed aggregate's fetched rows hit the cap", async () => {
     const aggregateGraph: GraphDoc = {
       nodes: [
         graph().nodes[0]!,
@@ -279,12 +279,13 @@ describe("runEtl — aggregate truncation guard", () => {
     dispatchMock.mockResolvedValueOnce(
       tabularResult(
         [
-          ["eng", "3"],
-          ["sales", "2"],
+          ["eng", "3", "eng"],
+          ["sales", "2", "sales"],
         ],
         [
           { name: "cohort", type: "string" },
           { name: "n", type: "string" },
+          { name: "__nia_group_cursor_0", type: "string" },
         ],
       ),
     );
@@ -293,13 +294,23 @@ describe("runEtl — aggregate truncation guard", () => {
 
     const result = await runEtl(job, queue);
 
-    expect(result.status).toBe("failed");
-    expect(result.message).toContain(`${requestedLimit}`);
-    expect(dispatchWriteMock).not.toHaveBeenCalled();
-    expect(recordChunkProgressMock).not.toHaveBeenCalled();
-    expect(queue.add).not.toHaveBeenCalled();
-    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
-    expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "error" }));
+    // Phase 9 Part 3: hitting the cap no longer fails the run — it's
+    // treated exactly like row-keyset hitting the cap, i.e. "there may be
+    // more" so this is not the last chunk. This chunk's rows still write,
+    // and the next job's cursor carries the last emitted group's group-by
+    // values ("sales", the second/last row above) as the group-key cursor.
+    expect(result).toEqual({ status: "chunk", nextCursor: null });
+    expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
+    expect(recordChunkProgressMock).toHaveBeenCalledWith(
+      job.runId,
+      2,
+      JSON.stringify({ lastKey: null, groupKey: ["sales"] }),
+    );
+    expect(queue.add).toHaveBeenCalledTimes(1);
+    const [, nextJob] = (queue.add as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(nextJob.cursor).toBe(JSON.stringify({ lastKey: null, groupKey: ["sales"] }));
+    expect(finishRunMock).not.toHaveBeenCalled();
+    expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "progress" }));
   });
 
   it("does not fail when a pushed aggregate's fetched rows are under the cap", async () => {
@@ -357,6 +368,98 @@ describe("runEtl — aggregate truncation guard", () => {
     expect(result.status).toBe("done");
     expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
     expect(finishRunMock).toHaveBeenCalledWith(job.runId, "succeeded");
+  });
+
+  it("resumes a pushed aggregate's second page from the persisted group-key cursor (Phase 9 Part 3 pagination resume)", async () => {
+    const aggregateGraph: GraphDoc = {
+      nodes: [
+        graph().nodes[0]!,
+        {
+          id: "agg",
+          type: "transform",
+          position: { x: 200, y: 0 },
+          config: { steps: [{ kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "count", field: null, alias: "n" }] }] },
+        },
+        {
+          id: "dest",
+          type: "destination",
+          manifestId: "supabase",
+          connectionId: DEST_CONN,
+          position: { x: 400, y: 0 },
+          config: {
+            operation: "insert",
+            entity: { namespace: "public", name: "users_dest" },
+            mapping: {
+              version: 1,
+              entries: [
+                { from: "cohort", to: "cohort" },
+                { from: "n", to: "n" },
+              ],
+              approvedAt: "2026-01-01T00:00:00.000Z",
+            },
+            upsertKeys: ["cohort"],
+          },
+        },
+      ],
+      edges: [
+        { id: "e0", source: "src", target: "agg" },
+        { id: "e1", source: "agg", target: "dest" },
+      ],
+    };
+    resolveGraphMock.mockResolvedValue(aggregateGraph);
+
+    const requestedLimit = 2;
+    // First page: exactly chunkSize rows -> "chunk", cursor carries the
+    // last emitted group's group-by tuple ("sales").
+    dispatchMock.mockResolvedValueOnce(
+      tabularResult(
+        [
+          ["eng", "3", "eng"],
+          ["sales", "2", "sales"],
+        ],
+        [
+          { name: "cohort", type: "string" },
+          { name: "n", type: "string" },
+          { name: "__nia_group_cursor_0", type: "string" },
+        ],
+      ),
+    );
+    const queue = queueStub();
+    const job = baseJob({ chunkSize: requestedLimit });
+
+    const firstResult = await runEtl(job, queue);
+    expect(firstResult).toEqual({ status: "chunk", nextCursor: null });
+    const [, firstNextJob] = (queue.add as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const persistedCursor = firstNextJob.cursor as string;
+    expect(persistedCursor).toBe(JSON.stringify({ lastKey: null, groupKey: ["sales"] }));
+
+    // Second invocation (self-enqueued resume): same job, cursor now set to
+    // the first call's persisted group-key cursor. Under the cap -> "done".
+    dispatchMock.mockReset();
+    dispatchMock.mockResolvedValueOnce(
+      tabularResult(
+        [["ops", "1", "ops"]],
+        [
+          { name: "cohort", type: "string" },
+          { name: "n", type: "string" },
+          { name: "__nia_group_cursor_0", type: "string" },
+        ],
+      ),
+    );
+    const resumedJob = baseJob({ chunkSize: requestedLimit, cursor: persistedCursor });
+
+    const secondResult = await runEtl(resumedJob, queue);
+
+    expect(secondResult).toEqual({ status: "done" });
+    // Proves the second page's compiled query actually threaded the
+    // persisted group-key cursor through (Part 2's ParamSink path), not
+    // just that pagination happened to stop — the cursor's "sales" value
+    // must appear as a bound param in the recompiled group-keyset WHERE.
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const [, secondQuery] = dispatchMock.mock.calls[0]!;
+    expect(secondQuery.params).toContain("sales");
+    expect(dispatchWriteMock).toHaveBeenCalledTimes(2);
+    expect(finishRunMock).toHaveBeenCalledWith(resumedJob.runId, "succeeded");
   });
 });
 
@@ -582,6 +685,166 @@ describe("runEtl — unique-key-missing hard fail", () => {
   });
 });
 
+describe("runEtl — stateful residual op (Phase 9 Part 1)", () => {
+  // Two chained transform nodes (not one), same reason as the onFailure
+  // suite above: runEtl.ts only attempts pushdown when
+  // `transforms.length === 1`, so with two nodes the `aggregate` step
+  // always stays residual regardless of dialect support — exactly the
+  // shape that needs the cross-chunk accumulator, never pushdown.
+  function statefulAggregateGraph(): GraphDoc {
+    return {
+      nodes: [
+        graph().nodes[0]!,
+        { id: "noop", type: "transform", position: { x: 100, y: 0 }, config: { steps: [] } },
+        {
+          id: "agg",
+          type: "transform",
+          position: { x: 200, y: 0 },
+          config: { steps: [{ kind: "aggregate", groupBy: ["cohort"], aggregations: [{ fn: "sum", field: "salary", alias: "total" }] }] },
+        },
+        {
+          id: "dest",
+          type: "destination",
+          manifestId: "supabase",
+          connectionId: DEST_CONN,
+          position: { x: 400, y: 0 },
+          config: {
+            operation: "insert",
+            entity: { namespace: "public", name: "users_dest" },
+            mapping: {
+              version: 1,
+              entries: [
+                { from: "cohort", to: "cohort" },
+                { from: "total", to: "total" },
+              ],
+              approvedAt: "2026-01-01T00:00:00.000Z",
+            },
+            upsertKeys: ["cohort"],
+          },
+        },
+      ],
+      edges: [
+        { id: "e0", source: "src", target: "noop" },
+        { id: "e1", source: "noop", target: "agg" },
+        { id: "e2", source: "agg", target: "dest" },
+      ],
+    };
+  }
+
+  function chunkRows(rows: [string, string, number][]) {
+    return tabularResult(
+      rows.map(([id, cohort, salary]) => [id, cohort, salary]),
+      [
+        { name: "id", type: "string" },
+        { name: "cohort", type: "string" },
+        { name: "salary", type: "string" },
+      ],
+    );
+  }
+
+  function writtenTotalsByCohort(): Record<string, number> {
+    const [, input] = dispatchWriteMock.mock.calls[dispatchWriteMock.mock.calls.length - 1]!;
+    const cohortIdx = input.columns.indexOf("cohort");
+    const totalIdx = input.columns.indexOf("total");
+    return Object.fromEntries(input.rows.map((r: unknown[]) => [r[cohortIdx], r[totalIdx]]));
+  }
+
+  it("(a) matches the single-chunk result when the source spans 3+ fetched chunks", async () => {
+    resolveGraphMock.mockResolvedValue(statefulAggregateGraph());
+    dispatchMock
+      .mockResolvedValueOnce(chunkRows([["1", "eng", 100], ["2", "sales", 50]]))
+      .mockResolvedValueOnce(chunkRows([["3", "eng", 200], ["4", "sales", 30]]))
+      .mockResolvedValueOnce(chunkRows([["5", "eng", 50]]));
+    const queue = queueStub();
+    const job = baseJob({ chunkSize: 2 });
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({ status: "done" });
+    expect(dispatchMock).toHaveBeenCalledTimes(3);
+    expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
+    expect(writtenTotalsByCohort()).toEqual({ eng: 350, sales: 80 });
+    // Never a per-chunk write mid-loop and never a next-chunk self-enqueue
+    // — the whole run is one job invocation (see runStatefulResidual's doc
+    // comment).
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(recordChunkProgressMock).toHaveBeenCalledTimes(1);
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "succeeded");
+    expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "done" }));
+  });
+
+  it("(b) a kill after chunk 1 and a resumed retry together match the full-data result", async () => {
+    resolveGraphMock.mockResolvedValue(statefulAggregateGraph());
+    const queue = queueStub();
+    const job = baseJob({ chunkSize: 2 });
+
+    // "Killed after chunk 1": chunk 1 reads fine, chunk 2's read never
+    // comes back (the worker died mid-loop) — an unexpected rejection,
+    // left to propagate rather than converted to a clean fail() (matches
+    // this file's header comment on genuinely unexpected exceptions).
+    dispatchMock
+      .mockResolvedValueOnce(chunkRows([["1", "eng", 100], ["2", "sales", 50]]))
+      .mockRejectedValueOnce(new Error("connection reset — simulated kill"));
+
+    await expect(runEtl(job, queue)).rejects.toThrow("simulated kill");
+    expect(dispatchWriteMock).not.toHaveBeenCalled();
+    expect(recordChunkProgressMock).not.toHaveBeenCalled();
+    expect(finishRunMock).not.toHaveBeenCalled();
+
+    // "Resumed": BullMQ redelivers the exact same job (cursor: null,
+    // nothing was ever persisted mid-loop). A stale/unrelated persisted
+    // checkpoint cursor must still be ignored (per the plan: "resume
+    // restarts extraction from the beginning ... when a stateful op is
+    // present") — asserted below via the first read having no cursor
+    // filter, not just via the final total.
+    dispatchMock.mockReset();
+    getRunCheckpointMock.mockReset();
+    getRunCheckpointMock.mockResolvedValue({ status: "running", cursor: JSON.stringify({ lastKey: "999" }) });
+    dispatchMock
+      .mockResolvedValueOnce(chunkRows([["1", "eng", 100], ["2", "sales", 50]]))
+      .mockResolvedValueOnce(chunkRows([["3", "eng", 200], ["4", "sales", 30]]))
+      .mockResolvedValueOnce(chunkRows([["5", "eng", 50]]));
+
+    const resumedResult = await runEtl(job, queue);
+
+    expect(resumedResult).toEqual({ status: "done" });
+    const [, firstQuery] = dispatchMock.mock.calls[0]!;
+    expect(firstQuery.sql).not.toContain("WHERE");
+    expect(firstQuery.params).toEqual([]);
+    expect(writtenTotalsByCohort()).toEqual({ eng: 350, sales: 80 });
+  });
+
+  it("(c) fails loudly, without writing, once the group cap is exceeded", async () => {
+    resolveGraphMock.mockResolvedValue(statefulAggregateGraph());
+    dispatchMock.mockResolvedValueOnce(
+      chunkRows([
+        ["1", "eng", 100],
+        ["2", "sales", 50],
+        ["3", "ops", 10],
+      ]),
+    );
+    const queue = queueStub();
+    const job = baseJob({ chunkSize: 10 });
+
+    const previousCap = process.env.RESIDUAL_GROUP_CAP;
+    process.env.RESIDUAL_GROUP_CAP = "2";
+    try {
+      const result = await runEtl(job, queue);
+
+      expect(result.status).toBe("failed");
+      expect(result.message).toContain("2");
+      expect(result.message!.toLowerCase()).toContain("cap");
+      expect(dispatchWriteMock).not.toHaveBeenCalled();
+      expect(recordChunkProgressMock).not.toHaveBeenCalled();
+      expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
+      expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "error" }));
+    } finally {
+      if (previousCap === undefined) delete process.env.RESIDUAL_GROUP_CAP;
+      else process.env.RESIDUAL_GROUP_CAP = previousCap;
+    }
+  });
+});
+
 describe("runEtl — keyset query shape per dialect", () => {
   it("builds a keyset SQL query with no WHERE clause on the first chunk", async () => {
     const queue = queueStub();
@@ -599,7 +862,12 @@ describe("runEtl — keyset query shape per dialect", () => {
     await runEtl(baseJob({ cursor: JSON.stringify({ lastKey: "5" }) }), queue);
 
     const [, query] = dispatchMock.mock.calls[0]!;
-    expect(query.sql).toBe("SELECT * FROM `public`.`users` WHERE `id` > ? ORDER BY `id` LIMIT 10");
+    // Phase 9 Part 2: the cursor condition now resolves through the same
+    // ParamSink/combineAnd path as every other pushed WHERE fragment
+    // (packages/schemas/src/ops/dialects/sqlShared.ts's combineAnd wraps
+    // each fragment in parens) instead of being hand-appended as bare
+    // text — same semantics, this is just the now-consistent shape.
+    expect(query.sql).toBe("SELECT * FROM `public`.`users` WHERE (`id` > ?) ORDER BY `id` LIMIT 10");
     expect(query.params).toEqual(["50"]);
   });
 

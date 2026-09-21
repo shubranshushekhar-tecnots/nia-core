@@ -459,44 +459,24 @@ wiring referenced in §5) are unrelated to either fix and remain as-is.
 
 ## 8. Open risks / deferred, carried forward
 
-- **Phase 9 keyset-collision prerequisite** (recorded in both TODO.md and
-  decisions.md's batch-5-follow-up-1 entry): mysql's `?` placeholder
-  binds by left-to-right text-scan position; appending a keyset
-  pagination condition into `WHERE` after `ParamSink`'s resolve pass has
-  already run would silently swap the keyset value into a `HAVING`
-  placeholder's slot. Must route keyset conditions through `ParamSink`
-  itself, or add a permanent regression case proving the keyset condition
-  is always textually last, before Phase 9's keyset pagination work
-  touches any query with both a `HAVING` clause and mysql's placeholder
-  style.
-- **Aggregate pushdown cap — false-positive fail, not silent truncation,
-  pending Phase 9 aggregate pagination.** Effective cap: `requestedLimit =
-  min(job.chunkSize, MAX_CHUNK_ROWS)`, `MAX_CHUNK_ROWS = 1000`
-  (`apps/worker/src/lib/etl/queryBuilder.ts:36`). Applies identically to
-  SQL and Mongo aggregate pushdown — both branches of
-  `buildEtlReadQuery` pass the same `limit` value into a trailing
-  `LIMIT ${limit}` (postgres/mysql, `queryBuilder.ts:73`) or `$limit:
-  limit` stage (mongo, `queryBuilder.ts:55`), and `runEtl.ts` treats the
-  result identically regardless of dialect. A guard already exists
-  (`runEtl.ts:214-221`, shipped Phase 6 Block 6, commit `3872b5f` —
-  predates Phase 8, not introduced this phase): if
-  `sourceRowsFetched === requestedLimit`, the run hard-fails before
-  `dispatchWrite` (zero destination rows written) with `Aggregate result
-  may exceed ${requestedLimit} groups; refine group-by or raise the
-  cap.` This is **not** the silent-truncation shape — it fails loud. Its
-  known limitation (documented in both `runEtl.ts`'s own comment and
-  `TODO.md:106-153`): fetching exactly `requestedLimit` rows can't be
-  distinguished from a truncated result, so a workflow whose true
-  GROUP BY output is legitimately exactly at the cap false-positive
-  fails. **Proposed refinement (not implemented):** request
-  `requestedLimit + 1` rows instead of `requestedLimit`; if more than
-  `requestedLimit` come back, fail with the same clear cap-naming error
-  (now a true positive, not a maybe); if `requestedLimit` or fewer come
-  back, the true result set fit and can ship normally — eliminating the
-  false-positive edge case without needing real aggregate-aware
-  pagination. Still not a substitute for the real fix (a keyset cursor
-  over the group-by columns, `TODO.md:120-123`); scoped as a stopgap
-  until Phase 9's aggregate pagination work lands.
+- **Phase 9 keyset-collision prerequisite — RESOLVED (Phase 9 Part 2).**
+  Both the row-keyset cursor (`SqlKeysetCursor`) and the group-key cursor
+  (`SqlGroupKeyCursor`, Part 3) now route through `compileSql`'s
+  `ParamSink`/`resolveParamSink` pass itself, before the resolve pass
+  runs, rather than being hand-appended to an already-resolved
+  `sqlQuery.params` array — closing the mysql text-position/param-index
+  desync risk this entry warned about. `queryBuilder.ts`'s old
+  hand-append pattern is deleted.
+- **Aggregate pushdown cap — RESOLVED (Phase 9 Part 3).** The
+  false-positive-fail-at-cap guard described here (shipped Phase 6 Block
+  6, commit `3872b5f`) is removed; a pushed aggregate now pages by
+  group-key keyset instead of hard-failing when `sourceRowsFetched ===
+  requestedLimit`. See `TODO.md`'s "Aggregate pushdown pagination — DONE
+  (Phase 9 Part 3)" entry and `docs/decisions.md`'s Phase 9 entry for the
+  implementation. One known gap carried forward: a pushed aggregate
+  prefix feeding a further residual stateful op is not paginated inside
+  `runStatefulResidual`'s internal loop (see TODO.md's entry for why this
+  was accepted as out of scope).
 - **Regex out-of-subset patterns**: v1 scope is deliberately unvalidated
   passthrough (this session's Item 3 decision) — not reject-at-validation,
   not residual-fallback. Revisit if a real workflow hits a silent-
@@ -560,17 +540,22 @@ wiring referenced in §5) are unrelated to either fix and remain as-is.
   fix is out of scope — the general staging + atomic swap the destination
   write needs is Phase 11 scope, not something 8b-3 should build a
   one-off version of just for this policy).
-- **8b-3 pushed `'null'`/`'drop'` failure counts are silent (added
-  2026-09-21, follow-up item 3).** A pushed `'null'`/`'drop'`
-  `filter`/`computed_field`/`aggregate`-`having` step reports no failure
+- **8b-3 pushed `'null'`/`'drop'` failure counts are silent — RESOLVED,
+  Phase 9 Part 4.** Was: a pushed `'null'`/`'drop'`
+  `filter`/`computed_field`/`aggregate`-`having` step reported no failure
   count at all (`failures: undefined` in the run result) because the
   flag-column mechanism that would have counted per-row failures in
   pushed SQL/Mongo was built, then removed again in the same phase once
   `fallibleStepIsPushable` made `'fail'`/`'quarantine'` always-residual
-  and the flag column had nothing left to serve. This deviates from
-  8b-3's original design goal that no policy silently hides failures — a
-  `'drop'`ped row today leaves zero trace in the run result — and must be
-  fixed before Phase 13, when model-proposed `'drop'` policies begin.
+  and the flag column had nothing left to serve. Fixed by Phase 9 Part 4's
+  pushed pre-check queries (`compileFailurePreChecks` +
+  `buildFailurePreCheckQuery`/`dispatch`, run once before extraction,
+  against the same source and upstream filters): `'null'`/`'drop'` now run
+  a `COUNT(failure predicate)` pre-check and report that count the same
+  way the residual path does, with the step still fully pushed; `'fail'`
+  runs an `EXISTS(failure predicate)` pre-check and aborts before any
+  write if true, using the same error the residual path raises, also
+  while staying pushed. See `docs/decisions.md`'s Phase 9 entry.
 
 **Open flags carried forward from prior phases (not new to Phase 8):**
 - **`canvas.spec.ts:274` skip** — `test.skip('source drawer: entity/table

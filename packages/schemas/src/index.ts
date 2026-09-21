@@ -7,8 +7,8 @@ export * from "./graph.js";
 export * from "./expression.js";
 export * from "./nodeConfig.js";
 export * from "./pushdown.js";
-export type { OpKind, StepFailureReport } from "./ops/types.js";
-export { OP_REGISTRY } from "./ops/registry.js";
+export type { OpKind, StepFailureReport, ResidualExecution, ResidualAccumulator } from "./ops/types.js";
+export { OP_REGISTRY, opForStep } from "./ops/registry.js";
 // Phase 8b-3: OnFailureAbortError is thrown by ops/onFailure.ts's
 // computeFailureReport (via applyResidual) for policy "fail" — public so
 // runEtl.ts can catch it specifically and convert it into a clean run

@@ -324,7 +324,7 @@ describe("runPreview", () => {
     const [, query] = dispatchMock.mock.calls[0]!;
     expect(query.sql).toBe(
       "SELECT `region` AS `region`, `order_count` AS `order_count` FROM " +
-        "(SELECT `region`, COUNT(*) AS `order_count` FROM `public`.`orders` GROUP BY `region` HAVING (COUNT(*) >= ?)) AS agg",
+        "(SELECT ANY_VALUE(`region`) AS `region`, COUNT(*) AS `order_count`, ANY_VALUE(HEX(BINARY `region`)) AS `__nia_group_cursor_0` FROM `public`.`orders` GROUP BY BINARY `region` HAVING (COUNT(*) >= ?)) AS agg",
     );
     expect(query.params).toEqual([20]);
   });

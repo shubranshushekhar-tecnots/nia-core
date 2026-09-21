@@ -2,8 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import Nav from './Nav';
-import Hero from './Hero';
-import DemoSection from './DemoSection';
+import HeroCanvasSection from './hero-canvas/HeroCanvasSection';
 import TrustedBy from './TrustedBy';
 import Features from './Features';
 import ConnectorsOrbit from './ConnectorsOrbit';
@@ -16,7 +15,6 @@ import Footer from './Footer';
 export default function LandingPage() {
   const navRef = useRef<HTMLElement>(null);
   const heroRef = useRef<HTMLElement>(null);
-  const stageRef = useRef<HTMLElement>(null);
   const bandRef = useRef<HTMLElement>(null);
   const footRef = useRef<HTMLElement>(null);
 
@@ -31,27 +29,29 @@ export default function LandingPage() {
       const nav = navRef.current;
       if (!nav) return;
 
+      // Hero is a self-contained dark island (see hero-canvas/HeroCanvasSection):
+      // Nav starts transparent-on-black, goes solid black once the hero pins
+      // (its own scroll rig sets `wrapper.dataset.heroPinned`), then resumes
+      // the normal frosted-light treatment once the 420vh hero section has
+      // fully scrolled past. HeroCanvasSection owns all of the hero's own
+      // scroll-driven visuals via useHeroScrollProgress — this handler only
+      // drives Nav's theme sweep now, it no longer touches hero styles.
       const heroEl = heroRef.current;
-      const heroHeight = heroEl?.getBoundingClientRect().height || 0;
-      const pastHero = window.scrollY > Math.max(heroHeight - 74, 0) * 0.7;
-      nav.style.setProperty('--nav-bg', pastHero ? 'rgba(248,250,252,.82)' : 'transparent');
+      const heroRect = heroEl?.getBoundingClientRect();
+      const pastHero = (heroRect?.bottom ?? -Infinity) <= 74;
+      const pinned = !pastHero && heroEl?.dataset.heroPinned === 'true';
+      const darkIsland = !pastHero;
+
+      nav.style.setProperty('--nav-bg', pastHero ? 'rgba(248,250,252,.82)' : pinned ? '#000000' : 'transparent');
       nav.style.setProperty('--nav-blur', pastHero ? 'blur(12px)' : 'none');
       nav.style.borderBottomColor = pastHero ? 'var(--line)' : 'transparent';
       nav.style.boxShadow = pastHero ? '0 10px 30px -24px rgba(15,23,42,.5)' : 'none';
-      if (reduce) return;
-
-      const hero = heroRef.current;
-      const stage = stageRef.current;
-      if (hero && stage) {
-        const h = hero.getBoundingClientRect().height || 1;
-        const p = Math.max(0, Math.min(1, window.scrollY / (h * 0.8)));
-        const e = p * p * (3 - 2 * p);
-        hero.style.transform = `perspective(1200px) scale(${1 - e * 0.14}) translateY(${-e * 70}px) rotateX(${e * 7}deg)`;
-        hero.style.opacity = String(1 - e * 0.85);
-        hero.style.filter = `blur(${(e * 5).toFixed(2)}px)`;
-        stage.style.transform = `translateY(${-e * 44}px)`;
-        stage.style.borderTopLeftRadius = stage.style.borderTopRightRadius = `${36 - e * 22}px`;
+      if (darkIsland) {
+        nav.style.setProperty('--nav-fg', '#FFFFFF');
+      } else {
+        nav.style.removeProperty('--nav-fg');
       }
+      if (reduce) return;
 
       const band = bandRef.current;
       const foot = footRef.current;
@@ -76,8 +76,7 @@ export default function LandingPage() {
   return (
     <div style={{ width: '100%', minHeight: '100vh', boxSizing: 'border-box', background: 'var(--bg)' }}>
       <Nav navRef={navRef} />
-      <Hero heroRef={heroRef} />
-      <DemoSection stageRef={stageRef} />
+      <HeroCanvasSection heroRef={heroRef} />
       <TrustedBy />
       <Features />
       <ConnectorsOrbit />
