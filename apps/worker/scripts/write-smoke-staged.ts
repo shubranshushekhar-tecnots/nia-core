@@ -36,8 +36,12 @@
  * Prerequisites (not started by this script):
  *   - `supabase start` (applies migrations, incl. 0021/0022's
  *     staging_objects table)
- *   - `docker compose up -d --build redis dev-mysql dev-postgres
- *     connector-mysql connector-supabase`
+ *   - `redis`/`dev-mysql`/`dev-postgres`/`connector-mysql`/
+ *     `connector-supabase` are rebuilt+started automatically by
+ *     `pnpm run smoke:staged`'s `presmoke:staged` step (`docker compose up
+ *     -d --build ...`) — always a fresh connector image, never a stale one
+ *     silently serving old signature-verification logic (see
+ *     docs/decisions.md's Phase 11 "stale image" lesson).
  *   - apps/web/.env.local (or supabase status) for SUPABASE_ANON_KEY, used
  *     to sign in as seed.sql's demo user for the write-grant RPCs (same
  *     requirement as write-smoke.ts/etl-kill-resume-smoke.ts).

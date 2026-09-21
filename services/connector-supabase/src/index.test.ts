@@ -18,12 +18,17 @@ import { describe, expect, it, vi } from "vitest";
 const execMock = vi.fn();
 const releaseMock = vi.fn();
 const queryMock = vi.fn();
+// Records BEGIN/COMMIT/ROLLBACK/SET LOCAL calls so tests can assert on
+// transaction control flow directly (execMock only sees the "real" data
+// queries — see the comment above).
+const controlMock = vi.fn();
 
 function makeClient() {
   return {
     query: vi.fn(async (q: string | { text: string; values?: unknown[] }) => {
       const text = typeof q === "string" ? q : q.text;
       if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK" || /^SET LOCAL/.test(text)) {
+        controlMock(text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK" ? text : "SET LOCAL");
         return { rows: [], fields: [] };
       }
       return execMock(q);
@@ -47,6 +52,7 @@ async function freshApp() {
   execMock.mockReset();
   releaseMock.mockReset();
   queryMock.mockReset();
+  controlMock.mockReset();
   verifyActiveWriteGrantMock.mockReset();
   verifyActiveWriteGrantMock.mockResolvedValue(true);
   process.env.WRITE_DISPATCH_SIGNING_SECRET = "a".repeat(32);
@@ -423,5 +429,27 @@ describe("connector-supabase /stage (route-level)", () => {
     expect(body.ok).toBe(false);
     expect(body.assertionResults[0]).toMatchObject({ ok: false });
     expect(execMock).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO"));
+  });
+
+  it("rolls back and rethrows (no ok:false response) when the apply DML itself fails mid-transaction, not just when an assertion fails", async () => {
+    const { app, signWriteContext } = await freshApp();
+    execMock.mockImplementation(async (q: { text?: string } | string) => {
+      const text = typeof q === "string" ? q : q.text;
+      if (text?.includes("COUNT(*)")) return { rows: [{ n: 0 }] };
+      if (text?.includes("INSERT INTO")) throw new Error("duplicate key value violates unique constraint");
+      return { rows: [], rowCount: 0 };
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/stage",
+      payload: stagePayload({ signWriteContext }, "apply", { assertions: [{ kind: "noNullKeys", columns: ["id"] }] }),
+    });
+    // Not a 200 op:"apply",ok:false response (that shape is reserved for
+    // assertion failures) — a mid-transaction DML failure is a hard error,
+    // matching the plan's "fails loudly" bar.
+    expect(res.statusCode).toBe(500);
+    expect(res.json().message).toMatch(/duplicate key value violates unique constraint/);
+    expect(controlMock).toHaveBeenCalledWith("ROLLBACK");
+    expect(controlMock).not.toHaveBeenCalledWith("COMMIT");
   });
 });

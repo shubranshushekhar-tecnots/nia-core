@@ -340,3 +340,24 @@
     replica-set-topology sandbox variant to test for real, not a
     skip that needs revisiting so much as a capability gap in the
     current sandbox.
+- **Phase 13 gate (added 2026-09-21) — deferred checks to run before
+  Phase 13 starts, not before:**
+  - Full `conformance:agreement` suite (all cases, not a subset).
+  - All smoke scripts: `smoke`, `smoke:aggregate`,
+    `smoke:aggregate:postgres-source`, `smoke:write`,
+    `smoke:write:mysql-mongo`, `smoke:staged`, `smoke:chat`,
+    `smoke:mapping`, `smoke:profile`.
+  - `kill-test` (etl-kill-resume-smoke's kill/redelivery path, direct
+    mode — separate from `smoke:staged`'s own kill-after-chunk-1-resume
+    scenario, which only covers staged mode).
+  - Golden corpus evaluation (`eval:golden`, `eval:golden:plan`).
+  - Cross-org RLS check on `source_profiles` (Phase 10 added this table;
+    no RLS probe for it in `supabase/tests/rls_probes.sql` yet — needs
+    one proving org A can't read/write org B's profiled-source rows).
+  - Anon key can't read the `nia` schema on a real (not local) Supabase
+    project — Phase 11's staging/quarantine tables live in `nia`, created
+    ad hoc by the write-role credential via `/stage`'s `create` op; never
+    verified against a real linked project that the anon key + PostgREST
+    can't enumerate or query `nia.nia_stg_*`/`nia.nia_quarantine`.
+  - Mongo staged mode on a real replica set, if still skipped by then —
+    see this file's "Mongo staged-mode testing" entry above.

@@ -17,7 +17,11 @@
  *
  * Prerequisites (not started by this script):
  *   - `supabase start`
- *   - `docker compose up -d --build redis dev-postgres connector-supabase`
+ *   - `redis`/`dev-postgres`/`connector-supabase` are rebuilt+started
+ *     automatically by `pnpm run smoke:write`'s `presmoke:write` step
+ *     (`docker compose up -d --build ...`) — always a fresh connector
+ *     image, never a stale one silently serving old signature-verification
+ *     logic (see docs/decisions.md's Phase 11 "stale image" lesson).
  *   - apps/web/.env.local (or supabase status) for SUPABASE_ANON_KEY, used
  *     here to sign in as seed.sql's demo user (demo@nia.dev/password) —
  *     create_write_grant/confirm_write_grant/revoke_write_grant are

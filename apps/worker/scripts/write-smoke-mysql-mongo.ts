@@ -13,7 +13,12 @@
  *
  * Prerequisites (not started by this script):
  *   - `supabase start`
- *   - `docker compose up -d --build redis dev-mysql dev-mongo connector-mysql connector-mongodb`
+ *   - `redis`/`dev-mysql`/`dev-mongo`/`connector-mysql`/`connector-mongodb`
+ *     are rebuilt+started automatically by `pnpm run smoke:write:mysql-mongo`'s
+ *     `presmoke:write:mysql-mongo` step (`docker compose up -d --build ...`)
+ *     — always a fresh connector image, never a stale one silently serving
+ *     old signature-verification logic (see docs/decisions.md's Phase 11
+ *     "stale image" lesson — this is the exact bug class that caused).
  *   - apps/web/.env.local (or supabase status) for SUPABASE_ANON_KEY
  */
 import mysql from "mysql2/promise";
