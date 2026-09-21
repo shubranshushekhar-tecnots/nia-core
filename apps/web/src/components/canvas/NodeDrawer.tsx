@@ -7,6 +7,7 @@ import type { CanvasNode } from '@/lib/canvas/mapping';
 import { confirmWriteGrant, createWriteGrant, getConnectionSchema, getWriteGrants, revokeWriteGrant, type WriteGrant } from '@/lib/api/connectionsClient';
 import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
+import ProfileTab from './ProfileTab';
 import { KIND_COLOR, KIND_LABEL } from './GraphFlowNode';
 import { getConnectorIcon } from './icons';
 import {
@@ -457,8 +458,12 @@ export default function NodeDrawer({
   const identityName = data.resolved ? (data.manifestName ?? 'Unconfigured') : (data.unknownReason ?? 'Unknown');
   const identityTitle = `${identityName}${data.connectionLabel ? ` · ${data.connectionLabel}` : ''}`;
   const showSourceDestForm = data.resolved && data.graphNodeType !== 'transform' && !parsed.unrecognized;
-  const showTabs = data.graphNodeType === 'destination' && showSourceDestForm;
-  const [activeTab, setActiveTab] = useState<'setup' | 'mapping'>('setup');
+  const sourceDestConfig = !parsed.unrecognized ? (parsed.value as SourceDestConfig) : undefined;
+  const showMappingTab = data.graphNodeType === 'destination' && showSourceDestForm;
+  // Profile tab needs an entity selected — with none picked yet there's nothing to profile (mirrors the mapping tab's own showSourceDestForm gate).
+  const showProfileTab = data.graphNodeType === 'source' && showSourceDestForm && !!sourceDestConfig?.entity && !!data.connectionId;
+  const showTabs = showMappingTab || showProfileTab;
+  const [activeTab, setActiveTab] = useState<'setup' | 'mapping' | 'profile'>('setup');
 
   // Only override the mapping dropdown's source-field list when exactly one
   // transform node sits on the path — 0 transforms means nothing to
@@ -535,9 +540,16 @@ export default function NodeDrawer({
           <button type="button" style={panelTabStyle(activeTab === 'setup')} onClick={() => setActiveTab('setup')}>
             Setup
           </button>
-          <button type="button" style={panelTabStyle(activeTab === 'mapping')} onClick={() => setActiveTab('mapping')}>
-            Field mapping
-          </button>
+          {showMappingTab && (
+            <button type="button" style={panelTabStyle(activeTab === 'mapping')} onClick={() => setActiveTab('mapping')}>
+              Field mapping
+            </button>
+          )}
+          {showProfileTab && (
+            <button type="button" style={panelTabStyle(activeTab === 'profile')} onClick={() => setActiveTab('profile')}>
+              Profile
+            </button>
+          )}
         </div>
       )}
 
@@ -584,6 +596,10 @@ export default function NodeDrawer({
             checkResults={checkResults}
             onChange={(next) => onConfigChange(next)}
           />
+        )}
+
+        {showProfileTab && activeTab === 'profile' && data.connectionId && sourceDestConfig?.entity && (
+          <ProfileTab connectionId={data.connectionId} entity={sourceDestConfig.entity} />
         )}
 
         {data.resolved && data.graphNodeType === 'transform' && !parsed.unrecognized && (

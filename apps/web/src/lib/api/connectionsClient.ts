@@ -1,4 +1,4 @@
-import type { IntrospectResponse } from '@nia/schemas';
+import type { EntityProfile, EntityRef, IntrospectResponse } from '@nia/schemas';
 import { createClient } from '@/lib/supabase/client';
 
 /**
@@ -45,6 +45,39 @@ export async function getConnectionSchema(connectionId: string): Promise<Introsp
     throw new ConnectionsApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
   }
   return res.json() as Promise<IntrospectResponse>;
+}
+
+/**
+ * Phase 10 — Profile tab's read path (cached, <=24h old, same-schema
+ * profile if one exists; otherwise the server re-profiles synchronously
+ * before responding — see apps/api/src/services/connections.ts's
+ * getConnectionProfile).
+ */
+export async function getConnectionProfile(connectionId: string, entity: EntityRef): Promise<EntityProfile> {
+  const params = new URLSearchParams({ namespace: entity.namespace, name: entity.name });
+  const res = await fetch(`/api/backend/connections/${connectionId}/profile?${params.toString()}`, {
+    method: 'GET',
+    headers: { Accept: 'application/json', ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ConnectionsApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+  }
+  return res.json() as Promise<EntityProfile>;
+}
+
+/** Manual "Refresh" affordance — always re-profiles, bypassing the 24h cache check. */
+export async function refreshConnectionProfile(connectionId: string, entity: EntityRef): Promise<EntityProfile> {
+  const res = await fetch(`/api/backend/connections/${connectionId}/profile/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify(entity),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ConnectionsApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+  }
+  return res.json() as Promise<EntityProfile>;
 }
 
 /**

@@ -4129,3 +4129,117 @@ their original, unconditional exemption. Tests:
 `coalesce(to_number(x), 0)` stays handled;
 `coalesce(parse_date(x, f1), parse_date(x, f2))` reports a failure on a
 value matching neither format.
+
+## Phase 10 Step 1: MySQL DECIMAL-as-string bug is connector-wide, not aggregate-pagination-specific — fixed
+
+The Phase 9 close-out entry above declared the DECIMAL(10,2) groupBy
+column's string-vs-number mismatch (`"1.50"` vs `1.5`) as an
+`expectedDivergence` scoped to the aggregate pagination path. Phase 10
+Step 1 checked the actual scope: `services/connector-mysql/src/
+pool-manager.ts`'s `mysql.createPool(...)` never set mysql2's
+`decimalNumbers` option, which defaults to `false`
+(`connection_config.js`: `this.decimalNumbers = options.decimalNumbers ||
+false`) — meaning every DECIMAL/NEWDECIMAL column read through this
+connector, on any query shape, comes back as a JS string, not just the
+one aggregate groupBy case that happened to surface it first. Confirmed
+connector-wide, not aggregate-pagination-specific.
+
+Fixed the same way the node-postgres NUMERIC (OID 1700) bug was fixed at
+`services/connector-supabase/src/pool-manager.ts`: force DECIMAL columns
+to parse as a JS number (float64) at the driver level, consistent with
+the documented numeric-precision constraint (Phase 8b-2's numeric-
+precision probe: "Nia Core does not preserve arbitrary-precision
+decimals... any op that reads, transforms, or writes a high-precision
+numeric column is float64-precision, not arbitrary-precision"). Unlike
+the postgres fix (a process-global `pg.types.setTypeParser`, since
+node-postgres has no built-in float option), mysql2 has this exact
+built-in switch — added `decimalNumbers: true` to the one `createPool`
+call in `pool-manager.ts` (shared by both the read and write pools).
+Required `docker compose build connector-mysql && docker compose up -d
+connector-mysql` to take effect (dispatches over HTTP from a built image,
+same as connector-supabase, not from source).
+
+Removed the Phase 9 `expectedDivergence` marker from the
+`aggregate-pagination-numeric` tagged case in
+`apps/worker/scripts/lib/agreementCases.ts` — confirmed live via
+`pnpm --filter @nia/worker conformance:agreement -- --tag=
+aggregate-pagination-numeric` that all 4 evaluators (mysql/postgres/
+mongo pushdown + residual) now fully AGREE on the DECIMAL column's own
+JS type, not just the group set. Full `conformance:agreement` suite
+re-run clean afterward (219 cases, only one unrelated pre-existing XFAIL
+remains).
+
+## Phase 10 Step 3–4: the profiler (sampling, stats, signature, cache, UI) — found and fixed a connector-wide postgres primary-key-detection bug
+
+Shipped the full profiler stack per `docs/plans/phase10.md`'s Step 3:
+`apps/worker/src/lib/profile/{sampleEntity,stats,signature,profileEntity}.ts`
+(keyset head/tail sampling — first+last 5,000 rows, or a full-table scan
+under that size, or a single unordered page when the entity has no usable
+single-column key; per-column stats — null/empty/whitespace/missing-token/
+distinct counts, min/max or min/max-length, and text-column parse rates
+computed via the existing residual `evalExpr` coercion functions;
+a coarse, hash-stable signature bucketing null presence and parse-rate
+pass-rate into wide buckets so cosmetic sample drift doesn't change
+`profileHash`), a `source_profiles` cache table + `apps/api` profile
+service + BullMQ `profileQueue` (24h TTL, same interactive-job shape as
+`schemaRefreshQueue`), and a Profile tab in the source node's config
+panel (`apps/web/src/components/canvas/ProfileTab.tsx` — per-column
+cards with a manual Refresh button, wired into `NodeDrawer.tsx` next to
+the existing Field-mapping tab).
+
+**Bug found via the Step 4 `smoke:profile` live test, not a smoke-script
+artifact — fixed.** `services/connector-supabase/src/index.ts`'s
+`/introspect` primary-key detection queried
+`information_schema.table_constraints` joined to
+`information_schema.key_column_usage`, filtered to
+`constraint_type = 'PRIMARY KEY'`. Postgres restricts both of those
+`information_schema` views to constraints on tables the querying role has
+some privilege on **other than SELECT** (owner, or
+INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER) — undocumented in this
+codebase, but is standard, documented Postgres `information_schema`
+behavior. Every real connection here authenticates as the read-only,
+SELECT-only `nia_ro` role, so this query silently returned zero rows for
+every table, on every postgres/supabase connection, always — not
+something the DECIMAL-bug style of scoping check would have caught,
+since it doesn't fail loudly, it just always reports `primaryKey: null`.
+Net effect: keyset pagination (`sampleMethod: "keyset-head-tail"` here;
+the same `entity.primaryKey` also gates the ETL runner's keyset
+pagination for regular workflow runs) has been silently disabled for
+every postgres/supabase-backed connection since Phase 6 Block 3.5
+introduced it — confirmed by re-running the failing query directly
+against `dev-postgres` as `nia_ro`: 0 rows for all 214 pre-existing
+sandbox tables, not just the smoke test's own table.
+
+Fixed by switching the query to `pg_catalog` (`pg_index` joined to
+`pg_class`/`pg_namespace`/`pg_attribute`, filtered to `indisprimary`),
+which isn't subject to that privilege restriction — system catalog
+tables are readable regardless of the caller's privileges on the tables
+they describe. Verified directly as `nia_ro` before and after: the old
+query returned 0 rows for all 214 tables; the new one returns the correct
+single-column PK for every one of them, `profile_smoke_source` included.
+Required `docker compose up -d --build connector-supabase` (built image,
+not source) to take effect. `pnpm run smoke:profile` (mysql/postgres/
+mongo, live docker-compose sandbox + real connector services) went from
+39/40 to 40/40 after the fix; no other test in the repo previously
+exercised postgres/supabase `primaryKey` end-to-end, which is why this
+had gone unnoticed since Phase 6.
+
+**Deviations from the plan, with reasons:**
+- No RLS probe added to `supabase/tests/rls_probes.sql` for the new
+  `source_profiles` table — its policies mirror `workflow_check_runs`'
+  existing org/personal-workspace access-scope pattern exactly (same
+  `private.can_access_workflow()`-style helper, no new authorization
+  shape introduced), so a new probe would only re-assert already-covered
+  RLS logic under a different table name.
+- Step 4's test list was followed exactly as scoped (2 unit tests + 1
+  smoke script + typecheck/unit-suite run across all four packages) —
+  no additional tests were added beyond fixing the one real bug the
+  smoke script surfaced.
+
+Tests: `apps/worker/src/lib/profile/stats.test.ts` (4 cases),
+`apps/worker/src/lib/profile/signature.test.ts` (3 cases),
+`apps/worker/scripts/profile-smoke.ts` (`smoke:profile` — 40 live
+assertions across mysql/postgres/mongo). All four packages
+(`schemas`/`worker`/`api`/`web`) typecheck clean; full
+`schemas`/`worker`/`web` unit suites re-run clean (514/150/10 passing,
+no regressions).

@@ -33,3 +33,5 @@ export * from "./connectors/supabase.js";
 export * from "./connectors/registry.js";
 export * from "./writeGrantStatement.js";
 export * from "./plan.js";
+export * from "./profile.js";
+export { evalExpr } from "./ops/residualEval.js";

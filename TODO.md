@@ -259,3 +259,16 @@
   pushed `'null'`/`'drop'` steps. Must land before Phase 13, when the
   missing-value specialist begins generating model-proposed `'drop'`
   policies at scale.
+- **Phase 13: refuse/flag a workflow run when the live entity's
+  `profile_hash` drifts from the profile a mapping/policy was proposed
+  against (added 2026-09-21).** Phase 10 built the profiler
+  (`source_profiles.profile_hash`, cached with a 24h TTL, manual
+  Refresh in the source node's Profile tab) but it's advisory-only —
+  nothing today reads `profile_hash` at run time. Phase 13's
+  missing-value specialist (and any future model-proposed
+  mapping/policy) should be generated *against* a specific profile
+  snapshot; before a run applies that proposal, re-check the live
+  entity's current `profile_hash` against the one the proposal was
+  generated from, and refuse (or surface a re-review prompt) on a
+  mismatch rather than silently applying a policy tuned for a schema
+  shape that's since drifted.

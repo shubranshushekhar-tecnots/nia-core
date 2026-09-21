@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EntityRef } from "./nodeConfig.js";
 
 /**
  * BullMQ job payloads. Two queues:
@@ -185,6 +186,31 @@ export const PlanProposeJob = z.object({
 });
 export type PlanProposeJob = z.infer<typeof PlanProposeJob>;
 
+/**
+ * Phase 10 — source profiling. Carries `connectionId` + `entity` (not a
+ * workflowId): profiling targets one entity on one connection directly,
+ * the same connection-scoped shape as SchemaRefreshJob rather than the
+ * workflow-scoped shape of PreviewJob/ProposeMappingJob — a source node
+ * has no approved mapping/workflow context to resolve a target from (see
+ * apps/web/src/components/canvas/NodeDrawer.tsx's Profile tab, which reads
+ * `entity` straight off the source node's own persisted SourceDestConfig).
+ * Same triggeredByUserId contract as every other interactive job that
+ * dispatches a real read (this samples up to 10,000 real rows via
+ * dispatch()). The worker computes and returns the profile only — same
+ * no-persistence-in-worker shape as check_run/preview_run/schema_refresh
+ * (apps/worker/src/index.ts's header comment); apps/api's connections
+ * service is the one that writes the result into source_profiles, through
+ * its own req.supabase.
+ */
+export const ProfileRunJob = z.object({
+  kind: z.literal("profile_run"),
+  scope: WorkspaceScope,
+  connectionId: z.string().uuid(),
+  entity: EntityRef,
+  triggeredByUserId: z.string().uuid(),
+});
+export type ProfileRunJob = z.infer<typeof ProfileRunJob>;
+
 export const InteractiveJob = z.discriminatedUnion("kind", [
   ChatQueryJob,
   CheckRunJob,
@@ -192,5 +218,6 @@ export const InteractiveJob = z.discriminatedUnion("kind", [
   PreviewJob,
   SchemaRefreshJob,
   PlanProposeJob,
+  ProfileRunJob,
 ]);
 export type InteractiveJob = z.infer<typeof InteractiveJob>;

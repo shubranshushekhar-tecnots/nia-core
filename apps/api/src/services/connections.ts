@@ -1,11 +1,13 @@
+import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getConnectorManifest, type ConfigField, type CredentialRef, type IntrospectResponse } from "@nia/schemas";
+import { getConnectorManifest, EntityProfile, type ConfigField, type CredentialRef, type IntrospectResponse, type EntityRef } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 import { dispatchInvalidate, dispatchIntrospect, dispatchTest } from "../lib/connectorDispatch.js";
 import { logExecutionAudit } from "../lib/executionAudit.js";
 import { getCachedSchema, setCachedSchema, invalidateCachedSchema } from "../lib/schemaCache.js";
 import { runSchemaRefreshJob } from "../lib/schemaRefreshQueue.js";
+import { runProfileJob } from "../lib/profileQueue.js";
 
 export type Connection = {
   id: string;
@@ -383,4 +385,115 @@ export async function refreshConnectionSchema(
 
   setCachedSchema(credential, schema);
   return schema;
+}
+
+const PROFILE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+type SourceProfileRow = {
+  schema_hash: string;
+  sample_method: string;
+  sample_size: number;
+  stats: unknown;
+  signature: unknown;
+  profile_hash: string;
+  profiled_at: string;
+};
+
+/** Hashes an entity's (name, type) field list — the source_profiles cache key that detects "the source schema changed" (see 0020_source_profiles.sql's header comment). Sorted by name so field reordering in the connector's own introspect response never spuriously busts the cache. */
+function computeSchemaHash(entity: { fields: { name: string; type: string }[] }): string {
+  const canonical = [...entity.fields].sort((a, b) => a.name.localeCompare(b.name)).map((f) => ({ name: f.name, type: f.type }));
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+function rowToProfile(row: SourceProfileRow): EntityProfile {
+  return EntityProfile.parse({
+    sampleMethod: row.sample_method,
+    sampleSize: row.sample_size,
+    columns: row.stats,
+    signature: row.signature,
+    profileHash: row.profile_hash,
+    profiledAt: row.profiled_at,
+  });
+}
+
+function findSchemaEntity(schema: IntrospectResponse, entity: EntityRef): IntrospectResponse["entities"][number] {
+  const found = schema.entities.find((e) => e.namespace === entity.namespace && e.name === entity.name);
+  if (!found) throw new AppError(404, "ENTITY_NOT_FOUND", `Entity ${entity.namespace}.${entity.name} not found in this connection's schema.`);
+  return found;
+}
+
+/**
+ * Phase 10 — Profile tab's read path. Reuses the cached source_profiles
+ * row when its schema_hash still matches the entity's CURRENT introspected
+ * schema (computeSchemaHash below, same hash algorithm the cache row was
+ * written with) and profiled_at is under 24h old; otherwise falls through
+ * to refreshConnectionProfile, same "stale cache -> re-fetch" shape as
+ * getConnectionSchema/schemaCache.ts, just backed by a real table instead
+ * of an in-process Map (profiles are per-entity and too numerous/large to
+ * keep only in memory).
+ */
+export async function getConnectionProfile(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  id: string,
+  entity: EntityRef,
+  triggeredByUserId: string,
+): Promise<EntityProfile> {
+  const schema = await getConnectionSchema(supabase, scope, id);
+  const schemaHash = computeSchemaHash(findSchemaEntity(schema, entity));
+
+  const { data } = await supabase
+    .from("source_profiles")
+    .select("schema_hash, sample_method, sample_size, stats, signature, profile_hash, profiled_at")
+    .eq("connection_id", id)
+    .eq("entity_namespace", entity.namespace)
+    .eq("entity_name", entity.name)
+    .maybeSingle<SourceProfileRow>();
+
+  if (data && data.schema_hash === schemaHash && Date.now() - new Date(data.profiled_at).getTime() < PROFILE_CACHE_TTL_MS) {
+    return rowToProfile(data);
+  }
+
+  return refreshConnectionProfile(supabase, scope, id, entity, triggeredByUserId);
+}
+
+/**
+ * Manual "Refresh" affordance, and getConnectionProfile's fallback on a
+ * stale/missing cache row. Runs the worker's profile_run job (bounded, see
+ * profileQueue.ts's header comment) then upserts the result into
+ * source_profiles keyed on (connection_id, entity_namespace, entity_name)
+ * — the unique constraint 0020_source_profiles.sql defines specifically so
+ * this can be a real upsert, not a delete+insert.
+ */
+export async function refreshConnectionProfile(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  id: string,
+  entity: EntityRef,
+  triggeredByUserId: string,
+): Promise<EntityProfile> {
+  const schema = await getConnectionSchema(supabase, scope, id);
+  const schemaHash = computeSchemaHash(findSchemaEntity(schema, entity));
+
+  const profile = await runProfileJob({ scope, connectionId: id, entity, triggeredByUserId });
+
+  const { error } = await supabase.from("source_profiles").upsert(
+    {
+      connection_id: id,
+      entity_namespace: entity.namespace,
+      entity_name: entity.name,
+      schema_hash: schemaHash,
+      sample_method: profile.sampleMethod,
+      sample_size: profile.sampleSize,
+      stats: profile.columns,
+      signature: profile.signature,
+      profile_hash: profile.profileHash,
+      profiled_at: profile.profiledAt,
+      profiled_by_user_id: triggeredByUserId,
+    },
+    { onConflict: "connection_id,entity_namespace,entity_name" },
+  );
+  if (error) throw new AppError(500, "PROFILE_UPSERT_FAILED", error.message);
+
+  return profile;
 }

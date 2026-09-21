@@ -102,9 +102,9 @@ export default function HeroCanvasSection({ heroRef }: { heroRef: RefObject<HTML
                 <span style={{ color: COLOR.brandVioletOnBlack }}>Load.</span>
               </span>
               <span style={h1LineCenter}>
-                <span style={{ color: COLOR.textPrimary }}>All on one</span>{' '}
-                <span ref={ghostRef} aria-hidden="true" className="nia-hero-ghost" style={ghostSpanStyle} />{' '}
-                <span style={{ color: COLOR.textPrimary }}>canvas.</span>
+                <span style={{ color: COLOR.textPrimary, justifySelf: 'start' }}>All on one</span>
+                <span ref={ghostRef} aria-hidden="true" className="nia-hero-ghost" style={ghostSpanStyle} />
+                <span style={{ color: COLOR.textPrimary, justifySelf: 'end' }}>canvas.</span>
               </span>
             </h1>
 
@@ -231,13 +231,13 @@ const textLayerStyle: CSSProperties = {
 const textInnerStyle: CSSProperties = {
   boxSizing: 'border-box',
   maxWidth: 1480,
-  padding: '148px clamp(24px,6vw,56px) 40px',
+  padding: '300px clamp(24px,6vw,56px) 40px',
 };
 
 const h1Style: CSSProperties = {
   margin: 0,
   fontWeight: 300,
-  fontSize: 'clamp(40px, 7.2vw, 104px)',
+  fontSize: 'clamp(44px, 8.4vw, 124px)',
   lineHeight: 0.94,
   letterSpacing: '-0.028em',
   display: 'flex',
@@ -251,23 +251,30 @@ const h1Line: CSSProperties = {
   flexWrap: 'wrap',
 };
 
-// Second headline line only: centered so its reserved gap (the ghost span)
-// lands near the true viewport horizontal center, matching the window's
-// fixed cx (see useHeroScrollProgress) instead of wherever left-aligned
-// text flow would otherwise put it. `alignItems: 'center'` (overriding the
-// shared baseline alignment) so the small inline image sits vertically
-// centered on the text row, like an inline chip, rather than bottom-aligned
-// to the text baseline.
+// Second headline line: a 3-column grid (`1fr auto 1fr`) rather than flex —
+// `justify-content: space-between` only equalizes the *gaps* around the
+// ghost span, so it drifts toward whichever side text ("All on one" vs
+// "canvas.") is narrower. The grid's two `1fr` columns always claim equal
+// width regardless of their text's length, so the middle (auto-sized) ghost
+// column is guaranteed to sit at the row's true horizontal center; each
+// text span uses `justifySelf` to hug its own edge within its `1fr` column.
+// `alignItems: 'center'` (overriding the shared baseline alignment used by
+// line 1) vertically centers the small inline image on the text row, like
+// an inline chip, rather than bottom-aligning it to the text baseline. The
+// window's rest horizontal position tracks the ghost span's actual live
+// position (see useHeroScrollProgress), so it always matches wherever this
+// layout puts it.
 const h1LineCenter: CSSProperties = {
-  ...h1Line,
+  display: 'grid',
+  gridTemplateColumns: '1fr auto 1fr',
   alignItems: 'center',
-  justifyContent: 'center',
   width: '100%',
+  columnGap: 12,
 };
 
 const ghostSpanStyle: CSSProperties = {
   display: 'inline-block',
-  width: '11vw',
+  width: '15vw',
   maxWidth: REST_WINDOW.w,
   minWidth: 64,
   aspectRatio: `${REST_WINDOW.w} / ${REST_WINDOW.h}`,

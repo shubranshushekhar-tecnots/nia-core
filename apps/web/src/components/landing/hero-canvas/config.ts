@@ -5,7 +5,7 @@
 // `.window` clipping it grows — so every pixel value here is a real,
 // final on-screen size, not something that gets scaled later.
 
-export type NodeGlyph = 'clock' | 'supabase' | 'sparkle' | 'branch' | 'chart' | 'chat';
+export type NodeGlyph = 'clock' | 'supabase' | 'claude' | 'branch' | 'powerbi' | 'slack';
 export type NodeState = 'active' | 'idle' | 'not-taken';
 
 export type PortDef = { label: string; side: 'in' | 'out'; dy: number };
@@ -36,11 +36,17 @@ export const COLOR = {
   // only the surrounding "ground" letterbox stays black, so the window
   // reads as a lit portal into the pipeline while it's opening.
   canvasBg: '#FFFFFF',
-  cardSurface: '#0C0C0C',
-  cardBorder: '#1E1E1E',
-  iconTile: '#17171A',
-  iconTileBorder: '#232326',
-  divider: '#1A1A1A',
+  // Card surface is white (not the old dark-island look) — cards read as
+  // real workflow-canvas nodes sitting on the white canvas, per the
+  // reference design. Title text uses `chromeStrong` (dark ink), not
+  // `textPrimary`, because `textPrimary` is shared with the rest-state
+  // headline over the black ground and must stay white there.
+  cardSurface: '#F2F2F4',
+  cardBorder: '#E5E5EA',
+  cardShadow: '0 1px 2px rgba(16,16,20,0.04), 0 8px 24px -12px rgba(16,16,20,0.12)',
+  iconTile: '#F5F5F7',
+  iconTileBorder: '#EBEBF0',
+  divider: '#EEEEF2',
   connector: '#D9D9DF',
   dotGrid: '#E6E6EC',
   textPrimary: '#FFFFFF',
@@ -50,12 +56,13 @@ export const COLOR = {
   // Chrome overlay sits atop the (now white) canvas once pinned, so it
   // needs dark ink here rather than the light `text*` tokens above (those
   // stay for the rest-state text, which is still over the black ground).
+  // Also reused as the node card title color for the same reason.
   chromeMuted: '#6B6B75',
   chromeStrong: '#101014',
   railTrack: '#E6E6EC',
   brandVioletOnBlack: '#7361FF',
   brandViolet: '#5B4BE7',
-  inactiveDot: '#3A3A3A',
+  inactiveDot: '#C7C7D1',
   node: {
     schedule: '#F0A868',
     data: '#4FD1C5',
@@ -95,7 +102,7 @@ export const NODES: CanvasNode[] = [
     id: 'claude',
     x: 306,
     y: 0,
-    glyph: 'sparkle',
+    glyph: 'claude',
     title: 'Claude',
     subtitle: 'Classify order notes',
     color: COLOR.node.ai,
@@ -121,7 +128,7 @@ export const NODES: CanvasNode[] = [
     id: 'powerbi',
     x: 424,
     y: 190,
-    glyph: 'chart',
+    glyph: 'powerbi',
     title: 'Power BI',
     subtitle: 'Push dataset',
     color: COLOR.node.action,
@@ -132,7 +139,7 @@ export const NODES: CanvasNode[] = [
     id: 'slack',
     x: 424,
     y: 360,
-    glyph: 'chat',
+    glyph: 'slack',
     title: 'Slack',
     subtitle: 'Notify #data-ops',
     color: COLOR.textDim,
@@ -175,5 +182,5 @@ export const PRIMARY_NODE_CENTER = { x: CARD_W / 2, y: PORT_ROW_Y };
 // A lerp is measured live from the ghost span itself (see
 // useHeroScrollProgress) so the window always lands exactly where the
 // headline's ghost reserved room for it, at any viewport width.
-export const REST_WINDOW = { w: 160, h: 100 };
+export const REST_WINDOW = { w: 240, h: 150 };
 export const PIN_THRESHOLD = 0.12; // fraction of scrollable range where Phase A ends

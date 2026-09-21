@@ -91,6 +91,15 @@ const EnvSchema = z.object({
   RUN_SSE_MAX_DURATION_MS: z.coerce.number().int().positive().default(1_800_000),
   /** Comment-only keep-alive so intermediary proxies don't time out an idle SSE connection — same rationale as CHAT_SSE_HEARTBEAT_MS, its own var since the two features' cadence has no reason to stay coupled. */
   RUN_SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(15_000),
+  /**
+   * Upper bound on profileQueue.ts's synchronous await of the worker's
+   * profile_run job (Phase 10). No LLM call, but up to ~10 paginated
+   * connector dispatches (sampleEntity.ts's head+tail keyset pages), so
+   * budgeted above SCHEMA_REFRESH_TIMEOUT_MS's single-introspect-call
+   * budget. Past this, the route fails clean with a 503 naming the worker
+   * unavailable rather than hanging the HTTP request indefinitely.
+   */
+  PROFILE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
 });
 
 export const env = EnvSchema.parse(process.env);

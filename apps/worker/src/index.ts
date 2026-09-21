@@ -16,6 +16,7 @@ import { registerNightlyEvalSchedule } from "./lib/eval/schedule.js";
 import { shutdownLangfuse } from "./lib/observability/langfuse.js";
 import { runEtl } from "./lib/etl/runEtl.js";
 import { runPlanPropose } from "./lib/plan/runPlanPropose.js";
+import { profileEntity } from "./lib/profile/profileEntity.js";
 
 /**
  * Nia worker — the execution spine.
@@ -106,6 +107,16 @@ const interactive = new Worker(
         // that's Session 2's Apply route, a separate explicit write.
         console.log(`[interactive] plan_propose for workflow ${payload.workflowId}`);
         return await runPlanPropose(payload, job.id!);
+      case "profile_run":
+        // Phase 10 — profileEntity.ts owns connection/schema/entity
+        // resolution, keyset head/tail sampling, and stats/signature/hash
+        // computation; this handler only computes the EntityProfile, it
+        // never persists it — same no-persistence-in-index.ts shape as
+        // schema_refresh/preview_run. apps/api's profile service is the
+        // one that upserts into source_profiles, through its own
+        // req.supabase.
+        console.log(`[interactive] profile_run for connection ${payload.connectionId} entity ${payload.entity.namespace}.${payload.entity.name}`);
+        return await profileEntity(payload);
     }
   },
   { connection, concurrency: 10 },

@@ -37,12 +37,10 @@ export function useHeroScrollProgress(refs: HeroRefs) {
     // REST_WINDOW constants only if the ghost can't be measured yet).
     // Re-measured on resize alongside `range`. Width/height come from the
     // real DOM box so the window's rest *size* matches the gap the headline
-    // reserved for it. Horizontal position is always viewport-centered
-    // (never tied to the ghost's left offset) so the window never drifts
-    // left/right; vertical position eases from the ghost's natural line
-    // position to viewport-center as the hero opens — it doesn't need to be
-    // centered top/bottom at rest.
-    let restBox = { top: 0, width: REST_WINDOW.w, height: REST_WINDOW.h };
+    // reserved for it. Both horizontal and vertical position ease from the
+    // ghost's natural (left-aligned) line position to viewport-center as
+    // the hero opens — it doesn't need to be centered at rest.
+    let restBox = { top: 0, left: 0, width: REST_WINDOW.w, height: REST_WINDOW.h };
 
     const applyFrame = (raw: number) => {
       const vw = window.innerWidth;
@@ -71,8 +69,14 @@ export function useHeroScrollProgress(refs: HeroRefs) {
         const posEased = heroEase(posT);
         w = lerp(restBox.width, vw, eased);
         h = lerp(restBox.height, vh, eased);
+        // cx is pinned to the ghost's rest center for the entire scroll —
+        // it does NOT lerp toward vw/2 like cy does, because the headline
+        // container isn't viewport-centered (maxWidth 1480, left-aligned),
+        // so lerping toward vw/2 made the window visibly drift sideways
+        // across scroll frames instead of holding its horizontal position.
+        const restCx = restBox.left + restBox.width / 2;
         const restCy = restBox.top + restBox.height / 2;
-        const cx = vw / 2;
+        const cx = restCx;
         const cy = lerp(restCy, vh / 2, posEased);
         windowEl.style.width = `${w}px`;
         windowEl.style.height = `${h}px`;
@@ -129,7 +133,7 @@ export function useHeroScrollProgress(refs: HeroRefs) {
       if (ghostEl) {
         const g = ghostEl.getBoundingClientRect();
         if (g.width > 0 && g.height > 0) {
-          restBox = { top: g.top, width: g.width, height: g.height };
+          restBox = { top: g.top, left: g.left, width: g.width, height: g.height };
         }
       }
     };

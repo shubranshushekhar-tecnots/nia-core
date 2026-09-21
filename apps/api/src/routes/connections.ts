@@ -1,5 +1,6 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
+import { EntityRef } from "@nia/schemas";
 import { requireAuth } from "../middleware/auth.js";
 import { attachActor } from "../middleware/actor.js";
 import { requireCapability } from "../middleware/requireCapability.js";
@@ -16,6 +17,8 @@ import {
   testConnection,
   getConnectionSchema,
   refreshConnectionSchema,
+  getConnectionProfile,
+  refreshConnectionProfile,
 } from "../services/connections.js";
 
 export const connectionsRouter: ExpressRouter = Router();
@@ -120,6 +123,33 @@ connectionsRouter.post(
   asyncHandler(async (req, res) => {
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await refreshConnectionSchema(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId);
+    res.json(data);
+  }),
+);
+
+const profileQuerySchema = EntityRef;
+
+connectionsRouter.get(
+  "/:id/profile",
+  validate({ params: connectionParamsSchema, query: profileQuerySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const entity = req.query as unknown as z.infer<typeof EntityRef>;
+    const data = await getConnectionProfile(req.supabase, scopeFromActor(req.actor), req.params.id!, entity, req.actor.userId);
+    res.json(data);
+  }),
+);
+
+// Same capability class as /schema/refresh: this triggers a real worker
+// job that hits the external connector via dispatch() (up to ~10 sampling
+// queries), not a plain read — see can.ts's DECISION-C comment.
+connectionsRouter.post(
+  "/:id/profile/refresh",
+  requireCapability("connections.test"),
+  validate({ params: connectionParamsSchema, body: EntityRef }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await refreshConnectionProfile(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body, req.actor.userId);
     res.json(data);
   }),
 );

@@ -1761,9 +1761,10 @@ export const AGREEMENT_CASES: AgreementCase[] = [
     // arm shows up as a row-count/content mismatch against the other 3 arms.
     // CONFIRMED LIVE: all 4 arms agree on the same 3 groups (n=9 total=3,
     // n=10 total=3, n=100 total=9) across both pages — no dropped/duplicated
-    // group. The only per-row mismatch is `d`'s own JS type (mysql2 returns
-    // "1.50" as a string; postgres/mongo/residual return 1.5 as a number) —
-    // declared below via expectedDivergence, unrelated to pagination.
+    // group. Phase 10 Step 1: `d`'s own JS type mismatch (mysql2 returning
+    // "1.50" as a string instead of 1.5) is now fixed connector-wide via
+    // pool-manager.ts's `decimalNumbers: true` — the expectedDivergence
+    // below was removed once this case went green under that fix.
     description: "Fix — adversarial paginated aggregate: GROUP BY (n INT, d DECIMAL(10,2)) with n = 9, 10, 100 (byte order != numeric order), page size 2",
     seedRows: [
       { n: 9, d: 1.5, v: 1 },
@@ -1784,11 +1785,5 @@ export const AGREEMENT_CASES: AgreementCase[] = [
     tag: "aggregate-pagination-numeric",
     expectedPushedResidualCount: 0,
     pageSize: 2,
-    expectedDivergence: {
-      reason:
-        'mysql renders the DECIMAL(10,2) groupBy column `d` as a JS string (e.g. "1.50"), while postgres/mongo/residual render it as a JS number (1.5) — a pre-existing mysql2 driver type-shape quirk, unrelated to pagination. The group SET itself (which `n` values exist, with correct `total` sums) agrees across all 4 evaluators on every page; only `d`\'s own JS type differs.',
-      decisionsRef:
-        "docs/decisions.md — \"Phase 9 close-out fix: MySQL group-key pagination cursor must match ORDER BY's byte order, not the column's own type\"",
-    },
   },
 ];

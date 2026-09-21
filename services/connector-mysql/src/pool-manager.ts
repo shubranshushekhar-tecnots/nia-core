@@ -84,6 +84,15 @@ function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): 
       ...secret,
       connectionLimit: POOL_LIMIT_PER_CONNECTION,
       waitForConnections: true,
+      // Phase 10 Step 1 — mysql2 defaults DECIMAL/NEWDECIMAL columns to JS
+      // strings (e.g. "10.00") on every read, connector-wide, not just the
+      // Phase 9 aggregate-pagination groupBy path that first surfaced it.
+      // Forced to float64 here, mirroring connector-supabase's pg.types
+      // NUMERIC (OID 1700) fix in pool-manager.ts: consistent with the
+      // documented numeric-precision constraint (docs/decisions.md,
+      // Phase 8b-2 numeric-precision probe) that Nia Core does not
+      // preserve arbitrary-precision decimals beyond float64.
+      decimalNumbers: true,
     });
   })();
   pools.set(key, { poolPromise, lastUsed: Date.now() });

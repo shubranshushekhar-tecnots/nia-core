@@ -58,18 +58,30 @@ app.post("/introspect", async (req) => {
      ORDER BY table_schema, table_name, ordinal_position`,
   );
   // Postgres's information_schema.columns has no PK flag of its own (unlike
-  // MySQL's column_key) — primary-key columns are discovered separately via
-  // table_constraints + key_column_usage, filtered to PRIMARY KEY, and
+  // MySQL's column_key) — primary-key columns are discovered separately and
   // merged in below. Phase 6 Block 3.5: backs IntrospectResponse's
   // per-entity primaryKey used for the ETL runner's keyset pagination.
+  //
+  // Phase 10 fix: this MUST go through pg_catalog (pg_index/pg_class/
+  // pg_attribute), not information_schema.table_constraints +
+  // key_column_usage. Those information_schema views only show a
+  // constraint to the querying role if it has a table privilege OTHER
+  // than SELECT (owner, INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER)
+  // — see the Postgres docs' privilege note on table_constraints. Every
+  // real connection here authenticates as a read-only (SELECT-only) role,
+  // so the old query silently returned zero rows for every table, always
+  // reporting primaryKey: null and permanently disabling keyset
+  // pagination for postgres/supabase connections. pg_catalog system
+  // tables aren't subject to that restriction.
   const pkResult = await pool.query(
-    `SELECT tc.table_schema, tc.table_name, kcu.column_name
-     FROM information_schema.table_constraints tc
-     JOIN information_schema.key_column_usage kcu
-       ON kcu.constraint_name = tc.constraint_name
-      AND kcu.constraint_schema = tc.constraint_schema
-     WHERE tc.constraint_type = 'PRIMARY KEY'
-       AND tc.table_schema NOT IN ('information_schema','pg_catalog','pg_toast')`,
+    `SELECT n.nspname AS table_schema, c.relname AS table_name, a.attname AS column_name
+     FROM pg_index i
+     JOIN pg_class c ON c.oid = i.indrelid
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+     WHERE i.indisprimary
+       AND n.nspname NOT IN ('information_schema','pg_catalog','pg_toast')
+     ORDER BY n.nspname, c.relname, a.attnum`,
   );
   const pkColsByEntity = new Map<string, string[]>();
   for (const r of pkResult.rows as Array<Record<string, string>>) {
