@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { parseExpression, stringifyExpression, type TransformStep } from '@nia/schemas';
-import { inputStyle, rowStyle } from './shared';
+import { inputStyle, OnFailureSelect, rowStyle } from './shared';
 
 export function ComputedFieldStepEditor({
   step,
@@ -45,9 +45,10 @@ export function ComputedFieldStepEditor({
         />
       </div>
       {error && <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 2 }}>{error}</div>}
-      <div style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 4 }}>
+      <div style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 4, marginBottom: 8 }}>
         Fields, numbers/strings, <span style={{ fontFamily: 'var(--font-data)' }}>+ - * /</span>, concat(), coalesce().
       </div>
+      <OnFailureSelect value={step.onFailure} onChange={(v) => onChange({ ...step, onFailure: v })} />
     </div>
   );
 }

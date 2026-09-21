@@ -3,6 +3,7 @@ import { collectFieldRefs, type Expr } from "../expression.js";
 import type { OpKind, OpModule, SqlEmitContext } from "./types.js";
 import { exprFnsPushable } from "./types.js";
 import { evalExpr } from "./residualEval.js";
+import { computeFailureReport, fallibleStepIsPushable, quarantineMessage, resolveOnFailure } from "./onFailure.js";
 
 /**
  * SQL HAVING can't portably reference a SELECT alias across mysql/postgres
@@ -81,6 +82,16 @@ export const aggregateOp: OpModule<AggregateStepT> = {
     // that have nothing to do with dialect support. `having`, if present,
     // is the only Expr content this op carries — it may reference a
     // call-fn that isn't pushable on `dialect`.
+    //
+    // Phase 8b-3: a fallible call inside `having` already excludes the
+    // group under three-valued logic (same null≡drop collapse as
+    // filter), so "null"/"drop" push normally with zero extra code —
+    // no failure count is observable for a pushed group though (only a
+    // residually executed step counts failures; same documented v1
+    // trade-off as filter.ts — see onFailure.ts's top doc comment).
+    // "fail"/"quarantine" are always forced residual
+    // (fallibleStepIsPushable).
+    if (step.having && !fallibleStepIsPushable(step, step.having)) return false;
     return step.having ? exprFnsPushable(step.having, dialect) : true;
   },
 
@@ -116,6 +127,9 @@ export const aggregateOp: OpModule<AggregateStepT> = {
       } else {
         havingSql = compileHavingViaSubstitution(step.having, ctx, step.aggregations);
       }
+      // Phase 8b-3: a fallible call inside `having`, if present, already
+      // forced this step residual (isPushable's fallibleStepIsPushable
+      // check) — nothing further to emit here.
     }
 
     ctx.setAggregate(fullSelect, groupByCols.length ? groupByCols : null, havingSql);
@@ -147,6 +161,9 @@ export const aggregateOp: OpModule<AggregateStepT> = {
     ctx.push({ $project: projectDrop });
 
     if (step.having) {
+      // Phase 8b-3: a fallible call inside `having`, if present, already
+      // forced this step residual (isPushable's fallibleStepIsPushable
+      // check) — nothing further to emit here, matching emitSql.
       const conditions = exprToConditions(step.having);
       if (conditions) {
         if (conditions.length > 0) {
@@ -155,10 +172,6 @@ export const aggregateOp: OpModule<AggregateStepT> = {
           if (combined) ctx.push({ $match: combined });
         }
       } else {
-        // $match runs after $project has already flattened groupBy/alias
-        // fields to top-level keys, so a plain (non-target-substituted)
-        // compileExpr is always sufficient here — unlike the SQL path,
-        // no compileHavingViaSubstitution-equivalent is needed.
         ctx.push({ $match: { $expr: ctx.adapter.compileExpr(step.having) } });
       }
     }
@@ -279,11 +292,18 @@ export const aggregateOp: OpModule<AggregateStepT> = {
     // ruling 2: having may only reference an aggregation alias or a groupBy
     // field — both are now plain top-level keys on outRow, so evalExpr (the
     // same helper filter steps use) applies directly, no special-casing.
+    // Phase 8b-3: failures counted BEFORE the having-filter below removes
+    // any rows — the equivalent point to where the SQL/Mongo flag column
+    // exists (part of the same select/group HAVING filters, not excluded
+    // by it).
+    const report = step.having
+      ? computeFailureReport("aggregate having", step.having, outRows, resolveOnFailure(step.onFailure))
+      : undefined;
     if (step.having) {
       outRows = outRows.filter((row) => evalExpr(step.having!, row) === true);
     }
 
-    return { cols, rows: outRows };
+    return { cols, rows: outRows, failures: report ? [report] : undefined };
   },
 
   checkConfig(step, ctx) {
@@ -316,6 +336,8 @@ export const aggregateOp: OpModule<AggregateStepT> = {
           );
         }
       }
+      const quarantine = quarantineMessage(step, step.having);
+      if (quarantine) messages.push(`aggregate step ${ctx.index + 1}: ${quarantine}`);
     }
 
     return messages;

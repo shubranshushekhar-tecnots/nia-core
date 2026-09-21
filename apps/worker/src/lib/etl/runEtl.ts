@@ -5,6 +5,7 @@ import {
   compilePushdown,
   findPersistedEntity,
   manifestDialect,
+  OnFailureAbortError,
   parseNodeConfig,
   resolveSourceEntity,
   type DialectQuery,
@@ -223,11 +224,27 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   const keyColumnIndex = result.value.columns.findIndex((c) => c.name === keyColumn);
   const lastRow = sourceRowsFetched > 0 ? result.value.rows[sourceRowsFetched - 1] : undefined;
   const nextKey = lastRow && keyColumnIndex !== -1 ? (lastRow[keyColumnIndex] as string | number) : lastKey;
-  const { columns: residualColumns, rows: residualRows } = applyResidualTransforms(
-    result.value.columns.map((c) => c.name),
-    result.value.rows,
-    residualSteps,
-  );
+  // Phase 8b-3: a residual step whose onFailure policy is "fail" throws
+  // OnFailureAbortError (via computeFailureReport, ops/onFailure.ts) once
+  // it counts a failing row — caught here and converted into the same
+  // clean, non-retrying run-failure path as every other business-rule
+  // rejection above (never left to propagate as an unexpected exception,
+  // and never triggers BullMQ's retry/backoff).
+  let residualColumns: string[];
+  let residualRows: unknown[][];
+  let residualFailures: ReturnType<typeof applyResidualTransforms>["failures"];
+  try {
+    ({ columns: residualColumns, rows: residualRows, failures: residualFailures } = applyResidualTransforms(
+      result.value.columns.map((c) => c.name),
+      result.value.rows,
+      residualSteps,
+    ));
+  } catch (err) {
+    if (err instanceof OnFailureAbortError) {
+      return fail(scope, job.runId, job.nodeId, err.message);
+    }
+    throw err;
+  }
 
   const indices = mapping.entries.map((e) => residualColumns.indexOf(e.from));
   const missing = mapping.entries.find((_, i) => indices[i] === -1);
@@ -261,6 +278,12 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       nodeId: job.nodeId,
       totalRowsProcessed,
       durationMs,
+      // Phase 8b-3: this chunk's residual failure counts only — see
+      // runEvents.ts's `failures` doc comment for why cross-chunk
+      // accumulation is out of scope. Every fallible-containing step
+      // contributes a report even at count: 0 ("no policy is silent" —
+      // see onFailure.test.ts / runEtl.test.ts) — unfiltered here.
+      failures: residualFailures.length > 0 ? residualFailures : undefined,
     });
     return { status: "done" };
   }

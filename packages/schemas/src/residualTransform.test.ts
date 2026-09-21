@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { applyResidualTransforms } from "./residualTransform.js";
 import { parseExpression } from "./expression.js";
-import type { AggregateStep } from "./nodeConfig.js";
+import type { AggregateStep, ComputedFieldStep, FilterStep } from "./nodeConfig.js";
+import { OnFailureAbortError } from "./ops/onFailure.js";
 
 function expr(src: string) {
   const parsed = parseExpression(src);
@@ -154,5 +155,73 @@ describe("applyResidualTransforms — aggregate", () => {
 
     const result = applyResidualTransforms(columns, rows, [step]);
     expect(result.rows).toHaveLength(3); // eng/core, eng/infra, sales/core
+  });
+});
+
+describe("applyResidualTransforms — onFailure failure reporting (Phase 8b-3)", () => {
+  const cols = ["x"];
+  const rowsWithOneFailure: unknown[][] = [["10"], ["abc"], [null]];
+
+  it("onFailure: 'null' — row stays, field becomes null, failures reports count=1", () => {
+    const step: ComputedFieldStep = {
+      kind: "computed_field",
+      name: "y",
+      expression: expr("to_number(x)"),
+      onFailure: "null",
+    };
+
+    const result = applyResidualTransforms(cols, rowsWithOneFailure, [step]);
+    expect(result.rows).toHaveLength(3);
+    expect(result.failures).toEqual([{ label: 'computed_field "y"', fns: ["to_number"], policy: "null", count: 1 }]);
+  });
+
+  it("onFailure: 'drop' — failing row is removed, failures still reports count=1", () => {
+    const step: ComputedFieldStep = {
+      kind: "computed_field",
+      name: "y",
+      expression: expr("to_number(x)"),
+      onFailure: "drop",
+    };
+
+    const result = applyResidualTransforms(cols, rowsWithOneFailure, [step]);
+    expect(result.rows).toHaveLength(2);
+    expect(result.failures).toEqual([{ label: 'computed_field "y"', fns: ["to_number"], policy: "drop", count: 1 }]);
+  });
+
+  it("onFailure: 'fail' — throws OnFailureAbortError naming the step, function, and count", () => {
+    const step: ComputedFieldStep = {
+      kind: "computed_field",
+      name: "y",
+      expression: expr("to_number(x)"),
+      onFailure: "fail",
+    };
+
+    expect(() => applyResidualTransforms(cols, rowsWithOneFailure, [step])).toThrow(OnFailureAbortError);
+    expect(() => applyResidualTransforms(cols, rowsWithOneFailure, [step])).toThrow(
+      'computed_field "y": to_number failed on 1 row(s).',
+    );
+  });
+
+  it("absent onFailure defaults to 'fail'", () => {
+    const step: ComputedFieldStep = { kind: "computed_field", name: "y", expression: expr("to_number(x)") };
+    expect(() => applyResidualTransforms(cols, rowsWithOneFailure, [step])).toThrow(OnFailureAbortError);
+  });
+
+  it("a step with no fallible calls is unaffected, regardless of onFailure", () => {
+    const step: FilterStep = { kind: "filter", expr: expr("x > 0"), onFailure: "fail" };
+    const result = applyResidualTransforms(["x"], [[1], [-1], [2]], [step]);
+    expect(result.failures).toEqual([]);
+    expect(result.rows).toHaveLength(2);
+  });
+
+  it("accumulates failures across multiple steps, in order", () => {
+    const steps = [
+      { kind: "computed_field", name: "y", expression: expr("to_number(x)"), onFailure: "null" } as ComputedFieldStep,
+      { kind: "computed_field", name: "z", expression: expr("to_integer(x)"), onFailure: "null" } as ComputedFieldStep,
+    ];
+
+    const result = applyResidualTransforms(cols, rowsWithOneFailure, steps);
+    expect(result.failures.map((f) => f.label)).toEqual(['computed_field "y"', 'computed_field "z"']);
+    expect(result.failures.every((f) => f.count === 1)).toBe(true);
   });
 });

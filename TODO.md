@@ -226,6 +226,29 @@
   scope) — rename the roadmap's Phase 8/Phase 9 to named milestones
   (e.g. "Console + audit" / "Hardening + self-host") to remove the
   numbering collision. Console + audit is mandatory before Phase 15.
+- **Phase 8b-3 deferred fallible candidates (added 2026-09-21).** 8b-3
+  scoped `fallible` to exactly 6 call-fns (`to_number, to_integer,
+  to_boolean, to_date, parse_date, parse_number`) — the ones that return
+  NULL on invalid non-null input in every evaluator (step 1's inventory).
+  Two more candidates were identified but deliberately deferred, not
+  forgotten:
+  - **Regex no-match** (`regex_extract`/`regex_match` returning
+    NULL/false on a non-matching input) — arguably a "failure" in the
+    same sense as a bad coercion, but conflating "the pattern didn't
+    match" with "the input couldn't be parsed" would make `onFailure`
+    fire on ordinary, expected regex misses (e.g. filtering rows where a
+    pattern *doesn't* match is a normal use case, not an error state).
+    Needs its own semantics discussion, not a mechanical addition to the
+    `fallible` set.
+  - **Divide by zero** (`divide`, and by extension `mod`/`quotient`) —
+    today's residual/pushdown behavior for divide-by-zero already
+    diverges by dialect in ways not yet fully agreement-tested (mysql
+    returns NULL, postgres raises a native division-by-zero error,
+    mongo/residual behavior not yet pinned) — folding this into
+    `fallible` before that divergence is itself resolved would make
+    `onFailure`'s "same predicate shape pushable everywhere" guarantee
+    false for this function specifically. Revisit once divide-by-zero's
+    own cross-evaluator agreement is established.
 - **Shape-only conformance fixtures for `regex_extract`, `regex_replace`,
   `canonicalize`, `strip_accents` (added 2026-09-21).** §4 of
   `PHASE8_EXIT.md` notes these 4 functions are proven only via the live
@@ -236,3 +259,16 @@
   non-default-pushability skip arms (`regex_extract`'s mysql skip,
   `regex_replace`/`canonicalize`'s mongo skip, `strip_accents`'s
   all-dialects skip).
+- **Phase 9: pre-check query per pushed fallible step, to restore
+  failure visibility (added 2026-09-21).** Today a pushed
+  `filter`/`computed_field`/`aggregate`-`having` step with a fallible
+  call either forces itself (and every later step in the node) fully
+  residual (`'fail'`/`'quarantine'`) or pushes silently with no failure
+  count (`'null'`/`'drop'` — see `PHASE8_EXIT.md` §8). Add a pre-check
+  query per pushed fallible step: `EXISTS(<failure predicate>)` detects
+  a `'fail'` failure up front so the step can stay pushed for the main
+  query instead of forcing itself and every later step residual;
+  `COUNT(<failure predicate>)` restores an accurate failure count for
+  pushed `'null'`/`'drop'` steps. Must land before Phase 13, when the
+  missing-value specialist begins generating model-proposed `'drop'`
+  policies at scale.

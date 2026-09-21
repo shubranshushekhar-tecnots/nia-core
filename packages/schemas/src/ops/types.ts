@@ -4,6 +4,7 @@ import { collectCallFns } from "../expression.js";
 import type {
   AggregationSpec,
   FilterCondition,
+  OnFailurePolicy,
   TransformStep,
 } from "../nodeConfig.js";
 import type { ParamSink } from "./paramSink.js";
@@ -222,6 +223,24 @@ export interface MongoDialectAdapter {
   combineAnd(clauses: Record<string, unknown>[]): Record<string, unknown> | null;
 }
 
+// ---- Failure reporting (Phase 8b-3) ---------------------------------------
+//
+// "fail" and "quarantine" are always forced residual whenever a step's
+// expression actually contains a fallible call (expression.ts's
+// FALLIBLE_CALL_FNS) — see onFailure.ts's top doc comment for why. That
+// means no pushed-SQL/Mongo flag-column mechanism is needed at all: only a
+// residually executed step ever counts failures. "null"/"drop" still push
+// normally but don't get a failure count (documented v1 trade-off — see
+// onFailure.ts).
+
+export interface StepFailureReport {
+  /** Human-readable step identity for the abort error, e.g. `computed_field "discount"`. */
+  label: string;
+  fns: CallFn[];
+  policy: OnFailurePolicy;
+  count: number;
+}
+
 // ---- Emit contexts (per-node accumulation, built by the orchestrator) ---
 
 export interface SqlEmitContext {
@@ -290,11 +309,18 @@ export interface OpModule<TStep extends TransformStep = TransformStep> {
   /** Mirrors transformOutputFields' per-kind branch. Absent = shape unchanged. */
   transformOutputShape?(step: TStep, currentShape: Set<string> | null): Set<string> | null;
 
-  /** In-memory fallback (residualTransform.ts). */
+  /**
+   * In-memory fallback (residualTransform.ts). `failures` (Phase 8b-3) is
+   * optional and omitted entirely by ops whose step type can never carry a
+   * fallible call (drop_fields) — present (possibly empty-count) on
+   * filter/computed_field/aggregate whenever their expression contains a
+   * fallible call, so runEtl.ts can report/abort the same way regardless
+   * of which step ran residually.
+   */
   applyResidual(
     input: { cols: string[]; rows: Record<string, unknown>[] },
     step: TStep,
-  ): { cols: string[]; rows: Record<string, unknown>[] };
+  ): { cols: string[]; rows: Record<string, unknown>[]; failures?: StepFailureReport[] };
 
   /**
    * Strict check-time validation (checks.ts checkConfig). Plain message

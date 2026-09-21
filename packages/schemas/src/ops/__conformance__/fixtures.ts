@@ -639,4 +639,174 @@ export const OP_FIXTURES: OpFixture[] = [
       expectedRows: [{ cohort: "eng", max_salary: 100 }],
     },
   },
+
+  // ---- Phase 8b-3 onFailure — shape-only (DB-execution proof already
+  // lives in apps/worker/scripts/lib/agreementCases.ts's `tag: "onfailure"`
+  // cases, run live against real infra; these fixtures exist only to
+  // pin the *compiled query shape* the way every other fixture in this
+  // file does, and to fail by omission if onFailure's pushdown shape ever
+  // regresses). No `dbCase` on any of these — see docs/decisions.md's
+  // "Phase 8b-3" entry for why: `'fail'`/`'quarantine'` never produce a
+  // DialectQuery at all (fallibleStepIsPushable forces them fully
+  // residual), so only `'null'`/`'drop'` are representable here.
+  {
+    opKind: "computed_field",
+    dialect: "mysql",
+    description: "onFailure: 'null' pushes with zero extra shape — the fallible expression is the whole SELECT, no added WHERE",
+    config: { steps: [{ kind: "computed_field", name: "y", expression: expr("to_boolean(x)"), onFailure: "null" }] },
+    expectedDialectQuery: {
+      dialect: "mysql",
+      whereSql: null,
+      selectSql:
+        "(CASE WHEN `x` IS NULL THEN NULL WHEN (`x` IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(JSON_ARRAY(`x`), '$[0]')) IN ('INTEGER', 'UNSIGNED INTEGER', 'DOUBLE', 'DECIMAL')) THEN (CASE WHEN CAST(`x` AS DOUBLE) = 1 THEN TRUE WHEN CAST(`x` AS DOUBLE) = 0 THEN FALSE ELSE NULL END) ELSE (CASE WHEN TRIM(LOWER(CAST(`x` AS CHAR))) IN ('true', '1') THEN TRUE WHEN TRIM(LOWER(CAST(`x` AS CHAR))) IN ('false', '0') THEN FALSE ELSE NULL END) END) AS `y`",
+      params: [],
+      isAggregate: false,
+      groupBySql: null,
+      havingSql: null,
+    },
+  },
+  {
+    opKind: "computed_field",
+    dialect: "mysql",
+    description: "onFailure: 'drop' adds an explicit 'WHERE NOT <failure predicate>' stage — computed_field's SELECT-only shape doesn't naturally exclude a failing row the way filter's WHERE does",
+    config: { steps: [{ kind: "computed_field", name: "y", expression: expr("to_boolean(x)"), onFailure: "drop" }] },
+    expectedDialectQuery: {
+      dialect: "mysql",
+      whereSql:
+        "(NOT (((CASE WHEN `x` IS NULL THEN NULL WHEN (`x` IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(JSON_ARRAY(`x`), '$[0]')) IN ('INTEGER', 'UNSIGNED INTEGER', 'DOUBLE', 'DECIMAL')) THEN (CASE WHEN CAST(`x` AS DOUBLE) = 1 THEN TRUE WHEN CAST(`x` AS DOUBLE) = 0 THEN FALSE ELSE NULL END) ELSE (CASE WHEN TRIM(LOWER(CAST(`x` AS CHAR))) IN ('true', '1') THEN TRUE WHEN TRIM(LOWER(CAST(`x` AS CHAR))) IN ('false', '0') THEN FALSE ELSE NULL END) END) IS NULL AND `x` IS NOT NULL)))",
+      selectSql:
+        "(CASE WHEN `x` IS NULL THEN NULL WHEN (`x` IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(JSON_ARRAY(`x`), '$[0]')) IN ('INTEGER', 'UNSIGNED INTEGER', 'DOUBLE', 'DECIMAL')) THEN (CASE WHEN CAST(`x` AS DOUBLE) = 1 THEN TRUE WHEN CAST(`x` AS DOUBLE) = 0 THEN FALSE ELSE NULL END) ELSE (CASE WHEN TRIM(LOWER(CAST(`x` AS CHAR))) IN ('true', '1') THEN TRUE WHEN TRIM(LOWER(CAST(`x` AS CHAR))) IN ('false', '0') THEN FALSE ELSE NULL END) END) AS `y`",
+      params: [],
+      isAggregate: false,
+      groupBySql: null,
+      havingSql: null,
+    },
+  },
+  {
+    opKind: "computed_field",
+    dialect: "postgres",
+    description: "onFailure: 'drop' adds the same 'WHERE NOT <failure predicate>' stage on postgres",
+    config: { steps: [{ kind: "computed_field", name: "y", expression: expr("to_boolean(x)"), onFailure: "drop" }] },
+    expectedDialectQuery: {
+      dialect: "postgres",
+      whereSql:
+        '(NOT (((CASE WHEN "x" IS NULL THEN NULL WHEN ("x" IS NOT NULL AND CAST(pg_typeof("x") AS text) IN (\'smallint\', \'integer\', \'bigint\', \'decimal\', \'numeric\', \'real\', \'double precision\')) THEN (CASE WHEN CAST("x" AS double precision) = 1 THEN TRUE WHEN CAST("x" AS double precision) = 0 THEN FALSE ELSE NULL END) ELSE (CASE WHEN TRIM(LOWER(CAST("x" AS text))) IN (\'true\', \'1\') THEN TRUE WHEN TRIM(LOWER(CAST("x" AS text))) IN (\'false\', \'0\') THEN FALSE ELSE NULL END) END) IS NULL AND "x" IS NOT NULL)))',
+      selectSql:
+        '(CASE WHEN "x" IS NULL THEN NULL WHEN ("x" IS NOT NULL AND CAST(pg_typeof("x") AS text) IN (\'smallint\', \'integer\', \'bigint\', \'decimal\', \'numeric\', \'real\', \'double precision\')) THEN (CASE WHEN CAST("x" AS double precision) = 1 THEN TRUE WHEN CAST("x" AS double precision) = 0 THEN FALSE ELSE NULL END) ELSE (CASE WHEN TRIM(LOWER(CAST("x" AS text))) IN (\'true\', \'1\') THEN TRUE WHEN TRIM(LOWER(CAST("x" AS text))) IN (\'false\', \'0\') THEN FALSE ELSE NULL END) END) AS "y"',
+      params: [],
+      isAggregate: false,
+      groupBySql: null,
+      havingSql: null,
+    },
+  },
+  {
+    opKind: "computed_field",
+    dialect: "mongo",
+    description: "onFailure: 'drop' appends a trailing $match/$not stage after $addFields, mirroring the SQL 'WHERE NOT' shape",
+    config: { steps: [{ kind: "computed_field", name: "y", expression: expr("to_boolean(x)"), onFailure: "drop" }] },
+    expectedDialectQuery: {
+      dialect: "mongo",
+      isAggregate: false,
+      pipeline: [
+        {
+          $addFields: {
+            y: {
+              $cond: [
+                { $eq: ["$x", null] },
+                null,
+                {
+                  $cond: [
+                    { $isNumber: "$x" },
+                    { $cond: [{ $eq: ["$x", 1] }, true, { $cond: [{ $eq: ["$x", 0] }, false, null] }] },
+                    {
+                      $cond: [
+                        { $in: [{ $trim: { input: { $toLower: { $toString: "$x" } } } }, ["true", "1"]] },
+                        true,
+                        { $cond: [{ $in: [{ $trim: { input: { $toLower: { $toString: "$x" } } } }, ["false", "0"]] }, false, null] },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        {
+          $match: {
+            $expr: {
+              $not: [
+                {
+                  $and: [
+                    {
+                      $eq: [
+                        {
+                          $cond: [
+                            { $eq: ["$x", null] },
+                            null,
+                            {
+                              $cond: [
+                                { $isNumber: "$x" },
+                                { $cond: [{ $eq: ["$x", 1] }, true, { $cond: [{ $eq: ["$x", 0] }, false, null] }] },
+                                {
+                                  $cond: [
+                                    { $in: [{ $trim: { input: { $toLower: { $toString: "$x" } } } }, ["true", "1"]] },
+                                    true,
+                                    {
+                                      $cond: [
+                                        { $in: [{ $trim: { input: { $toLower: { $toString: "$x" } } } }, ["false", "0"]] },
+                                        false,
+                                        null,
+                                      ],
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                        null,
+                      ],
+                    },
+                    { $ne: ["$x", null] },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      ],
+    },
+  },
+  {
+    opKind: "filter",
+    dialect: "mysql",
+    description: "onFailure: 'null' on a filter pushes as a plain WHERE — no extra stage, since a fallible call's NULL result already excludes the row under three-valued logic",
+    config: { steps: [{ kind: "filter", expr: expr("to_boolean(x) = true"), onFailure: "null" }] },
+    expectedDialectQuery: {
+      dialect: "mysql",
+      whereSql:
+        "(((CASE WHEN `x` IS NULL THEN NULL WHEN (`x` IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(JSON_ARRAY(`x`), '$[0]')) IN ('INTEGER', 'UNSIGNED INTEGER', 'DOUBLE', 'DECIMAL')) THEN (CASE WHEN CAST(`x` AS DOUBLE) = 1 THEN TRUE WHEN CAST(`x` AS DOUBLE) = 0 THEN FALSE ELSE NULL END) ELSE (CASE WHEN TRIM(LOWER(CAST(`x` AS CHAR))) IN ('true', '1') THEN TRUE WHEN TRIM(LOWER(CAST(`x` AS CHAR))) IN ('false', '0') THEN FALSE ELSE NULL END) END) = ?))",
+      selectSql: null,
+      params: [true],
+      isAggregate: false,
+      groupBySql: null,
+      havingSql: null,
+    },
+  },
+  {
+    opKind: "filter",
+    dialect: "mysql",
+    description: "onFailure: 'drop' on a filter compiles byte-identical WHERE SQL to 'null' above — proves the documented null≡drop collapse for filter (nodeConfig.ts's OnFailurePolicy doc comment) holds at the pushed-SQL level too, not just residually",
+    config: { steps: [{ kind: "filter", expr: expr("to_boolean(x) = true"), onFailure: "drop" }] },
+    expectedDialectQuery: {
+      dialect: "mysql",
+      whereSql:
+        "(((CASE WHEN `x` IS NULL THEN NULL WHEN (`x` IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(JSON_ARRAY(`x`), '$[0]')) IN ('INTEGER', 'UNSIGNED INTEGER', 'DOUBLE', 'DECIMAL')) THEN (CASE WHEN CAST(`x` AS DOUBLE) = 1 THEN TRUE WHEN CAST(`x` AS DOUBLE) = 0 THEN FALSE ELSE NULL END) ELSE (CASE WHEN TRIM(LOWER(CAST(`x` AS CHAR))) IN ('true', '1') THEN TRUE WHEN TRIM(LOWER(CAST(`x` AS CHAR))) IN ('false', '0') THEN FALSE ELSE NULL END) END) = ?))",
+      selectSql: null,
+      params: [true],
+      isAggregate: false,
+      groupBySql: null,
+      havingSql: null,
+    },
+  },
 ];

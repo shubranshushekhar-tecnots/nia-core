@@ -3,6 +3,7 @@ import { collectFieldRefs } from "../expression.js";
 import type { OpModule } from "./types.js";
 import { exprFnsPushable } from "./types.js";
 import { evalExpr } from "./residualEval.js";
+import { computeFailureReport, fallibleStepIsPushable, quarantineMessage, resolveOnFailure } from "./onFailure.js";
 
 export const filterOp: OpModule<FilterStepT> = {
   kind: "filter",
@@ -13,6 +14,17 @@ export const filterOp: OpModule<FilterStepT> = {
   },
 
   isPushable(dialect, step) {
+    // Phase 8b-3: a fallible call's NULL result already excludes the row
+    // via the WHERE clause under three-valued logic (null ≡ drop for
+    // filter — see nodeConfig.ts's OnFailurePolicy doc comment), so
+    // "null"/"drop" push normally with zero extra code — no separate
+    // failure count is available for a pushed filter (only a residually
+    // executed step counts failures; see onFailure.ts's top doc comment
+    // and docs/decisions.md's 8b-3 entry for this documented v1
+    // trade-off). "fail"/"quarantine" are always forced residual
+    // (fallibleStepIsPushable) since they need to inspect every row to
+    // report/abort, not just exclude non-matching ones.
+    if (!fallibleStepIsPushable(step, step.expr)) return false;
     return exprFnsPushable(step.expr, dialect);
   },
 
@@ -47,7 +59,9 @@ export const filterOp: OpModule<FilterStepT> = {
   },
 
   applyResidual(input, step) {
-    return { cols: input.cols, rows: input.rows.filter((row) => evalExpr(step.expr, row) === true) };
+    const report = computeFailureReport("filter", step.expr, input.rows, resolveOnFailure(step.onFailure));
+    const rows = input.rows.filter((row) => evalExpr(step.expr, row) === true);
+    return { cols: input.cols, rows, failures: report ? [report] : undefined };
   },
 
   checkConfig(step, ctx) {
@@ -57,6 +71,8 @@ export const filterOp: OpModule<FilterStepT> = {
         messages.push(`filter step ${ctx.index + 1} has a condition with no field selected.`);
       }
     }
+    const quarantine = quarantineMessage(step, step.expr);
+    if (quarantine) messages.push(`filter step ${ctx.index + 1}: ${quarantine}`);
     return messages;
   },
 };

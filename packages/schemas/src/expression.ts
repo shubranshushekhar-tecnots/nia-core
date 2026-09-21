@@ -1005,6 +1005,101 @@ export function collectCallFns(expr: Expr): Set<CallFn> {
   return fns;
 }
 
+/**
+ * Phase 8b-3 — the fallible-call vocabulary: every call-fn that can return
+ * NULL on a row where all its own arguments are non-null (a "failure", per
+ * onFailure's contract — NULL *input* is never a failure, only an
+ * unparseable/out-of-range non-null input is). Deliberately excludes
+ * `to_text` (never nulls on non-null input) and `format_number` (can null
+ * on a non-null-but-invalid `decimals` arg, but out of scope by decision —
+ * see docs/decisions.md's 8b-3 entry). Other candidates (regex no-match,
+ * divide by zero) are deferred — see TODO.md.
+ */
+export const FALLIBLE_CALL_FNS: ReadonlySet<CallFn> = new Set([
+  "to_number",
+  "to_integer",
+  "to_boolean",
+  "to_date",
+  "parse_date",
+  "parse_number",
+]);
+
+/**
+ * Phase 8b-3 follow-up — a fallible call directly wrapped by `coalesce`,
+ * `is_null`, or `is_not_null` is considered explicitly handled by the
+ * author (the expression already branches on/defaults the null result), so
+ * it's excluded from the failure predicate. Only DIRECT nesting counts —
+ * `is_null(x + to_number(y))` does NOT count (the binary breaks direct
+ * adjacency), but `is_null(to_number(x))` and `coalesce(to_number(x), 0)`
+ * do. This matches the Phase 13 missing-value specialist's expected
+ * `coalesce(to_number(x), default)` output shape.
+ */
+const FAILURE_HANDLING_FNS: ReadonlySet<CallFn> = new Set(["coalesce", "is_null", "is_not_null"]);
+
+/** Collects every fallible call node (not just fn names — callers need `.args` to build a failure predicate) anywhere in an expression tree, mirroring collectCallFns's recursion shape. Excludes fallible calls directly wrapped by a handling fn (see FAILURE_HANDLING_FNS). */
+export function collectFallibleCalls(expr: Expr): ExprCall[] {
+  const calls: ExprCall[] = [];
+  function walk(node: Expr, parentFn: CallFn | null): void {
+    switch (node.kind) {
+      case "field":
+      case "literal":
+        return;
+      case "binary":
+        walk(node.left, null);
+        walk(node.right, null);
+        return;
+      case "call":
+        if (FALLIBLE_CALL_FNS.has(node.fn) && !(parentFn !== null && FAILURE_HANDLING_FNS.has(parentFn))) {
+          calls.push(node);
+        }
+        node.args.forEach((arg) => walk(arg, node.fn));
+        return;
+      case "comparison":
+        walk(node.left, null);
+        walk(node.right, null);
+        return;
+      case "logical":
+        node.args.forEach((arg) => walk(arg, null));
+        return;
+      case "conditional":
+        node.branches.forEach((b) => {
+          walk(b.when, null);
+          walk(b.then, null);
+        });
+        walk(node.else, null);
+        return;
+    }
+  }
+  walk(expr, null);
+  return calls;
+}
+
+/**
+ * Builds a synthetic boolean Expr that evaluates true on a row exactly when
+ * `expr` contains a fallible call that FAILED on that row (per
+ * FALLIBLE_CALL_FNS's doc comment: all of that call's own arguments
+ * non-null, but its own result null). Built entirely out of grammar that's
+ * already pushable everywhere its inputs are (`is_null`/`is_not_null` are
+ * unconditionally pushable on every dialect — ops/types.ts's
+ * FN_PUSHABILITY), so this expression can be compiled through the exact
+ * same `compileExpr`/`compileCondition`/having-substitution path as the
+ * original expression — no new dialect plumbing needed. Multiple fallible
+ * calls in one expression OR together (the row failed if *any* of them
+ * did). Returns null when `expr` has no fallible calls (nothing to build).
+ */
+export function buildFailureExpr(expr: Expr): Expr | null {
+  const calls = collectFallibleCalls(expr);
+  if (calls.length === 0) return null;
+  const perCall: Expr[] = calls.map((call) => {
+    const argsNonNull: Expr[] = call.args.map((arg) => ({ kind: "call", fn: "is_not_null", args: [arg] }));
+    const resultIsNull: Expr = { kind: "call", fn: "is_null", args: [call] };
+    return argsNonNull.length > 0
+      ? { kind: "logical", op: "and", args: [resultIsNull, ...argsNonNull] }
+      : resultIsNull;
+  });
+  return perCall.length === 1 ? perCall[0]! : { kind: "logical", op: "or", args: perCall };
+}
+
 /** Collects every field reference in an expression tree — used to validate computed fields only reference upstream columns and by the pushdown compiler's dependency analysis. */
 export function collectFieldRefs(expr: Expr): string[] {
   switch (expr.kind) {

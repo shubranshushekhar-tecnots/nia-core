@@ -257,6 +257,33 @@ export function exprToConditions(expr: Expr): FilterCondition[] | null {
 const ExprOrLegacyConditions = z.union([ExprSchema, z.array(FilterCondition).transform(conditionsToExpr)]);
 
 /**
+ * Phase 8b-3 — onFailure policy for a step whose expression(s) contain a
+ * fallible call (expression.ts's FALLIBLE_CALL_FNS: to_number/to_integer/
+ * to_boolean/to_date/parse_date/parse_number). A "failure" is a row where
+ * every argument to the fallible call is non-null but its own result is
+ * null — NULL *input* is never a failure. Has no effect on a step whose
+ * expression contains no fallible call.
+ *   - "fail" (the semantic default when the property is ABSENT — deliberately
+ *     not schema-defaulted, since no saved workflow uses computed_field yet
+ *     (checked live, Phase 8b-3 Step 1) there is no backward-compatible
+ *     "null" default to preserve; every op module's own logic treats
+ *     `undefined` as "fail"): abort the run. The error names the step, the
+ *     failing function, and the failing-row count — never raw values.
+ *   - "null": failing results become NULL (this was already the only
+ *     behavior before 8b-3).
+ *   - "drop": rows where the fallible call failed are removed.
+ *   - "quarantine": accepted by this schema, but rejected at compile time
+ *     (checks.ts's checkConfig / each op's emitSql/emitMongo/applyResidual)
+ *     with "quarantine requires a quarantine sink (Phase 11)" — the sink
+ *     itself doesn't exist yet.
+ * For `filter`, "null" and "drop" are the SAME observable behavior (a NULL
+ * boolean already excludes the row under three-valued logic) — documented,
+ * not a distinct code path.
+ */
+export const OnFailurePolicy = z.enum(["fail", "null", "drop", "quarantine"]);
+export type OnFailurePolicy = z.infer<typeof OnFailurePolicy>;
+
+/**
  * Pre-8b-1 FilterStep persisted its conditions under the key `conditions`,
  * not `expr` — the key itself was renamed, not just its value shape. A
  * plain `expr: ExprOrLegacyConditions` on the new key can only upcast the
@@ -285,6 +312,8 @@ export const FilterStep = z.object({
   kind: z.literal("filter"),
   /** "Keep rows where this boolean Expr is true." AND-of-comparisons is one shape it can take, not the only one, since Phase 8b-1. */
   expr: ExprOrLegacyConditions.default([]),
+  /** See OnFailurePolicy's doc comment. Absent = "fail". No effect unless `expr` contains a fallible call. */
+  onFailure: OnFailurePolicy.optional(),
 });
 export type FilterStep = z.infer<typeof FilterStep>;
 
@@ -296,6 +325,8 @@ export const ComputedFieldStep = z.object({
   name: z.string(),
   /** Always a parsed AST (expression.ts) — never a raw string — so the pushdown compiler never re-parses untrusted text. */
   expression: ExprSchema,
+  /** See OnFailurePolicy's doc comment. Absent = "fail". No effect unless `expression` contains a fallible call. */
+  onFailure: OnFailurePolicy.optional(),
 });
 export type ComputedFieldStep = z.infer<typeof ComputedFieldStep> & { expression: Expr };
 
@@ -366,6 +397,8 @@ export const AggregateStep = z.object({
   groupBy: z.array(z.string()).default([]),
   aggregations: z.array(AggregationSpec).default([]),
   having: ExprOrLegacyConditions.optional(),
+  /** See OnFailurePolicy's doc comment. Absent = "fail". No effect unless `having` contains a fallible call. `groupBy`/`aggregations` never carry an Expr, so onFailure only ever applies to `having`. */
+  onFailure: OnFailurePolicy.optional(),
   /**
    * Phase 7 Session 2 — Copilot Apply's cardinality-probe evidence
    * (plan.ts's PlanAggregateProbeResult), stamped onto this exact step once

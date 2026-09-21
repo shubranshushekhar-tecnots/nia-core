@@ -93,6 +93,49 @@ export interface AgreementCase {
    * consequence, not a bug — see `decisionsRef`. Keep this list short.
    */
   expectedDivergence?: { reason: string; decisionsRef: string };
+  /**
+   * Phase 8b-3 — optional grouping tag consumed by ops-agreement.ts's
+   * `--tag=<tag>` CLI flag, which runs only cases carrying that tag instead
+   * of the full suite. Added per the plan's "add a filter flag to
+   * ops-agreement.ts if needed to run only new cases" instruction.
+   */
+  tag?: string;
+  /**
+   * Phase 8b-3 — for an onFailure: "null" | "drop" case: asserts the
+   * residual arm's `failures` report (ops/types.ts's StepFailureReport[])
+   * instead of just diffing rows. Pushdown arms don't produce a failure
+   * count in v1 (see onFailure.ts's top doc comment) — only the residual
+   * arm is checked against this; all evaluated arms are still row-diffed
+   * as normal.
+   */
+  expectedResidualFailures?: { label: string; fns: string[]; count: number }[];
+  /**
+   * Phase 8b-3 — for an onFailure: "fail" case: every fallible expression
+   * forces its step residual (fallibleStepIsPushable), so every SQL/mongo
+   * pushdown arm is expected to WARN-skip (plan.residualCount > 0) and the
+   * residual arm is expected to throw OnFailureAbortError with a message
+   * containing this substring — asserted instead of the ordinary row-diff
+   * outcome, which never runs for this case (no arm ever returns rows).
+   */
+  expectAbort?: string;
+  /**
+   * Phase 8b-3 follow-up (item 3) — pins `compilePushdown`'s
+   * `plan.residualCount` for every dialect arm, so a case can assert
+   * whether a composition stays fully pushed (0) or falls to residual (>0)
+   * — independent of `expectedResidualFailures`, which only ever inspects
+   * the pure in-process reference arm. Used to lock in the documented v1
+   * trade-off that a fully-pushed "null"/"drop" composition (e.g. a
+   * fallible filter immediately before a pushed aggregate) produces NO
+   * failure count in a real run (runEtl.ts only ever computes `failures`
+   * for `residualSteps`, which is empty when everything pushes) — verified
+   * live via `compilePushdown` directly: "drop" stays fully pushed
+   * (residualCount 0 on all 3 dialects) while "fail" forces the entire
+   * filter+aggregate pair residual (residualCount 2), which is what lets
+   * the residual arm's OnFailureAbortError correctly abort with an
+   * accurate count. See docs/decisions.md's 8b-3 entry for the full
+   * writeup of why this is NOT treated as a bug to fix.
+   */
+  expectedPushedResidualCount?: number;
 }
 
 /** Parses a bare expression string for use inside a hand-built `steps` array (see `AgreementCase.steps`'s doc comment above) — throws at module load if the string doesn't parse, matching ops-agreement.ts's own buildConfig behavior for the ordinary filterExpr path. */
@@ -1459,5 +1502,105 @@ export const AGREEMENT_CASES: AgreementCase[] = [
     description: "is_null(parse_number(text)) NULL-safety",
     seedRows: [{ text: null }],
     filterExpr: "is_null(parse_number(text))",
+  },
+
+  // Phase 8b-3 — onFailure policy, live 4-evaluator coverage. All 4 cases
+  // use the same computed_field(y = to_number(x)) shape with the same
+  // valid/invalid/NULL seed so the only thing varying across them is the
+  // onFailure policy (or, for the 4th, an aggregate step downstream of a
+  // "drop" computed_field). computed_field, not filter, is deliberately
+  // chosen for the fail/null/drop trio: filter's null and drop policies
+  // collapse into the identical observable behavior (see OnFailurePolicy's
+  // doc comment in nodeConfig.ts), which would make two of the three cases
+  // indistinguishable; computed_field's null (field becomes NULL, row
+  // stays) vs drop (row removed) are genuinely different code paths.
+  {
+    // A second computed_field column, `z = coalesce(to_number(x), 0)`, is
+    // added here (follow-up item 2) specifically to prove the "handled"
+    // exclusion holds live, not just in unit tests: to_number is directly
+    // wrapped by coalesce, so it's excluded from the failure predicate —
+    // no report entry for `z`, no abort, and (left with onFailure absent,
+    // i.e. the "fail" default) still fully pushable across all 3 dialects,
+    // since fallibleStepIsPushable only forces residual for an UNHANDLED
+    // fallible call under "fail"/"quarantine".
+    description: 'Phase 8b-3 — onFailure: "null" on computed_field(to_number(x)): failing row keeps its place with a NULL, count=1. Also carries a coalesce(to_number(x), 0)-handled column (z) with no explicit onFailure, proving a handled fallible call is excluded from the failure report and stays pushable under the "fail" default.',
+    seedRows: [
+      { x: "10" }, // valid -> y = 10, z = 10, not a failure
+      { x: "abc" }, // non-null arg, NULL result -> a failure for y; z = coalesce(NULL, 0) = 0, not a failure (handled)
+      { x: null }, // NULL arg -> NOT a failure, y = NULL, z = coalesce(NULL, 0) = 0
+    ],
+    filterExpr: "to_number(x) > -1", // unused (steps set below), required by the type
+    steps: [
+      { kind: "computed_field", name: "y", expression: parseExpr("to_number(x)"), onFailure: "null" },
+      { kind: "computed_field", name: "z", expression: parseExpr("coalesce(to_number(x), 0)") },
+    ],
+    tag: "onfailure",
+    expectedResidualFailures: [{ label: 'computed_field "y"', fns: ["to_number"], count: 1 }],
+  },
+  {
+    description: 'Phase 8b-3 — onFailure: "drop" on computed_field(to_number(x)): failing row is removed entirely, count=1',
+    seedRows: [
+      { x: "10" },
+      { x: "abc" },
+      { x: null },
+    ],
+    filterExpr: "to_number(x) > -1",
+    steps: [{ kind: "computed_field", name: "y", expression: parseExpr("to_number(x)"), onFailure: "drop" }],
+    tag: "onfailure",
+    expectedResidualFailures: [{ label: 'computed_field "y"', fns: ["to_number"], count: 1 }],
+  },
+  {
+    description: 'Phase 8b-3 — onFailure: "fail" on computed_field(to_number(x)): every pushdown arm is forced residual, residual arm aborts naming the step/function/count',
+    seedRows: [
+      { x: "10" },
+      { x: "abc" },
+      { x: null },
+    ],
+    filterExpr: "to_number(x) > -1",
+    steps: [{ kind: "computed_field", name: "y", expression: parseExpr("to_number(x)"), onFailure: "fail" }],
+    tag: "onfailure",
+    expectAbort: 'computed_field "y": to_number failed on 1 row(s).',
+  },
+  {
+    // A `filter` step, not `computed_field`, is required here:
+    // aggregate.ts's pushdownPrefixRequirement only allows a pushed
+    // aggregate to be preceded, in the pushed prefix, by `filter` steps
+    // (a pushed computed_field ahead of it would need a subquery/CTE this
+    // v1 compiler never emits, unrelated to onFailure — see its doc
+    // comment). `y > -1` excludes both a failing row (to_number -> NULL,
+    // three-valued NULL > -1 -> unknown -> excluded) and would exclude it
+    // identically whether onFailure is "null" or "drop" (the two collapse
+    // for filter, per OnFailurePolicy's doc comment) — onFailure: "drop"
+    // is set anyway so this case genuinely exercises the policy's pushdown
+    // path (fallibleStepIsPushable), not just a coincidental default.
+    description: 'Phase 8b-3 — onFailure: "drop" on a filter step upstream of an aggregate: fully pushed down (WHERE excludes the failing row before GROUP BY), matching residual drop-then-aggregate',
+    // `y` is a genuinely numeric seed column, summed by the aggregate —
+    // kept separate from `x` (the fallible-filtered column) so this case
+    // isolates the drop-before-GROUP-BY pushdown behavior from an
+    // unrelated cross-dialect SUM(text) inconsistency (mysql implicitly
+    // casts a numeric-looking string column, postgres errors outright
+    // with "function sum(text) does not exist", mongo silently sums it
+    // as 0 — summing `x` itself made all three dialects disagree for
+    // reasons that have nothing to do with onFailure).
+    seedRows: [
+      { grp: "a", x: "10", y: 100 },
+      { grp: "a", x: "abc", y: 200 }, // to_number(x) fails -> row excluded before aggregation
+      { grp: "b", x: "5", y: 50 },
+    ],
+    filterExpr: "to_number(x) > -1",
+    steps: [
+      { kind: "filter", expr: parseExpr("to_number(x) > -1"), onFailure: "drop" },
+      { kind: "aggregate", groupBy: ["grp"], aggregations: [{ fn: "sum", field: "y", alias: "total" }] },
+    ],
+    tag: "onfailure",
+    expectedResidualFailures: [{ label: "filter", fns: ["to_number"], count: 1 }],
+    // Item 3 follow-up: pins that this composition stays FULLY pushed
+    // (residualCount 0) under "drop" on all 3 dialects — i.e. a real run
+    // (runEtl.ts) reports no failure count at all for this case (the
+    // `expectedResidualFailures` above only proves the pure reference
+    // implementation's count is correct, not what a real pushed run
+    // returns). This is the documented v1 trade-off, not a bug — see
+    // docs/decisions.md's 8b-3 entry.
+    expectedPushedResidualCount: 0,
   },
 ];

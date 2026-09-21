@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { conditionsToExpr, exprToConditions } from '@nia/schemas';
 import type { FilterCondition, FilterOperator, TransformStep } from '@nia/schemas';
-import { FieldSelect, OPERATORS, coerceValue, inputStyle, removeBtnStyle, rowStyle } from './shared';
+import { FieldSelect, OnFailureSelect, OPERATORS, coerceValue, inputStyle, removeBtnStyle, rowStyle } from './shared';
 
 /**
  * Phase 8b-1: `step.expr` is now an `Expr` tree, not a `FilterCondition[]`
@@ -27,9 +27,12 @@ export function FilterStepEditor({
 
   if (conditions === null) {
     return (
-      <div style={{ fontSize: 12, color: 'var(--ink4)', fontStyle: 'italic' }}>
-        This filter&apos;s expression is too complex for this editor (built by hand or by Copilot). It will keep
-        running as-is; edit it via the expression source to change it.
+      <div>
+        <div style={{ fontSize: 12, color: 'var(--ink4)', fontStyle: 'italic', marginBottom: 8 }}>
+          This filter&apos;s expression is too complex for this editor (built by hand or by Copilot). It will keep
+          running as-is; edit it via the expression source to change it.
+        </div>
+        <OnFailureSelect value={step.onFailure} onChange={(v) => onChange({ ...step, onFailure: v })} />
       </div>
     );
   }
@@ -82,10 +85,11 @@ export function FilterStepEditor({
         onClick={() =>
           onChange({ ...step, expr: conditionsToExpr([...conditions, { field: fields[0] ?? '', operator: 'eq', value: '' }]) })
         }
-        style={{ fontSize: 12, border: '1px dashed var(--line2)', background: 'none', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: 'var(--ink3)' }}
+        style={{ fontSize: 12, border: '1px dashed var(--line2)', background: 'none', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: 'var(--ink3)', marginBottom: 8 }}
       >
         + Condition
       </button>
+      <OnFailureSelect value={step.onFailure} onChange={(v) => onChange({ ...step, onFailure: v })} />
     </div>
   );
 }

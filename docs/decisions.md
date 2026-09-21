@@ -3561,3 +3561,258 @@ divergence (not just a native syntax error) from an out-of-subset
 pattern, or if the "normalization specialist" (or any future
 pattern-generating code) needs to emit patterns outside the pinned
 subset above as a matter of course rather than exception.
+
+## Phase 8b-3: `onFailure` as a first-class op property — closes Phase 8
+
+**What shipped.** A `fallible` flag on 6 call-fns (`to_number, to_integer,
+to_boolean, to_date, parse_date, parse_number`) plus an `onFailure: 'fail'
+| 'null' | 'drop' | 'quarantine'` property on `filter`/`computed_field`/
+`aggregate` (its `having`) steps whose expression contains a fallible
+call. A fallible call fails on a row when all its arguments are non-null
+and its result is null — NULL input is never a failure (this was
+confirmed for all 6 functions across all 4 evaluators via existing
+agreement cases before any code was written, per Step 1's inventory; no
+saved workflow uses these functions in a way this phase needed to
+reconcile — remote has 0 `workflow_graphs` rows, local's 4 mysql
+workflows have zero `computed_field` steps).
+
+Absent `onFailure` resolves to `'fail'` — the "right default, not the
+backward-compatible one," per the task's explicit framing, since no
+saved workflow exercises the changed path. `'null'` is unchanged legacy
+behavior (failing calls resolve to `NULL`, row keeps its place). `'drop'`
+removes the failing row entirely. `'quarantine'` is rejected at
+config-check time with a fixed message (`"quarantine requires a
+quarantine sink (Phase 11)."`) — 8b-3 defines the property and its
+semantics only, the sink itself is Phase 11 scope. Where policies
+collapse for a given op kind (`filter`'s `'null'` and `'drop'` produce
+identical observable output — a failing row is excluded from the result
+either way, since the row source *is* the predicate for `filter`, unlike
+`computed_field` where `'null'` keeps the row with a null field and
+`'drop'` removes it), that collapse is documented on `OnFailurePolicy`
+in `nodeConfig.ts` rather than given an invented distinct code path.
+
+**Pushdown.** The failure predicate is built from the same expression
+tree via `buildFailureExpr` (`expression.ts`), so `onFailure` is pushable
+wherever its underlying functions already are — no separate "is this
+predicate pushable" question. `'null'`/`'drop'` push with zero extra
+code for `filter`/`aggregate`-`having`: a fallible call's NULL result
+already excludes the row via three-valued `WHERE`/`HAVING` logic, so
+`'null'` and `'drop'` are indistinguishable at the SQL/Mongo level for
+those two op kinds (same collapse as above, now also true of pushed
+SQL, not just residual). `computed_field`'s `'drop'` pushes as a normal
+projected field plus an extra `WHERE NOT <predicate>` filter stage (its
+`'null'` needs no extra stage — a NULL result is already the field's
+pushed value). `'fail'` and `'quarantine'` are always forced fully
+residual (`fallibleStepIsPushable` returns `false`) — they need to
+inspect and count *every* row, not just exclude non-matching ones, which
+the "extra WHERE stage" shape can't express. No per-row failure count is
+observable for a pushed `'null'`/`'drop'` filter or aggregate-having (only
+a residually executed step counts failures) — an accepted v1 scope
+limit, not attempted this phase.
+
+**Deviation from the original design note on pushdown mechanics.** The
+task's Step 2 sketched "`fail`/counts → a flag column the worker reads
+and strips" and "with aggregate pushdown downstream: fail/counts use
+`SUM(flag)` as extra aggregate." That flag-column mechanism was built,
+found unnecessary once `fallibleStepIsPushable` made `'fail'`/
+`'quarantine'` always-residual (a flag column only matters for a policy
+that's actually pushed), and removed again in this same phase — see
+`ops/types.ts`/`pushdown.ts`'s now-absent `addFailureFlag`/
+`FailureFlagMeta`/`FailureFlagInfo`/`failureFlags` symbols, deleted as
+dead code once the always-residual-for-fail design was settled. This is
+not a partial implementation; it's a design correction made and closed
+out within the phase.
+
+**`aggregate`'s pushdown-prefix restriction is unrelated to `onFailure`,
+and interacts with it.** `aggregate.ts`'s `pushdownPrefixRequirement`
+only allows a pushed `aggregate` to be preceded, within the pushed
+prefix, by `filter` steps — a pushed `computed_field`/`drop_fields` ahead
+of it would need to reference a computed/projected column inside the
+aggregate's own `GROUP BY`/`SELECT`, i.e. a subquery/CTE layer this v1
+compiler never emits. This predates 8b-3 and has nothing to do with
+`onFailure` semantics, but it means a `computed_field(onFailure:
+'drop')` step immediately before an `aggregate` can *never* be pushed
+down regardless of policy — the aggregate (and everything from it
+onward) is always forced residual by the prefix rule alone. Discovered
+while building the "drop-upstream-of-aggregate" live agreement case
+(below): a `filter`-based version of the same test is required to
+actually exercise the "pushdown composes `WHERE NOT <predicate>` before
+`GROUP BY`" behavior against real dialects; a `computed_field`-based
+version of the same test only ever exercises the residual arm, silently.
+
+**Mongo.** Same predicate shape — `buildFailureExpr`'s output compiles
+through the existing dialect-adapter `compileExpr` path used everywhere
+else, no separate Mongo-specific failure-predicate logic.
+
+**Web.** `OnFailureSelect` (`apps/web/src/components/canvas/ops/
+shared.tsx`) added to `FilterStepEditor`/`ComputedFieldStepEditor`/
+`AggregateStepEditor`, defaulting the displayed value to `'fail'` when
+the step's `onFailure` is unset (matching `resolveOnFailure`'s runtime
+default) without writing that default into the step config until the
+user actually changes it. `Record<OpKind, …>` exhaustive-mapped-type
+editor registry (`OP_EDITOR_REGISTRY`, `ops/types.ts`) left intact — no
+new op kind was added, so no new registry entry was required.
+
+**Run-result reporting.** Every policy reports per-step failure counts:
+`applyResidualTransforms` (`residualTransform.ts`) now returns `{
+columns, rows, failures: StepFailureReport[] }` instead of just rows;
+`StepFailureReport` is `{ label, fns, policy, count }`. `RunStreamEvent`'s
+`done` variant (`runEvents.ts`) carries an optional `failures` array —
+last-chunk-only, no cross-chunk accumulation across a multi-chunk run
+(a v1 scope limit, not attempted). `runEtl.ts` catches
+`OnFailureAbortError` thrown mid-run by a `'fail'`-policy step and
+converts it into a clean run failure via the existing `fail()` helper,
+naming the step/function/failing-row-count — never the raw failing
+value (verified by a unit test asserting the abort message does not
+contain the seeded bad value).
+
+**Handled-failure idioms — `coalesce`/`is_null`/`is_not_null` directly
+wrapping a fallible call are excluded from the failure predicate
+(follow-up, same session, supersedes the "deliberately-accepted
+default-behavior change" note this replaces).** The original 8b-3 design
+had `computeFailureReport` fire unconditionally on any fallible call
+found anywhere in a step's expression tree, including one nested inside
+a null-safety wrapper like `is_null(to_number(x))` — meaning an
+otherwise-explicit "I already handle the null case" idiom would still
+abort the run under the `'fail'` default. Confirmed empirically at the
+time (throwaway probe, not committed): `is_null(to_number(x))` over
+`x = "abc"` threw `OnFailureAbortError` instead of evaluating to `true`.
+This was flagged as intended-but-surprising, not fixed. It's now fixed:
+`collectFallibleCalls` (`expression.ts`) tracks each node's *direct*
+parent call during its walk and excludes a fallible call from the
+returned list (and therefore from `buildFailureExpr`'s predicate,
+`fallibleFnsIn`'s report, and `fallibleStepIsPushable`'s pushability
+check — all three funnel through `collectFallibleCalls`) when its direct
+parent is `coalesce`, `is_null`, or `is_not_null`. Only *direct* nesting
+counts — `is_null(to_number(x) + 1)` still fails/aborts under `'fail'`,
+since the binary node breaks direct adjacency between `is_null` and
+`to_number`. This matches the Phase 13 missing-value specialist's
+expected `coalesce(to_number(x), default)` output shape (the stated
+motivation for this follow-up) and directly resolves the pattern the 12
+pre-existing `agreementCases.ts` entries below were flagged as newly
+broken by — they use exactly the `is_null(fn(x))` shape this exclusion
+now recognizes as handled, so they're expected to no longer abort. The
+untagged full-suite re-run that would confirm this for all 12 wasn't
+re-done this round (only `--tag=onfailure`'s 4 cases plus the new unit
+coverage, per this follow-up's own scoping); re-verify before closing
+out the `PHASE8_EXIT.md` §8 follow-up item this superseded.
+
+Previously, the same throwaway probe also established: exactly **12**
+pre-existing `agreementCases.ts` entries were affected — every
+`is_null(fn(x))`-shaped probe seeded with a non-null, invalid argument
+(never the NULL-input seed rows for the same functions, since NULL input
+is never a failure by definition): `to_number` (3: unparseable text,
+`1e400` overflow, statically-boolean `to_number(true)`), `to_integer` (1:
+unparseable text), `to_boolean` (1: unrecognized string), `to_date` (3:
+non-ISO input, out-of-calendar-bounds month, wrong-typed numeric arg),
+`parse_date` (2: out-of-range field, shape-mismatched input),
+`parse_number` (2: rejected scientific notation, non-numeric input). One
+additional pre-existing `XFAIL` case (date-shaped CASE branches vs. a
+plain TEXT column) also appeared in that full-suite run but is unrelated
+to 8b-3.
+
+**Tests.** Unit (`packages/schemas/src/ops/onFailure.test.ts`, 24
+tests, +7 this follow-up): `resolveOnFailure` default/pass-through;
+`quarantineMessage`/`computeFailureReport`'s quarantine rejection (both
+the compile-time message and the runtime throw, and its "no effect
+without a fallible call" cases); `fallibleStepIsPushable`'s policy
+matrix; `computeFailureReport`'s counts for `'null'`/`'drop'` (including
+the NULL-input-is-not-a-failure case); `'fail'`'s `OnFailureAbortError`
+(asserting the message never contains the raw failing value, and that a
+zero-failure run doesn't throw); `rowFailed` against `buildFailureExpr`'s
+output directly; a dedicated "handled-failure idioms" block covering
+`coalesce(to_number(x), 0)` and `is_null`/`is_not_null(to_number(x))`
+each producing no failure report even under `'fail'`, a handled call
+staying pushable under `'fail'`, the direct-nesting-only boundary
+(`is_null(to_number(x) + 1)` still aborts), and an unhandled fallible
+call alongside a handled one in the same expression still being
+reported (only the unhandled one). Full `@nia/schemas` suite: 487/487
+pass (up from 481 pre-follow-up — the concurrent verification round
+this session also independently added 6 conformance fixtures; no
+regressions from either change).
+
+Live (`apps/worker/scripts/ops-agreement.ts --tag=onfailure`, added the
+`--tag=<tag>` CLI flag plus `AgreementCase.expectAbort`/
+`expectedResidualFailures` assertion fields for this purpose), 4 cases,
+all pass:
+1. `onFailure: 'null'` on `computed_field(to_number(x))`, seed
+   `{valid, non-null-invalid, null}` — residual failure count = 1,
+   pushdown/residual agree. This follow-up added a second column,
+   `z = coalesce(to_number(x), 0)`, to this same case with `onFailure`
+   left absent (defaults to `'fail'`) — it still fully pushes down and
+   agrees with residual across all 4 evaluators, proving the handled
+   exclusion holds live, not just in unit tests: `z`'s `to_number` is
+   directly wrapped by `coalesce`, so it never enters the failure
+   predicate or forces residual under the `'fail'` default.
+2. `onFailure: 'drop'` on the same shape — same assertion structure,
+   failing row removed.
+3. `onFailure: 'fail'` on the same shape — all 3 DB dialects WARN-skip
+   (forced residual, as designed), residual arm throws
+   `OnFailureAbortError` with the exact expected message.
+4. `onFailure: 'drop'` on a **`filter`** step (not `computed_field` —
+   see the pushdown-prefix note above) immediately upstream of an
+   `aggregate`, summing a separate genuinely-numeric seed column (not
+   the fallible-filtered one — summing the filtered string column
+   itself surfaced an unrelated cross-dialect `SUM(text)` inconsistency
+   during test authoring: mysql implicitly casts, postgres errors with
+   `function sum(text) does not exist`, mongo silently sums it as 0;
+   fixed by isolating the aggregated column from the filtered one, not
+   a real bug in `onFailure`). All 3 dialects fully push down (`WHERE`
+   excluding the failing row composes correctly before `GROUP BY`) and
+   agree with residual — this is the one live case that actually proves
+   the pushdown-composition claim, not just residual correctness.
+
+**Aggregate pushdown counts (follow-up, same session, item 3) — confirmed
+as the existing documented trade-off, not a new bug; no residual-forcing
+change made.** Investigated whether case 4 above (`filter(onFailure:
+'drop')` immediately pushed into an `aggregate`) silently loses its
+failure count in a real run, since the pushed `WHERE NOT <predicate>`
+excludes the row before `GROUP BY`, and no pushed arm ever computes a
+per-row count (only `applyResidualTransforms` does, and `runEtl.ts` only
+calls it on `residualSteps`, which is empty when everything pushes).
+Verified live via `compilePushdown` directly (no DB needed to answer
+"does this stay pushed"): under `'drop'`, the filter+aggregate pair
+stays **fully pushed** (`residualCount` 0 on all 3 dialects) — meaning a
+real `runEtl.ts` run's `done` event has `failures: undefined` for this
+case, not a zero count. Under `'fail'` in the identical position, the
+pair is **fully residual** (`residualCount` 2 on all 3 dialects,
+`fallibleStepIsPushable` already blocks the filter from pushing, and
+`pushdown.ts`'s `splitPushable` order-stopping semantics cascade that
+block onto the aggregate too) — the residual arm's `OnFailureAbortError`
+fires correctly with an accurate count, confirmed live. So `'fail'`
+already aborts correctly here; only `'drop'`'s missing count matched the
+task's trigger condition.
+
+Chose **not** to force this composition residual, for one reason: it
+isn't specific to aggregate at all — `'null'`/`'drop'` already lose their
+count on *any* pushed `filter`/`computed_field`/`aggregate`-`having`,
+standalone or not (this file's "Pushdown" section above, and
+`onFailure.ts`'s top doc comment, already call this out as "an accepted
+v1 scope limit, not attempted this phase," predating this follow-up).
+Special-casing only the filter-immediately-before-aggregate shape would
+be an arbitrary carve-out that doesn't fix the general problem (a
+standalone pushed `filter(onFailure: 'drop')` alone would still report no
+count) and contradicts the Step 2 design correction already recorded
+above (a flag-column mechanism was built, found unnecessary, and
+deliberately removed as dead code once `'fail'`/`'quarantine'` became
+always-residual — reintroducing pushdown-blocking machinery here to chase
+a `'null'`/`'drop'` count would resurrect exactly that rejected
+complexity for a narrower, inconsistent slice of it). Recommend treating
+full failure-count visibility under a pushed `'null'`/`'drop'` policy as
+its own deliberate future scope item (the flag-column route, or
+equivalent), not a quiet fix folded into this follow-up.
+
+What *did* change: added `AgreementCase.expectedPushedResidualCount`
+(`agreementCases.ts`) — asserts `compilePushdown`'s `plan.residualCount`
+for every dialect arm, independent of `expectedResidualFailures` (which
+only ever inspects the pure in-process reference arm and says nothing
+about what a real pushed run returns). Case 4 now pins
+`expectedPushedResidualCount: 0`, locking in "this stays fully pushed,
+therefore a real run reports no failure count for it" as an asserted,
+intentional property instead of an unverified assumption. Verified live
+(`--tag=onfailure`, still 4/4 PASS, no new case added, per this item's
+"only add a count assertion to Case 4" scoping).
+
+Per Step 4's scoping, the full (~200+ case) agreement suite and smoke
+scripts were **not** re-run this phase — only the 4 new tagged cases,
+plus the full unit suite and a 4-package typecheck.

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { GraphDoc } from "@nia/schemas";
+import { parseExpression } from "@nia/schemas";
+import type { GraphDoc, OnFailurePolicy, TransformStep } from "@nia/schemas";
 import type { Queue } from "bullmq";
 
 /**
@@ -356,6 +357,184 @@ describe("runEtl — aggregate truncation guard", () => {
     expect(result.status).toBe("done");
     expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
     expect(finishRunMock).toHaveBeenCalledWith(job.runId, "succeeded");
+  });
+});
+
+describe("runEtl — onFailure abort / failure-count threading (Phase 8b-3)", () => {
+  // Two chained transform nodes, not one: runEtl.ts only attempts pushdown
+  // when `transforms.length === 1` (compilePushdown "never designed to
+  // chain pushdown across multiple nodes" — see its header comment); with
+  // two nodes every step runs fully residual regardless of its onFailure
+  // policy's own pushability, which is what lets this suite observe
+  // applyResidualTransforms's real abort/failure-count behavior without
+  // also having to simulate a dialect actually computing the pushed column.
+  function transformGraph(step: TransformStep, mapFrom = "y"): GraphDoc {
+    return {
+      nodes: [
+        graph().nodes[0]!,
+        { id: "noop", type: "transform", position: { x: 100, y: 0 }, config: { steps: [] } },
+        {
+          id: "cf",
+          type: "transform",
+          position: { x: 200, y: 0 },
+          config: { steps: [step] },
+        },
+        {
+          id: "dest",
+          type: "destination",
+          manifestId: "supabase",
+          connectionId: DEST_CONN,
+          position: { x: 400, y: 0 },
+          config: {
+            operation: "insert",
+            entity: { namespace: "public", name: "users_dest" },
+            mapping: { version: 1, entries: [{ from: mapFrom, to: mapFrom }], approvedAt: "2026-01-01T00:00:00.000Z" },
+            upsertKeys: [mapFrom],
+          },
+        },
+      ],
+      edges: [
+        { id: "e0", source: "src", target: "noop" },
+        { id: "e1", source: "noop", target: "cf" },
+        { id: "e2", source: "cf", target: "dest" },
+      ],
+    };
+  }
+
+  function expr(source: string) {
+    const parsed = parseExpression(source);
+    if (!parsed.ok) throw new Error(parsed.error);
+    return parsed.expr;
+  }
+
+  function fallibleStep(onFailure: OnFailurePolicy): TransformStep {
+    return { kind: "computed_field", name: "y", expression: expr("to_number(amount)"), onFailure };
+  }
+
+  function amountRows(rows: [string, string][]) {
+    return tabularResult(
+      rows.map(([id, amount]) => [id, amount]),
+      [
+        { name: "id", type: "string" },
+        { name: "amount", type: "string" },
+      ],
+    );
+  }
+
+  it("aborts the run cleanly when onFailure: 'fail' hits an invalid row, without writing", async () => {
+    resolveGraphMock.mockResolvedValueOnce(transformGraph(fallibleStep("fail")));
+    dispatchMock.mockResolvedValueOnce(
+      amountRows([
+        ["1", "10"],
+        ["2", "abc"],
+      ]),
+    );
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result.status).toBe("failed");
+    expect(result.message).toBe('computed_field "y": to_number failed on 1 row(s).');
+    expect(dispatchWriteMock).not.toHaveBeenCalled();
+    expect(recordChunkProgressMock).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
+    expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "error" }));
+  });
+
+  it("threads residual failure counts into the 'done' event when onFailure: 'null'", async () => {
+    resolveGraphMock.mockResolvedValueOnce(transformGraph(fallibleStep("null")));
+    dispatchMock.mockResolvedValueOnce(
+      amountRows([
+        ["1", "10"],
+        ["2", "abc"],
+      ]),
+    );
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result.status).toBe("done");
+    expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
+    expect(publishRunEventMock).toHaveBeenCalledWith(
+      SCOPE,
+      job.runId,
+      expect.objectContaining({
+        type: "done",
+        failures: [{ label: 'computed_field "y"', fns: ["to_number"], policy: "null", count: 1 }],
+      }),
+    );
+  });
+
+  it("reports a zero count (not silence) when a fallible step's calls all succeed", async () => {
+    // Per Step 2's "every policy reports per-step failure counts ... no
+    // policy is silent": computeFailureReport (ops/onFailure.ts) always
+    // contributes a report for a fallible-containing step, even count: 0,
+    // and runEtl.ts threads every residual report straight into the
+    // chunk's "done" event unfiltered. Contrast with the next test, where
+    // the step has no fallible call at all and contributes no report.
+    resolveGraphMock.mockResolvedValueOnce(transformGraph(fallibleStep("null")));
+    dispatchMock.mockResolvedValueOnce(
+      amountRows([
+        ["1", "10"],
+        ["2", "20"],
+      ]),
+    );
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result.status).toBe("done");
+    expect(publishRunEventMock).toHaveBeenCalledWith(
+      SCOPE,
+      job.runId,
+      expect.objectContaining({
+        type: "done",
+        failures: [{ label: 'computed_field "y"', fns: ["to_number"], policy: "null", count: 0 }],
+      }),
+    );
+  });
+
+  it("omits 'failures' entirely from the 'done' event for a step with no fallible calls", async () => {
+    // A `filter` step never produces a `y` field (only `computed_field`
+    // does) — transformGraph's dest mapping is rewritten here to map
+    // `amount` instead, since that's the only field this step's output
+    // actually carries.
+    const noopFilterStep: TransformStep = { kind: "filter", expr: expr("amount > 0"), onFailure: "fail" };
+    const g = transformGraph(noopFilterStep);
+    resolveGraphMock.mockResolvedValueOnce({
+      ...g,
+      nodes: g.nodes.map((n) =>
+        n.id === "dest" && n.type === "destination"
+          ? {
+              ...n,
+              config: {
+                ...n.config,
+                mapping: { version: 1, entries: [{ from: "amount", to: "amount" }], approvedAt: "2026-01-01T00:00:00.000Z" },
+                upsertKeys: ["amount"],
+              },
+            }
+          : n,
+      ),
+    });
+    dispatchMock.mockResolvedValueOnce(
+      amountRows([
+        ["1", "10"],
+        ["2", "20"],
+      ]),
+    );
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result.status).toBe("done");
+    const doneCall = publishRunEventMock.mock.calls.find(([, , event]) => (event as { type: string }).type === "done");
+    expect(doneCall).toBeDefined();
+    expect((doneCall![2] as { failures?: unknown }).failures).toBeUndefined();
   });
 });
 

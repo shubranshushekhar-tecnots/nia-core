@@ -7,8 +7,13 @@ export * from "./graph.js";
 export * from "./expression.js";
 export * from "./nodeConfig.js";
 export * from "./pushdown.js";
-export type { OpKind } from "./ops/types.js";
+export type { OpKind, StepFailureReport } from "./ops/types.js";
 export { OP_REGISTRY } from "./ops/registry.js";
+// Phase 8b-3: OnFailureAbortError is thrown by ops/onFailure.ts's
+// computeFailureReport (via applyResidual) for policy "fail" — public so
+// runEtl.ts can catch it specifically and convert it into a clean run
+// failure instead of an unexpected-exception path.
+export { OnFailureAbortError, resolveOnFailure } from "./ops/onFailure.js";
 // Deliberately public (not just internal to this package's own tests):
 // Phase 8b-2a's apps/worker/scripts/ops-db-conformance.ts reuses this same
 // array for DB-execution assertions rather than duplicating fixture

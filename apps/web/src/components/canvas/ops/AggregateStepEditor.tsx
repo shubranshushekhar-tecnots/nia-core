@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { conditionsToExpr, exprToConditions } from '@nia/schemas';
 import type { AggregateFn, AggregationSpec, Expr, FilterCondition, FilterOperator, TransformStep } from '@nia/schemas';
-import { FieldSelect, OPERATORS, addStepBtnStyle, coerceValue, inputStyle, removeBtnStyle, rowStyle } from './shared';
+import { FieldSelect, OnFailureSelect, OPERATORS, addStepBtnStyle, coerceValue, inputStyle, removeBtnStyle, rowStyle } from './shared';
 
 const AGGREGATE_FNS: { value: AggregateFn; label: string }[] = [
   { value: 'count', label: 'count' },
@@ -216,6 +216,9 @@ export function AggregateStepEditor({
           </button>
         </>
       )}
+      <div style={{ marginTop: 12 }}>
+        <OnFailureSelect value={step.onFailure} onChange={(v) => onChange({ ...step, onFailure: v })} />
+      </div>
     </div>
   );
 }

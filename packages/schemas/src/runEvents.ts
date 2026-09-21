@@ -1,4 +1,13 @@
 import { z } from "zod";
+import { OnFailurePolicy } from "./nodeConfig.js";
+
+/** Phase 8b-3 — mirrors ops/types.ts's StepFailureReport (this package's own DTO, not imported directly, so runEvents.ts stays independent of the ops/ internals a worker-only compiler concern). */
+const RunStepFailureReport = z.object({
+  label: z.string(),
+  fns: z.array(z.string()),
+  policy: OnFailurePolicy,
+  count: z.number().int().nonnegative(),
+});
 
 /**
  * Events the worker's ETL runner (apps/worker/src/lib/etl/runEtl.ts)
@@ -29,6 +38,19 @@ export const RunStreamEvent = z.discriminatedUnion("type", [
     nodeId: z.string(),
     totalRowsProcessed: z.number().int().nonnegative(),
     durationMs: z.number().int().nonnegative(),
+    /**
+     * Phase 8b-3 — per-step onFailure counts from the run's LAST chunk's
+     * residual execution only (fail/quarantine already aborted the run
+     * before a `done` event could ever be published — see runEtl.ts's
+     * OnFailureAbortError catch). Cross-chunk cumulative counts would need
+     * persisted per-run failure-count state (workflow_runs has none today)
+     * — out of 8b-3's scope, deferred alongside the Phase 11 quarantine
+     * sink. Absent/empty when no step in this run's transform config
+     * carries a fallible call. A step that does carry one always
+     * contributes a report, even count: 0 ("no policy is silent") — not
+     * filtered out.
+     */
+    failures: z.array(RunStepFailureReport).optional(),
   }),
   z.object({
     type: z.literal("error"),

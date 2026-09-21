@@ -1,5 +1,6 @@
 import type { TransformStep } from "./nodeConfig.js";
 import { opForStep } from "./ops/registry.js";
+import type { StepFailureReport } from "./ops/types.js";
 
 /**
  * In-process executor for the transform steps a pushdown compiler
@@ -20,26 +21,34 @@ import { opForStep } from "./ops/registry.js";
  * row-shape conversion plus the per-step dispatch loop. The generic
  * per-row eval helpers (`evalExpr`/`matchesCondition`) op modules share
  * live in ops/residualEval.ts.
+ *
+ * Phase 8b-3: also collects each step's optional `failures` report (fail/
+ * quarantine already threw inside applyResidual before returning — see
+ * onFailure.ts's computeFailureReport — so anything collected here is
+ * already a "the run may continue" null/drop count) into a flat array, in
+ * step order, for the caller (runEtl.ts) to fold into the run result.
  */
 
 export function applyResidualTransforms(
   columns: string[],
   rows: unknown[][],
   steps: TransformStep[],
-): { columns: string[]; rows: unknown[][] } {
+): { columns: string[]; rows: unknown[][]; failures: StepFailureReport[] } {
   let cols = [...columns];
   let objRows: Record<string, unknown>[] = rows.map((row) => {
     const obj: Record<string, unknown> = {};
     cols.forEach((c, i) => (obj[c] = row[i]));
     return obj;
   });
+  const failures: StepFailureReport[] = [];
 
   for (const step of steps) {
     const result = opForStep(step).applyResidual({ cols, rows: objRows }, step);
     cols = result.cols;
     objRows = result.rows;
+    if (result.failures) failures.push(...result.failures);
   }
 
   const outRows = objRows.map((row) => cols.map((c) => row[c] ?? null));
-  return { columns: cols, rows: outRows };
+  return { columns: cols, rows: outRows, failures };
 }

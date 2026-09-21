@@ -47,8 +47,10 @@ import {
   compilePushdown,
   applyResidualTransforms,
   parseExpression,
+  OnFailureAbortError,
   type TransformConfig,
   type SourceDialect,
+  type StepFailureReport,
 } from "@nia/schemas";
 import {
   provisionMysqlFixture,
@@ -118,12 +120,15 @@ function inferColumnOrder(seedRows: Record<string, unknown>[]): string[] {
  * live as an exact -5:30 offset on a non-UTC (IST) dev machine — see
  * dbHarness.ts's parseDateShapedString doc comment for the full story.
  */
-function runResidual(testCase: AgreementCase, config: TransformConfig): Record<string, unknown>[] {
+function runResidual(
+  testCase: AgreementCase,
+  config: TransformConfig,
+): { rows: Record<string, unknown>[]; failures: StepFailureReport[] } {
   const cols = inferColumnOrder(testCase.seedRows);
   const rows = testCase.seedRows.map((row) => cols.map((c) => row[c] ?? null));
   const result = applyResidualTransforms(cols, rows, config.steps);
   const dateCols = new Set(testCase.dateColumns ?? []);
-  return result.rows.map((row) => {
+  const mapped = result.rows.map((row) => {
     const obj: Record<string, unknown> = {};
     result.columns.forEach((c, i) => {
       const v = row[i];
@@ -131,16 +136,32 @@ function runResidual(testCase: AgreementCase, config: TransformConfig): Record<s
     });
     return obj;
   });
+  return { rows: mapped, failures: result.failures ?? [] };
+}
+
+/**
+ * Phase 8b-3: `--tag=<tag>` narrows the run to only cases carrying that
+ * `AgreementCase.tag` (e.g. `--tag=onfailure`) — the "simple filter flag"
+ * Step 3 calls for so the new onFailure cases can be run/iterated on
+ * without re-running the full ~40-case suite against live sandbox DBs
+ * every time.
+ */
+function selectCases(): AgreementCase[] {
+  const tagArg = process.argv.find((a) => a.startsWith("--tag="));
+  if (!tagArg) return AGREEMENT_CASES;
+  const tag = tagArg.slice("--tag=".length);
+  return AGREEMENT_CASES.filter((c) => c.tag === tag);
 }
 
 async function main(): Promise<void> {
-  log(`=== ops-agreement: ${AGREEMENT_CASES.length} case(s), 4-way (mysql/postgres/mongo pushdown + residual) ===\n`);
+  const cases = selectCases();
+  log(`=== ops-agreement: ${cases.length} case(s), 4-way (mysql/postgres/mongo pushdown + residual) ===\n`);
   const cleanups: Array<() => Promise<void>> = [];
   let totalDivergentCases = 0;
   let totalErroredCases = 0;
   let totalUntriagedCases = 0;
 
-  for (const testCase of AGREEMENT_CASES) {
+  for (const testCase of cases) {
     log(`--- ${testCase.description} ---`);
     if (testCase.steps) {
       log(`    steps: ${testCase.steps.map((s) => s.kind).join(" -> ")} (filterExpr field unused for this case: ${testCase.filterExpr})`);
@@ -151,11 +172,22 @@ async function main(): Promise<void> {
     const results: Partial<Record<Arm, Record<string, unknown>[]>> = {};
     const erroredArms: Arm[] = [];
 
+    let pushedCountAssertionFailed = false;
     for (const dialect of DIALECTS) {
       try {
         const provisioned = await provisionFor(dialect, testCase.seedRows, testCase.dateColumns);
         cleanups.push(provisioned.cleanup);
         const plan = compilePushdown(dialect, config);
+        if (testCase.expectedPushedResidualCount !== undefined) {
+          if (plan.residualCount === testCase.expectedPushedResidualCount) {
+            log(`    PASS  ${dialect}: residualCount matches expected (${plan.residualCount})`);
+          } else {
+            log(
+              `    FAIL  ${dialect}: expected residualCount ${testCase.expectedPushedResidualCount}, got ${plan.residualCount}`,
+            );
+            pushedCountAssertionFailed = true;
+          }
+        }
         if (plan.residualCount > 0) {
           log(`    WARN  ${dialect}: filter not fully pushed down (${plan.residualCount} residual step(s)) — skipping this arm`);
           continue;
@@ -166,11 +198,45 @@ async function main(): Promise<void> {
         erroredArms.push(dialect);
       }
     }
-    try {
-      results.residual = runResidual(testCase, config);
-    } catch (err) {
-      log(`    ERROR  residual: ${err instanceof Error ? err.message : String(err)}`);
-      erroredArms.push("residual");
+    let abortAssertionFailed = pushedCountAssertionFailed;
+    if (testCase.expectAbort) {
+      // Phase 8b-3: a "fail" case is expected to ABORT the residual arm
+      // (OnFailureAbortError), never to return rows — assert that instead
+      // of the normal diff/failures-count path below.
+      try {
+        runResidual(testCase, config);
+        log(`    FAIL  expected residual to throw OnFailureAbortError containing "${testCase.expectAbort}", but it returned rows`);
+        abortAssertionFailed = true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof OnFailureAbortError && message.includes(testCase.expectAbort)) {
+          log(`    PASS  residual aborted as expected: ${message}`);
+        } else {
+          log(`    FAIL  expected OnFailureAbortError containing "${testCase.expectAbort}", got: ${message}`);
+          abortAssertionFailed = true;
+        }
+      }
+    } else {
+      try {
+        const residual = runResidual(testCase, config);
+        results.residual = residual.rows;
+        if (testCase.expectedResidualFailures) {
+          // Only the residual arm ever produces a per-step failure count
+          // (see onFailure.ts's top doc comment) — a pushed "null"/"drop"
+          // arm has nothing to compare this against.
+          const actual = residual.failures.map((f) => ({ label: f.label, fns: f.fns, count: f.count }));
+          const expected = testCase.expectedResidualFailures;
+          if (JSON.stringify(actual) === JSON.stringify(expected)) {
+            log(`    PASS  residual failures match: ${JSON.stringify(actual)}`);
+          } else {
+            log(`    FAIL  residual failures mismatch — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+            abortAssertionFailed = true;
+          }
+        }
+      } catch (err) {
+        log(`    ERROR  residual: ${err instanceof Error ? err.message : String(err)}`);
+        erroredArms.push("residual");
+      }
     }
 
     const arms = ARMS.filter((a) => results[a] !== undefined);
@@ -186,7 +252,7 @@ async function main(): Promise<void> {
         }
       }
     }
-    const isUntriaged = (caseDivergent || erroredArms.length > 0) && !testCase.expectedDivergence;
+    const isUntriaged = (caseDivergent || erroredArms.length > 0 || abortAssertionFailed) && !testCase.expectedDivergence;
     if (caseDivergent) totalDivergentCases++;
     if (erroredArms.length > 0) totalErroredCases++;
     if (isUntriaged) totalUntriagedCases++;
@@ -216,10 +282,10 @@ async function main(): Promise<void> {
       totalUntriagedCases === 0
         ? `ALL CASES AGREE (OR ARE DECLARED XFAIL), NO UNTRIAGED ERRORS${
             totalDivergentCases > 0 || totalErroredCases > 0
-              ? ` — ${totalDivergentCases}/${AGREEMENT_CASES.length} case(s) diverged, ${totalErroredCases}/${AGREEMENT_CASES.length} case(s) had an errored arm, all covered by an expectedDivergence marker (see XFAIL line(s) above)`
+              ? ` — ${totalDivergentCases}/${cases.length} case(s) diverged, ${totalErroredCases}/${cases.length} case(s) had an errored arm, all covered by an expectedDivergence marker (see XFAIL line(s) above)`
               : ""
           }`
-        : `${totalUntriagedCases}/${AGREEMENT_CASES.length} case(s) had an UNTRIAGED divergence or error (${totalDivergentCases} diverged, ${totalErroredCases} had an errored arm total) — review report above, triage each per the plan (homogenize only if a genuine bug, else declare via expectedDivergence + docs/decisions.md)`
+        : `${totalUntriagedCases}/${cases.length} case(s) had an UNTRIAGED divergence, error, or failed assertion (${totalDivergentCases} diverged, ${totalErroredCases} had an errored arm total) — review report above, triage each per the plan (homogenize only if a genuine bug, else declare via expectedDivergence + docs/decisions.md)`
     }`,
   );
 }

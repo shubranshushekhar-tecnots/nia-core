@@ -1,4 +1,4 @@
-import type { FilterOperator } from '@nia/schemas';
+import type { FilterOperator, OnFailurePolicy } from '@nia/schemas';
 
 /**
  * Shared styling/helpers consumed by more than one op editor
@@ -79,5 +79,46 @@ export function FieldSelect({
         </option>
       ))}
     </select>
+  );
+}
+
+/**
+ * Phase 8b-3 — onFailure policy select, shared by every op editor whose step
+ * can carry a fallible call (filter/computed_field/aggregate). Mirrors
+ * nodeConfig.ts's OnFailurePolicy doc comment: absent means "fail", which
+ * this renders as an explicit "fail" option (not a blank/placeholder) so the
+ * default is visible, not hidden. "quarantine" is listed too (schema-valid)
+ * even though it's rejected at compile time until Phase 11's sink exists —
+ * checkConfig surfaces that rejection same as any other config error.
+ */
+const ON_FAILURE_OPTIONS: { value: OnFailurePolicy; label: string }[] = [
+  { value: 'fail', label: 'Fail the run' },
+  { value: 'null', label: 'Set to null' },
+  { value: 'drop', label: 'Drop the row' },
+  { value: 'quarantine', label: 'Quarantine (Phase 11)' },
+];
+
+export function OnFailureSelect({
+  value,
+  onChange,
+}: {
+  value: OnFailurePolicy | undefined;
+  onChange: (v: OnFailurePolicy) => void;
+}) {
+  return (
+    <div style={rowStyle}>
+      <span style={{ fontSize: 12, color: 'var(--ink4)', width: 90 }}>On failure</span>
+      <select
+        value={value ?? 'fail'}
+        onChange={(e) => onChange(e.target.value as OnFailurePolicy)}
+        style={{ ...inputStyle, flex: 1 }}
+      >
+        {ON_FAILURE_OPTIONS.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }

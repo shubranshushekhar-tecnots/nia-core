@@ -1,19 +1,19 @@
-# Phase 8 Exit Report — DRAFT
+# Phase 8 Exit Report
 
-**Status: DRAFT, not final.** Phase 8b-3 (per-node `onFailure`/quarantine
-behavior) is explicitly still open and out of scope for this report — this
-covers 8a (op registry) and 8b-2 (DAX-derived function-vocabulary batches
-0-6 plus their hardening follow-ups) only, i.e. everything through batch
-6's regex-flavor follow-up closed out in this session.
+**Status: closed.** Covers 8a (op registry), 8b-2 (DAX-derived
+function-vocabulary batches 0-6 plus their hardening follow-ups), and
+8b-3 (per-node `onFailure`/quarantine behavior) — everything through
+8b-3's live agreement cases, which closes Phase 8.
 
-**Commit status:** everything this report covers is committed — `89b299e`
-("Phase 8a: op registry + dialect adapter seam") plus `677d692` ("Phase
-8b-2: DAX-derived function vocabulary (batches 0-6) + op registry
-hardening", 2026-09-21 11:31:35 +0530), which includes this file, the
-+2786-line `docs/decisions.md` session log, `agreementCases.ts`, and every
-core-implementation file listed in §7. The phase shipped ahead of this
-exit-doc's own review/sign-off, which is still pending (8b-3 is also still
-unaddressed).
+**Commit status:** 8a/8b-2 are committed — `89b299e` ("Phase 8a: op
+registry + dialect adapter seam") plus `677d692` ("Phase 8b-2:
+DAX-derived function vocabulary (batches 0-6) + op registry hardening",
+2026-09-21 11:31:35 +0530), which includes this file, the +2786-line
+`docs/decisions.md` session log, `agreementCases.ts`, and every
+core-implementation file listed in §7. **8b-3's changes are not
+committed as of this report** — see the session's final `git diff
+--staged --stat` for the full file list; committing was explicitly out
+of scope for the 8b-3 task.
 
 ---
 
@@ -36,6 +36,7 @@ unaddressed).
 | batch 5 follow-up 1 | Cross-fragment `arg(n)`/params desync — **a live production bug**, fixed via `ParamSink` (`packages/schemas/src/ops/paramSink.ts`) | "batch 5 follow-up 1: ParamSink hardening" |
 | batch 6 | Cleaning vocabulary — 7 functions (`regex_match, regex_extract, regex_replace, canonicalize, strip_accents, parse_date, parse_number`) | "batch 6: Cleaning vocabulary" |
 | post-batch-6, this session | `bodyText` reconstruction verified as already rebuilt on source-span adjacency (not an operator allowlist) — structurally eliminates the whole "tokenizer splits an operator the source didn't" bug class; regex flavor-divergence risk formalized into a pinned, live-proven subset + a made-and-documented reject-vs-fallback decision (v1 scope, unvalidated passthrough) | "Post-batch-6: bodyText rebuilt on source spans"; "Batch 6 regex flavor divergence" + its "Follow-up: live edge-case probes run" subsection |
+| 8b-3 | `onFailure: 'fail' \| 'null' \| 'drop' \| 'quarantine'` as a first-class property on `filter`/`computed_field`/`aggregate`-`having` steps whose expression contains one of 6 fallible call-fns; absent resolves to `'fail'` (the "right default, not backward-compatible" per the task); pushdown reuses the same expression via `buildFailureExpr`, `'fail'`/`'quarantine'` always forced residual; web editors wired; closes Phase 8 | "Phase 8b-3: `onFailure` as a first-class op property — closes Phase 8" |
 
 ---
 
@@ -348,6 +349,44 @@ documented in decisions.md before this session even started) and Item 3
 live-proven subset with 32 total cross-evaluator assertions, plus a
 made-and-documented reject-vs-fallback decision).
 
+### 5b. Verification — 8b-3 closeout (re-run, superseding the numbers above)
+
+Re-run live this session, against the same real docker-compose sandbox
+databases, after 8b-3's implementation (op registry, pushdown, web
+wiring, tests, fixtures) landed:
+
+- **Guardrails**: `pnpm --filter @nia/guardrails test -- --run` →
+  4 test files, **72 passed | 1 expected fail** (73 total) — unchanged,
+  guardrails wasn't touched by 8b-3.
+- **Schemas**: `pnpm --filter @nia/schemas test -- --run` →
+  **481/481 passed** (up from 422 — the +59 includes the onFailure unit
+  tests plus the 6 new shape-only conformance fixtures added this
+  session, each contributing to both the "has a fixture" and
+  "compiles to the exact expected shape" conformance describe blocks).
+- **Worker**: `pnpm --filter @nia/worker test -- --run` →
+  **139/139 passed** (up from 135 — the `runEtl.test.ts` onFailure
+  describe block), 17 files.
+- **Live cross-evaluator agreement suite, tagged** (`ops-agreement.ts
+  --tag=onfailure`): **4/4 cases AGREE** — `'null'`, `'drop'`, `'fail'`
+  (forced fully residual, aborts naming step/function/count), and a
+  `'drop'`-then-aggregate pushdown case.
+- **Live cross-evaluator agreement suite, full untagged** (all 217
+  cases): **12/217 untriaged** (all logged `AGREE (partial)` — pushdown
+  arms still agree with each other, only the residual arm now throws
+  `OnFailureAbortError`), exactly matching the confirmed breakdown in
+  `docs/decisions.md`'s Phase 8b-3 entry (`to_number` 3, `to_integer` 1,
+  `to_boolean` 1, `to_date` 3, `parse_date` 2, `parse_number` 2) — plus
+  the 1 pre-existing declared XFAIL (date-shape heuristic vs. a plain
+  TEXT column), unrelated to 8b-3 and already accounted for. Deliberately
+  not patched this phase; see §8.
+- **Smoke scripts** (`apps/worker`, real dispatch/write against sandbox
+  DBs via real connector services): `smoke` (dispatch-smoke.ts),
+  `smoke:aggregate`, `smoke:write`, `smoke:write:mysql-mongo` — **all
+  "ALL PASSED"**. `smoke:chat` skipped (requires an LLM API key,
+  unrelated to onFailure's changed surface).
+- **Typecheck**: `@nia/schemas`, `@nia/guardrails`, `@nia/worker`,
+  `@nia/web` — all clean, 0 errors.
+
 ---
 
 ## 6. Pre-existing/unrelated issues discovered, not fixed
@@ -464,11 +503,74 @@ wiring referenced in §5) are unrelated to either fix and remain as-is.
   wrong-result divergence (not just a native syntax error) from an
   out-of-subset pattern, or if future pattern-generating code needs to
   emit out-of-subset patterns as a matter of course.
-- **8b-3** (per-node `onFailure`/quarantine behavior) — explicitly not
-  started, out of scope for this report.
+- **8b-3 fail-abort-mid-run caveat.** Absent `onFailure` now resolves to
+  `'fail'`, and `computeFailureReport` runs unconditionally whenever a
+  step's expression contains any of the 6 fallible call-fns — including
+  one nested inside a null-safety wrapper like `is_null(to_number(x))`.
+  Any *new* `filter`/`computed_field`/`aggregate`-`having` step using
+  one of these functions without an explicit `onFailure` will now abort
+  the run (naming the step/function/failing-row-count, never the raw
+  value) on the first row where the argument is non-null but the
+  coercion result is null, rather than silently treating it as
+  null/excluded as before. No saved workflow exercises this today
+  (confirmed in 8b-3's Step 1 inventory), so this is an intended
+  consequence of choosing the "right" default over the
+  backward-compatible one — not a bug. The full (untagged, 217-case)
+  agreement suite was re-run this session specifically to confirm the
+  blast radius: exactly **12** pre-existing `agreementCases.ts` entries
+  are affected (all `is_null(fn(x))`-shaped NULL-safety probes for
+  invalid non-null input, none for NULL input itself, since NULL input is
+  never a failure) — `to_number` (3), `to_integer` (1), `to_boolean` (1),
+  `to_date` (3), `parse_date` (2), `parse_number` (2). Every one logs as
+  `AGREE (partial)`: the mysql/postgres/mongo pushdown arms still agree
+  with each other in all 12; only the residual arm now throws
+  `OnFailureAbortError` instead of evaluating the NULL-based comparison,
+  which `ops-agreement.ts` counts as "untriaged" absent an
+  `expectedDivergence` marker. Deliberately **not** patched this phase
+  (declaring each via `expectedDivergence`, or converting them to opt
+  into `onFailure: "null"`, is real but non-urgent triage work — these
+  cases' original intent, proving the NULL-invariant, is already
+  re-proven more precisely by the 4 dedicated Phase 8b-3 onFailure
+  cases). Revisit before Phase 9. Full writeup: `docs/decisions.md`'s
+  "Phase 8b-3" entry.
+- **8b-3 aggregate pushdown-prefix interaction.** `aggregate.ts`'s
+  pre-existing `pushdownPrefixRequirement` only allows `filter` steps in
+  the pushed prefix ahead of an `aggregate` (a pushed `computed_field`
+  ahead of it would need a subquery/CTE this v1 compiler never emits) —
+  unrelated to `onFailure`, but it means a `computed_field(onFailure:
+  'drop')` step immediately before an `aggregate` can never be pushed
+  down regardless of policy; only a `filter`-based drop-upstream-of-
+  aggregate step actually exercises real `WHERE NOT`-before-`GROUP BY`
+  pushdown composition. See `docs/decisions.md`'s "Phase 8b-3" entry for
+  how this was found (while authoring the live agreement case for this
+  exact scenario).
 - **`strip_accents`** has zero pushdown anywhere (residual-only on all 3
   dialects) — accepted as-is, no native per-dialect equivalent
   investigated further this phase.
+- **8b-3 partial-write-on-abort risk.** A `'fail'`-policy step's
+  `OnFailureAbortError` is only ever thrown by `applyResidualTransforms`
+  mid-run, in `runEtl.ts`'s per-chunk loop — a run that has already
+  written and committed one or more prior chunks to the destination via
+  `dispatchWrite` will leave those earlier chunks' rows in place even
+  though the overall run reports `"failed"`. There is no staging table or
+  atomic swap in front of the destination write today, so a `'fail'`
+  abort partway through a multi-chunk run is a real partial-write
+  outcome, not just a clean all-or-nothing rejection. Accepted as a known
+  gap for this phase (no saved workflow exercises `'fail'` today, and the
+  fix is out of scope — the general staging + atomic swap the destination
+  write needs is Phase 11 scope, not something 8b-3 should build a
+  one-off version of just for this policy).
+- **8b-3 pushed `'null'`/`'drop'` failure counts are silent (added
+  2026-09-21, follow-up item 3).** A pushed `'null'`/`'drop'`
+  `filter`/`computed_field`/`aggregate`-`having` step reports no failure
+  count at all (`failures: undefined` in the run result) because the
+  flag-column mechanism that would have counted per-row failures in
+  pushed SQL/Mongo was built, then removed again in the same phase once
+  `fallibleStepIsPushable` made `'fail'`/`'quarantine'` always-residual
+  and the flag column had nothing left to serve. This deviates from
+  8b-3's original design goal that no policy silently hides failures — a
+  `'drop'`ped row today leaves zero trace in the run result — and must be
+  fixed before Phase 13, when model-proposed `'drop'` policies begin.
 
 **Open flags carried forward from prior phases (not new to Phase 8):**
 - **`canvas.spec.ts:274` skip** — `test.skip('source drawer: entity/table
