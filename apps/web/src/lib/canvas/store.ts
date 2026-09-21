@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Plan } from "@nia/schemas";
+import type { Plan, PlanDiff } from "@nia/schemas";
 
 // Canvas UI-only state (same convention as components/app/store.ts). *Committed*
 // node and edge data live in React Flow's own useNodesState/useEdgesState,
@@ -35,6 +35,16 @@ type CanvasState = {
    */
   ghostPlan: Plan | null;
   setGhostPlan: (plan: Plan | null) => void;
+  /**
+   * Phase 12 — same in-memory-only, never-autosaved contract as ghostPlan
+   * above, for a diff-shaped proposal instead of an add-only one. Mutually
+   * exclusive with ghostPlan in practice (setting one is expected to clear
+   * the other), but kept as a separate field rather than a tagged union so
+   * FlowCanvas's existing `ghostPlan`-typed call sites don't need a runtime
+   * narrow on every read.
+   */
+  ghostDiff: PlanDiff | null;
+  setGhostDiff: (diff: PlanDiff | null) => void;
   clearGhost: () => void;
 };
 
@@ -46,6 +56,8 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   version: 0,
   setVersion: (version) => set({ version }),
   ghostPlan: null,
-  setGhostPlan: (ghostPlan) => set({ ghostPlan }),
-  clearGhost: () => set({ ghostPlan: null }),
+  setGhostPlan: (ghostPlan) => set({ ghostPlan, ghostDiff: null }),
+  ghostDiff: null,
+  setGhostDiff: (ghostDiff) => set({ ghostDiff, ghostPlan: null }),
+  clearGhost: () => set({ ghostPlan: null, ghostDiff: null }),
 }));

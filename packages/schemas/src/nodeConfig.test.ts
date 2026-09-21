@@ -8,6 +8,7 @@ import {
   DropFieldsStep,
   AggregateStep,
   parseNodeConfig,
+  updateStepProvenance,
 } from "./nodeConfig.js";
 
 describe("SourceDestConfig", () => {
@@ -122,5 +123,28 @@ describe("parseNodeConfig", () => {
     const raw = { operation: "not_a_real_op" };
     const result = parseNodeConfig("destination", raw);
     expect(result).toEqual({ unrecognized: true, type: "destination", raw });
+  });
+});
+
+describe("updateStepProvenance", () => {
+  // The single write-point both copilotDiffApply.ts's applyPlanDiff (via
+  // planDiff.ts's stampDiffStepProvenance) and apps/web's
+  // TransformEditor.tsx call through — see StepProvenance's doc comment.
+  // Covers both transitions the user flow depends on: a plan apply
+  // stamping `copilot`+planId onto a step, and a subsequent manual edit
+  // resetting that back to `manual` (never leaving stale copilot
+  // provenance on a step a user has since hand-edited).
+  it("stamps copilot+planId on apply, then resets to manual on a later manual edit", () => {
+    const original: FilterStep = FilterStep.parse({ kind: "filter", id: "step-1" });
+    expect(original.provenance).toBeUndefined();
+
+    const afterApply = updateStepProvenance(original, { source: "copilot", planId: "plan-1" });
+    expect(afterApply.provenance).toEqual({ source: "copilot", planId: "plan-1" });
+    // Everything else about the step is untouched.
+    expect(afterApply.id).toBe("step-1");
+    expect(afterApply.kind).toBe("filter");
+
+    const afterManualEdit = updateStepProvenance(afterApply, { source: "manual" });
+    expect(afterManualEdit.provenance).toEqual({ source: "manual" });
   });
 });

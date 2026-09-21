@@ -37,6 +37,17 @@ export type CanvasNodeData = {
   connectionLabel?: string;
   /** True only for ghostMapping.ts's Plan-derived overlay nodes — never set by graphToFlow/buildCanvasNode. Drives GraphFlowNode's read-only dashed/translucent styling; never persisted (flowToGraph doesn't read this field back). */
   isGhost?: boolean;
+  /**
+   * Phase 12 — set only by ghostMapping.ts's planDiffToGhostFlow, on the
+   * REAL (already-committed) node/edge a removeNode/updateNode op targets,
+   * not on a separate overlay object like isGhost. Drives GraphFlowNode's
+   * dimmed "Removed" marker or before/after "Updated" badge. Never
+   * persisted (flowToGraph doesn't read this back) and always cleared the
+   * same way isGhost's overlay nodes are (FlowCanvas re-derives display
+   * nodes from ghostDiff on every render, so this can't leak into a save).
+   */
+  ghostDiffStatus?: "removed" | "updated";
+  ghostDiffLabel?: string;
 };
 
 export type CanvasNode = Node<CanvasNodeData, GraphNode["type"]>;

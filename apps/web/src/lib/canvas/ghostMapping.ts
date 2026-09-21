@@ -1,4 +1,4 @@
-import type { GraphPosition, Plan } from '@nia/schemas';
+import type { GraphPosition, Plan, PlanDiff } from '@nia/schemas';
 import { computePlanLayout } from '@nia/schemas';
 import { resolveCanvasNode, type CanvasNode, type CanvasEdge, type MappingContext } from './mapping';
 
@@ -82,4 +82,109 @@ export function planToGhostFlow(
   }));
 
   return { nodes, edges };
+}
+
+/**
+ * Phase 12 — pure PlanDiff -> ghost-overlay mapper, parallel to
+ * planToGhostFlow above (that function is untouched; a diff and an
+ * add-only Plan need different overlay shapes since a diff can touch
+ * already-committed elements, not just propose new ones).
+ *
+ * Unlike planToGhostFlow, most ops here don't produce a brand-new overlay
+ * node/edge — a removeNode/updateNode op targets a REAL node that's
+ * already in useNodesState. So this returns two different kinds of
+ * output:
+ *   - addNodes/addEdges: genuinely new overlay objects (addNode/addEdge
+ *     ops), same read-only isGhost:true treatment as planToGhostFlow.
+ *   - nodeMarks/edgeMarks: a nodeId/edgeId -> status+label map FlowCanvas
+ *     merges onto the REAL node/edge's data (never a separate object),
+ *     which is what drives GraphFlowNode's dimmed "Removed" styling and
+ *     before/after "Updated" badge.
+ *
+ * addNode.node already carries a real, final position (unlike Plan's
+ * PlanNode.position, which is an LLM guess computePlanLayout overrides) —
+ * so no layout pass is needed here.
+ */
+export type GhostDiffMark = { status: 'removed' | 'updated'; label: string };
+
+export function planDiffToGhostFlow(
+  diff: PlanDiff,
+  ctx: MappingContext,
+): {
+  addNodes: CanvasNode[];
+  addEdges: CanvasEdge[];
+  nodeMarks: Map<string, GhostDiffMark>;
+  edgeMarks: Map<string, GhostDiffMark>;
+} {
+  const addNodes: CanvasNode[] = [];
+  const addEdges: CanvasEdge[] = [];
+  const nodeMarks = new Map<string, GhostDiffMark>();
+  const edgeMarks = new Map<string, GhostDiffMark>();
+  const stepChangeCounts = new Map<string, number>();
+
+  for (const op of diff.ops) {
+    switch (op.kind) {
+      case 'addNode': {
+        const resolution = resolveCanvasNode(op.node, ctx);
+        addNodes.push({
+          id: op.node.id,
+          type: op.node.type,
+          position: op.node.position,
+          width: 196,
+          height: 80,
+          draggable: false,
+          selectable: false,
+          connectable: false,
+          deletable: false,
+          data: {
+            graphNodeType: op.node.type,
+            connectionId: op.node.connectionId,
+            manifestId: op.node.manifestId,
+            config: op.node.config,
+            isGhost: true,
+            ...resolution,
+          },
+        });
+        break;
+      }
+      case 'addEdge': {
+        addEdges.push({
+          id: `ghost-${op.edge.id}`,
+          source: op.edge.source,
+          target: op.edge.target,
+          selectable: false,
+          deletable: false,
+          style: { stroke: 'var(--copilot-accent)', strokeDasharray: '4 3' },
+        });
+        break;
+      }
+      case 'removeNode':
+        nodeMarks.set(op.nodeId, { status: 'removed', label: 'Removed by Copilot' });
+        break;
+      case 'updateNode':
+        if (!nodeMarks.has(op.nodeId)) nodeMarks.set(op.nodeId, { status: 'updated', label: 'Updated by Copilot' });
+        break;
+      case 'removeEdge':
+        edgeMarks.set(op.edgeId, { status: 'removed', label: 'Removed by Copilot' });
+        break;
+      case 'addStep':
+      case 'removeStep':
+      case 'updateStep':
+      case 'moveStep':
+        // Rolled up onto the owning node's mark below — a compact node
+        // card has no room for a per-step diff view; the drawer (once it
+        // reads ghostDiff, Phase 13) is where step-level detail belongs.
+        stepChangeCounts.set(op.nodeId, (stepChangeCounts.get(op.nodeId) ?? 0) + 1);
+        break;
+      default:
+        op satisfies never;
+    }
+  }
+
+  for (const [nodeId, count] of stepChangeCounts) {
+    if (nodeMarks.has(nodeId)) continue; // removeNode/updateNode already covers this node
+    nodeMarks.set(nodeId, { status: 'updated', label: count === 1 ? '1 step changed' : `${count} steps changed` });
+  }
+
+  return { addNodes, addEdges, nodeMarks, edgeMarks };
 }

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type { Connection } from '@/lib/connections/types';
 import type { LocalMessage } from '@/lib/chat/useChatSession';
+import type { AppliedPlan } from '@/lib/api/copilotClient';
 import Logo from '@/components/Logo';
 import CommandBar from './CommandBar';
 import {
@@ -41,6 +42,10 @@ export default function CopilotSidebar({
   send,
   retry,
   resetConversation,
+  appliedPlans,
+  onRevertPlan,
+  revertingPlanId,
+  revertError,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -55,6 +60,11 @@ export default function CopilotSidebar({
   send: (connectionIds: string[], message: string) => Promise<void>;
   retry: () => void;
   resetConversation: () => void;
+  /** Phase 12 — previously-applied Copilot diffs, for the "Applied changes" Revert list. */
+  appliedPlans: AppliedPlan[];
+  onRevertPlan: (planId: string) => void;
+  revertingPlanId: string | null;
+  revertError: { planId: string; message: string; conflicts?: string[] } | null;
 }) {
   const [width, setWidth] = useState(COPILOT_WIDTH_DEFAULT);
   const [dragging, setDragging] = useState(false);
@@ -143,6 +153,10 @@ export default function CopilotSidebar({
           send={send}
           retry={retry}
           resetConversation={resetConversation}
+          appliedPlans={appliedPlans}
+          onRevertPlan={onRevertPlan}
+          revertingPlanId={revertingPlanId}
+          revertError={revertError}
         />
       </div>
     </div>

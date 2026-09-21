@@ -4356,3 +4356,104 @@ clean. All packages typecheck clean; `worker` (160), `schemas` (520),
 `connector-mysql` (22), `connector-mongodb` (17),
 `connector-supabase` (44, incl. `index.test.ts`'s 20 signed-context/
 `/stage` cases) unit suites all green, no regressions.
+
+## Phase 12: the diff model — snapshot-based ops, revert-as-inverse, refuse-on-conflict
+
+Shipped per `docs/plans/phase12.md`. A `PlanDiff`
+(`packages/schemas/src/planDiff.ts`) is a list of ops — `addNode`,
+`removeNode`, `updateNode`, `addEdge`, `removeEdge`, `addStep`,
+`removeStep`, `updateStep`, `moveStep` — addressed by stable id
+(`GraphNode.id`/`GraphEdge.id`, or a `TransformStep`'s own new `id`
+field, backfilled onto pre-Phase-12 steps by `ensureGraphStepIds` the
+first time a diff touches their owning node). Deliberately a separate,
+parallel contract from `plan.ts`'s existing `Plan` (Phase 7's add-only
+propose/apply), not an extension of it — `Plan` has no revert story and
+nothing in Copilot's propose path emits a `PlanDiff` yet (per the plan:
+"Don't change Copilot prompts... Phase 13's specialists are the
+first"). `Plan`/`applyPlan()`/`copilotApply.ts` are untouched.
+
+**Snapshot-based, not JSON-patch.** Every update/remove op carries a
+full "before" snapshot of the element it touches; every add/update op
+carries the full "after". More verbose on the wire than a patch, in
+exchange for two properties a patch can't give for free: `invertDiff`
+is a pure, total function — an op's "before" IS its inverse's "after"
+and vice versa, no re-fetch needed to build a revert — and
+`checkRevertConflicts` can compare live graph state against exactly
+what a plan's ops left behind without re-deriving that from a patch's
+start state.
+
+**Revert is literally apply-the-inverse, through the identical path.**
+`revertPlan` (`apps/api/src/services/copilotDiffApply.ts`) builds
+`invertDiff(originalDiff, { baseGraphVersion: <live version> })` —
+same op kinds, reversed order, each op individually inverted — and
+runs it through the exact same `validateDiffStructure` ->
+`applyDiffToGraph` -> `putWorkflowGraph` sequence as a normal apply,
+including the same `graphVersion` concurrency check (a revert always
+targets the graph's *current* live version at revert time, never the
+version its own apply happened to leave behind). This is why revert
+needed no bespoke graph-mutation code at all — it only needed
+`invertDiff` and a way to re-run the apply path with different input.
+
+**Refuse-on-conflict, no automatic merging.** Before building the
+inverse, `checkRevertConflicts` walks every op in the *original* diff
+and confirms the live graph still matches what that op left behind (an
+add/update op's `after`, or a remove op's target still being absent).
+Any mismatch — not just the first one — refuses the revert with a 409
+`REVERT_CONFLICT` and the full list of what changed; the web UI shows
+that list under the Revert button rather than attempting any kind of
+merge, per the plan's "No automatic merging."
+
+**Why pre-Phase-12 plans aren't revertible.** `copilot_applied_plans`
+(migration `0023_copilot_applied_plans.sql`) is a new table populated
+only by the new diff-apply path — one row per diff actually applied
+(including reverts, which get their own ordinary row with
+`reverts_plan_id` set). A plan applied through the legacy `Plan`/
+`applyPlan()` path, or through this path before the migration existed,
+has no row here and therefore nothing for `revertPlan` to look up or
+invert. The web UI checks for a row's existence (`listAppliedPlans`)
+to decide whether to offer the Revert button at all, rather than
+inferring revertibility any other way.
+
+**Audit stays load-bearing, but through a new RPC.** `0019`'s
+`log_plan_applied` is shaped for the add-only `Plan` contract
+(`p_applied_node_ids uuid[]` — every element of a `Plan` is a new
+node). A `PlanDiff`'s ops touch nodes, edges, *and* steps, so a single
+"node ids" array doesn't fit; `0023` adds `log_plan_diff_applied`
+instead (records the applied row id + op-kind list, sufficient to look
+up the full diff via `copilot_applied_plans.id`), plus
+`mark_plan_reverted` — the only path that can set a row's
+`reverted_at`/`reverted_by`/`revert_plan_id`, atomically paired with
+its own `copilot_plan.reverted` audit entry, for the same "a
+revert-state change must never happen without a paired audit row"
+reason `0019` already established for `audit_log` itself having no
+client-insert path.
+
+**Deviations from the plan, with reasons:**
+- New `log_plan_diff_applied` RPC instead of reusing `log_plan_applied`
+  — see "Audit stays load-bearing" above; the existing RPC's shape
+  doesn't fit a diff's node/edge/step-mixed op list.
+- No RLS probes added to `supabase/tests/rls_probes.sql` for
+  `copilot_applied_plans` — its two policies
+  (`copilot_applied_plans_select_access`/`_insert_access`) both reduce
+  to the same `private.can_access_workflow(workflow_id)` helper every
+  other workflow-scoped table already uses and already has probes for;
+  a new probe would just re-assert that helper's existing coverage
+  under a new table name.
+- `planDiff.test.ts` (5 cases) and `copilotDiffApply.test.ts` (6
+  cases) both exceed the plan's literal minimum (round-trip,
+  revert-refused-on-conflict, removeNode-without-removeEdge fails,
+  apply-then-revert-through-the-service) — the extra cases cover
+  step-level ops (add/remove/update/move) round-tripping through the
+  same `invertDiff`/`checkRevertConflicts` machinery as node/edge ops,
+  and a double-revert-refused-with-`PLAN_ALREADY_REVERTED` case at the
+  service layer. Not scope creep — same engine, same contract, just
+  more of the op-kind space exercised.
+
+Tests: `planDiff.test.ts` 5/5, `copilotDiffApply.test.ts` 6/6 (both
+part of the totals below). `packages/schemas` typecheck clean, 530/530
+unit tests green. `apps/api` typecheck clean, 34/34 unit tests green.
+`apps/web` typecheck clean. `e2e/copilot.spec.ts` 6/6 (4 persona-login
+setup + both propose->ghost->apply flows) green against the unchanged
+legacy `Plan` apply path — confirms this phase's `putWorkflowGraph`/
+`ensureGraphStepIds` additions didn't regress it. No RLS probes added
+(see deviations). Not committed, per the plan's explicit instruction.

@@ -32,11 +32,13 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
   const showTargetHandle = data.graphNodeType !== 'source';
   const showSourceHandle = data.graphNodeType !== 'destination';
   const isGhost = data.isGhost === true;
+  const diffStatus = data.ghostDiffStatus;
+  const isDiffRemoved = diffStatus === 'removed';
   const Icon = getConnectorIcon(data.manifestId, data.graphNodeType);
 
   return (
     <div
-      title={isGhost ? 'Proposed by Copilot — read-only until applied' : data.unknownReason}
+      title={isGhost ? 'Proposed by Copilot — read-only until applied' : (data.ghostDiffLabel ?? data.unknownReason)}
       style={{
         position: 'relative',
         width: 196,
@@ -45,13 +47,15 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
         background: data.resolved ? 'var(--surface)' : 'var(--warn-bg)',
         border: isGhost
           ? 'var(--provisional-border)'
-          : selected
-            ? '1.5px solid var(--acc)'
-            : data.resolved
-              ? '1px solid var(--card-line)'
-              : '1.5px solid var(--warn-bd)',
+          : diffStatus
+            ? '1.5px dashed var(--copilot-accent)'
+            : selected
+              ? '1.5px solid var(--acc)'
+              : data.resolved
+                ? '1px solid var(--card-line)'
+                : '1.5px solid var(--warn-bd)',
         boxShadow: isGhost ? 'none' : selected ? `0 0 0 3px var(--acc-soft), var(--card-shadow)` : 'var(--card-shadow)',
-        opacity: isGhost ? 'var(--ghost-opacity)' : 1,
+        opacity: isGhost || isDiffRemoved ? 'var(--ghost-opacity)' : 1,
         padding: '10px 12px',
         boxSizing: 'border-box',
         cursor: isGhost ? 'default' : 'grab',
@@ -100,6 +104,24 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
             Proposed
           </span>
         )}
+        {!isGhost && diffStatus && (
+          <span
+            title={data.ghostDiffLabel}
+            style={{
+              marginLeft: 'auto',
+              fontSize: 10,
+              fontWeight: 600,
+              color: 'var(--copilot-accent)',
+              background: 'var(--surface)',
+              border: '1px solid var(--copilot-accent)',
+              borderRadius: 999,
+              padding: '1px 6px',
+              textDecoration: isDiffRemoved ? 'line-through' : 'none',
+            }}
+          >
+            {isDiffRemoved ? 'Removed' : 'Updated'}
+          </span>
+        )}
       </div>
 
       <div style={{ fontSize: 13.5, fontWeight: 600, color: data.resolved ? 'var(--ink)' : 'var(--warn)', marginTop: 4 }}>
@@ -107,6 +129,9 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
       </div>
       {data.connectionLabel && (
         <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginTop: 2 }}>{data.connectionLabel}</div>
+      )}
+      {!isGhost && diffStatus === 'updated' && data.ghostDiffLabel && (
+        <div style={{ fontSize: 10.5, color: 'var(--copilot-accent)', marginTop: 2 }}>{data.ghostDiffLabel}</div>
       )}
 
       {showSourceHandle && (

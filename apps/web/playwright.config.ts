@@ -5,6 +5,10 @@ const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: './e2e',
+  // Fails fast with a pointed message if apps/worker isn't running or
+  // canvasC's seeded connections are missing — see globalSetup.ts's header
+  // comment. Runs once, before the "setup" project's persona logins.
+  globalSetup: './e2e/globalSetup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

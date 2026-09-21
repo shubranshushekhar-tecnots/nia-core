@@ -1,4 +1,4 @@
-import type { GraphDoc, Plan, PlanProposeOutcome } from '@nia/schemas';
+import type { GraphDoc, Plan, PlanDiff, PlanProposeOutcome } from '@nia/schemas';
 import { createClient } from '@/lib/supabase/client';
 
 /**
@@ -11,12 +11,14 @@ import { createClient } from '@/lib/supabase/client';
 export class CopilotApiError extends Error {
   status: number;
   code: string;
+  details: unknown;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
     this.name = 'CopilotApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -72,7 +74,75 @@ export async function applyPlan(workflowId: string, input: { plan: Plan; prompt?
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new CopilotApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new CopilotApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
   return res.json() as Promise<ApplyPlanResult>;
+}
+
+export type ApplyPlanDiffResult = { graph: GraphDoc; version: number; appliedPlanId: string };
+
+export type AppliedPlan = {
+  id: string;
+  workflowId: string;
+  summary: string;
+  prompt: string;
+  diff: PlanDiff;
+  graphVersionAfter: number;
+  appliedAt: string;
+  appliedBy: string | null;
+  revertedAt: string | null;
+  revertedBy: string | null;
+  revertPlanId: string | null;
+  revertsPlanId: string | null;
+};
+
+/**
+ * Phase 12 — diff-based apply (POST /workflows/:id/plan/apply-diff),
+ * parallel to applyPlan() above (that function and its route are
+ * deliberately untouched). Same "failure preserves ghost" contract:
+ * only clear a diff ghost after this resolves successfully.
+ */
+export async function applyPlanDiff(workflowId: string, input: { diff: PlanDiff; prompt?: string }): Promise<ApplyPlanDiffResult> {
+  const res = await fetch(`/api/backend/workflows/${workflowId}/plan/apply-diff`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new CopilotApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
+  }
+  return res.json() as Promise<ApplyPlanDiffResult>;
+}
+
+/** Applied/reverted Copilot diff history for a workflow — GET /workflows/:id/plan/applied. */
+export async function listAppliedPlans(workflowId: string): Promise<AppliedPlan[]> {
+  const res = await fetch(`/api/backend/workflows/${workflowId}/plan/applied`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new CopilotApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
+  }
+  return res.json() as Promise<AppliedPlan[]>;
+}
+
+/**
+ * Reverts a previously-applied diff via its inverse
+ * (POST /workflows/:id/plan/applied/:planId/revert). On 409
+ * REVERT_CONFLICT, `CopilotApiError.details` carries `{ conflicts: string[] }`
+ * — the caller renders that list rather than a generic error; there is no
+ * automatic merge/retry.
+ */
+export async function revertPlan(workflowId: string, planId: string, input: { prompt?: string } = {}): Promise<ApplyPlanDiffResult> {
+  const res = await fetch(`/api/backend/workflows/${workflowId}/plan/applied/${planId}/revert`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new CopilotApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
+  }
+  return res.json() as Promise<ApplyPlanDiffResult>;
 }

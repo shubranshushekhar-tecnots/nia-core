@@ -1,6 +1,6 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
-import { GraphDoc, Plan } from "@nia/schemas";
+import { GraphDoc, Plan, PlanDiff } from "@nia/schemas";
 import { requireAuth } from "../middleware/auth.js";
 import { attachActor } from "../middleware/actor.js";
 import { requireCapability } from "../middleware/requireCapability.js";
@@ -11,6 +11,7 @@ import { scopeFromActor } from "../lib/workspaceScope.js";
 import { getWorkflowDetail } from "../services/workflows.js";
 import { getWorkflowGraph, putWorkflowGraph } from "../services/workflowGraphs.js";
 import { applyPlan } from "../services/copilotApply.js";
+import { applyPlanDiff, listAppliedPlans, revertPlan } from "../services/copilotDiffApply.js";
 import { proposePlanForWorkflow } from "../services/copilotPropose.js";
 import { getLatestCheckRun, listCheckRuns, runAndRecordChecks } from "../services/checks.js";
 import { proposeMappingForWorkflow } from "../services/mappings.js";
@@ -112,6 +113,59 @@ workflowsRouter.post(
   asyncHandler(async (req, res) => {
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await applyPlan(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body);
+    res.json(data);
+  }),
+);
+
+const applyPlanDiffBodySchema = z.object({
+  diff: PlanDiff,
+  prompt: z.string().optional(),
+});
+
+// Phase 12 — diff-based Copilot apply/revert, parallel to the Phase 7
+// add-only /plan/apply route above (that route and copilotApply.ts are
+// deliberately untouched; this is a new path, not a replacement). Same
+// capability gate as every other config-editing route in this file
+// (workflows.updateDefinition).
+workflowsRouter.post(
+  "/:id/plan/apply-diff",
+  requireCapability("workflows.updateDefinition"),
+  validate({ params: workflowParamsSchema, body: applyPlanDiffBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await applyPlanDiff(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body);
+    res.json(data);
+  }),
+);
+
+// History of applied/reverted Copilot diffs for this workflow (Revert UI +
+// Logs-tab style activity). Read-only, no capability gate beyond auth —
+// same pattern as GET /:id/checks.
+workflowsRouter.get(
+  "/:id/plan/applied",
+  validate({ params: workflowParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await listAppliedPlans(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    res.json(data);
+  }),
+);
+
+const revertPlanParamsSchema = z.object({ id: z.string().uuid(), planId: z.string().uuid() });
+const revertPlanBodySchema = z.object({ prompt: z.string().optional() });
+
+// Reverts a previously-applied diff via its inverse (services/
+// copilotDiffApply.ts's revertPlan header comment) — 409 REVERT_CONFLICT
+// with a `conflicts` list in the error body when a touched element has
+// drifted since apply; the UI renders that list rather than a generic
+// error.
+workflowsRouter.post(
+  "/:id/plan/applied/:planId/revert",
+  requireCapability("workflows.updateDefinition"),
+  validate({ params: revertPlanParamsSchema, body: revertPlanBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await revertPlan(req.supabase, scopeFromActor(req.actor), req.params.id!, req.params.planId!, req.body);
     res.json(data);
   }),
 );

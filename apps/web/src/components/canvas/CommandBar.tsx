@@ -4,7 +4,7 @@ import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PlanProposeOutcome } from '@nia/schemas';
 import type { Connection } from '@/lib/connections/types';
 import { STAGE_LABEL, type LocalMessage } from '@/lib/chat/useChatSession';
-import { proposePlan, CopilotApiError } from '@/lib/api/copilotClient';
+import { proposePlan, CopilotApiError, type AppliedPlan } from '@/lib/api/copilotClient';
 import { useCanvasStore } from '@/lib/canvas/store';
 import {
   chatCitationChipStyle,
@@ -32,6 +32,15 @@ import {
   chatStatusRowStyle,
   chatUnfaithfulNoteStyle,
 } from '@/components/app/styles';
+import {
+  appliedPlanErrorStyle,
+  appliedPlanRevertBtnStyle,
+  appliedPlanRevertedTagStyle,
+  appliedPlanRowStyle,
+  appliedPlanSummaryStyle,
+  appliedPlansSectionStyle,
+  appliedPlansTitleStyle,
+} from './styles';
 
 /**
  * "Ask or command…" chat surface for the canvas (Phase 5 Session 4) — reuses
@@ -288,6 +297,10 @@ export default function CommandBar({
   send,
   retry,
   resetConversation,
+  appliedPlans,
+  onRevertPlan,
+  revertingPlanId,
+  revertError,
 }: {
   workflowId: string;
   connections: Connection[];
@@ -302,6 +315,11 @@ export default function CommandBar({
   send: (connectionIds: string[], message: string) => Promise<void>;
   retry: () => void;
   resetConversation: () => void;
+  /** Phase 12 — previously-applied Copilot diffs, for the "Applied changes" Revert list. */
+  appliedPlans: AppliedPlan[];
+  onRevertPlan: (planId: string) => void;
+  revertingPlanId: string | null;
+  revertError: { planId: string; message: string; conflicts?: string[] } | null;
 }) {
   const setGhostPlan = useCanvasStore((s) => s.setGhostPlan);
   const clearGhost = useCanvasStore((s) => s.clearGhost);
@@ -519,6 +537,44 @@ export default function CommandBar({
               </span>
             </div>
           )}
+        </div>
+      )}
+
+      {appliedPlans.length > 0 && (
+        <div style={appliedPlansSectionStyle} data-testid="applied-plans-section">
+          <span style={appliedPlansTitleStyle}>Applied changes</span>
+          {appliedPlans.map((plan) => {
+            const reverted = plan.revertedAt !== null;
+            const err = revertError?.planId === plan.id ? revertError : null;
+            return (
+              <div key={plan.id} data-testid="applied-plan-row">
+                <div style={appliedPlanRowStyle}>
+                  <span style={appliedPlanSummaryStyle} title={plan.summary}>
+                    {plan.summary}
+                  </span>
+                  {reverted ? (
+                    <span style={appliedPlanRevertedTagStyle}>Reverted</span>
+                  ) : (
+                    <button
+                      type="button"
+                      style={appliedPlanRevertBtnStyle}
+                      onClick={() => onRevertPlan(plan.id)}
+                      disabled={revertingPlanId === plan.id}
+                      data-testid="applied-plan-revert"
+                    >
+                      {revertingPlanId === plan.id ? 'Reverting…' : 'Revert'}
+                    </button>
+                  )}
+                </div>
+                {err && (
+                  <div style={appliedPlanErrorStyle} data-testid="applied-plan-error">
+                    {err.message}
+                    {err.conflicts && err.conflicts.length > 0 && `: ${err.conflicts.join(', ')}`}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

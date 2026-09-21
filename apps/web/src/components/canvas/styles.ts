@@ -854,6 +854,68 @@ export const planBannerErrorStyle: CSSProperties = {
   flex: 'none',
 };
 
+// ---------- Phase 12 — applied-plans Revert list (CommandBar.tsx) ----------
+// "Keep it plain" per the Phase 12 plan (Step 2E) — a simple bordered list,
+// no new visual language beyond existing thread/chip tokens.
+
+export const appliedPlansSectionStyle: CSSProperties = {
+  flex: 'none',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: '10px 16px',
+  borderBottom: '1px solid var(--panel-line)',
+};
+
+export const appliedPlansTitleStyle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  color: 'var(--ink4)',
+  textTransform: 'uppercase',
+  letterSpacing: '.04em',
+};
+
+export const appliedPlanRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '6px 0',
+  borderBottom: '1px solid var(--line2)',
+};
+
+export const appliedPlanSummaryStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 12,
+  color: 'var(--ink)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+export const appliedPlanRevertBtnStyle: CSSProperties = {
+  flex: 'none',
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: 'var(--ink3)',
+  background: 'var(--surface2)',
+  border: '1px solid var(--line2)',
+  borderRadius: 6,
+  padding: '4px 10px',
+  cursor: 'pointer',
+};
+
+export const appliedPlanRevertedTagStyle: CSSProperties = {
+  flex: 'none',
+  fontSize: 11,
+  color: 'var(--ink4)',
+};
+
+export const appliedPlanErrorStyle: CSSProperties = {
+  fontSize: 11.5,
+  color: 'var(--bad)',
+};
+
 // ---------- viewport toolbar (zoom / fit / fullscreen) ----------
 
 // ChecksDock is a full-width absolutely-positioned bottom bar (36px

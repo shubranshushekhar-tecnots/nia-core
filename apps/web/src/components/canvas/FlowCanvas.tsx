@@ -17,7 +17,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, type ActorRole, type Plan } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, type ActorRole, type Plan, type PlanDiff } from '@nia/schemas';
 import type { SidebarProject, WorkflowDetail } from '@/lib/dashboard/types';
 import type { Connection } from '@/lib/connections/types';
 import type { ChatMessage, Conversation } from '@/lib/api/chatServer';
@@ -29,10 +29,10 @@ import {
   type CanvasEdge,
   type MappingContext,
 } from '@/lib/canvas/mapping';
-import { planToGhostFlow } from '@/lib/canvas/ghostMapping';
+import { planToGhostFlow, planDiffToGhostFlow } from '@/lib/canvas/ghostMapping';
 import { findUpstreamSource } from '@/lib/canvas/upstream';
 import { getWorkflowGraph, putWorkflowGraph, GraphApiError, type WorkflowGraphResult } from '@/lib/api/graphClient';
-import { applyPlan, CopilotApiError } from '@/lib/api/copilotClient';
+import { applyPlan, applyPlanDiff, listAppliedPlans, revertPlan, CopilotApiError } from '@/lib/api/copilotClient';
 import { runWorkflowChecks, getLatestCheckRun, listCheckRuns, ChecksApiError } from '@/lib/api/checksClient';
 import { startWorkflowRun, streamRun, cancelWorkflowRun, RunApiError } from '@/lib/api/runsClient';
 import { useCanvasStore } from '@/lib/canvas/store';
@@ -141,6 +141,7 @@ function CanvasInner({
   const [edges, setEdges, onEdgesChange] = useEdgesState<CanvasEdge>(initial.edges);
   const parkedLegacyTriggers = useRef(data!.graph.parkedLegacyTriggers);
   const ghostPlan = useCanvasStore((s) => s.ghostPlan);
+  const ghostDiff = useCanvasStore((s) => s.ghostDiff);
   const clearGhost = useCanvasStore((s) => s.clearGhost);
 
   // Phase 7 Session 2 — Copilot ghost overlay. `ghost` is purely a display
@@ -155,8 +156,34 @@ function CanvasInner({
     () => (ghostPlan ? planToGhostFlow(ghostPlan, nodes.map((n) => n.position), ctx) : null),
     [ghostPlan, nodes, ctx],
   );
-  const displayNodes = useMemo(() => (ghost ? [...nodes, ...ghost.nodes] : nodes), [nodes, ghost]);
-  const displayEdges = useMemo(() => (ghost ? [...edges, ...ghost.edges] : edges), [edges, ghost]);
+  // Phase 12 — PlanDiff's ghost overlay, parallel to `ghost` above but
+  // structurally different: addNode/addEdge ops need genuinely new overlay
+  // objects (same isGhost:true treatment `ghost` uses), while
+  // removeNode/updateNode/removeEdge ops target REAL, already-committed
+  // nodes/edges, so they come back as a nodeId/edgeId -> mark map that gets
+  // merged onto the real node/edge data below instead of a separate overlay
+  // object (see ghostMapping.ts's planDiffToGhostFlow doc comment).
+  const ghostDiffOverlay = useMemo(() => (ghostDiff ? planDiffToGhostFlow(ghostDiff, ctx) : null), [ghostDiff, ctx]);
+  const displayNodes = useMemo(() => {
+    const marked = ghostDiffOverlay
+      ? nodes.map((n) => {
+          const mark = ghostDiffOverlay.nodeMarks.get(n.id);
+          return mark ? { ...n, data: { ...n.data, ghostDiffStatus: mark.status, ghostDiffLabel: mark.label } } : n;
+        })
+      : nodes;
+    const overlayNodes = [...(ghost?.nodes ?? []), ...(ghostDiffOverlay?.addNodes ?? [])];
+    return overlayNodes.length > 0 ? [...marked, ...overlayNodes] : marked;
+  }, [nodes, ghost, ghostDiffOverlay]);
+  const displayEdges = useMemo(() => {
+    const marked = ghostDiffOverlay
+      ? edges.map((e) => {
+          const mark = ghostDiffOverlay.edgeMarks.get(e.id);
+          return mark ? { ...e, style: { ...e.style, opacity: 0.35, strokeDasharray: '4 3' } } : e;
+        })
+      : edges;
+    const overlayEdges = [...(ghost?.edges ?? []), ...(ghostDiffOverlay?.addEdges ?? [])];
+    return overlayEdges.length > 0 ? [...marked, ...overlayEdges] : marked;
+  }, [edges, ghost, ghostDiffOverlay]);
   // Bring newly-proposed ghost nodes into view without disturbing the
   // user's existing pan/zoom when there's nothing new to show.
   const lastFitGhostPlanRef = useRef<Plan | null>(null);
@@ -165,6 +192,12 @@ function CanvasInner({
     lastFitGhostPlanRef.current = ghostPlan;
     fitView({ nodes: ghost.nodes.map((n) => ({ id: n.id })), duration: 400, maxZoom: 1, padding: 0.3 });
   }, [ghost, ghostPlan, fitView]);
+  const lastFitGhostDiffRef = useRef<PlanDiff | null>(null);
+  useEffect(() => {
+    if (!ghostDiffOverlay || !ghostDiff || lastFitGhostDiffRef.current === ghostDiff || ghostDiffOverlay.addNodes.length === 0) return;
+    lastFitGhostDiffRef.current = ghostDiff;
+    fitView({ nodes: ghostDiffOverlay.addNodes.map((n) => ({ id: n.id })), duration: 400, maxZoom: 1, padding: 0.3 });
+  }, [ghostDiffOverlay, ghostDiff, fitView]);
 
   const saveState = useCanvasStore((s) => s.saveState);
   const setSaveState = useCanvasStore((s) => s.setSaveState);
@@ -391,6 +424,83 @@ function CanvasInner({
     setApplyPlanError(null);
     clearGhost();
   }, [clearGhost]);
+
+  // Phase 12 — apply-diff, parallel to handleApplyPlan above (that function
+  // and the legacy add-only Plan/applyPlan() path are deliberately
+  // untouched). Same "failure preserves ghost" contract.
+  const [applyingPlanDiff, setApplyingPlanDiff] = useState(false);
+  const [applyPlanDiffError, setApplyPlanDiffError] = useState<string | null>(null);
+  const appliedPlansQueryKey = useMemo(() => ['workflow-applied-plans', workflow.id], [workflow.id]);
+  const { data: appliedPlans } = useQuery({
+    queryKey: appliedPlansQueryKey,
+    queryFn: () => listAppliedPlans(workflow.id),
+    staleTime: Infinity,
+  });
+  const handleApplyPlanDiff = useCallback(async () => {
+    if (!ghostDiff) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setApplyingPlanDiff(true);
+    setApplyPlanDiffError(null);
+    try {
+      const result = await applyPlanDiff(workflow.id, { diff: ghostDiff });
+      queryClient.setQueryData(queryKey, result);
+      const remapped = graphToFlow(result.graph, ctx);
+      setNodes(remapped.nodes);
+      setEdges(remapped.edges);
+      setVersion(result.version);
+      setSaveState('idle');
+      clearGhost();
+      queryClient.invalidateQueries({ queryKey: appliedPlansQueryKey });
+    } catch (err) {
+      setApplyPlanDiffError(err instanceof CopilotApiError ? err.message : 'Apply failed — try again.');
+    } finally {
+      setApplyingPlanDiff(false);
+    }
+  }, [ghostDiff, workflow.id, queryClient, queryKey, appliedPlansQueryKey, ctx, setNodes, setEdges, setVersion, setSaveState, clearGhost]);
+
+  const handleDiscardPlanDiff = useCallback(() => {
+    setApplyPlanDiffError(null);
+    clearGhost();
+  }, [clearGhost]);
+
+  // Phase 12 — revert. Refusal (409 REVERT_CONFLICT) carries a
+  // `{ conflicts: string[] }` details payload (see copilotClient.ts's
+  // CopilotApiError) naming which touched elements changed since apply; no
+  // automatic merge, the user must resolve manually. Success mirrors
+  // handleApplyPlan's remap-and-set-state shape and refreshes the applied-
+  // plans list so the reverted entry's reverted_at/revertPlanId show up.
+  const [revertingPlanId, setRevertingPlanId] = useState<string | null>(null);
+  const [revertError, setRevertError] = useState<{ planId: string; message: string; conflicts?: string[] } | null>(null);
+  const handleRevertPlan = useCallback(
+    async (planId: string) => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      setRevertingPlanId(planId);
+      setRevertError(null);
+      try {
+        const result = await revertPlan(workflow.id, planId);
+        queryClient.setQueryData(queryKey, result);
+        const remapped = graphToFlow(result.graph, ctx);
+        setNodes(remapped.nodes);
+        setEdges(remapped.edges);
+        setVersion(result.version);
+        setSaveState('idle');
+        queryClient.invalidateQueries({ queryKey: appliedPlansQueryKey });
+      } catch (err) {
+        const conflicts =
+          err instanceof CopilotApiError && err.code === 'REVERT_CONFLICT'
+            ? (err.details as { conflicts?: string[] } | undefined)?.conflicts
+            : undefined;
+        setRevertError({
+          planId,
+          message: err instanceof CopilotApiError ? err.message : 'Revert failed — try again.',
+          conflicts,
+        });
+      } finally {
+        setRevertingPlanId(null);
+      }
+    },
+    [workflow.id, queryClient, queryKey, appliedPlansQueryKey, ctx, setNodes, setEdges, setVersion, setSaveState],
+  );
 
   // Checks (Phase 5 Session 3 Task 2). Latest persisted run is fetched once
   // on mount (GET .../checks/latest, never re-runs anything); "Run checks"
@@ -761,6 +871,31 @@ function CanvasInner({
               </div>
             )}
 
+            {ghostDiff && (
+              <div style={planBannerStyle} data-testid="plan-diff-banner">
+                <span style={planBannerTextStyle}>{ghostDiff.summary}</span>
+                {applyPlanDiffError && <span style={planBannerErrorStyle}>{applyPlanDiffError}</span>}
+                <button
+                  type="button"
+                  style={planBannerDiscardBtnStyle}
+                  onClick={handleDiscardPlanDiff}
+                  disabled={applyingPlanDiff}
+                  data-testid="plan-diff-banner-discard"
+                >
+                  Discard
+                </button>
+                <button
+                  type="button"
+                  style={planBannerApplyBtnStyle}
+                  onClick={handleApplyPlanDiff}
+                  disabled={applyingPlanDiff}
+                  data-testid="plan-diff-banner-apply"
+                >
+                  {applyingPlanDiff ? 'Applying…' : 'Apply'}
+                </button>
+              </div>
+            )}
+
             {/* Full-view floating controls — the merged header (and the icon
                 rail) live outside fullscreenRef, so both disappear once the
                 Fullscreen API is engaged. Mirrors CanvasHeader's breadcrumb
@@ -951,6 +1086,10 @@ function CanvasInner({
             send={chatSession.send}
             retry={chatSession.retry}
             resetConversation={chatSession.resetConversation}
+            appliedPlans={appliedPlans ?? []}
+            onRevertPlan={handleRevertPlan}
+            revertingPlanId={revertingPlanId}
+            revertError={revertError}
           />
         </div>
       </div>

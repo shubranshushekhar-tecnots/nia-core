@@ -6,6 +6,7 @@ import {
   compilePushdown,
   manifestDialect,
   OP_REGISTRY,
+  updateStepProvenance,
   type TransformConfig,
   type TransformStep,
 } from '@nia/schemas';
@@ -67,16 +68,21 @@ export default function TransformEditor({
   const plan = useMemo(() => compilePushdown(dialect, config), [dialect, config]);
   const [copied, setCopied] = useState(false);
 
+  // Phase 12 — any edit made through this UI is, by definition, manual: it
+  // resets/overwrites whatever provenance a step carried (e.g. `copilot`+
+  // planId from a plan apply), so a later revert-conflict check correctly
+  // sees "this step was changed since the plan was applied" (see
+  // StepProvenance's doc comment).
   function updateStep(i: number, next: TransformStep) {
     const steps = config.steps.slice();
-    steps[i] = next;
+    steps[i] = updateStepProvenance(next, { source: 'manual' });
     onChange({ ...config, steps });
   }
   function removeStep(i: number) {
     onChange({ ...config, steps: config.steps.filter((_, idx) => idx !== i) });
   }
   function addStep(kind: TransformStep['kind']) {
-    const step = OP_REGISTRY[kind].createDefault();
+    const step = updateStepProvenance(OP_REGISTRY[kind].createDefault(), { source: 'manual' });
     onChange({ ...config, steps: [...config.steps, step] });
   }
 

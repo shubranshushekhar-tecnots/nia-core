@@ -308,6 +308,33 @@ export const OnFailurePolicy = z.enum(["fail", "null", "drop", "quarantine"]);
 export type OnFailurePolicy = z.infer<typeof OnFailurePolicy>;
 
 /**
+ * Phase 12 — provenance of a TransformStep: did Copilot's diff-apply engine
+ * add/last-touch it (carrying the applied-plan id that did so, planDiff.ts's
+ * PlanDiff/copilot_applied_plans.id), did a Phase 13 specialist (carrying
+ * the same planId plus which specialist and, optionally, which model),
+ * or was it hand-authored/last-edited by a user in the transform editor?
+ * Absent means "predates Phase 12" (every step that existed before this
+ * field was added), not "manual" — a distinct third state so a future UI
+ * can tell "we don't know" from "we know it was manual", though nothing
+ * currently branches on that distinction.
+ *
+ * `updateStepProvenance` below is the only place a step's provenance
+ * should ever be written from, so the "manual edit clears copilot/
+ * specialist provenance" rule (docs/plans/phase12.md, Design B) lives in
+ * one place. Two call sites use it: planDiff.ts's `stampDiffStepProvenance`
+ * (apply-time, stamps `copilot`+planId before a diff is validated/applied/
+ * persisted — see that function's header comment for why) and
+ * apps/web's TransformEditor.tsx (`manual`, on every step edit/add through
+ * the transform editor UI).
+ */
+export const StepProvenance = z.discriminatedUnion("source", [
+  z.object({ source: z.literal("copilot"), planId: z.string() }),
+  z.object({ source: z.literal("specialist"), planId: z.string(), specialist: z.string(), model: z.string().optional() }),
+  z.object({ source: z.literal("manual") }),
+]);
+export type StepProvenance = z.infer<typeof StepProvenance>;
+
+/**
  * Pre-8b-1 FilterStep persisted its conditions under the key `conditions`,
  * not `expr` — the key itself was renamed, not just its value shape. A
  * plain `expr: ExprOrLegacyConditions` on the new key can only upcast the
@@ -332,12 +359,29 @@ function upcastLegacyFilterKey(raw: unknown): unknown {
   return raw;
 }
 
+/**
+ * Phase 12 — every TransformStep variant below carries an optional stable
+ * `id` (plan-diff ops address a step by this, never by array index) and an
+ * optional `provenance` (see StepProvenance's doc comment). Both optional
+ * rather than required: no saved workflow has ever had either field before
+ * Phase 12, so requiring them would fail every existing persisted
+ * TransformConfig at parse time. `ensureStepIds` below is the one place
+ * that backfills a missing id — never done inline in these schemas, so a
+ * bare `.parse()` stays a pure, referentially-transparent function of its
+ * input (no hidden `crypto.randomUUID()` side effect on every parse call).
+ */
+const stepIdentityFields = {
+  id: z.string().optional(),
+  provenance: StepProvenance.optional(),
+};
+
 export const FilterStep = z.object({
   kind: z.literal("filter"),
   /** "Keep rows where this boolean Expr is true." AND-of-comparisons is one shape it can take, not the only one, since Phase 8b-1. */
   expr: ExprOrLegacyConditions.default([]),
   /** See OnFailurePolicy's doc comment. Absent = "fail". No effect unless `expr` contains a fallible call. */
   onFailure: OnFailurePolicy.optional(),
+  ...stepIdentityFields,
 });
 export type FilterStep = z.infer<typeof FilterStep>;
 
@@ -351,12 +395,14 @@ export const ComputedFieldStep = z.object({
   expression: ExprSchema,
   /** See OnFailurePolicy's doc comment. Absent = "fail". No effect unless `expression` contains a fallible call. */
   onFailure: OnFailurePolicy.optional(),
+  ...stepIdentityFields,
 });
 export type ComputedFieldStep = z.infer<typeof ComputedFieldStep> & { expression: Expr };
 
 export const DropFieldsStep = z.object({
   kind: z.literal("drop_fields"),
   fields: z.array(z.string().min(1)).default([]),
+  ...stepIdentityFields,
 });
 export type DropFieldsStep = z.infer<typeof DropFieldsStep>;
 
@@ -435,17 +481,48 @@ export const AggregateStep = z.object({
    */
   observedCount: z.number().int().nonnegative().optional(),
   probedAt: z.string().datetime().optional(),
+  ...stepIdentityFields,
 });
 export type AggregateStep = z.infer<typeof AggregateStep>;
 
 export const TransformStep = z.discriminatedUnion("kind", [FilterStep, ComputedFieldStep, DropFieldsStep, AggregateStep]);
 export type TransformStep = z.infer<typeof TransformStep>;
 
+/** The one place a step's `provenance` field should ever be written from — see StepProvenance's doc comment. */
+export function updateStepProvenance<S extends TransformStep>(step: S, provenance: StepProvenance): S {
+  return { ...step, provenance };
+}
+
 export const TransformConfig = z.object({
   /** Applied in array order — a later step sees the previous step's output shape (e.g. a drop_fields before a filter on a dropped field is a user-visible ordering choice, not validated here). */
   steps: z.array(z.preprocess(upcastLegacyFilterKey, TransformStep)).default([]),
 });
 export type TransformConfig = z.infer<typeof TransformConfig>;
+
+/**
+ * Phase 12 — assigns a fresh `crypto.randomUUID()` (Web Crypto global, not
+ * `node:crypto` — this package is imported by apps/web's browser bundle as
+ * well as apps/api/apps/worker's Node processes, so it needs an API both
+ * runtimes actually have) to any step missing an `id`, leaving steps that
+ * already have one untouched. Pure and idempotent for an already-fully-
+ * identified array (returns a new array either way — never mutates the
+ * input — but every element is `===` its input element when no id was
+ * missing, so a caller can cheaply tell "nothing changed" via `every`/
+ * reference equality if it ever needs to skip a redundant write).
+ *
+ * This is the "assigned on read for existing steps" half of the Phase 12
+ * plan's step-id requirement — called by planDiff.ts's diff-apply path
+ * against the just-fetched graph, before any op is applied, so every step
+ * a diff might address by id is guaranteed to have one. Not called from
+ * parseNodeConfig itself: that function is used by pure, read-only callers
+ * (checks.ts, the canvas) that must stay side-effect-free and
+ * referentially transparent — minting a random id on every parse call
+ * would make two parses of the *same* persisted config disagree, which is
+ * worse than not having ids at all for anything that compares them.
+ */
+export function ensureStepIds(steps: TransformStep[]): TransformStep[] {
+  return steps.map((step) => (step.id ? step : { ...step, id: crypto.randomUUID() }));
+}
 
 export type ParsedNodeConfig =
   | { unrecognized: false; type: "source" | "destination"; value: SourceDestConfig }
