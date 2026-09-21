@@ -272,3 +272,37 @@
   generated from, and refuse (or surface a re-review prompt) on a
   mismatch rather than silently applying a policy tuned for a schema
   shape that's since drifted.
+- **Composite-PK extraction: reuse Phase 9's lexicographic keyset
+  expansion (added 2026-09-21).** `runEtl.ts`'s plain (non-aggregate)
+  extraction precondition only accepts a *single-column* primary key —
+  both connector-supabase's `pg_catalog` PK query and connector-mysql's
+  `column_key` PK query collapse a multi-column PK to `null`
+  (`pkCols.length === 1 ? pkCols[0]! : null`), which then hits the same
+  hard-fail as a genuinely key-less table. Phase 9 already solved the
+  exact same "order and paginate by more than one column" problem for
+  aggregate pushdown's group-key cursor (lexicographic tuple comparison
+  compiled through `ParamSink`, plus the mysql `BINARY`/`HEX(BINARY)`
+  collation fix for string columns — see `PHASE9_EXIT.md` and
+  `docs/decisions.md`'s Phase 9 entries). Extend plain extraction's
+  keyset pagination to accept a composite `primaryKey: string[]` and
+  reuse that same lexicographic `(k1, k2, ...) > (cursor1, cursor2,
+  ...)` comparison + cursor-tuple encoding, instead of continuing to
+  refuse every composite-PK table/entity outright.
+- **A strategy for views (added 2026-09-21).** Views have no primary
+  key by definition, and `runEtl.ts`'s plain-extraction precondition
+  currently refuses them exactly like any other key-less table
+  (`entity.primaryKey` is always `null` for a view, hard error, no
+  aggregate-pushdown exemption unless the view's own defining query
+  happens to be one). Decide and design an actual strategy rather than
+  leaving views permanently unextractable: candidates include (a)
+  letting the user designate a column (or column set) on the view as an
+  ordering/dedup key at mapping time, with a disclaimer that
+  uniqueness/stability is unverified and on them; (b) a bounded
+  unordered-but-deduplicated scan (extending the profiler's
+  `no-key-scan`/`fetchUnkeyedPage` approach in `sampleEntity.ts` from
+  "profiling only" to "actual extraction," with the same silent
+  skip/duplicate risk under concurrent writes that implies and needs to
+  be surfaced to the user, not hidden); or (c) requiring the view's
+  underlying base table(s) to be introspected instead and refusing only
+  when that's not resolvable. Needs a decision before the no-PK path is
+  ever offered to users as anything more than a hard refusal.
