@@ -121,6 +121,36 @@
     aggregate-aware pagination cursor (e.g. keyset over the group-by
     columns themselves) so large-cardinality group-bys can page like any
     other query — revisit if/when that becomes a real workload.
+    **Named prerequisite for that work (Follow-up 1 / Condition 4, see
+    docs/decisions.md's Follow-up 1 entry for the full trace):**
+    `queryBuilder.ts`'s `buildEtlReadQuery` appends the keyset-cursor
+    condition/placeholder AFTER `compilePushdown`'s `ParamSink` resolve
+    pass has already run and returned final, real placeholders — safe
+    only because today's aggregate branch (`sqlQuery?.isAggregate`) never
+    adds a keyset condition at all, so keyset and `havingSql` never
+    coexist in the same query. Whenever aggregate pagination is built, if
+    the keyset condition is appended into `WHERE` the same way the
+    non-aggregate branch does (`conditions.push(...)`, `params.push(cursor)`
+    onto the END of the already-resolved `sqlQuery.params` array), it
+    reintroduces the exact arg(n)-desync bug class Follow-up 1 fixed,
+    through a door outside `compileSql`'s protection: for mysql, the
+    keyset placeholder would land TEXTUALLY inside `WHERE` (before
+    `GROUP BY`/`HAVING` in the final SQL string) while its bound value
+    sits NUMERICALLY LAST in the flat params array (after `HAVING`'s own
+    params) — mysql binds `?` by left-to-right scan of the final text, so
+    this silently swaps the keyset value into a `HAVING` placeholder's
+    slot and vice versa. (Postgres is unaffected by this specific shape,
+    since its `$N` binds by explicit number, not text position — but
+    don't rely on that per-dialect asymmetry, fix it generically.) Do NOT
+    hand-splice a keyset placeholder into `WHERE` after the fact. Either
+    (a) route the keyset condition through `ParamSink`/`resolveParamSink`
+    itself — i.e. push it inside `compileSql`, before the resolve pass
+    runs, so it participates in the same exactly-once scan-order
+    resolution as every other literal — or (b) if it must stay appended
+    downstream in `queryBuilder.ts`, prove (with a permanent mysql
+    agreement-style regression case, per Condition 3's precedent) that it
+    is always textually last in the assembled SQL, with no exceptions.
+    Not fixed now — no aggregate pagination exists yet to fix it in.
   - **Residual (non-pushed) aggregation buffers all per-group state in
     memory** (`residualTransform.ts`) — a `Map` of group-key → running
     accumulators, plus a `Set` per `count_distinct` aggregation. Fine at
@@ -150,3 +180,34 @@
   `pushdown.ts`'s `SourceDialect` (`"mongo"`) — a small, behavior-neutral
   rename onto the shared enum, recommended but deliberately left
   untouched since it wasn't required by this phase's scope.
+- **Scheduled work, not just an open observation: Postgres explicit-cast
+  pass for untyped bind-parameters.** `docs/decisions.md`'s "Phase 8b-2a:
+  Postgres CASE-branch literal typing" entry has now been sighted three
+  separate times — `computed_field`'s conditional branches (8b-2a),
+  `binary` arithmetic (8b-2b), and the `computed_field/postgres`
+  conditional fixture in `ops-db-conformance.ts`'s live run (Phase 8b-2
+  batch 1) — all the same root cause: Postgres infers an untyped bind
+  parameter's type as `text` whenever it lands in a position with no
+  adjacent typed operand to infer from. Three independent sightings is
+  enough to promote this from a standing note to real, scoped work: a
+  dialect-adapter change in `sqlShared.ts` that wraps every literal
+  compiled to a bind parameter with an explicit Postgres type cast
+  (`$n::type`, inferred from the literal's JS type at compile time)
+  wherever it isn't already sitting next to a typed column reference —
+  not just the `CASE`/`binary` shapes caught so far, since the entry's
+  own analysis already names `UNION`/`COALESCE`-with-mixed-arguments as
+  carrying the identical risk in principle. Needs its own phase slot
+  (dialect-adapter change + a new conformance-fixture surface asserting
+  the emitted JS type matches across all 3 dialects for every literal
+  shape), not folded into whichever batch happens to next touch
+  `sqlShared.ts`.
+- Surface the numeric-precision platform constraint in product-facing
+  docs (Phase 8b-2, pre-batch-5 hardening, Item 2): numeric/decimal
+  values beyond float64 precision (~15-17 significant digits, or exact
+  integers above 2^53) are lossy on read across all 3 dialects — proven
+  live via `apps/worker/scripts/numeric-precision-probe.ts`, see
+  `docs/decisions.md`'s Item 2 entry. A customer pointing a pipeline at
+  a ledger or scientific dataset needs to know this before they run it,
+  not discover it after silently getting rounded numbers back. Not a
+  bug to fix (see decisions.md for why the alternatives are worse) —
+  just needs to be documented for customers.

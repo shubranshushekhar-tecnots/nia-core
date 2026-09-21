@@ -9,7 +9,13 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "build:deps": "pnpm --filter @nia/schemas --filter @nia/guardrails build",
+    "presmoke": "pnpm run build:deps",
     "smoke": "tsx scripts/dispatch-smoke.ts",
+    "presmoke:aggregate": "pnpm run build:deps",
+    "smoke:aggregate": "tsx scripts/aggregate-smoke.ts",
+    "presmoke:aggregate:postgres-source": "pnpm run build:deps",
+    "smoke:aggregate:postgres-source": "tsx scripts/aggregate-smoke-postgres-source.ts",
     "smoke:write": "tsx scripts/write-smoke.ts",
     "smoke:write:mysql-mongo": "tsx scripts/write-smoke-mysql-mongo.ts",
     "smoke:chat": "tsx scripts/chat-smoke.ts",
@@ -18,7 +24,11 @@
     "bootstrap": "tsx scripts/dev-bootstrap.ts",
     "eval:golden": "tsx scripts/run-golden-eval.ts",
     "eval:golden:plan": "tsx scripts/run-plan-golden-eval.ts",
-    "kill-test": "tsx scripts/kill-test.ts"
+    "kill-test": "tsx scripts/kill-test.ts",
+    "preconformance:fixtures": "pnpm run build:deps",
+    "conformance:fixtures": "tsx scripts/ops-db-conformance.ts",
+    "preconformance:agreement": "pnpm run build:deps",
+    "conformance:agreement": "tsx scripts/ops-agreement.ts"
   },
   "dependencies": {
     "@langchain/core": "^0.3.40",

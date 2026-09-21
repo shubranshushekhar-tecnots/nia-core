@@ -9,6 +9,11 @@ export * from "./nodeConfig.js";
 export * from "./pushdown.js";
 export type { OpKind } from "./ops/types.js";
 export { OP_REGISTRY } from "./ops/registry.js";
+// Deliberately public (not just internal to this package's own tests):
+// Phase 8b-2a's apps/worker/scripts/ops-db-conformance.ts reuses this same
+// array for DB-execution assertions rather than duplicating fixture
+// authoring in a parallel array — see fixtures.ts's header comment.
+export { OP_FIXTURES, type OpFixture } from "./ops/__conformance__/fixtures.js";
 export * from "./residualTransform.js";
 export * from "./runEvents.js";
 export * from "./checks.js";

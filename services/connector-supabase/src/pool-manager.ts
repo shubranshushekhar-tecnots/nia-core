@@ -2,6 +2,26 @@ import pg from "pg";
 import { createClient } from "@supabase/supabase-js";
 import type { ConnectorConfig, CredentialRef } from "@nia/schemas";
 
+// Phase 8b-2, Fix 1 finding — node-postgres deliberately does NOT parse
+// NUMERIC/DECIMAL (OID 1700) to a JS number by default (unlike
+// DOUBLE PRECISION/OID 701, which it does parse), to avoid silent precision
+// loss for callers who need exact decimal semantics. But column-types.ts's
+// OID_TO_COLUMN_TYPE already declares OID 1700 -> ColumnType "number" — so
+// without this, any genuine customer `numeric`/`decimal` column (not just
+// pushdown's own CAST(... AS numeric), which sqlShared.ts's
+// castAmbiguousLiteral switched to from `double precision` specifically to
+// fix a bigint float64-collision false positive) would silently return
+// string values through a contract that already promises "number".
+// Registering this once, at module load (pg's type parser registry is
+// process-global), aligns runtime values with that pre-existing declared
+// contract. parseFloat, not a bigint-safe parser: OID 20 (int8/bigint) is a
+// separate OID, untouched here, and keeps its own existing string-return
+// behavior (see docs/decisions.md's Fix 1 entry for why bigint precision is
+// handled differently — an actual bigint value can exceed
+// Number.MAX_SAFE_INTEGER, which decimal-shaped numeric values from this
+// cast never do).
+pg.types.setTypeParser(1700, (val: string) => parseFloat(val));
+
 /**
  * Pool manager — warm connections keyed by `connectionId:credVersion`.
  * Lazy-created, idle-evicted, socket-capped so Nia never exhausts a
@@ -78,7 +98,7 @@ function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): 
   const poolPromise = (async () => {
     const { host, port, database, ssl } = parsePostgresConfig(config);
     const secret = await resolveVaultSecret(cred.vaultRef);
-    return new pg.Pool({
+    const pool = new pg.Pool({
       host,
       port,
       database,
@@ -87,6 +107,28 @@ function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): 
       max: POOL_LIMIT_PER_CONNECTION,
       ssl: ssl ? { rejectUnauthorized: false } : undefined,
     });
+    // Phase 8b-2, batch 5 — pin every physical connection's session
+    // timezone to UTC. EXTRACT(part FROM a timestamptz value) is directly
+    // sensitive to Postgres's session `timezone` GUC (confirmed live:
+    // identical stored instant gave a different HOUR depending on session
+    // tz) while a customer's actual server/container default is out of
+    // Nia's control and not guaranteed to be UTC. Without this, date-part
+    // pushdown results would silently vary by whatever tz the target
+    // Postgres happens to be configured with — the exact "collation
+    // problem" this batch's UTC-everywhere pin exists to close. Applied
+    // per-connection (pg's 'connect' event fires once per new physical
+    // socket the pool opens, not per query), so it's paid once, not
+    // per-query, and survives pool churn/reconnects automatically.
+    pool.on("connect", (client) => {
+      client.query("SET TIME ZONE 'UTC'").catch(() => {
+        // Best-effort: a role without SET privileges (unlikely, but not
+        // guaranteed for an arbitrary customer credential) shouldn't take
+        // the whole pool down — date-part pushdown for that connection
+        // would then inherit the server's default tz, a pre-existing
+        // condition this pin improves on everywhere it succeeds.
+      });
+    });
+    return pool;
   })();
   pools.set(key, { poolPromise, lastUsed: Date.now() });
   poolPromise.catch(() => {

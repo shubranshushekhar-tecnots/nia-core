@@ -65,8 +65,11 @@ describe("parseExpression", () => {
   });
 
   it("rejects a call to a function outside the grammar", () => {
-    const result = parseExpression("upper(name)");
-    // "upper" isn't in CALL_FNS, so it's parsed as a bare field ref, then the
+    // Phase 8b-2, batch 3: "upper" used to be this test's canonical
+    // out-of-grammar example, but it's now a real CALL_FNS member (Text
+    // core) — swapped to "shout", which remains outside the grammar.
+    const result = parseExpression("shout(name)");
+    // "shout" isn't in CALL_FNS, so it's parsed as a bare field ref, then the
     // leftover "(name)" is unparsed trailing input -> a parse error.
     expect(result.ok).toBe(false);
   });
@@ -106,5 +109,98 @@ describe("parseExpression", () => {
     if (result.ok) {
       expect(() => ExprSchema.parse(result.expr)).not.toThrow();
     }
+  });
+});
+
+describe("parseExpression — Math core call-fns (batch 1) arity", () => {
+  it("parses 1-arg math fns (abs/ceil/floor/sign/sqrt/int/trunc)", () => {
+    for (const fn of ["abs", "ceil", "floor", "sign", "sqrt", "int", "trunc"]) {
+      const result = parseExpression(`${fn}(amount)`);
+      expect(result).toEqual({ ok: true, expr: { kind: "call", fn, args: [{ kind: "field", name: "amount" }] } });
+    }
+  });
+
+  it("parses 2-arg math fns (mod/power/quotient/round_to_multiple)", () => {
+    for (const fn of ["mod", "power", "quotient", "round_to_multiple"]) {
+      const result = parseExpression(`${fn}(amount, 3)`);
+      expect(result).toEqual({
+        ok: true,
+        expr: { kind: "call", fn, args: [{ kind: "field", name: "amount" }, { kind: "literal", value: 3 }] },
+      });
+    }
+  });
+
+  it("parses divide() with 2 or 3 args (optional default-on-zero)", () => {
+    expect(parseExpression("divide(a, b)").ok).toBe(true);
+    expect(parseExpression("divide(a, b, 0)").ok).toBe(true);
+  });
+
+  it("parses round/round_up/round_down with an optional digits arg", () => {
+    for (const fn of ["round", "round_up", "round_down"]) {
+      expect(parseExpression(`${fn}(price)`).ok).toBe(true);
+      expect(parseExpression(`${fn}(price, 2)`).ok).toBe(true);
+    }
+  });
+
+  it("rejects wrong arity for 1-arg math fns", () => {
+    expect(parseExpression("abs(a, b)").ok).toBe(false);
+    expect(parseExpression("sqrt()").ok).toBe(false);
+  });
+
+  it("rejects wrong arity for 2-arg math fns", () => {
+    expect(parseExpression("mod(a)").ok).toBe(false);
+    expect(parseExpression("power(a, b, c)").ok).toBe(false);
+    expect(parseExpression("round_to_multiple(a)").ok).toBe(false);
+  });
+
+  it("rejects divide() with 0, 1, or 4 args", () => {
+    expect(parseExpression("divide()").ok).toBe(false);
+    expect(parseExpression("divide(a)").ok).toBe(false);
+    expect(parseExpression("divide(a, b, c, d)").ok).toBe(false);
+  });
+
+  it("rejects round() with more than 2 args", () => {
+    expect(parseExpression("round(a, 2, 3)").ok).toBe(false);
+  });
+
+  it("every math-fn parse also validates against ExprSchema", () => {
+    const result = parseExpression("round(divide(a, b, 0), 2)");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(() => ExprSchema.parse(result.expr)).not.toThrow();
+  });
+});
+
+describe("parseExpression — Math remainder call-fns (batch 2) arity", () => {
+  it("parses exp/ln as 1-arg", () => {
+    for (const fn of ["exp", "ln"]) {
+      const result = parseExpression(`${fn}(amount)`);
+      expect(result).toEqual({ ok: true, expr: { kind: "call", fn, args: [{ kind: "field", name: "amount" }] } });
+    }
+  });
+
+  it("parses log() with 1 arg (natural log) or 2 args (explicit base)", () => {
+    expect(parseExpression("log(amount)")).toEqual({
+      ok: true,
+      expr: { kind: "call", fn: "log", args: [{ kind: "field", name: "amount" }] },
+    });
+    expect(parseExpression("log(amount, 2)")).toEqual({
+      ok: true,
+      expr: { kind: "call", fn: "log", args: [{ kind: "field", name: "amount" }, { kind: "literal", value: 2 }] },
+    });
+  });
+
+  it("rejects wrong arity for exp/ln/log", () => {
+    expect(parseExpression("exp()").ok).toBe(false);
+    expect(parseExpression("exp(a, b)").ok).toBe(false);
+    expect(parseExpression("ln()").ok).toBe(false);
+    expect(parseExpression("ln(a, b)").ok).toBe(false);
+    expect(parseExpression("log()").ok).toBe(false);
+    expect(parseExpression("log(a, b, c)").ok).toBe(false);
+  });
+
+  it("every batch 2 math-fn parse also validates against ExprSchema", () => {
+    const result = parseExpression("log(exp(ln(amount)), 2)");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(() => ExprSchema.parse(result.expr)).not.toThrow();
   });
 });

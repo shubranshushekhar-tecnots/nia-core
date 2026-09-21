@@ -4,6 +4,7 @@ import { opForStep } from "./ops/registry.js";
 import { mysqlAdapter } from "./ops/dialects/mysql.js";
 import { postgresAdapter } from "./ops/dialects/postgres.js";
 import { mongoAdapter } from "./ops/dialects/mongo.js";
+import { createParamSink, resolveParamSink } from "./ops/paramSink.js";
 
 /**
  * Compiler pushdown v1 — pure, no I/O, importable by both apps/worker
@@ -135,7 +136,7 @@ function splitPushable(steps: TransformStep[], dialect: SourceDialect): { pushed
     }
     const op = opForStep(step);
     const prefixOk = op.pushdownPrefixRequirement ? op.pushdownPrefixRequirement(pushedKinds) : true;
-    if (!prefixOk || !op.isPushable(dialect)) {
+    if (!prefixOk || !op.isPushable(dialect, step)) {
       blocked = true;
       residual.push(step);
       continue;
@@ -151,14 +152,21 @@ function splitPushable(steps: TransformStep[], dialect: SourceDialect): { pushed
 
 function compileSql(steps: TransformStep[], dialect: SqlDialect): SqlDialectQuery {
   const adapter = sqlAdapterFor(dialect);
-  const params: unknown[] = [];
+  // Phase 8b-2 Follow-up 1 (arg(n)/params desync hardening — see
+  // ops/paramSink.ts's doc comment for the full story): every step's
+  // emitSql pushes its literals onto this ParamSink as opaque TOKENS, not
+  // real placeholders yet — resolveParamSink below is the ONE place,
+  // after every fragment is fully assembled, that swaps tokens for real
+  // placeholders, walked in REAL SQL clause/physical order rather than
+  // JS-call order.
+  const sink = createParamSink();
   const whereFragments: string[] = [];
   const selectFragments: string[] = [];
   let aggregateResult: { select: string[]; groupBy: string[] | null; having: string | null } | null = null;
 
   const ctx: SqlEmitContext = {
     adapter,
-    params,
+    params: sink,
     addWhere(fragment) {
       whereFragments.push(fragment);
     },
@@ -174,22 +182,31 @@ function compileSql(steps: TransformStep[], dialect: SqlDialect): SqlDialectQuer
     opForStep(step).emitSql?.(step, ctx);
   }
 
-  const whereSql = adapter.combineAnd(whereFragments);
+  const whereJoined = adapter.combineAnd(whereFragments);
 
   if (!aggregateResult) {
-    return { dialect, whereSql, selectSql: selectFragments.length ? selectFragments.join(", ") : null, params, isAggregate: false, groupBySql: null, havingSql: null };
+    const selectJoined = selectFragments.length ? selectFragments.join(", ") : null;
+    // Physical order matches queryBuilder.ts's real assembly: `SELECT *, <selectSql> FROM ... WHERE <whereSql>` — select before where.
+    const { resolved, params } = resolveParamSink(
+      sink,
+      [selectJoined, whereJoined] as [string | null, string | null],
+      adapter.placeholder,
+    );
+    const [selectSql, whereSql] = resolved;
+    return { dialect, whereSql, selectSql, params, isAggregate: false, groupBySql: null, havingSql: null };
   }
 
   const { select, groupBy, having } = aggregateResult as { select: string[]; groupBy: string[] | null; having: string | null };
-  return {
-    dialect,
-    whereSql,
-    selectSql: select.length ? select.join(", ") : null,
-    params,
-    isAggregate: true,
-    groupBySql: groupBy && groupBy.length ? groupBy.join(", ") : null,
-    havingSql: having,
-  };
+  const selectJoined = select.length ? select.join(", ") : null;
+  const groupByJoined = groupBy && groupBy.length ? groupBy.join(", ") : null;
+  // Physical order matches queryBuilder.ts's real assembly: `SELECT <selectSql> FROM ... WHERE <whereSql> GROUP BY <groupBySql> HAVING <havingSql>`.
+  const { resolved, params } = resolveParamSink(
+    sink,
+    [selectJoined, whereJoined, groupByJoined, having] as [string | null, string | null, string | null, string | null],
+    adapter.placeholder,
+  );
+  const [selectSql, whereSql, groupBySql, havingSql] = resolved;
+  return { dialect, whereSql, selectSql, params, isAggregate: true, groupBySql, havingSql };
 }
 
 // ---- Mongo compilation -------------------------------------------------

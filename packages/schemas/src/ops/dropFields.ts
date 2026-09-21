@@ -9,7 +9,7 @@ export const dropFieldsOp: OpModule<DropFieldsStepT> = {
     return { kind: "drop_fields", fields: [] };
   },
 
-  isPushable(dialect: SourceDialect) {
+  isPushable(dialect: SourceDialect, _step: DropFieldsStepT) {
     // Native field-exclusion projection ($project: {f: 0}) only exists in
     // Mongo's aggregation framework. Plain SQL has no "SELECT * EXCEPT
     // (col)" — expressing this would require enumerating every *kept*

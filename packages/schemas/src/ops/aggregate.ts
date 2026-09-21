@@ -1,6 +1,7 @@
 import { AggregateStep, type AggregateStep as AggregateStepT, type AggregationSpec, exprToConditions } from "../nodeConfig.js";
 import { collectFieldRefs, type Expr } from "../expression.js";
 import type { OpKind, OpModule, SqlEmitContext } from "./types.js";
+import { exprFnsPushable } from "./types.js";
 import { evalExpr } from "./residualEval.js";
 
 /**
@@ -72,12 +73,15 @@ export const aggregateOp: OpModule<AggregateStepT> = {
     return { kind: "aggregate", groupBy: [], aggregations: [] };
   },
 
-  isPushable() {
+  isPushable(dialect, step) {
     // GROUP BY / $group exist in all 3 dialects — always structurally
-    // pushable. pushdownPrefixRequirement/blocksFollowingPushdown below
-    // constrain WHERE an aggregate step may land in the pushed list, for
-    // reasons that have nothing to do with dialect support.
-    return true;
+    // pushable regardless of groupBy/aggregations content.
+    // pushdownPrefixRequirement/blocksFollowingPushdown below constrain
+    // WHERE an aggregate step may land in the pushed list, for reasons
+    // that have nothing to do with dialect support. `having`, if present,
+    // is the only Expr content this op carries — it may reference a
+    // call-fn that isn't pushable on `dialect`.
+    return step.having ? exprFnsPushable(step.having, dialect) : true;
   },
 
   pushdownPrefixRequirement(pushedKindsSoFar: OpKind[]) {

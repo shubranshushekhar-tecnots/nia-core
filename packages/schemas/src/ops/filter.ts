@@ -1,6 +1,7 @@
 import { FilterStep, type FilterStep as FilterStepT, exprToConditions } from "../nodeConfig.js";
 import { collectFieldRefs } from "../expression.js";
 import type { OpModule } from "./types.js";
+import { exprFnsPushable } from "./types.js";
 import { evalExpr } from "./residualEval.js";
 
 export const filterOp: OpModule<FilterStepT> = {
@@ -11,8 +12,8 @@ export const filterOp: OpModule<FilterStepT> = {
     return { kind: "filter", expr: { kind: "literal", value: true } };
   },
 
-  isPushable() {
-    return true;
+  isPushable(dialect, step) {
+    return exprFnsPushable(step.expr, dialect);
   },
 
   emitSql(step, ctx) {

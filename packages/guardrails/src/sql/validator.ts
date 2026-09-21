@@ -96,10 +96,31 @@ export function validateReadOnlySql(
 
   // Blocklist scan: no forbidden keyword may appear as a real (non-string,
   // non-comment, non-quoted-identifier) word token anywhere in the query.
-  for (const t of body) {
-    if (t.type === "word" && FORBIDDEN_KEYWORDS.has(t.value.toLowerCase())) {
-      return { ok: false, reason: `Forbidden keyword: ${t.value}` };
-    }
+  //
+  // "truncate" and "replace" are carved out when used as function calls
+  // (immediately followed by "("): MySQL's TRUNCATE(x, digits) is a real,
+  // harmless numeric function (packages/schemas's math-fn SQL emission
+  // relies on it) unrelated to the destructive TRUNCATE TABLE statement;
+  // MySQL's REPLACE(str, from, to) (Phase 8b-2 batch 3: found live via
+  // agreement-testing — packages/schemas's substitute()/split() text-fn SQL
+  // emission relies on it) is a read-only string function unrelated to the
+  // mutating REPLACE INTO statement. Neither destructive statement form can
+  // reach this branch anyway — the leading-keyword allowlist above already
+  // requires the query to start with SELECT/WITH, and the single-statement
+  // check rejects any `;`-separated second statement, so a bare
+  // "truncate"/"replace" appearing mid-body can only ever be an
+  // identifier/function-call use, never the DDL/DML statement. The
+  // `(`-follows guard keeps each carve-out narrow (a bare "truncate"/
+  // "replace" with no parens still trips the blocklist) rather than
+  // removing the keyword from FORBIDDEN_KEYWORDS outright.
+  const CALL_CARVE_OUTS = new Set(["truncate", "replace"]);
+  for (let i = 0; i < body.length; i++) {
+    const t = body[i]!;
+    if (t.type !== "word" || !FORBIDDEN_KEYWORDS.has(t.value.toLowerCase())) continue;
+    const isCallCarveOut =
+      CALL_CARVE_OUTS.has(t.value.toLowerCase()) && body[i + 1]?.type === "punct" && body[i + 1]?.value === "(";
+    if (isCallCarveOut) continue;
+    return { ok: false, reason: `Forbidden keyword: ${t.value}` };
   }
 
   // LIMIT enforcement: find a top-level (paren-depth 0) LIMIT keyword and
@@ -115,18 +136,51 @@ export function validateReadOnlySql(
     }
   }
 
-  // Naively joining every token with a single space breaks reconstruction
-  // wherever the tokenizer split something that isn't actually
-  // space-separated in real SQL: qualified identifiers (`t` `.` `id` must
-  // become `t.id`, not `t . id`) and decimal numeric literals (`3` `.`
-  // `14` must become `3.14`, not `3 . 14`, which is a different, invalid
-  // token sequence to the server).
+  // Reconstruct from significant tokens only, using each token's own
+  // SOURCE SPAN (sql.slice(t.start, t.end), not the (currently identical,
+  // but not contractually guaranteed) t.value) and joining by SOURCE
+  // ADJACENCY: no space between two tokens that were touching in the
+  // original input (prev.end === t.start), a single space wherever there
+  // was any gap (real whitespace, or a comment — both were filtered out
+  // of `significant()` above, so a gap here just means "something sat
+  // between these two tokens in the source and it wasn't itself a
+  // significant token").
+  //
+  // This subsumes what used to be a hand-maintained MULTI_CHAR_OPERATORS
+  // allowlist (`<>`, `!=`, `<=`, `>=`, `~*`, `||`, ...) that had already
+  // missed two real, live-reachable operators once (Phase 8b-2 batch 6:
+  // `~*`/`||` were corrupted into invalid SQL — `~ *`, `| |` — before
+  // being added to the list by hand). Adjacency makes the whole class of
+  // "tokenizer splits an operator the source never split" bugs
+  // structurally unreachable: ANY two tokens that were adjacent in the
+  // input come back out adjacent, with no per-operator allowlist to keep
+  // up to date. This also naturally handles qualified identifiers
+  // (`t`.`id`) and decimal literals (`3`.`14`) the same way the old
+  // explicit `.`/`,` special-casing did — those tokens are adjacent in
+  // real SQL, so they stay adjacent here too, with no special-casing
+  // needed at all.
+  //
+  // Comment-stripping is the actual security invariant this whole
+  // function exists to preserve, and it still holds: `significant()`
+  // already dropped every comment token before `body`/`before`/`after`
+  // were built, so a comment's span is never sliced out of `sql` and
+  // never appears in the reconstructed text — including MySQL's
+  // executable `/*! ... */` version-conditional syntax and `/*+ ... */`
+  // optimizer hints (both tokenize as ordinary block comments here, and
+  // this validator's own header already discloses that MySQL itself does
+  // NOT treat `/*! ... */` as inert — see that disclaimer for the
+  // still-open gap in the keyword *scan*). The one thing this function
+  // must never regress to is slicing a contiguous range of the ORIGINAL
+  // string spanning a comment (that would silently resurrect whatever
+  // the comment contained, character-for-character, as live SQL sent to
+  // the server) — it only ever concatenates per-significant-token spans,
+  // never a single larger span that could straddle a dropped token.
   const bodyText = (tks: Token[]) =>
     tks.reduce((out, t, i) => {
-      if (i === 0) return t.value;
+      const text = sql.slice(t.start, t.end);
+      if (i === 0) return text;
       const prev = tks[i - 1]!;
-      const noSpace = t.value === "." || prev.value === "." || t.value === "," || t.value === ";";
-      return noSpace ? `${out}${t.value}` : `${out} ${t.value}`;
+      return prev.end === t.start ? `${out}${text}` : `${out} ${text}`;
     }, "");
 
   if (limitIdx === -1) {

@@ -1,5 +1,6 @@
 import { ComputedFieldStep, type ComputedFieldStep as ComputedFieldStepT } from "../nodeConfig.js";
 import type { OpModule } from "./types.js";
+import { exprFnsPushable } from "./types.js";
 import { evalExpr } from "./residualEval.js";
 
 export const computedFieldOp: OpModule<ComputedFieldStepT> = {
@@ -10,8 +11,8 @@ export const computedFieldOp: OpModule<ComputedFieldStepT> = {
     return { kind: "computed_field", name: "", expression: { kind: "literal", value: "" } };
   },
 
-  isPushable() {
-    return true;
+  isPushable(dialect, step) {
+    return exprFnsPushable(step.expression, dialect);
   },
 
   emitSql(step, ctx) {

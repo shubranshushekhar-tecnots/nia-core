@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { compilePushdown, manifestDialect, transformOutputFields } from "./pushdown.js";
 import type { TransformConfig } from "./nodeConfig.js";
 import { parseExpression } from "./expression.js";
+import { PARAM_TOKEN_CHAR } from "./ops/paramSink.js";
 
 function expr(src: string) {
   const parsed = parseExpression(src);
@@ -15,6 +16,10 @@ function q(dialect: "mysql" | "postgres", name: string): string {
 }
 function ph(dialect: "mysql" | "postgres", n: number): string {
   return dialect === "mysql" ? "?" : `$${n}`;
+}
+/** Phase 8b-2, batch 0 Fix 1/2: a string-literal placeholder on mysql is forced BINARY (collation-independent comparison); postgres is unaffected. */
+function phStr(dialect: "mysql" | "postgres", n: number): string {
+  return dialect === "mysql" ? `BINARY ${ph(dialect, n)}` : ph(dialect, n);
 }
 
 describe("manifestDialect", () => {
@@ -58,7 +63,7 @@ describe("compilePushdown — filter, both SQL dialects", () => {
     expect(plan.residualCount).toBe(0);
     expect(plan.dialectQuery).toEqual({
       dialect: "mysql",
-      whereSql: "(`age` > ?) AND (`name` = ?)",
+      whereSql: "(`age` > ?) AND (`name` = BINARY ?)",
       selectSql: null,
       params: [30, "Ada"],
       isAggregate: false,
@@ -89,12 +94,12 @@ describe("compilePushdown — filter, both SQL dialects", () => {
     });
   });
 
-  it("contains -> LIKE %..% (sql) / escaped $regex (mongo)", () => {
+  it("contains -> LIKE BINARY %..% (sql, case-sensitive default, Phase 8b-2b Fix 4) / escaped $regex no options (mongo)", () => {
     const containsConfig: TransformConfig = { steps: [{ kind: "filter", expr: expr('contains(email, "a.b+c")') }] };
     const mysqlPlan = compilePushdown("mysql", containsConfig);
     expect(mysqlPlan.dialectQuery).toEqual({
       dialect: "mysql",
-      whereSql: "(`email` LIKE ?)",
+      whereSql: "((`email` LIKE BINARY ?))",
       selectSql: null,
       params: ["%a.b+c%"],
       isAggregate: false,
@@ -105,7 +110,7 @@ describe("compilePushdown — filter, both SQL dialects", () => {
     const mongoPlan = compilePushdown("mongo", containsConfig);
     expect(mongoPlan.dialectQuery).toEqual({
       dialect: "mongo",
-      pipeline: [{ $match: { email: { $regex: "a\\.b\\+c", $options: "i" } } }],
+      pipeline: [{ $match: { email: { $regex: "a\\.b\\+c" } } }],
       isAggregate: false,
     });
   });
@@ -246,6 +251,45 @@ describe("compilePushdown — injection-shaped identifiers", () => {
 });
 
 /**
+ * Follow-up 1 Condition 1/2 (docs/decisions.md, ParamSink hardening): a
+ * customer-controlled field name must never be able to smuggle a
+ * ParamSink token (PARAM_TOKEN_CHAR, a NUL byte) into emitted SQL text —
+ * that would let a forged/collided token bind a value to the wrong
+ * placeholder, or worse, let resolveParamSink's exactly-once check pass
+ * on attacker-controlled text. quoteIdent (sqlShared.ts) rejects it
+ * outright rather than trying to escape it.
+ */
+describe("compilePushdown — ParamSink token hardening (Follow-up 1)", () => {
+  it("throws instead of quoting a field name containing the ParamSink token character", () => {
+    const config: TransformConfig = {
+      steps: [
+        {
+          kind: "filter",
+          expr: { kind: "comparison", op: "eq", left: { kind: "field", name: `evil${PARAM_TOKEN_CHAR}0${PARAM_TOKEN_CHAR}` }, right: { kind: "literal", value: 1 } },
+        },
+      ],
+    };
+    expect(() => compilePushdown("mysql", config)).toThrow(/reserved ParamSink token character/);
+    expect(() => compilePushdown("postgres", config)).toThrow(/reserved ParamSink token character/);
+  });
+
+  it("never leaves a ParamSink token in resolved SQL text (resolution completes inside compileSql, before guardrails ever sees it)", () => {
+    const config: TransformConfig = {
+      steps: [
+        { kind: "filter", expr: expr("age > 5") },
+        { kind: "computed_field", name: "rounded", expression: expr("round(price, 2)") },
+      ],
+    };
+    for (const dialect of ["mysql", "postgres"] as const) {
+      const plan = compilePushdown(dialect, config);
+      const q = plan.dialectQuery as { whereSql: string | null; selectSql: string | null };
+      expect(q.whereSql ?? "").not.toContain(PARAM_TOKEN_CHAR);
+      expect(q.selectSql ?? "").not.toContain(PARAM_TOKEN_CHAR);
+    }
+  });
+});
+
+/**
  * Parametrized across both SQL dialects so every aggregate case is proven
  * identically for mysql AND postgres (addendum, docs/decisions.md Block 6):
  * the compiler's dialect axis is ONE generic SQL emitter (compileSql,
@@ -351,7 +395,7 @@ describe.each(["mysql", "postgres"] as const)("compilePushdown — aggregate, SQ
       ],
     };
     const plan = compilePushdown(dialect, config);
-    expect(plan.dialectQuery).toMatchObject({ havingSql: `(${q(dialect, "cohort")} <> ${ph(dialect, 1)})`, params: ["unassigned"] });
+    expect(plan.dialectQuery).toMatchObject({ havingSql: `(${q(dialect, "cohort")} <> ${phStr(dialect, 1)})`, params: ["unassigned"] });
   });
 
   it("a computed_field ahead of the aggregate blocks the aggregate into residual too (v1: no subquery layering)", () => {

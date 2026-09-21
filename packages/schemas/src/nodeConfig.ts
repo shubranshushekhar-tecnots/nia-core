@@ -137,6 +137,11 @@ export const FilterCondition = z.object({
   field: z.string(),
   operator: FilterOperator,
   value: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  /** Only meaningful for operator: "contains". Phase 8b-2b: `contains` is
+   * case-SENSITIVE by default (predictable, doesn't vary by column
+   * collation) — absent/false means the default; true opts into a
+   * case-insensitive match. */
+  caseInsensitive: z.boolean().optional(),
 });
 export type FilterCondition = z.infer<typeof FilterCondition>;
 
@@ -154,8 +159,11 @@ function toComparisonExpr(cond: FilterCondition): Expr {
       return { kind: "call", fn: "is_null", args: [field] };
     case "is_not_null":
       return { kind: "call", fn: "is_not_null", args: [field] };
-    case "contains":
-      return { kind: "call", fn: "contains", args: [field, { kind: "literal", value: String(cond.value ?? "") }] };
+    case "contains": {
+      const args: Expr[] = [field, { kind: "literal", value: String(cond.value ?? "") }];
+      if (cond.caseInsensitive) args.push({ kind: "literal", value: true });
+      return { kind: "call", fn: "contains", args };
+    }
     default: {
       const opMap: Record<"eq" | "neq" | "gt" | "gte" | "lt" | "lte", Extract<Expr, { kind: "comparison" }>["op"]> = {
         eq: "eq",
@@ -221,8 +229,15 @@ export function exprToConditions(expr: Expr): FilterCondition[] | null {
       continue;
     }
     if (node.kind === "call" && node.fn === "contains" && node.args[0]?.kind === "field" && node.args[1]?.kind === "literal") {
-      out.push({ field: node.args[0].name, operator: "contains", value: node.args[1].value });
-      continue;
+      if (node.args.length === 2) {
+        out.push({ field: node.args[0].name, operator: "contains", value: node.args[1].value });
+        continue;
+      }
+      if (node.args.length === 3 && node.args[2]?.kind === "literal" && typeof node.args[2].value === "boolean") {
+        out.push({ field: node.args[0].name, operator: "contains", value: node.args[1].value, caseInsensitive: node.args[2].value });
+        continue;
+      }
+      return null;
     }
     return null;
   }
