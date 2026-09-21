@@ -29,12 +29,22 @@ import { resolveGraph } from "../checks/runWorkflowChecks.js";
 import { resolveConnection } from "../resolveConnection.js";
 import { getSchema } from "../introspection.js";
 import { dispatch } from "../dispatch.js";
-import { dispatchWrite } from "../writeDispatch.js";
 import { findSourcePath } from "../preview/runPreview.js";
 import { buildEtlReadQuery, buildFailurePreCheckQuery, MAX_CHUNK_ROWS } from "./queryBuilder.js";
 import { startRun, recordChunkProgress, finishRun, getRunCheckpoint } from "./workflowRuns.js";
 import { publishRunEvent } from "./publish.js";
 import type { WorkspaceScope } from "../workspaceScope.js";
+import {
+  resolveStagedWriteTarget,
+  runPreflight,
+  ensureStaging,
+  writeChunkRows,
+  writeQuarantineRows,
+  applyStaging,
+  dropStaging,
+  lastStepForAssertions,
+  type StagedWriteTarget,
+} from "./stagedWrite.js";
 
 /**
  * Block 3.5: keyset cursor — the last key value read so far, or null before
@@ -151,6 +161,8 @@ async function runStatefulResidual(args: {
   destConnectionId: string;
   /** Phase 9 Part 4 — already-computed pushed-step pre-check counts (see the caller's own doc comment on the pre-check block). This function always completes within one invocation (its own doc comment), so these are simply concatenated into the "done" event's failures, unconditionally. */
   pushedPreCheckFailures: StepFailureReport[];
+  /** Phase 11 — computed once by the caller (resolveStagedWriteTarget), before either branch is chosen, so a run can never straddle staged/direct mid-flight. */
+  stagedTarget: StagedWriteTarget;
 }): Promise<RunEtlResult> {
   const {
     scope,
@@ -167,7 +179,14 @@ async function runStatefulResidual(args: {
     destConfig,
     destConnectionId,
     pushedPreCheckFailures,
+    stagedTarget,
   } = args;
+
+  const mappedDestColumns = mapping.entries.map((e) => e.to);
+  const failStaged = (message: string): Promise<RunEtlResult> =>
+    dropStaging(destConnectionId, stagedTarget, destConfig, mappedDestColumns, scope, job.triggeredByUserId, job.runId)
+      .catch(() => undefined)
+      .then(() => fail(scope, job.runId, job.nodeId, message));
 
   const acc = opForStep(statefulStep).createAccumulator!(statefulStep);
   const cap = residualGroupCap();
@@ -199,7 +218,7 @@ async function runStatefulResidual(args: {
     const dialectQuery = compilePushdown(dialect, cursorPushdownConfig, cursorCondition).dialectQuery;
     const query = buildEtlReadQuery(dialect, entity, dialectQuery, dialect === "mongo" ? undefined : keyColumn, lastKey, requestedLimit);
     const result = await dispatch(sourceConnectionId, query, scope, job.triggeredByUserId, { rowCap: requestedLimit });
-    if (!result.ok) return fail(scope, job.runId, job.nodeId, `Source read failed: ${result.error.message}`);
+    if (!result.ok) return failStaged(`Source read failed: ${result.error.message}`);
 
     const sourceRowsFetched = result.value.rows.length;
     totalRowsRead += sourceRowsFetched;
@@ -219,17 +238,14 @@ async function runStatefulResidual(args: {
           preSteps,
         ));
       } catch (err) {
-        if (err instanceof OnFailureAbortError) return fail(scope, job.runId, job.nodeId, err.message);
+        if (err instanceof OnFailureAbortError) return failStaged(err.message);
         throw err;
       }
       preFailures = mergeFailureReports(preFailures, chunkFailures);
       acc.feed(rowsToObjects(chunkColumns, chunkRows));
 
       if (acc.size() > cap) {
-        return fail(
-          scope,
-          job.runId,
-          job.nodeId,
+        return failStaged(
           `Residual aggregate exceeded the ${cap}-group cap (set RESIDUAL_GROUP_CAP to raise it) — refine the group-by to produce fewer groups.`,
         );
       }
@@ -280,7 +296,7 @@ async function runStatefulResidual(args: {
       finalFailures = mergeFailureReports(finalFailures, post.failures);
     }
   } catch (err) {
-    if (err instanceof OnFailureAbortError) return fail(scope, job.runId, job.nodeId, err.message);
+    if (err instanceof OnFailureAbortError) return failStaged(err.message);
     throw err;
   }
 
@@ -288,22 +304,60 @@ async function runStatefulResidual(args: {
   const indices = mapping.entries.map((e) => finalColumns.indexOf(e.from));
   const missing = mapping.entries.find((_, i) => indices[i] === -1);
   if (missing) {
-    return fail(scope, job.runId, job.nodeId, `Mapping references field "${missing.from}" not present after transforms.`);
+    return failStaged(`Mapping references field "${missing.from}" not present after transforms.`);
   }
   const mappedColumns = mapping.entries.map((e) => e.to);
   const mappedRows = finalRowsArr.map((row) => indices.map((i) => row[i] ?? null));
 
   let rowsWritten = 0;
   if (mappedRows.length > 0) {
-    const writeResult = await dispatchWrite(
+    const writeResult = await writeChunkRows(
       destConnectionId,
-      { entity: destConfig.entity as WriteEntityRef, columns: mappedColumns, rows: mappedRows, upsertKeys: destConfig.upsertKeys! },
+      stagedTarget,
+      destConfig,
+      mappedColumns,
+      mappedRows,
       scope,
       job.triggeredByUserId,
+      job.runId,
     );
-    if (!writeResult.ok) return fail(scope, job.runId, job.nodeId, `Destination write failed: ${writeResult.error.message}`);
+    if (!writeResult.ok) return failStaged(`Destination write failed: ${writeResult.error.message}`);
     rowsWritten = writeResult.value.written;
   }
+
+  // Phase 11: quarantine rows are written (status 'pending') before apply —
+  // the apply transaction (below) is what marks them committed, or a
+  // terminal failure here leaves them for dropStaging/the sweeper. No-op
+  // in direct mode (writeQuarantineRows returns {written:0} immediately).
+  const quarantineResult = await writeQuarantineRows(
+    destConnectionId,
+    stagedTarget,
+    job.runId,
+    destConfig.entity as WriteEntityRef,
+    finalFailures,
+    scope,
+    job.triggeredByUserId,
+  );
+  if (!quarantineResult.ok) return failStaged(`Quarantine write failed: ${quarantineResult.error.message}`);
+
+  // Phase 11: staging apply (assertions + atomic swap into destination),
+  // then drop staging unconditionally — on success or failure alike (plan:
+  // "Drop staging after a successful apply and on terminal failure").
+  const lastStep = lastStepForAssertions(postSteps, [statefulStep]);
+  const applyResult = await applyStaging(
+    destConnectionId,
+    stagedTarget,
+    destConfig,
+    mappedDestColumns,
+    lastStep,
+    scope,
+    job.triggeredByUserId,
+    job.runId,
+  );
+  await dropStaging(destConnectionId, stagedTarget, destConfig, mappedDestColumns, scope, job.triggeredByUserId, job.runId).catch(
+    () => undefined,
+  );
+  if (!applyResult.ok) return fail(scope, job.runId, job.nodeId, applyResult.message);
 
   // No meaningful cursor for a completed stateful run — see this
   // function's doc comment (resume always restarts from the beginning).
@@ -385,17 +439,46 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     return fail(scope, job.runId, job.nodeId, "Destination has no upsert key(s) selected yet.");
   }
 
+  // Phase 11: computed once per run, before any extraction — `stagedTarget`
+  // is derived deterministically from job.runId, so a resumed job's later
+  // invocations recompute the exact same staging/quarantine entities as the
+  // first. `failStaged` below is only used for failures from this point
+  // onward (staging may already exist by then); the checks above (workflow/
+  // destination/mapping/upsertKeys missing) intentionally stay plain
+  // `fail()` — nothing to drop yet.
+  const destColumns = mapping.entries.map((e) => e.to);
+  const stagedTarget = resolveStagedWriteTarget(job.runId, destConfig);
+  const failStaged = (message: string): Promise<RunEtlResult> =>
+    dropStaging(dest.connectionId!, stagedTarget, destConfig, destColumns, scope, job.triggeredByUserId, job.runId)
+      .catch(() => undefined)
+      .then(() => fail(scope, job.runId, job.nodeId, message));
+
+  if (job.cursor === null && stagedTarget.mode === "staged") {
+    const preflight = await runPreflight(dest.connectionId, destConfig, scope);
+    if (!preflight.ok) return fail(scope, job.runId, job.nodeId, preflight.message);
+    const staging = await ensureStaging(
+      dest.connectionId,
+      stagedTarget,
+      destConfig,
+      destColumns,
+      scope,
+      job.triggeredByUserId,
+      job.runId,
+    );
+    if (!staging.ok) return fail(scope, job.runId, job.nodeId, staging.message);
+  }
+
   const path = findSourcePath(dest.id, graph);
   const sourceConnectionId = path?.source.connectionId;
   if (!path || !sourceConnectionId) {
-    return fail(scope, job.runId, job.nodeId, "Destination node has no upstream source node with a connection selected.");
+    return failStaged("Destination node has no upstream source node with a connection selected.");
   }
   const { source, transforms } = path;
 
   const resolvedSource = await resolveConnection(sourceConnectionId, scope);
-  if (!resolvedSource.ok) return fail(scope, job.runId, job.nodeId, `Source connection: ${resolvedSource.error.message}`);
+  if (!resolvedSource.ok) return failStaged(`Source connection: ${resolvedSource.error.message}`);
   const sourceSchema = await getSchema(resolvedSource.value);
-  if (!sourceSchema.ok) return fail(scope, job.runId, job.nodeId, `Source schema: ${sourceSchema.error.message}`);
+  if (!sourceSchema.ok) return failStaged(`Source schema: ${sourceSchema.error.message}`);
 
   const parsedSource = parseNodeConfig(source.type, source.config);
   const persistedEntity = !parsedSource.unrecognized && parsedSource.type !== "transform" ? parsedSource.value.entity : undefined;
@@ -409,18 +492,18 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   // findPersistedEntity/resolveSourceEntity below even run, so a run never
   // silently succeeds against an inferred table the user never picked.
   if (!persistedEntity) {
-    return fail(scope, job.runId, job.nodeId, `Source node "${source.id}" has no target table/collection selected yet.`);
+    return failStaged(`Source node "${source.id}" has no target table/collection selected yet.`);
   }
   let entity = findPersistedEntity(sourceSchema.value, persistedEntity);
   if (!entity) {
     const entityResult = resolveSourceEntity(sourceSchema.value, mapping.entries.map((e) => e.from));
-    if (!entityResult.ok) return fail(scope, job.runId, job.nodeId, entityResult.message);
+    if (!entityResult.ok) return failStaged(entityResult.message);
     entity = entityResult.entity;
   }
 
   const dialect = manifestDialect(source.manifestId);
   if (!dialect) {
-    return fail(scope, job.runId, job.nodeId, `Source connector "${source.manifestId ?? "unknown"}" has no supported query dialect.`);
+    return failStaged(`Source connector "${source.manifestId ?? "unknown"}" has no supported query dialect.`);
   }
 
   // Same >1-transform-node degrade-to-residual boundary as runPreview.ts's
@@ -467,10 +550,7 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   // dialects. Mirrors the upsertKeys-missing precondition above. Skipped
   // entirely for an aggregate pushdown (Block 6) — see isAggregatePushdown.
   if (dialect !== "mongo" && !entity.primaryKey && !isAggregatePushdown) {
-    return fail(
-      scope,
-      job.runId,
-      job.nodeId,
+    return failStaged(
       `Source table "${entity.namespace}.${entity.name}" has no single-column primary/unique key — the ETL runner requires one for reliable pagination. Add a primary key (or a unique constraint on one column) to this table to run this workflow.`,
     );
   }
@@ -506,12 +586,12 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       const preCheckQuery = buildFailurePreCheckQuery(dialect, entity, check.dialectQuery);
       const preCheckResult = await dispatch(sourceConnectionId, preCheckQuery, scope, job.triggeredByUserId, { rowCap: 1 });
       if (!preCheckResult.ok) {
-        return fail(scope, job.runId, job.nodeId, `Failure pre-check for ${check.label} failed: ${preCheckResult.error.message}`);
+        return failStaged(`Failure pre-check for ${check.label} failed: ${preCheckResult.error.message}`);
       }
       const raw = preCheckResult.value.rows[0]?.[0];
       const count = typeof raw === "number" ? raw : Number(raw ?? 0);
       if (check.policy === "fail" && count > 0) {
-        return fail(scope, job.runId, job.nodeId, `${check.label}: ${check.fns.join(", ")} failed on ${count} row(s).`);
+        return failStaged(`${check.label}: ${check.fns.join(", ")} failed on ${count} row(s).`);
       }
       pushedPreCheckFailures.push({ label: check.label, fns: check.fns, policy: check.policy, count });
     }
@@ -544,6 +624,7 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       destConfig,
       destConnectionId: dest.connectionId!,
       pushedPreCheckFailures,
+      stagedTarget,
     });
   }
 
@@ -579,7 +660,7 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   const query = buildEtlReadQuery(dialect, entity, dialectQuery, dialect === "mongo" ? undefined : keyColumn, lastKey, requestedLimit);
 
   const result = await dispatch(sourceConnectionId, query, scope, job.triggeredByUserId, { rowCap: requestedLimit });
-  if (!result.ok) return fail(scope, job.runId, job.nodeId, `Source read failed: ${result.error.message}`);
+  if (!result.ok) return failStaged(`Source read failed: ${result.error.message}`);
 
   const sourceRowsFetched = result.value.rows.length;
 
@@ -641,7 +722,7 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     ));
   } catch (err) {
     if (err instanceof OnFailureAbortError) {
-      return fail(scope, job.runId, job.nodeId, err.message);
+      return failStaged(err.message);
     }
     throw err;
   }
@@ -649,22 +730,41 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   const indices = mapping.entries.map((e) => residualColumns.indexOf(e.from));
   const missing = mapping.entries.find((_, i) => indices[i] === -1);
   if (missing) {
-    return fail(scope, job.runId, job.nodeId, `Mapping references field "${missing.from}" not present after transforms.`);
+    return failStaged(`Mapping references field "${missing.from}" not present after transforms.`);
   }
   const finalColumns = mapping.entries.map((e) => e.to);
   const finalRows = residualRows.map((row) => indices.map((i) => row[i] ?? null));
 
   let rowsWritten = 0;
   if (finalRows.length > 0) {
-    const writeResult = await dispatchWrite(
+    const writeResult = await writeChunkRows(
       dest.connectionId,
-      { entity: destConfig.entity as WriteEntityRef, columns: finalColumns, rows: finalRows, upsertKeys: destConfig.upsertKeys },
+      stagedTarget,
+      destConfig,
+      finalColumns,
+      finalRows,
       scope,
       job.triggeredByUserId,
+      job.runId,
     );
-    if (!writeResult.ok) return fail(scope, job.runId, job.nodeId, `Destination write failed: ${writeResult.error.message}`);
+    if (!writeResult.ok) return failStaged(`Destination write failed: ${writeResult.error.message}`);
     rowsWritten = writeResult.value.written;
   }
+
+  // Phase 11: quarantine rows for this chunk (staged mode only; a no-op in
+  // direct mode) — written per chunk, same as the staging data rows, since
+  // each chunk is a separate job invocation and residualFailures is
+  // chunk-scoped. Apply/drop (below) only happens once, on the last chunk.
+  const quarantineResult = await writeQuarantineRows(
+    dest.connectionId,
+    stagedTarget,
+    job.runId,
+    destConfig.entity as WriteEntityRef,
+    residualFailures,
+    scope,
+    job.triggeredByUserId,
+  );
+  if (!quarantineResult.ok) return failStaged(`Quarantine write failed: ${quarantineResult.error.message}`);
 
   const totalRowsProcessed = await recordChunkProgress(
     job.runId,
@@ -682,6 +782,25 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   const isLastChunk = sourceRowsFetched < requestedLimit;
 
   if (isLastChunk) {
+    // Phase 11: staging apply (assertions + atomic swap), then drop
+    // unconditionally — same "apply, then always drop" shape as the
+    // stateful path. No-op in direct mode.
+    const lastStep = lastStepForAssertions(residualSteps, []);
+    const applyResult = await applyStaging(
+      dest.connectionId,
+      stagedTarget,
+      destConfig,
+      destColumns,
+      lastStep,
+      scope,
+      job.triggeredByUserId,
+      job.runId,
+    );
+    await dropStaging(dest.connectionId, stagedTarget, destConfig, destColumns, scope, job.triggeredByUserId, job.runId).catch(
+      () => undefined,
+    );
+    if (!applyResult.ok) return fail(scope, job.runId, job.nodeId, applyResult.message);
+
     const durationMs = await finishRun(job.runId, "succeeded");
     // Phase 9 Part 4: pushedPreCheckFailures is only ever non-empty when
     // job.cursor was null AND this is that same invocation — i.e. exactly

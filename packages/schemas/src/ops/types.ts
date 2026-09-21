@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { AssertionSpec } from "../contract.js";
 import type { CallFn, Expr } from "../expression.js";
 import { collectCallFns } from "../expression.js";
 import type {
@@ -223,7 +224,8 @@ export interface MongoDialectAdapter {
   combineAnd(clauses: Record<string, unknown>[]): Record<string, unknown> | null;
 }
 
-// ---- Failure reporting (Phase 8b-3; pushed pre-checks added Phase 9 Part 4) --
+// ---- Failure reporting (Phase 8b-3; pushed pre-checks added Phase 9 Part 4;
+// quarantine row capture added Phase 11) --------------------------------
 //
 // "quarantine" is always forced residual whenever a step's expression
 // actually contains a fallible call (expression.ts's FALLIBLE_CALL_FNS) —
@@ -233,12 +235,30 @@ export interface MongoDialectAdapter {
 // abort-before-any-write guarantee and "null"/"drop" their failure counts
 // without needing a flag column walked row-by-row.
 
+/**
+ * One quarantined row (Phase 11), attributing a residual "quarantine"
+ * failure to the specific fallible call/input that produced it —
+ * onFailure.ts's findFailingCall builds these. `sourceRow` is the FULL row
+ * as it existed when the step ran (pre-transform), matching the plan's
+ * "source row (JSON)" quarantine table column; runEtl.ts is responsible for
+ * truncating `inputValue`/`sourceRow` before persisting and for enforcing
+ * the run-wide 100,000-row cap — this type carries no truncation/cap logic
+ * itself, since a single op module only ever sees one step's data.
+ */
+export interface QuarantinedRow {
+  fn: CallFn;
+  inputValue: unknown;
+  sourceRow: Record<string, unknown>;
+}
+
 export interface StepFailureReport {
   /** Human-readable step identity for the abort error, e.g. `computed_field "discount"`. */
   label: string;
   fns: CallFn[];
   policy: OnFailurePolicy;
   count: number;
+  /** Present only when `policy === "quarantine"` and `count > 0` — one entry per failing row, in row order. */
+  quarantinedRows?: QuarantinedRow[];
 }
 
 // ---- Emit contexts (per-node accumulation, built by the orchestrator) ---
@@ -381,4 +401,17 @@ export interface OpModule<TStep extends TransformStep = TransformStep> {
    * node/index context, same division as today.
    */
   checkConfig?(step: TStep, ctx: { index: number }): string[];
+
+  /**
+   * Phase 11 Block 2E — post-assertions this op wants run against staging
+   * before apply, beyond the `noNullKeys` (on upsertKeys) the worker always
+   * adds itself. Absent = none. Today only aggregate implements this
+   * (`{kind: "uniqueColumns", columns: step.groupBy}` — a graph whose last
+   * pushed/residual step is an aggregate must produce distinct groups in
+   * staging, since its own destination write always upserts/replaces by
+   * that same groupBy). runEtl.ts collects these only from the LAST step in
+   * the graph (staging holds that step's output shape, not an intermediate
+   * one).
+   */
+  stagingAssertions?(step: TStep): AssertionSpec[];
 }

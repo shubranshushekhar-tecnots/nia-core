@@ -17,6 +17,8 @@ import { shutdownLangfuse } from "./lib/observability/langfuse.js";
 import { runEtl } from "./lib/etl/runEtl.js";
 import { runPlanPropose } from "./lib/plan/runPlanPropose.js";
 import { profileEntity } from "./lib/profile/profileEntity.js";
+import { registerStagingSweepSchedule } from "./lib/etl/stagingSweepSchedule.js";
+import { sweepStaleStaging } from "./lib/etl/stagingSweeper.js";
 
 /**
  * Nia worker — the execution spine.
@@ -147,6 +149,17 @@ const heavy = new Worker(
         );
         return { status: "ok", summary: report.summary };
       }
+      case "staging_sweep": {
+        // Phase 11 item 12 — backstop cleanup for staging_objects rows a
+        // run's own dropStaging call missed (crash, stuck redelivery, etc).
+        // See lib/etl/stagingSweeper.ts's header comment.
+        console.log("[heavy] staging_sweep: sweeping stale staging_objects rows");
+        const result = await sweepStaleStaging();
+        console.log(
+          `[heavy] staging_sweep: swept ${result.swept}, skipped ${result.skipped}, failed ${result.failed}`,
+        );
+        return result;
+      }
     }
   },
   // maxStalledCount: 5 — BullMQ's own default is 1, meaning a job is
@@ -167,6 +180,8 @@ const heavy = new Worker(
 // schedulerId), so restarting the worker never creates duplicate repeatable
 // jobs. See lib/eval/schedule.ts.
 await registerNightlyEvalSchedule(heavyQueue);
+// Same idempotent-at-boot pattern — see lib/etl/stagingSweepSchedule.ts.
+await registerStagingSweepSchedule(heavyQueue);
 
 for (const w of [interactive, heavy]) {
   w.on("failed", (job, err) =>

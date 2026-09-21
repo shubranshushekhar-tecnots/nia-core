@@ -17,11 +17,11 @@ let instanceCount = 0;
 function MockPool(options: { max?: number; ssl?: unknown }) {
   instanceCount++;
   constructedOptions.push(options);
-  return { end: endMock, query: vi.fn() };
+  return { end: endMock, query: vi.fn(), on: vi.fn() };
 }
 
 vi.mock("pg", () => ({
-  default: { Pool: MockPool },
+  default: { Pool: MockPool, types: { setTypeParser: vi.fn() } },
 }));
 
 const config: ConnectorConfig = { host: "localhost", port: 5432, database: "testdb" };

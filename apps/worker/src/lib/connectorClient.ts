@@ -1,7 +1,21 @@
-import type { ConnectorConfig, ConnectorManifest, CredentialRef, IntrospectResponse, TestResponse, WriteRequest, WriteResponse } from "@nia/schemas";
+import type {
+  ConnectorConfig,
+  ConnectorManifest,
+  CredentialRef,
+  IntrospectResponse,
+  PreflightRequest,
+  PreflightResponse,
+  StageRequest,
+  StageResponse,
+  TestResponse,
+  WriteRequest,
+  WriteResponse,
+} from "@nia/schemas";
 import {
   ExecuteResponse,
   IntrospectResponse as IntrospectResponseSchema,
+  PreflightResponse as PreflightResponseSchema,
+  StageResponse as StageResponseSchema,
   TestResponse as TestResponseSchema,
   WriteResponse as WriteResponseSchema,
 } from "@nia/schemas";
@@ -15,6 +29,8 @@ const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_INTROSPECT_TIMEOUT_MS = 15000;
 const DEFAULT_TEST_TIMEOUT_MS = 15000;
 const DEFAULT_WRITE_TIMEOUT_MS = 15000;
+const DEFAULT_STAGE_TIMEOUT_MS = 30000;
+const DEFAULT_PREFLIGHT_TIMEOUT_MS = 15000;
 
 function baseUrl(manifest: ConnectorManifest): string {
   // Same CONNECTOR_DEV_HOST override apps/api/src/lib/connectorDispatch.ts
@@ -318,6 +334,151 @@ export async function sendWriteRequest(
       error: {
         kind: "service-error",
         message: `Malformed /write response from connector "${manifest.id}": ${parsed.error.message}`,
+      },
+    };
+  }
+  return { ok: true, value: parsed.data };
+}
+
+/**
+ * Calls a connector service's /stage endpoint (Phase 11 Block 2A/2B) — the
+ * staging lifecycle's create/apply/drop ops. Takes a fully-built
+ * StageRequest; same split as sendWriteRequest: the caller (staging
+ * orchestration in runEtl.ts) owns resolving the write credential/grant and
+ * signing the WriteContext before this function is ever reached. This
+ * function's only job is the HTTP hop and response-shape validation — it
+ * has no opinion on `op` and doesn't special-case connectors that refuse
+ * staged mode (e.g. connector-mongodb): that refusal comes back as an
+ * ordinary non-2xx `service-error`, same as any other connector-side
+ * rejection, for the caller to handle.
+ */
+export async function sendStageRequest(
+  manifest: ConnectorManifest,
+  request: StageRequest,
+  opts: { timeoutMs?: number } = {},
+): Promise<DispatchResult<StageResponse>> {
+  warnIfRouteMissing(manifest, "stage");
+  const timeoutMs = opts.timeoutMs ?? request.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(manifest)}/stage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return {
+        ok: false,
+        error: {
+          kind: "query-timeout",
+          message: `Stage op "${request.op}" against connector "${manifest.id}" timed out after ${timeoutMs}ms.`,
+        },
+      };
+    }
+    return {
+      ok: false,
+      error: {
+        kind: "service-unreachable",
+        message: `Could not reach connector service "${manifest.id}": ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    let message = `connector service "${manifest.id}" responded ${res.status}`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) message = body.message;
+    } catch {
+      // Non-JSON error body — keep the generic message.
+    }
+    return { ok: false, error: { kind: "service-error", message } };
+  }
+
+  const parsed = StageResponseSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: {
+        kind: "service-error",
+        message: `Malformed /stage response from connector "${manifest.id}": ${parsed.error.message}`,
+      },
+    };
+  }
+  return { ok: true, value: parsed.data };
+}
+
+/**
+ * Calls a connector service's /preflight endpoint (Phase 11 Block 2D).
+ * Unsigned and read-only — mirrors sendIntrospectRequest's posture, not
+ * sendWriteRequest's (there's no WriteContext to build here). Called once
+ * before extraction starts a staged run, so a missing privilege fails fast
+ * with an actionable message instead of partway through staging DDL.
+ */
+export async function sendPreflightRequest(
+  manifest: ConnectorManifest,
+  request: PreflightRequest,
+  opts: { timeoutMs?: number } = {},
+): Promise<DispatchResult<PreflightResponse>> {
+  warnIfRouteMissing(manifest, "preflight");
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_PREFLIGHT_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(manifest)}/preflight`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return {
+        ok: false,
+        error: {
+          kind: "query-timeout",
+          message: `Preflight against connector "${manifest.id}" timed out after ${timeoutMs}ms.`,
+        },
+      };
+    }
+    return {
+      ok: false,
+      error: {
+        kind: "service-unreachable",
+        message: `Could not reach connector service "${manifest.id}": ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    let message = `connector service "${manifest.id}" responded ${res.status}`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) message = body.message;
+    } catch {
+      // Non-JSON error body — keep the generic message.
+    }
+    return { ok: false, error: { kind: "service-error", message } };
+  }
+
+  const parsed = PreflightResponseSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: {
+        kind: "service-error",
+        message: `Malformed /preflight response from connector "${manifest.id}": ${parsed.error.message}`,
       },
     };
   }

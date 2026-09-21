@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { ConnectorManifest, CredentialRef, WriteRequest } from "@nia/schemas";
+import type { ConnectorManifest, CredentialRef, PreflightRequest, StageRequest, WriteRequest } from "@nia/schemas";
 import { validateBeforeDispatch } from "@nia/guardrails";
-import { sendToConnector, sendWriteRequest } from "./connectorClient.js";
+import { sendToConnector, sendWriteRequest, sendStageRequest, sendPreflightRequest } from "./connectorClient.js";
 
 /**
  * Compile-time-only proof, alongside the runtime tests below: this file is
@@ -48,7 +48,12 @@ function validQuery() {
  */
 function healthResponse(): Response {
   return new Response(
-    JSON.stringify({ status: "ok", service: "test-connector", pools: 0, routes: ["test", "introspect", "execute", "invalidate", "write"] }),
+    JSON.stringify({
+      status: "ok",
+      service: "test-connector",
+      pools: 0,
+      routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight"],
+    }),
     { status: 200 },
   );
 }
@@ -144,8 +149,12 @@ function writeRequest(): WriteRequest {
     context: {
       connectionId: credential.connectionId,
       grantId: "22222222-2222-2222-2222-222222222222",
+      runId: null,
       entity: { namespace: "sales", name: "orders" },
       columns: ["id", "total"],
+      mode: "upsert",
+      stagingEntity: null,
+      quarantineEntity: null,
       issuedAt: Date.now(),
       signature: "deadbeef",
     },
@@ -204,6 +213,162 @@ describe("sendWriteRequest", () => {
     mockFetch(() => Promise.resolve(new Response(JSON.stringify({ not: "a write response" }), { status: 200 })));
 
     const result = await sendWriteRequest(supabaseManifest, writeRequest());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("service-error");
+  });
+});
+
+function stageRequest(op: StageRequest["op"] = "create"): StageRequest {
+  return {
+    credential: { connectionId: credential.connectionId, credVersion: 1, vaultRef: "write-vault-ref" },
+    config: {},
+    op,
+    entity: { namespace: "sales", name: "orders" },
+    stagingEntity: { namespace: "nia", name: "nia_stg_abc123" },
+    quarantineEntity: null,
+    runId: "33333333-3333-3333-3333-333333333333",
+    mode: "upsert",
+    upsertKeys: ["id"],
+    assertions: [],
+    timeoutMs: 30000,
+    context: {
+      connectionId: credential.connectionId,
+      grantId: "22222222-2222-2222-2222-222222222222",
+      runId: "33333333-3333-3333-3333-333333333333",
+      entity: { namespace: "sales", name: "orders" },
+      columns: ["id", "total"],
+      mode: "upsert",
+      stagingEntity: { namespace: "nia", name: "nia_stg_abc123" },
+      quarantineEntity: null,
+      issuedAt: Date.now(),
+      signature: "deadbeef",
+    },
+  };
+}
+
+describe("sendStageRequest", () => {
+  const originalFetch = global.fetch;
+  beforeEach(() => {
+    global.fetch = vi.fn();
+  });
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("returns ok with the parsed StageResponse on a successful response", async () => {
+    mockFetch(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ op: "create", ok: true, assertionResults: [], durationMs: 8 }), { status: 200 }),
+      ),
+    );
+
+    const result = await sendStageRequest(supabaseManifest, stageRequest("create"));
+    expect(result).toEqual({ ok: true, value: { op: "create", ok: true, assertionResults: [], durationMs: 8 } });
+  });
+
+  it("normalizes a non-2xx response to service-error (e.g. a connector refusing staged mode)", async () => {
+    mockFetch(() =>
+      Promise.resolve(new Response(JSON.stringify({ message: "connector-mongodb does not support staged writes" }), { status: 500 })),
+    );
+
+    const result = await sendStageRequest(supabaseManifest, stageRequest("apply"));
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "service-error", message: "connector-mongodb does not support staged writes" },
+    });
+  });
+
+  it("normalizes a network failure to service-unreachable", async () => {
+    mockFetch(() => Promise.reject(new Error("ECONNREFUSED")));
+
+    const result = await sendStageRequest(supabaseManifest, stageRequest());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("service-unreachable");
+  });
+
+  it("normalizes an aborted request to query-timeout, naming the op", async () => {
+    mockFetch(() => {
+      const err = new Error("aborted");
+      err.name = "AbortError";
+      return Promise.reject(err);
+    });
+
+    const result = await sendStageRequest(supabaseManifest, stageRequest("apply"), { timeoutMs: 10 });
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "query-timeout", message: 'Stage op "apply" against connector "supabase" timed out after 10ms.' },
+    });
+  });
+
+  it("normalizes a malformed success-status response to service-error", async () => {
+    mockFetch(() => Promise.resolve(new Response(JSON.stringify({ not: "a stage response" }), { status: 200 })));
+
+    const result = await sendStageRequest(supabaseManifest, stageRequest());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("service-error");
+  });
+});
+
+function preflightRequest(): PreflightRequest {
+  return {
+    credential: { connectionId: credential.connectionId, credVersion: 1, vaultRef: "write-vault-ref" },
+    config: {},
+    entity: { namespace: "sales", name: "orders" },
+    upsertKeys: ["id"],
+  };
+}
+
+describe("sendPreflightRequest", () => {
+  const originalFetch = global.fetch;
+  beforeEach(() => {
+    global.fetch = vi.fn();
+  });
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("returns ok with the parsed PreflightResponse on a successful response", async () => {
+    mockFetch(() =>
+      Promise.resolve(new Response(JSON.stringify({ ok: true, checks: [{ name: "canCreateStaging", ok: true }] }), { status: 200 })),
+    );
+
+    const result = await sendPreflightRequest(supabaseManifest, preflightRequest());
+    expect(result).toEqual({ ok: true, value: { ok: true, checks: [{ name: "canCreateStaging", ok: true }] } });
+  });
+
+  it("normalizes a non-2xx response to service-error", async () => {
+    mockFetch(() => Promise.resolve(new Response(JSON.stringify({ message: "boom" }), { status: 500 })));
+
+    const result = await sendPreflightRequest(supabaseManifest, preflightRequest());
+    expect(result).toEqual({ ok: false, error: { kind: "service-error", message: "boom" } });
+  });
+
+  it("normalizes a network failure to service-unreachable", async () => {
+    mockFetch(() => Promise.reject(new Error("ECONNREFUSED")));
+
+    const result = await sendPreflightRequest(supabaseManifest, preflightRequest());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe("service-unreachable");
+  });
+
+  it("normalizes an aborted request to query-timeout", async () => {
+    mockFetch(() => {
+      const err = new Error("aborted");
+      err.name = "AbortError";
+      return Promise.reject(err);
+    });
+
+    const result = await sendPreflightRequest(supabaseManifest, preflightRequest(), { timeoutMs: 10 });
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: "query-timeout", message: 'Preflight against connector "supabase" timed out after 10ms.' },
+    });
+  });
+
+  it("normalizes a malformed success-status response to service-error", async () => {
+    mockFetch(() => Promise.resolve(new Response(JSON.stringify({ not: "a preflight response" }), { status: 200 })));
+
+    const result = await sendPreflightRequest(supabaseManifest, preflightRequest());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe("service-error");
   });

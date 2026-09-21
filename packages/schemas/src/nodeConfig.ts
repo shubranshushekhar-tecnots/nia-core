@@ -102,14 +102,35 @@ export type EntityRef = z.infer<typeof EntityRef>;
  * destination node to actually run (see apps/worker/src/lib/etl/runEtl.ts),
  * optional here for the same drafting-state reason `entity` is: the drawer
  * autosaves before a user has picked any keys yet.
+ *
+ * `writeMode` (Phase 11): destination-only. "staged" (the default — see
+ * resolveWriteMode below) routes every run's writes through a per-run
+ * staging table, atomic apply, and post-assertions (docs/plans/phase11.md).
+ * "direct" opts a destination back into the pre-Phase-11 behavior — writing
+ * straight to the destination table chunk-by-chunk, non-atomic across the
+ * whole run. Absent (undefined) means "staged"; there is no back-compat
+ * reason to default to "direct" since no saved workflow has ever had this
+ * field, unlike onFailure's absent-means-"fail" default which had to match
+ * pre-existing behavior. Named `DestinationWriteMode` (not `WriteMode`) to
+ * avoid colliding with contract.ts's `WriteMode` (upsert/replace — a
+ * different axis, both exported via this package's `export *` index).
  */
+export const DestinationWriteMode = z.enum(["staged", "direct"]);
+export type DestinationWriteMode = z.infer<typeof DestinationWriteMode>;
+
 export const SourceDestConfig = z.object({
   operation: Operation.default("read"),
   mapping: FieldMapping.optional(),
   entity: EntityRef.optional(),
   upsertKeys: z.array(z.string()).optional(),
+  writeMode: DestinationWriteMode.optional(),
 });
 export type SourceDestConfig = z.infer<typeof SourceDestConfig>;
+
+/** "Absent" resolves to "staged" — see SourceDestConfig's writeMode doc comment above. */
+export function resolveWriteMode(writeMode: DestinationWriteMode | undefined): DestinationWriteMode {
+  return writeMode ?? "staged";
+}
 
 export const FilterOperator = z.enum([
   "eq",
@@ -272,10 +293,13 @@ const ExprOrLegacyConditions = z.union([ExprSchema, z.array(FilterCondition).tra
  *   - "null": failing results become NULL (this was already the only
  *     behavior before 8b-3).
  *   - "drop": rows where the fallible call failed are removed.
- *   - "quarantine": accepted by this schema, but rejected at compile time
- *     (checks.ts's checkConfig / each op's emitSql/emitMongo/applyResidual)
- *     with "quarantine requires a quarantine sink (Phase 11)" — the sink
- *     itself doesn't exist yet.
+ *   - "quarantine" (Phase 11): failing rows are removed from the normal
+ *     output stream, same as "drop", but are also captured (source row +
+ *     the specific failing function/input value — see onFailure.ts's
+ *     findFailingCall) and routed by runEtl.ts to a per-destination
+ *     quarantine table instead of being silently discarded. Always forced
+ *     residual (ops/onFailure.ts's fallibleStepIsPushable) since only
+ *     residual execution has the full source row the sink needs.
  * For `filter`, "null" and "drop" are the SAME observable behavior (a NULL
  * boolean already excludes the row under three-valued logic) — documented,
  * not a distinct code path.

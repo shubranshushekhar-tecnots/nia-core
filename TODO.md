@@ -306,3 +306,37 @@
   underlying base table(s) to be introspected instead and refusing only
   when that's not resolvable. Needs a decision before the no-PK path is
   ever offered to users as anything more than a hard refusal.
+- **Phase 11 follow-ups (added 2026-09-21):**
+  - **Quarantine pushdown.** Quarantine writes today go row-by-row through
+    `writeQuarantineRows` (`stagedWrite.ts`) inside the same chunk loop as
+    the staging upsert — no batching/pushdown parity with the staging
+    write path's `buildStagingUpsertSql` batching. Revisit if quarantine
+    volume ever becomes a real per-chunk cost, not before.
+  - **Quarantine retention.** `nia.nia_quarantine` is one fixed, long-lived
+    table per destination database (`deriveQuarantineEntity`) — rows
+    accumulate forever once `committed`, with no TTL/archival policy.
+    The staging sweeper (24h) only covers `staging_objects`-registered
+    staging tables, not quarantine rows. Needs its own retention decision
+    (time-based purge? per-run archival table?) before quarantine volume
+    in a long-running production destination becomes a real storage cost.
+  - **Row-count reconciliation.** Nothing today cross-checks
+    `workflow_runs.rows_processed` against the destination's actual
+    post-apply row delta (e.g. via `pg_stat_user_tables` or an explicit
+    `SELECT COUNT(*)` before/after apply) — the Phase 11 silent-rollback
+    bug (see `docs/decisions.md`) was only caught by manual
+    `pg_stat_user_tables` inspection, not by any automated check. A
+    lightweight post-apply reconciliation assertion (destination count
+    delta matches `applied`) would have caught this class of bug at the
+    connector level immediately, rather than requiring a live smoke-test
+    investigation.
+  - **Mongo staged-mode testing — not skipped, correctly untestable.**
+    `smoke:staged` only exercises postgres + mysql, per the plan; mongo's
+    `/stage` unconditionally refuses staged mode on this sandbox's
+    standalone `mongod` topology (no replica set — multi-document
+    transactions aren't available), which is exercised directly by
+    `connector-mongodb`'s own unit tests, not by `smoke:staged`. Actual
+    staged-mode mongo behavior (apply-in-transaction on a real replica
+    set) remains unverified against live infrastructure — needs a
+    replica-set-topology sandbox variant to test for real, not a
+    skip that needs revisiting so much as a capability gap in the
+    current sandbox.

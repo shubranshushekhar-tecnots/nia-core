@@ -5,14 +5,36 @@ import {
   ExecuteRequest,
   InvalidateRequest,
   WriteRequest,
+  StageRequest,
+  PreflightRequest,
   type TabularResult,
   type WriteResponse,
+  type StageResponse,
+  type PreflightResponse,
+  type AssertionResult,
+  type WriteEntityRef,
 } from "@nia/schemas";
 import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant } from "./pool-manager.js";
 import { mapPostgresColumnType } from "./column-types.js";
 import { executeWithStatementTimeout } from "./query.js";
 import { verifyWriteContext } from "./writeSignature.js";
 import { buildUpsertSql } from "./writeSql.js";
+import {
+  buildCreateStagingSql,
+  buildDropStagingSql,
+  buildCreateQuarantineSql,
+  buildQuarantineInsertSql,
+  buildQuarantineCommitSql,
+  buildQuarantineDeletePendingSql,
+  buildQuarantineCountSql,
+  buildStagingCountSql,
+  buildApplyFromStagingSql,
+  buildAssertionQuery,
+} from "./stagingSql.js";
+
+function entityMatches(a: WriteEntityRef, b: WriteEntityRef): boolean {
+  return a.namespace === b.namespace && a.name === b.name;
+}
 
 /**
  * connector-supabase — direct Postgres access (targets a Supabase project's
@@ -33,7 +55,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-supabase",
   pools: poolCount(),
-  routes: ["test", "introspect", "execute", "invalidate", "write"],
+  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight"],
 }));
 
 app.post("/test", async (req) => {
@@ -161,8 +183,21 @@ app.post("/execute", async (req): Promise<TabularResult> => {
  * Request-vs-context entity/column equality is checked first so a stale
  * or mismatched signature can't be reused to authorize a different write
  * than the one it was actually signed for.
+ *
+ * Phase 11: this endpoint is ALSO how quarantined rows get written, not
+ * just destination upserts — deliberately reusing /write rather than
+ * adding a new raw-SQL-shaped endpoint. `body.entity` selects which: if it
+ * deep-equals `context.entity` this is a normal destination upsert
+ * (unchanged); if it deep-equals `context.quarantineEntity` this is a
+ * quarantine-row insert (fixed 6-column shape — run_id, dest_table,
+ * step_id, function, input_value, source_row — built by
+ * buildQuarantineInsertSql, lazily creating the quarantine table first).
+ * Any other entity is rejected — the signed context is still what decides
+ * which table(s) this call is allowed to touch, exactly like the staging
+ * lifecycle in /stage below.
  */
 const WRITE_ROW_CAP = Number(process.env.WRITE_ROW_CAP ?? 5000);
+const QUARANTINE_COLUMNS = ["run_id", "dest_table", "step_id", "function", "input_value", "source_row"];
 
 app.post("/write", async (req): Promise<WriteResponse> => {
   const body = WriteRequest.parse(req.body);
@@ -180,17 +215,6 @@ app.post("/write", async (req): Promise<WriteResponse> => {
       throw new Error(`upsertKey "${key}" is not present in columns`);
     }
   }
-
-  if (body.entity.namespace !== body.context.entity.namespace || body.entity.name !== body.context.entity.name) {
-    throw new Error("request entity does not match the signed context's entity");
-  }
-  const requestColumns = new Set(body.columns);
-  const contextColumns = new Set(body.context.columns);
-  const columnsMatch =
-    requestColumns.size === contextColumns.size && [...requestColumns].every((c) => contextColumns.has(c));
-  if (!columnsMatch) {
-    throw new Error("request columns do not match the signed context's columns");
-  }
   if (body.context.connectionId !== body.credential.connectionId) {
     throw new Error("signed context connectionId does not match the request credential");
   }
@@ -201,8 +225,12 @@ app.post("/write", async (req): Promise<WriteResponse> => {
     {
       connectionId: body.context.connectionId,
       grantId: body.context.grantId,
+      runId: body.context.runId,
       entity: body.context.entity,
       columns: body.context.columns,
+      mode: body.context.mode,
+      stagingEntity: body.context.stagingEntity,
+      quarantineEntity: body.context.quarantineEntity,
       issuedAt: body.context.issuedAt,
     },
     body.context.signature,
@@ -217,11 +245,272 @@ app.post("/write", async (req): Promise<WriteResponse> => {
   );
   if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
 
+  const isQuarantineWrite = body.context.quarantineEntity !== null && entityMatches(body.entity, body.context.quarantineEntity);
+
+  if (isQuarantineWrite) {
+    if (body.columns.length !== QUARANTINE_COLUMNS.length) {
+      throw new Error(`quarantine write must send exactly ${QUARANTINE_COLUMNS.length} columns (${QUARANTINE_COLUMNS.join(", ")})`);
+    }
+    const pool = await getWritePool(body.credential, body.config);
+    const start = Date.now();
+    const client = await pool.connect();
+    try {
+      for (const sql of buildCreateQuarantineSql(body.entity)) await client.query(sql);
+      const sql = buildQuarantineInsertSql(body.entity, body.rows.length);
+      const result = await client.query({ text: sql, values: body.rows.flat() });
+      return { written: result.rowCount ?? 0, durationMs: Date.now() - start };
+    } finally {
+      client.release();
+    }
+  }
+
+  if (!entityMatches(body.entity, body.context.entity)) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+  const requestColumns = new Set(body.columns);
+  const contextColumns = new Set(body.context.columns);
+  const columnsMatch =
+    requestColumns.size === contextColumns.size && [...requestColumns].every((c) => contextColumns.has(c));
+  if (!columnsMatch) {
+    throw new Error("request columns do not match the signed context's columns");
+  }
+
   const pool = await getWritePool(body.credential, body.config);
   const sql = buildUpsertSql(body.entity, body.columns, body.upsertKeys, body.rows.length);
   const start = Date.now();
   const result = await executeWithStatementTimeout(pool, sql, body.rows.flat(), body.timeoutMs);
   return { written: result.rowCount ?? 0, durationMs: Date.now() - start };
+});
+
+/**
+ * Phase 11 Block 2A/2B/2E — the staging lifecycle, discriminated by `op`.
+ * Every op re-verifies the signed context's HMAC first, then requires
+ * request-vs-context deep-equality on runId/entity/stagingEntity/
+ * quarantineEntity/mode before touching anything — this IS the "connector
+ * refuses to CREATE/DROP/apply against any table the signed context
+ * doesn't name" enforcement point (contract.ts's WriteContext doc
+ * comment); staging_objects (the Postgres registry row the worker keeps)
+ * is a second, independent layer, not this one.
+ */
+app.post("/stage", async (req): Promise<StageResponse> => {
+  const body = StageRequest.parse(req.body);
+  const start = Date.now();
+
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const signatureValid = verifyWriteContext(
+    {
+      connectionId: body.context.connectionId,
+      grantId: body.context.grantId,
+      runId: body.context.runId,
+      entity: body.context.entity,
+      columns: body.context.columns,
+      mode: body.context.mode,
+      stagingEntity: body.context.stagingEntity,
+      quarantineEntity: body.context.quarantineEntity,
+      issuedAt: body.context.issuedAt,
+    },
+    body.context.signature,
+    secret,
+  );
+  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+
+  if (body.context.connectionId !== body.credential.connectionId) {
+    throw new Error("signed context connectionId does not match the request credential");
+  }
+  if (body.context.runId !== body.runId) {
+    throw new Error("signed context runId does not match the request runId");
+  }
+  if (!entityMatches(body.entity, body.context.entity)) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+  if (!body.context.stagingEntity || !entityMatches(body.stagingEntity, body.context.stagingEntity)) {
+    throw new Error("request stagingEntity does not match the signed context's stagingEntity");
+  }
+  if (body.context.mode !== body.mode) {
+    throw new Error("request mode does not match the signed context's mode");
+  }
+  const quarantineMatches =
+    body.quarantineEntity === null
+      ? body.context.quarantineEntity === null
+      : body.context.quarantineEntity !== null && entityMatches(body.quarantineEntity, body.context.quarantineEntity);
+  if (!quarantineMatches) {
+    throw new Error("request quarantineEntity does not match the signed context's quarantineEntity");
+  }
+
+  const grantActive = await verifyActiveWriteGrant(body.context.grantId, body.context.connectionId, body.entity.namespace);
+  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+
+  const pool = await getWritePool(body.credential, body.config);
+
+  if (body.op === "create") {
+    const client = await pool.connect();
+    try {
+      for (const sql of buildCreateStagingSql(body.entity, body.stagingEntity)) await client.query(sql);
+      // The apply op unconditionally UPDATEs the quarantine table (to mark
+      // this run's pending rows committed) whenever a quarantineEntity is
+      // set, even for a chunk/run that never actually quarantines a row —
+      // the /write endpoint's quarantine-write branch (the other caller of
+      // buildCreateQuarantineSql) only creates it lazily, on first write.
+      // Without also creating it here, that UPDATE hits a nonexistent
+      // relation, which aborts the surrounding Postgres transaction; the
+      // apply handler's `.catch()` swallows the resulting JS rejection, so
+      // the subsequent COMMIT silently no-ops (rolls back) instead of
+      // erroring — reporting a fake `applied` count while leaving the
+      // destination untouched. Idempotent (CREATE TABLE IF NOT EXISTS),
+      // same as the staging table above.
+      if (body.quarantineEntity) {
+        for (const sql of buildCreateQuarantineSql(body.quarantineEntity)) await client.query(sql);
+      }
+    } finally {
+      client.release();
+    }
+    return { op: "create", ok: true, assertionResults: [], durationMs: Date.now() - start };
+  }
+
+  if (body.op === "drop") {
+    const client = await pool.connect();
+    try {
+      await client.query(buildDropStagingSql(body.stagingEntity));
+      if (body.quarantineEntity) {
+        const { sql } = buildQuarantineDeletePendingSql(body.quarantineEntity);
+        await client.query({ text: sql, values: [body.runId] }).catch(() => {
+          // Quarantine table may not exist yet (no row ever quarantined this run) — nothing to delete.
+        });
+      }
+    } finally {
+      client.release();
+    }
+    return { op: "drop", ok: true, assertionResults: [], durationMs: Date.now() - start };
+  }
+
+  // op === "apply": assertions run first, inside the same transaction as
+  // the apply DML, so a failure rolls back cleanly with zero destination
+  // effect — matching the plan's "leaves destination untouched" bar.
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL statement_timeout = ${Math.trunc(body.timeoutMs)}`);
+
+    const assertionResults: AssertionResult[] = [];
+    for (const spec of body.assertions) {
+      if (spec.kind === "maxFailureRate") {
+        let quarantineCount = 0;
+        if (body.quarantineEntity) {
+          const { sql } = buildQuarantineCountSql(body.quarantineEntity);
+          const r = await client.query({ text: sql, values: [body.runId] }).catch(() => ({ rows: [{ n: 0 }] }));
+          quarantineCount = Number((r.rows[0] as { n: number }).n);
+        }
+        const stagingR = await client.query(buildStagingCountSql(body.stagingEntity));
+        const stagingCount = Number((stagingR.rows[0] as { n: number }).n);
+        const denom = quarantineCount + stagingCount;
+        const rate = denom === 0 ? 0 : quarantineCount / denom;
+        const ok = rate <= spec.maxRate;
+        assertionResults.push({
+          spec,
+          ok,
+          detail: ok ? undefined : `failure rate ${(rate * 100).toFixed(1)}% (${quarantineCount}/${denom}) exceeds ${(spec.maxRate * 100).toFixed(1)}% max`,
+        });
+        continue;
+      }
+      const q = buildAssertionQuery(spec, body.stagingEntity, body.entity);
+      if (!q) continue;
+      const r = await client.query(q.sql);
+      const outcome = q.evaluate(r.rows[0] as Record<string, unknown>);
+      assertionResults.push({ spec, ok: outcome.ok, detail: outcome.detail });
+    }
+
+    if (assertionResults.some((a) => !a.ok)) {
+      await client.query("ROLLBACK");
+      return { op: "apply", ok: false, assertionResults, durationMs: Date.now() - start };
+    }
+
+    let applied = 0;
+    for (const sql of buildApplyFromStagingSql(body.entity, body.stagingEntity, body.context.columns, body.upsertKeys, body.mode)) {
+      const r = await client.query(sql);
+      applied = r.rowCount ?? applied;
+    }
+
+    let quarantined = 0;
+    if (body.quarantineEntity) {
+      const { sql } = buildQuarantineCommitSql(body.quarantineEntity);
+      const r = await client.query({ text: sql, values: [body.runId] }).catch(() => ({ rowCount: 0 }));
+      quarantined = r.rowCount ?? 0;
+    }
+
+    await client.query("COMMIT");
+    return { op: "apply", ok: true, assertionResults, applied, quarantined, durationMs: Date.now() - start };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {
+      // Connection may already be unusable — nothing more to do.
+    });
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * Phase 11 Block 2D — preflight. Unsigned and read-only, checks the
+ * credential's role can actually do what staged writes will need: create/
+ * drop in the `nia` staging schema, and write to the destination entity's
+ * schema. Each failure names the exact grant SQL an operator can run.
+ */
+app.post("/preflight", async (req): Promise<PreflightResponse> => {
+  const body = PreflightRequest.parse(req.body);
+  const pool = await getWritePool(body.credential, body.config);
+  const checks: PreflightResponse["checks"] = [];
+
+  try {
+    await pool.query('CREATE SCHEMA IF NOT EXISTS "nia"');
+    checks.push({ name: "create-schema-nia", ok: true });
+  } catch (e) {
+    checks.push({
+      name: "create-schema-nia",
+      ok: false,
+      message: e instanceof Error ? e.message : "unknown error",
+      grantSql: "GRANT CREATE ON DATABASE current_database() TO <role>;",
+    });
+  }
+
+  const probeTable = `"nia"."__nia_preflight_probe"`;
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS ${probeTable} (id int)`);
+    await pool.query(`DROP TABLE IF EXISTS ${probeTable}`);
+    checks.push({ name: "create-drop-staging-table", ok: true });
+  } catch (e) {
+    checks.push({
+      name: "create-drop-staging-table",
+      ok: false,
+      message: e instanceof Error ? e.message : "unknown error",
+      grantSql: `GRANT CREATE ON SCHEMA "nia" TO <role>;`,
+    });
+  }
+
+  const destSchema = body.entity.namespace.replace(/"/g, '""');
+  try {
+    await pool.query(`SELECT has_schema_privilege(current_user, '${destSchema}', 'USAGE')`);
+    const r = await pool.query(
+      `SELECT has_table_privilege(current_user, format('%I.%I', $1::text, $2::text), 'INSERT') AS ok`,
+      [body.entity.namespace, body.entity.name],
+    );
+    const ok = Boolean((r.rows[0] as { ok: boolean } | undefined)?.ok);
+    checks.push({
+      name: "write-destination",
+      ok,
+      message: ok ? undefined : `role lacks INSERT on "${body.entity.namespace}"."${body.entity.name}"`,
+      grantSql: ok ? undefined : `GRANT INSERT, UPDATE, DELETE ON "${body.entity.namespace}"."${body.entity.name}" TO <role>;`,
+    });
+  } catch (e) {
+    checks.push({
+      name: "write-destination",
+      ok: false,
+      message: e instanceof Error ? e.message : "unknown error",
+      grantSql: `GRANT INSERT, UPDATE, DELETE ON "${body.entity.namespace}"."${body.entity.name}" TO <role>;`,
+    });
+  }
+
+  return { ok: checks.every((c) => c.ok), checks };
 });
 
 app.post("/invalidate", async (req) => {

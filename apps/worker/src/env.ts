@@ -82,6 +82,16 @@ const EnvSchema = z
     /** Cron pattern for the nightly golden-set eval run — see lib/eval/schedule.ts. */
     EVAL_NIGHTLY_CRON: z.string().default("0 3 * * *"),
     /**
+     * Cron pattern for the staging-registry sweep (Phase 11 item 12) — see
+     * lib/etl/stagingSweepSchedule.ts. Hourly by default: this is how often
+     * the sweep JOB runs, independent of the 24h staleness cutoff each
+     * individual `staging_objects` row is judged against inside it (see
+     * stagingSweeper.ts) — an hourly cadence just means an orphaned staging
+     * table is never more than ~1h late to be swept once it crosses 24h,
+     * not that anything under 24h old is ever touched.
+     */
+    STAGING_SWEEP_CRON: z.string().default("0 * * * *"),
+    /**
      * Per-job chat-event replay log (lib/chat/publish.ts) — lets a client
      * that subscribes late, or reconnects mid-stream, recover events
      * published before it attached (pure pub/sub has no memory for that).

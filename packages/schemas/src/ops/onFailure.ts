@@ -1,20 +1,21 @@
 import type { CallFn, Expr } from "../expression.js";
-import { buildFailureExpr, collectFallibleCalls } from "../expression.js";
+import { buildFailureExpr, collectFallibleCalls, collectFallibleCallsDeep } from "../expression.js";
 import type { OnFailurePolicy } from "../nodeConfig.js";
 import { evalExpr } from "./residualEval.js";
-import type { StepFailureReport } from "./types.js";
+import type { QuarantinedRow, StepFailureReport } from "./types.js";
 
 /**
  * Phase 8b-3 — shared onFailure plumbing used by filter.ts/computedField.ts/
  * aggregate.ts (SQL/Mongo emit + residual apply + checkConfig). Kept in one
- * place so the "absent = fail", "quarantine rejected at compile time", and
- * "every policy reports a count" rules can't drift between op modules.
+ * place so the "absent = fail", "every policy reports a count" rules can't
+ * drift between op modules.
  *
  * One load-bearing design decision lives here: "quarantine" is always
  * forced residual (never pushed down) whenever a step's expression actually
- * contains a fallible call — see fallibleStepIsPushable below; quarantine
- * has no sink yet (Phase 11) so it always throws once it would matter, and
- * there's nothing to gain by pushing a step that can never actually run.
+ * contains a fallible call — see fallibleStepIsPushable below. Only
+ * residual execution has the full source row available to hand to the
+ * quarantine sink (Phase 11); there's nothing to gain by pushing a step
+ * that would need the source row it doesn't have.
  * "fail" DOES push now (Phase 9 Part 4): pushdown.ts's
  * compileFailurePreChecks runs one pre-check query, before extraction,
  * reusing the exact same upstream-pushed prefix, and runEtl.ts aborts
@@ -42,23 +43,6 @@ export function exprHasFallibleCalls(expr: Expr): boolean {
 /** Distinct fallible fn names present in expr, for error/report messages ("names ... the function"). */
 export function fallibleFnsIn(expr: Expr): CallFn[] {
   return [...new Set(collectFallibleCalls(expr).map((c) => c.fn))];
-}
-
-/**
- * "quarantine requires a quarantine sink (Phase 11)" — the sink itself
- * (Phase 11) doesn't exist yet, so quarantine is accepted by the schema but
- * always rejected once it would actually matter (i.e. the step has a
- * fallible call). checkConfig-facing: a plain message string (never
- * throws), so checkConfig's non-throwing contract stays intact.
- * computeFailureReport below throws the same rejection on the
- * emit/residual side, for a graph that was never re-checked after the
- * onFailure field was added by hand.
- */
-export function quarantineMessage(step: { onFailure?: OnFailurePolicy }, expr: Expr): string | null {
-  if (step.onFailure === "quarantine" && exprHasFallibleCalls(expr)) {
-    return "quarantine requires a quarantine sink (Phase 11).";
-  }
-  return null;
 }
 
 /**
@@ -96,15 +80,46 @@ export function rowFailed(failureExpr: Expr, row: Record<string, unknown>): bool
 }
 
 /**
+ * Per-row attribution (Phase 11 quarantine sink): given a row already known
+ * to have failed (rowFailed/buildFailureExpr returned true for it), finds
+ * the SPECIFIC fallible call responsible — the first call in
+ * collectFallibleCalls(expr) whose own args all evaluate non-null on this
+ * row but whose own result evaluates null — and returns its fn name plus
+ * its first argument's evaluated value (the natural "input that caused the
+ * failure" to persist to the quarantine table's `function`/`input_value`
+ * columns). A `coalesce` compound unit (see collectFallibleCalls's
+ * `coalesce` branch) is expanded via collectFallibleCallsDeep so the
+ * specific nested call is attributed, not the coalesce call node itself.
+ * Returns null only if called on a row that didn't actually fail (callers
+ * only call this after rowFailed has already confirmed a match).
+ */
+export function findFailingCall(expr: Expr, row: Record<string, unknown>): { fn: CallFn; inputValue: unknown } | null {
+  const topLevel = collectFallibleCalls(expr);
+  for (const call of topLevel) {
+    const candidates = call.fn === "coalesce" ? collectFallibleCallsDeep(call) : [call];
+    for (const candidate of candidates) {
+      const argsNonNull = candidate.args.every((arg) => evalExpr(arg, row) !== null);
+      if (!argsNonNull) continue;
+      if (evalExpr(candidate, row) !== null) continue;
+      const inputValue = candidate.args.length > 0 ? evalExpr(candidate.args[0]!, row) : null;
+      return { fn: candidate.fn, inputValue };
+    }
+  }
+  return null;
+}
+
+/**
  * Central residual-side helper shared by filter/computed_field/aggregate's
  * applyResidual. Returns undefined when `expr` has no fallible calls at all
- * (onFailure has no effect, nothing to report). Throws unconditionally for
- * "quarantine" (compile-time-style rejection — same message as
- * quarantineMessage) and for "fail" once `count > 0` (OnFailureAbortError).
- * Otherwise returns a StepFailureReport with the failing-row count over
- * `rows` as given — evaluated BEFORE any policy-driven row removal, so a
- * "drop"ped row is still counted, the exact shape residualTransform.ts
- * threads back to runEtl.ts for the run result.
+ * (onFailure has no effect, nothing to report). Throws for "fail" once
+ * `count > 0` (OnFailureAbortError). For "quarantine", never throws —
+ * instead attaches a `quarantinedRows` entry (via findFailingCall) for
+ * every failing row, letting runEtl.ts (Phase 11) route them to the
+ * quarantine sink. Otherwise returns a StepFailureReport with the
+ * failing-row count over `rows` as given — evaluated BEFORE any
+ * policy-driven row removal, so a "drop"ped/quarantined row is still
+ * counted, the exact shape residualTransform.ts threads back to runEtl.ts
+ * for the run result.
  */
 export function computeFailureReport(
   label: string,
@@ -115,15 +130,20 @@ export function computeFailureReport(
   const fns = fallibleFnsIn(expr);
   if (fns.length === 0) return undefined;
 
-  if (policy === "quarantine") {
-    throw new Error("quarantine requires a quarantine sink (Phase 11).");
-  }
-
   const failureExpr = buildFailureExpr(expr);
-  const count = failureExpr ? rows.filter((row) => rowFailed(failureExpr, row)).length : 0;
+  const failingRows = failureExpr ? rows.filter((row) => rowFailed(failureExpr, row)) : [];
+  const count = failingRows.length;
 
   if (policy === "fail" && count > 0) {
     throw new OnFailureAbortError(label, fns, count);
+  }
+
+  if (policy === "quarantine" && count > 0) {
+    const quarantinedRows: QuarantinedRow[] = failingRows.map((row) => {
+      const failing = findFailingCall(expr, row);
+      return { fn: failing?.fn ?? fns[0]!, inputValue: failing?.inputValue ?? null, sourceRow: row };
+    });
+    return { label, fns, policy, count, quarantinedRows };
   }
 
   return { label, fns, policy, count };

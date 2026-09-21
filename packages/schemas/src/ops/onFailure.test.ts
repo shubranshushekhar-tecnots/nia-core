@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   computeFailureReport,
   fallibleStepIsPushable,
+  findFailingCall,
   OnFailureAbortError,
-  quarantineMessage,
   resolveOnFailure,
   rowFailed,
 } from "./onFailure.js";
@@ -27,28 +27,54 @@ describe("resolveOnFailure", () => {
   });
 });
 
-describe("quarantine rejection", () => {
+describe("computeFailureReport — 'quarantine' captures rows instead of throwing (Phase 11)", () => {
   const fallible = expr("to_number(amount)");
   const notFallible = expr("amount > 0");
 
-  it("quarantineMessage rejects a step with onFailure: quarantine on a fallible expression", () => {
-    const msg = quarantineMessage({ onFailure: "quarantine" }, fallible);
-    expect(msg).toBe("quarantine requires a quarantine sink (Phase 11).");
+  it("never throws for quarantine, even with failing rows", () => {
+    expect(() => computeFailureReport("filter", fallible, [{ amount: "x" }], "quarantine")).not.toThrow();
   });
 
-  it("quarantineMessage is null when the expression has no fallible call, even under quarantine", () => {
-    expect(quarantineMessage({ onFailure: "quarantine" }, notFallible)).toBeNull();
+  it("returns quarantinedRows, one per failing row, with fn/inputValue/sourceRow", () => {
+    const rows = [{ amount: "10" }, { amount: "abc" }, { amount: null }];
+    const report = computeFailureReport("filter", fallible, rows, "quarantine");
+    expect(report).toEqual({
+      label: "filter",
+      fns: ["to_number"],
+      policy: "quarantine",
+      count: 1,
+      quarantinedRows: [{ fn: "to_number", inputValue: "abc", sourceRow: { amount: "abc" } }],
+    });
   });
 
-  it("quarantineMessage is null for any non-quarantine policy", () => {
-    expect(quarantineMessage({ onFailure: "fail" }, fallible)).toBeNull();
-    expect(quarantineMessage({}, fallible)).toBeNull();
+  it("omits quarantinedRows when there are no failures", () => {
+    const rows = [{ amount: "10" }, { amount: "20" }];
+    const report = computeFailureReport("filter", fallible, rows, "quarantine");
+    expect(report).toEqual({ label: "filter", fns: ["to_number"], policy: "quarantine", count: 0 });
+    expect(report?.quarantinedRows).toBeUndefined();
   });
 
-  it("computeFailureReport throws the same rejection unconditionally for quarantine", () => {
-    expect(() => computeFailureReport("filter", fallible, [{ amount: "x" }], "quarantine")).toThrow(
-      "quarantine requires a quarantine sink (Phase 11).",
-    );
+  it("returns undefined for quarantine when the expression has no fallible call", () => {
+    expect(computeFailureReport("filter", notFallible, [{ amount: "1" }], "quarantine")).toBeUndefined();
+  });
+});
+
+describe("findFailingCall", () => {
+  it("attributes a simple fallible call's fn and first-argument input value", () => {
+    const failing = expr("to_number(amount)");
+    expect(findFailingCall(failing, { amount: "abc" })).toEqual({ fn: "to_number", inputValue: "abc" });
+  });
+
+  it("returns null for a row that didn't actually fail", () => {
+    const failing = expr("to_number(amount)");
+    expect(findFailingCall(failing, { amount: "10" })).toBeNull();
+    expect(findFailingCall(failing, { amount: null })).toBeNull();
+  });
+
+  it("attributes the specific nested call inside a compound-fallible coalesce", () => {
+    const bothFallible = expr('coalesce(parse_date(amount, "YYYY-MM-DD"), parse_date(amount, "MM/DD/YYYY"))');
+    const result = findFailingCall(bothFallible, { amount: "not-a-date" });
+    expect(result).toEqual({ fn: "parse_date", inputValue: "not-a-date" });
   });
 });
 

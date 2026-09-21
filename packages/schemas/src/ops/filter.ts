@@ -3,7 +3,7 @@ import { collectFieldRefs } from "../expression.js";
 import type { OpModule } from "./types.js";
 import { exprFnsPushable } from "./types.js";
 import { evalExpr } from "./residualEval.js";
-import { computeFailureReport, fallibleStepIsPushable, quarantineMessage, resolveOnFailure } from "./onFailure.js";
+import { computeFailureReport, fallibleStepIsPushable, resolveOnFailure } from "./onFailure.js";
 
 export const filterOp: OpModule<FilterStepT> = {
   kind: "filter",
@@ -23,8 +23,8 @@ export const filterOp: OpModule<FilterStepT> = {
     // separate pre-check query for every pushed fallible step, giving
     // "fail" (and "null"/"drop") a real failure count without this op
     // needing to inspect every row itself. Only "quarantine" is still
-    // always forced residual (fallibleStepIsPushable) — it has no sink yet
-    // (Phase 11) so it always throws once it would matter.
+    // always forced residual (fallibleStepIsPushable) — only residual
+    // execution has the source row the quarantine sink (Phase 11) needs.
     if (!fallibleStepIsPushable(step, step.expr)) return false;
     return exprFnsPushable(step.expr, dialect);
   },
@@ -72,8 +72,6 @@ export const filterOp: OpModule<FilterStepT> = {
         messages.push(`filter step ${ctx.index + 1} has a condition with no field selected.`);
       }
     }
-    const quarantine = quarantineMessage(step, step.expr);
-    if (quarantine) messages.push(`filter step ${ctx.index + 1}: ${quarantine}`);
     return messages;
   },
 };

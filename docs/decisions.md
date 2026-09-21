@@ -4243,3 +4243,116 @@ assertions across mysql/postgres/mongo). All four packages
 (`schemas`/`worker`/`api`/`web`) typecheck clean; full
 `schemas`/`worker`/`web` unit suites re-run clean (514/150/10 passing,
 no regressions).
+
+## Phase 11: staging, atomic apply, post-assertions, quarantine sink — and a silent-rollback bug in the apply transaction
+
+Shipped per `docs/plans/phase11.md`. Every staged-mode run now writes to a
+per-run staging table (`nia.nia_stg_<run-hash>`, postgres/supabase;
+`<dest-db>.nia_stg_<run-hash>`, mysql), never directly to the destination.
+Chunks upsert into staging by the run's `upsertKeys`, so a resumed run
+reuses the same staging table and re-sent chunks stay idempotent — the
+staging name is derived deterministically from `runId`
+(`stagingRegistry.ts`'s `deriveStagingEntity`), not persisted state, so a
+redelivered job always lands on the same table without a lookup. A new
+`staging_objects` registry table (`0021_staging_registry.sql`,
+`0022_staging_objects_dest_info.sql`) records every staging/quarantine
+object's run id, connection, schema, name, and status; a sweeper
+(`stagingSweeper.ts` + `stagingSweepSchedule.ts`) drops any registry entry
+older than 24h, and only ever drops names that are actually in the
+registry (never a bare pattern match against the destination).
+
+**Atomic apply, not a rename swap.** Applying staging to the destination
+is a single destination-side transaction: `INSERT ... SELECT FROM staging
+... ON CONFLICT/ON DUPLICATE KEY UPDATE` for upsert mode, `DELETE FROM
+dest` + `INSERT ... SELECT` for replace mode. Deliberately not a
+rename/swap (`ALTER TABLE staging RENAME TO dest`) — a rename detaches
+the destination's RLS policies, grants, views, triggers, and FKs, none of
+which staging carries. Mongo has no equivalent: `/stage` refuses staged
+mode outright on a standalone `mongod` (this sandbox's topology — no
+replica set), pointing callers at direct mode, since atomic apply-from-
+staging needs multi-document transactions.
+
+Pre-apply assertions run against staging inside the same transaction,
+before any row moves: `noNullKeys` (upsert-key columns), `uniqueColumns`
+(op-declared — aggregate asserts group-key uniqueness in staging),
+`replaceShrinkGuard` (replace mode only, unless the destination sets
+`allowShrink`), and `maxFailureRate` (evaluated from the quarantine count
+the transaction already holds, never a client-supplied number). Any
+failure rolls back, drops staging, and leaves the destination untouched;
+each assertion's result is recorded in the run events. Quarantine is
+residual-only again (8b-3's compile-time rejection removed, per the
+plan) — quarantined rows are written `pending` mid-run and flipped to
+`committed` inside the same apply transaction that moves the real rows,
+so a failed run's pending quarantine rows are simply deleted, never
+half-committed.
+
+**Bug found via `smoke:staged`, not a smoke-script artifact — fixed.**
+The apply transaction's quarantine-commit (`UPDATE nia.nia_quarantine SET
+status='committed' WHERE run_id=$1`) ran unconditionally whenever a
+`quarantineEntity` was present on the request — true for every staged
+run, since staged mode always signs one — even for a run that never
+quarantined a single row. But `nia.nia_quarantine` was only ever created
+lazily, by the `/write` endpoint's quarantine-write branch, which only
+fires when there's an actual pending row to quarantine. So a clean run
+with zero quarantined rows hit an UPDATE against a table that didn't
+exist yet; the query rejection was caught by a `.catch(() => ({rowCount:
+0}))` guard (there to make the *commit* best-effort), but by then
+Postgres had already marked the whole transaction aborted. The
+`COMMIT` that followed didn't error — Postgres treats `COMMIT`/`ROLLBACK`
+on an aborted transaction as a silent rollback, not a client-visible
+failure — so the connector returned `{ok:true, applied:N}` while every
+row the transaction had inserted, including the real apply, was actually
+discarded. Confirmed via `pg_stat_user_tables`: `n_tup_ins` matched the
+connector's claimed `applied` count exactly, but `n_live_tup:0`,
+`n_dead_tup:n_tup_ins`, `n_tup_del:0` — Postgres counts INSERTs
+regardless of eventual rollback, so that mismatch is the definitive
+signature of a transaction that looked successful but wasn't. Fixed by
+making the `/stage` "create" op also idempotently create the quarantine
+table whenever a `quarantineEntity` is set, alongside the staging table
+it already creates (`services/connector-supabase/src/index.ts`) — same
+`CREATE TABLE IF NOT EXISTS` posture, so it's a no-op once the table
+exists from a prior run.
+
+**Second lesson, not a code bug: connector services run compiled
+images, not source.** After fixing the above and rebuilding
+`connector-supabase`, `smoke:write:mysql-mongo` failed on
+connector-mongodb alone with "write context signature is invalid or
+expired" — `connector-mongodb`'s container was still running a
+3-hour-old image built before this session's signature-payload change
+(`runId`/`mode`/`stagingEntity`/`quarantineEntity` joined the signed
+payload so a `/stage` request's staging lifecycle binds to the same
+signature as a row write). The worker signs with the new shape; the
+stale container verified against the old 4-field shape, so every
+signature mismatched. `docker compose up -d --build connector-mongodb`
+resolved it — smoke and unit suites both green after. Any connector
+source change requires a rebuild of that connector's own container
+before its smoke/verification is meaningful; a stale sibling connector
+can silently keep passing while another fails for a completely unrelated
+reason.
+
+**Deviations from the plan, with reasons:**
+- No standalone unit test for "the staging DDL builder refuses any name
+  not in the registry" — `stagingSql.ts`'s own header comment disclaims
+  this: identifiers there are never re-validated (contract.ts's Zod
+  `SqlIdentifier` already rejects anything but a bare identifier before
+  this module sees it), and the real enforcement point is `/stage`'s
+  handler rejecting any `stagingEntity`/`quarantineEntity`/`entity` that
+  doesn't match the signed `WriteContext` — already covered by
+  `index.test.ts`'s signed-context tampering tests (mismatched
+  `stagingEntity`, `runId`, `quarantineEntity`, `entity` each rejected).
+  Adding a second unit test at the SQL-builder layer would just
+  re-assert the same contract.ts-level guarantee under a different name.
+- `smoke:extract:postgres` (named in the plan) doesn't exist as a script;
+  ran the closest equivalents already in the repo instead
+  (`smoke:aggregate:postgres-source`, plus `smoke:write` and
+  `smoke:write:mysql-mongo`, both re-run clean per Step 3's "run the
+  existing write smokes once").
+
+Tests: `apps/worker/scripts/write-smoke-staged.ts` (`smoke:staged` — 20
+live assertions, postgres + mysql, production-equivalent write role,
+all 3 required scenarios: happy path, assertion failure, kill-after-
+chunk-1-resume). `smoke:write` and `smoke:write:mysql-mongo` re-run
+clean. All packages typecheck clean; `worker` (160), `schemas` (520),
+`connector-mysql` (22), `connector-mongodb` (17),
+`connector-supabase` (44, incl. `index.test.ts`'s 20 signed-context/
+`/stage` cases) unit suites all green, no regressions.

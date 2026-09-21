@@ -7,8 +7,12 @@ function payload(overrides: Partial<WriteSignaturePayload> = {}): WriteSignature
   return {
     connectionId: "11111111-1111-1111-1111-111111111111",
     grantId: "22222222-2222-2222-2222-222222222222",
+    runId: null,
     entity: { namespace: "sales", name: "orders" },
     columns: ["id", "total"],
+    mode: "upsert",
+    stagingEntity: null,
+    quarantineEntity: null,
     issuedAt: Date.now(),
     ...overrides,
   };

@@ -3,7 +3,7 @@ import { collectFieldRefs, type Expr } from "../expression.js";
 import type { OpKind, OpModule, ResidualAccumulator, SqlEmitContext } from "./types.js";
 import { exprFnsPushable } from "./types.js";
 import { evalExpr } from "./residualEval.js";
-import { computeFailureReport, fallibleStepIsPushable, quarantineMessage, resolveOnFailure } from "./onFailure.js";
+import { computeFailureReport, fallibleStepIsPushable, resolveOnFailure } from "./onFailure.js";
 
 /**
  * Phase 9 Part 1: the cross-chunk accumulator backing aggregateOp's
@@ -230,7 +230,9 @@ export const aggregateOp: OpModule<AggregateStepT> = {
     // compileFailurePreChecks — a synthetic pre-check with the same
     // `having` alias-substitution this step's own emitSql/emitMongo use,
     // replaced with the failure predicate, counting failing GROUPS). Only
-    // "quarantine" is still always forced residual (fallibleStepIsPushable).
+    // "quarantine" is still always forced residual (fallibleStepIsPushable)
+    // — only residual execution has the source row the quarantine sink
+    // (Phase 11) needs.
     if (step.having && !fallibleStepIsPushable(step, step.having)) return false;
     return step.having ? exprFnsPushable(step.having, dialect) : true;
   },
@@ -440,10 +442,19 @@ export const aggregateOp: OpModule<AggregateStepT> = {
           );
         }
       }
-      const quarantine = quarantineMessage(step, step.having);
-      if (quarantine) messages.push(`aggregate step ${ctx.index + 1}: ${quarantine}`);
     }
 
     return messages;
+  },
+
+  /**
+   * Phase 11 Block 2E — a graph whose last step is this aggregate writes
+   * staging rows shaped by `groupBy`, so staging must hold one row per
+   * group, the same uniqueness its own destination upsert/replace already
+   * relies on. runEtl.ts only collects this from the graph's LAST step
+   * (staging holds that step's output shape, not an intermediate one).
+   */
+  stagingAssertions(step) {
+    return step.groupBy.length > 0 ? [{ kind: "uniqueColumns", columns: step.groupBy }] : [];
   },
 };

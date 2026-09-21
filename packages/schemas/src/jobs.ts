@@ -90,7 +90,19 @@ export const EvalRunJob = z.object({
 });
 export type EvalRunJob = z.infer<typeof EvalRunJob>;
 
-export const HeavyJob = z.discriminatedUnion("kind", [EtlRunJob, EvalRunJob]);
+/**
+ * Phase 11 item 12 — sweeps `staging_objects` rows still `active` and older
+ * than 24h (see stagingSweeper.ts). No payload fields, same shape as
+ * EvalRunJob: it always sweeps whatever is currently stale, enqueued by a
+ * BullMQ repeatable job scheduler (stagingSweepSchedule.ts, registered at
+ * boot in index.ts) rather than carrying any per-invocation state.
+ */
+export const StagingSweepJob = z.object({
+  kind: z.literal("staging_sweep"),
+});
+export type StagingSweepJob = z.infer<typeof StagingSweepJob>;
+
+export const HeavyJob = z.discriminatedUnion("kind", [EtlRunJob, EvalRunJob, StagingSweepJob]);
 export type HeavyJob = z.infer<typeof HeavyJob>;
 
 export const CheckRunJob = z.object({

@@ -6,7 +6,6 @@ import { evalExpr } from "./residualEval.js";
 import {
   computeFailureReport,
   fallibleStepIsPushable,
-  quarantineMessage,
   resolveOnFailure,
   rowFailed,
 } from "./onFailure.js";
@@ -31,7 +30,8 @@ export const computedFieldOp: OpModule<ComputedFieldStepT> = {
     // pushes too (Phase 9 Part 4, via pushdown.ts's
     // compileFailurePreChecks pre-check query — see onFailure.ts's top
     // doc comment). Only "quarantine" is still always forced residual —
-    // see fallibleStepIsPushable.
+    // see fallibleStepIsPushable (only residual execution has the source
+    // row the quarantine sink needs).
     return fallibleStepIsPushable(step, step.expression);
   },
 
@@ -65,7 +65,12 @@ export const computedFieldOp: OpModule<ComputedFieldStepT> = {
     const report = computeFailureReport(`computed_field "${step.name}"`, step.expression, input.rows, policy);
     const cols = input.cols.includes(step.name) ? input.cols : [...input.cols, step.name];
     const rows = input.rows.map((row) => ({ ...row, [step.name]: evalExpr(step.expression, row) }));
-    if (report && policy === "drop") {
+    // Unlike filter/aggregate's having, a computed_field's failing row
+    // isn't naturally excluded by its SELECT-only shape — "drop" removes it
+    // explicitly here, and "quarantine" (Phase 11) must too: a quarantined
+    // row is routed to the quarantine sink instead of the normal output
+    // stream, so it can't also remain in `rows`.
+    if (report && (policy === "drop" || policy === "quarantine")) {
       const failureExpr = buildFailureExpr(step.expression)!;
       const kept = rows.filter((_, i) => !rowFailed(failureExpr, input.rows[i]!));
       return { cols, rows: kept, failures: [report] };
@@ -76,8 +81,6 @@ export const computedFieldOp: OpModule<ComputedFieldStepT> = {
   checkConfig(step, ctx) {
     const messages: string[] = [];
     if (step.name === "") messages.push(`computed field step ${ctx.index + 1} has no output name.`);
-    const quarantine = quarantineMessage(step, step.expression);
-    if (quarantine) messages.push(`computed field step ${ctx.index + 1}: ${quarantine}`);
     return messages;
   },
 };

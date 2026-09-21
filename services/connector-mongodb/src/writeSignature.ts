@@ -17,8 +17,12 @@ const CLOCK_SKEW_MS = 5_000;
 export type WriteSignaturePayload = {
   connectionId: string;
   grantId: string;
+  runId: string | null;
   entity: { namespace: string; name: string };
   columns: string[];
+  mode: string;
+  stagingEntity: { namespace: string; name: string } | null;
+  quarantineEntity: { namespace: string; name: string } | null;
   issuedAt: number;
 };
 
@@ -26,9 +30,15 @@ function canonicalPayload(input: WriteSignaturePayload): string {
   return JSON.stringify({
     connectionId: input.connectionId,
     grantId: input.grantId,
+    runId: input.runId,
     namespace: input.entity.namespace,
     name: input.entity.name,
     columns: [...input.columns].sort(),
+    mode: input.mode,
+    stagingNamespace: input.stagingEntity?.namespace ?? null,
+    stagingName: input.stagingEntity?.name ?? null,
+    quarantineNamespace: input.quarantineEntity?.namespace ?? null,
+    quarantineName: input.quarantineEntity?.name ?? null,
     issuedAt: input.issuedAt,
   });
 }

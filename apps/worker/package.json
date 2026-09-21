@@ -18,6 +18,7 @@
     "smoke:aggregate:postgres-source": "tsx scripts/aggregate-smoke-postgres-source.ts",
     "smoke:write": "tsx scripts/write-smoke.ts",
     "smoke:write:mysql-mongo": "tsx scripts/write-smoke-mysql-mongo.ts",
+    "smoke:staged": "tsx scripts/write-smoke-staged.ts",
     "smoke:chat": "tsx scripts/chat-smoke.ts",
     "smoke:mapping": "tsx scripts/mapping-smoke.ts",
     "presmoke:profile": "pnpm run build:deps",

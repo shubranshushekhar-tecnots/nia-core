@@ -1053,8 +1053,8 @@ export const FALLIBLE_CALL_FNS: ReadonlySet<CallFn> = new Set([
  */
 const FAILURE_HANDLING_FNS: ReadonlySet<CallFn> = new Set(["coalesce", "is_null", "is_not_null"]);
 
-/** Structural, exemption-ignoring deep collector: every call node anywhere in `expr` whose fn is in FALLIBLE_CALL_FNS, regardless of any coalesce/is_null/is_not_null wrapping. Used only (a) to decide whether a coalesce's last argument is itself capable of producing a fallible null, and (b) to gather the inner calls for that coalesce's compound failure predicate — see collectFallibleCalls's `coalesce` branch. Not a general-purpose substitute for collectFallibleCalls, which is exemption-aware. */
-function collectFallibleCallsDeep(expr: Expr): ExprCall[] {
+/** Structural, exemption-ignoring deep collector: every call node anywhere in `expr` whose fn is in FALLIBLE_CALL_FNS, regardless of any coalesce/is_null/is_not_null wrapping. Used (a) to decide whether a coalesce's last argument is itself capable of producing a fallible null and to gather the inner calls for that coalesce's compound failure predicate — see collectFallibleCalls's `coalesce` branch — and (b) by onFailure.ts's findFailingCall (Phase 11 quarantine sink) to attribute a failed row to the specific nested call that failed inside a compound coalesce unit. Not a general-purpose substitute for collectFallibleCalls, which is exemption-aware. */
+export function collectFallibleCallsDeep(expr: Expr): ExprCall[] {
   const calls: ExprCall[] = [];
   function walk(node: Expr): void {
     switch (node.kind) {

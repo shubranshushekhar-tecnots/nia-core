@@ -17,6 +17,14 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  * entity, columns, issuedAt — so any tampering with any of those fields
  * after signing invalidates it. `MAX_AGE_MS` bounds replay even though
  * this only ever crosses the internal Docker network.
+ *
+ * Phase 11: `runId`/`mode`/`stagingEntity`/`quarantineEntity` joined the
+ * signed payload so a /stage request's staging lifecycle is bound to the
+ * exact same signature as a row-write request — see contract.ts's
+ * WriteContext doc comment. `stagingEntity`/`quarantineEntity` are
+ * destructured to their two string fields (not nested) in the canonical
+ * payload so `null` vs `{namespace,name}` can't collide with any other
+ * field's JSON shape.
  */
 
 export const WRITE_CONTEXT_MAX_AGE_MS = 60_000;
@@ -26,8 +34,12 @@ const CLOCK_SKEW_MS = 5_000;
 export type WriteSignaturePayload = {
   connectionId: string;
   grantId: string;
+  runId: string | null;
   entity: { namespace: string; name: string };
   columns: string[];
+  mode: string;
+  stagingEntity: { namespace: string; name: string } | null;
+  quarantineEntity: { namespace: string; name: string } | null;
   issuedAt: number;
 };
 
@@ -35,9 +47,15 @@ function canonicalPayload(input: WriteSignaturePayload): string {
   return JSON.stringify({
     connectionId: input.connectionId,
     grantId: input.grantId,
+    runId: input.runId,
     namespace: input.entity.namespace,
     name: input.entity.name,
     columns: [...input.columns].sort(),
+    mode: input.mode,
+    stagingNamespace: input.stagingEntity?.namespace ?? null,
+    stagingName: input.stagingEntity?.name ?? null,
+    quarantineNamespace: input.quarantineEntity?.namespace ?? null,
+    quarantineName: input.quarantineEntity?.name ?? null,
     issuedAt: input.issuedAt,
   });
 }

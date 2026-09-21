@@ -6,8 +6,12 @@ import {
   ExecuteRequest,
   InvalidateRequest,
   WriteRequest,
+  StageRequest,
+  PreflightRequest,
   type TabularResult,
   type WriteResponse,
+  type StageResponse,
+  type PreflightResponse,
 } from "@nia/schemas";
 import { getDb, getWriteDb, evict, poolCount, verifyActiveWriteGrant } from "./pool-manager.js";
 import { flattenDocuments } from "./flatten.js";
@@ -60,7 +64,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-mongodb",
   pools: poolCount(),
-  routes: ["test", "introspect", "execute", "invalidate", "write"],
+  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight"],
 }));
 
 app.post("/test", async (req) => {
@@ -185,8 +189,12 @@ app.post("/write", async (req): Promise<WriteResponse> => {
     {
       connectionId: body.context.connectionId,
       grantId: body.context.grantId,
+      runId: body.context.runId,
       entity: body.context.entity,
       columns: body.context.columns,
+      mode: body.context.mode,
+      stagingEntity: body.context.stagingEntity,
+      quarantineEntity: body.context.quarantineEntity,
       issuedAt: body.context.issuedAt,
     },
     body.context.signature,
@@ -207,6 +215,45 @@ app.post("/write", async (req): Promise<WriteResponse> => {
   const result = await db.collection(body.entity.name).bulkWrite(ops);
   const written = result.upsertedCount + result.matchedCount;
   return { written, durationMs: Date.now() - start };
+});
+
+/**
+ * Phase 11 Block 2A/2B/2D — connector-mongodb does NOT implement the
+ * staging lifecycle. Atomic apply-from-staging (Block 2B) needs the
+ * create-staging + write-to-staging + apply-in-one-transaction sequence to
+ * be genuinely atomic, which on MongoDB means multi-document transactions
+ * — only available on a replica set (or sharded cluster), never on a
+ * standalone `mongod`. This codebase's sandbox/dev mongo topology is
+ * standalone (see docs/decisions.md's Phase 11 entry), and detecting
+ * "is this deployment a replica set" per-connection (via `hello`/
+ * `isMaster` and `db.admin().command({replSetGetStatus:1})`) to
+ * conditionally support staging only on replica-set connections is out of
+ * scope for this phase — this is the plan's own documented fallback:
+ * "On standalone mongo, refuse staged mode with a clear message pointing
+ * to direct mode." Both routes below refuse unconditionally, regardless
+ * of the actual connection's topology, rather than half-implementing a
+ * topology probe with no way to exercise the transactional path in this
+ * environment. `/stage` still Zod-parses the request (so malformed
+ * payloads fail the same way they would anywhere else) but never opens a
+ * connection or touches Mongo — there is nothing to verify a signature
+ * against, since no mutation ever happens.
+ */
+const STAGED_MODE_UNSUPPORTED_MESSAGE =
+  "connector-mongodb does not support staged writes: atomic apply-from-staging requires multi-document " +
+  "transactions, which are only available on a MongoDB replica set (or sharded cluster), never on a standalone " +
+  "mongod. Use direct mode (a WriteRequest with no stagingEntity) for this connection instead.";
+
+app.post("/stage", async (req): Promise<StageResponse> => {
+  StageRequest.parse(req.body);
+  throw new Error(STAGED_MODE_UNSUPPORTED_MESSAGE);
+});
+
+app.post("/preflight", async (req): Promise<PreflightResponse> => {
+  PreflightRequest.parse(req.body);
+  return {
+    ok: false,
+    checks: [{ name: "stagedModeSupported", ok: false, message: STAGED_MODE_UNSUPPORTED_MESSAGE }],
+  };
 });
 
 app.post("/invalidate", async (req) => {

@@ -5,18 +5,42 @@ import {
   ExecuteRequest,
   InvalidateRequest,
   WriteRequest,
+  StageRequest,
+  PreflightRequest,
   type TabularResult,
   type WriteResponse,
+  type StageResponse,
+  type PreflightResponse,
+  type AssertionResult,
+  type WriteEntityRef,
 } from "@nia/schemas";
 import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant } from "./pool-manager.js";
 import { verifyWriteContext } from "./writeSignature.js";
 import { buildUpsertSql } from "./writeSql.js";
+import {
+  buildCreateStagingSql,
+  buildDropStagingSql,
+  buildCreateQuarantineSql,
+  buildQuarantineInsertSql,
+  buildQuarantineCommitSql,
+  buildQuarantineDeletePendingSql,
+  buildQuarantineCountSql,
+  buildStagingCountSql,
+  buildApplyFromStagingSql,
+  buildAssertionQuery,
+} from "./stagingSql.js";
+
+function entityMatches(a: WriteEntityRef, b: WriteEntityRef): boolean {
+  return a.namespace === b.namespace && a.name === b.name;
+}
 
 /**
  * connector-mysql — one shared service per tool type on the internal Docker
  * network. Uniform contract: /test /introspect /execute /invalidate /health,
  * plus /write (Phase 6 Block 5 — this connector's etl_sink capability,
- * mirroring connector-supabase's write path exactly, just MySQL-dialect).
+ * mirroring connector-supabase's write path exactly, just MySQL-dialect),
+ * plus /stage and /preflight (Phase 11 — staging lifecycle, MySQL-dialect
+ * mirror of connector-supabase's /stage and /preflight).
  *
  * The worker sends dialect-native, guardrail-approved queries. This service's
  * jobs are pooling, execution, and normalization to the tabular shape.
@@ -28,7 +52,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-mysql",
   pools: poolCount(),
-  routes: ["test", "introspect", "execute", "invalidate", "write"],
+  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight"],
 }));
 
 app.post("/test", async (req) => {
@@ -132,8 +156,17 @@ app.post("/execute", async (req): Promise<TabularResult> => {
  * `timeout` option) rather than a executeWithStatementTimeout wrapper —
  * connector-mysql has never had one; /execute above uses the same
  * pool.query({sql, values, timeout}) shape.
+ *
+ * Phase 11: this endpoint is ALSO how quarantined rows get written — see
+ * connector-supabase's /write header comment for the full rationale
+ * (deliberately reused rather than adding a new raw-SQL-shaped endpoint).
+ * `body.entity` selects which: matches `context.entity` → normal
+ * destination upsert (unchanged); matches `context.quarantineEntity` →
+ * quarantine-row insert (fixed 6-column shape, lazily creating the
+ * quarantine table first).
  */
 const WRITE_ROW_CAP = Number(process.env.WRITE_ROW_CAP ?? 5000);
+const QUARANTINE_COLUMNS = ["run_id", "dest_table", "step_id", "function", "input_value", "source_row"];
 
 app.post("/write", async (req): Promise<WriteResponse> => {
   const body = WriteRequest.parse(req.body);
@@ -151,17 +184,6 @@ app.post("/write", async (req): Promise<WriteResponse> => {
       throw new Error(`upsertKey "${key}" is not present in columns`);
     }
   }
-
-  if (body.entity.namespace !== body.context.entity.namespace || body.entity.name !== body.context.entity.name) {
-    throw new Error("request entity does not match the signed context's entity");
-  }
-  const requestColumns = new Set(body.columns);
-  const contextColumns = new Set(body.context.columns);
-  const columnsMatch =
-    requestColumns.size === contextColumns.size && [...requestColumns].every((c) => contextColumns.has(c));
-  if (!columnsMatch) {
-    throw new Error("request columns do not match the signed context's columns");
-  }
   if (body.context.connectionId !== body.credential.connectionId) {
     throw new Error("signed context connectionId does not match the request credential");
   }
@@ -172,8 +194,12 @@ app.post("/write", async (req): Promise<WriteResponse> => {
     {
       connectionId: body.context.connectionId,
       grantId: body.context.grantId,
+      runId: body.context.runId,
       entity: body.context.entity,
       columns: body.context.columns,
+      mode: body.context.mode,
+      stagingEntity: body.context.stagingEntity,
+      quarantineEntity: body.context.quarantineEntity,
       issuedAt: body.context.issuedAt,
     },
     body.context.signature,
@@ -188,6 +214,38 @@ app.post("/write", async (req): Promise<WriteResponse> => {
   );
   if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
 
+  const isQuarantineWrite =
+    body.context.quarantineEntity !== null && entityMatches(body.entity, body.context.quarantineEntity);
+
+  if (isQuarantineWrite) {
+    if (body.columns.length !== QUARANTINE_COLUMNS.length) {
+      throw new Error(`quarantine write must send exactly ${QUARANTINE_COLUMNS.length} columns (${QUARANTINE_COLUMNS.join(", ")})`);
+    }
+    const pool = await getWritePool(body.credential, body.config);
+    const start = Date.now();
+    const conn = await pool.getConnection();
+    try {
+      for (const sql of buildCreateQuarantineSql(body.entity)) await conn.query(sql);
+      const sql = buildQuarantineInsertSql(body.entity, body.rows.length);
+      const [result] = await conn.query(sql, body.rows.flat());
+      const written = (result as { affectedRows?: number }).affectedRows ?? 0;
+      return { written, durationMs: Date.now() - start };
+    } finally {
+      conn.release();
+    }
+  }
+
+  if (!entityMatches(body.entity, body.context.entity)) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+  const requestColumns = new Set(body.columns);
+  const contextColumns = new Set(body.context.columns);
+  const columnsMatch =
+    requestColumns.size === contextColumns.size && [...requestColumns].every((c) => contextColumns.has(c));
+  if (!columnsMatch) {
+    throw new Error("request columns do not match the signed context's columns");
+  }
+
   const pool = await getWritePool(body.credential, body.config);
   const sql = buildUpsertSql(body.entity, body.columns, body.upsertKeys, body.rows.length);
   const start = Date.now();
@@ -198,6 +256,227 @@ app.post("/write", async (req): Promise<WriteResponse> => {
   });
   const written = (result as { affectedRows?: number }).affectedRows ?? 0;
   return { written, durationMs: Date.now() - start };
+});
+
+/**
+ * Phase 11 Block 2A/2B/2E — the staging lifecycle, discriminated by `op`.
+ * MySQL-dialect mirror of connector-supabase's /stage — same enforcement
+ * order (HMAC first, then request-vs-context deep-equality on
+ * runId/entity/stagingEntity/quarantineEntity/mode before touching
+ * anything). Transactions use mysql2's connection.beginTransaction/commit/
+ * rollback (no `SET LOCAL statement_timeout` equivalent in MySQL — the
+ * client-side `timeout` option connector-mysql already uses elsewhere
+ * isn't available mid-transaction on a dedicated connection, so apply
+ * relies on the destination's own query timeouts).
+ */
+app.post("/stage", async (req): Promise<StageResponse> => {
+  const body = StageRequest.parse(req.body);
+  const start = Date.now();
+
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const signatureValid = verifyWriteContext(
+    {
+      connectionId: body.context.connectionId,
+      grantId: body.context.grantId,
+      runId: body.context.runId,
+      entity: body.context.entity,
+      columns: body.context.columns,
+      mode: body.context.mode,
+      stagingEntity: body.context.stagingEntity,
+      quarantineEntity: body.context.quarantineEntity,
+      issuedAt: body.context.issuedAt,
+    },
+    body.context.signature,
+    secret,
+  );
+  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+
+  if (body.context.connectionId !== body.credential.connectionId) {
+    throw new Error("signed context connectionId does not match the request credential");
+  }
+  if (body.context.runId !== body.runId) {
+    throw new Error("signed context runId does not match the request runId");
+  }
+  if (!entityMatches(body.entity, body.context.entity)) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+  if (!body.context.stagingEntity || !entityMatches(body.stagingEntity, body.context.stagingEntity)) {
+    throw new Error("request stagingEntity does not match the signed context's stagingEntity");
+  }
+  if (body.context.mode !== body.mode) {
+    throw new Error("request mode does not match the signed context's mode");
+  }
+  const quarantineMatches =
+    body.quarantineEntity === null
+      ? body.context.quarantineEntity === null
+      : body.context.quarantineEntity !== null && entityMatches(body.quarantineEntity, body.context.quarantineEntity);
+  if (!quarantineMatches) {
+    throw new Error("request quarantineEntity does not match the signed context's quarantineEntity");
+  }
+
+  const grantActive = await verifyActiveWriteGrant(body.context.grantId, body.context.connectionId, body.entity.namespace);
+  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+
+  const pool = await getWritePool(body.credential, body.config);
+
+  if (body.op === "create") {
+    const conn = await pool.getConnection();
+    try {
+      for (const sql of buildCreateStagingSql(body.entity, body.stagingEntity)) await conn.query(sql);
+    } finally {
+      conn.release();
+    }
+    return { op: "create", ok: true, assertionResults: [], durationMs: Date.now() - start };
+  }
+
+  if (body.op === "drop") {
+    const conn = await pool.getConnection();
+    try {
+      await conn.query(buildDropStagingSql(body.stagingEntity));
+      if (body.quarantineEntity) {
+        const { sql } = buildQuarantineDeletePendingSql(body.quarantineEntity);
+        await conn.query(sql, [body.runId]).catch(() => {
+          // Quarantine table may not exist yet (no row ever quarantined this run) — nothing to delete.
+        });
+      }
+    } finally {
+      conn.release();
+    }
+    return { op: "drop", ok: true, assertionResults: [], durationMs: Date.now() - start };
+  }
+
+  // op === "apply": assertions run first, inside the same transaction as
+  // the apply DML, so a failure rolls back cleanly with zero destination
+  // effect — matching the plan's "leaves destination untouched" bar.
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const assertionResults: AssertionResult[] = [];
+    for (const spec of body.assertions) {
+      if (spec.kind === "maxFailureRate") {
+        let quarantineCount = 0;
+        if (body.quarantineEntity) {
+          const { sql } = buildQuarantineCountSql(body.quarantineEntity);
+          const quarantineResult = await conn.query(sql, [body.runId]).catch(() => null);
+          const rows = quarantineResult ? (quarantineResult[0] as Array<{ n: number }>) : [{ n: 0 }];
+          quarantineCount = Number(rows[0]?.n ?? 0);
+        }
+        const [stagingRows] = await conn.query(buildStagingCountSql(body.stagingEntity));
+        const stagingCount = Number((stagingRows as Array<{ n: number }>)[0]?.n ?? 0);
+        const denom = quarantineCount + stagingCount;
+        const rate = denom === 0 ? 0 : quarantineCount / denom;
+        const ok = rate <= spec.maxRate;
+        assertionResults.push({
+          spec,
+          ok,
+          detail: ok ? undefined : `failure rate ${(rate * 100).toFixed(1)}% (${quarantineCount}/${denom}) exceeds ${(spec.maxRate * 100).toFixed(1)}% max`,
+        });
+        continue;
+      }
+      const q = buildAssertionQuery(spec, body.stagingEntity, body.entity);
+      if (!q) continue;
+      const [rows] = await conn.query(q.sql);
+      const outcome = q.evaluate(((rows as Array<Record<string, unknown>>)[0] ?? {}) as Record<string, unknown>);
+      assertionResults.push({ spec, ok: outcome.ok, detail: outcome.detail });
+    }
+
+    if (assertionResults.some((a) => !a.ok)) {
+      await conn.rollback();
+      return { op: "apply", ok: false, assertionResults, durationMs: Date.now() - start };
+    }
+
+    let applied = 0;
+    for (const sql of buildApplyFromStagingSql(body.entity, body.stagingEntity, body.context.columns, body.upsertKeys, body.mode)) {
+      const [result] = await conn.query(sql);
+      applied = (result as { affectedRows?: number }).affectedRows ?? applied;
+    }
+
+    let quarantined = 0;
+    if (body.quarantineEntity) {
+      const { sql } = buildQuarantineCommitSql(body.quarantineEntity);
+      const commitResult = await conn.query(sql, [body.runId]).catch(() => null);
+      quarantined = commitResult ? ((commitResult[0] as { affectedRows?: number }).affectedRows ?? 0) : 0;
+    }
+
+    await conn.commit();
+    return { op: "apply", ok: true, assertionResults, applied, quarantined, durationMs: Date.now() - start };
+  } catch (err) {
+    await conn.rollback().catch(() => {
+      // Connection may already be unusable — nothing more to do.
+    });
+    throw err;
+  } finally {
+    conn.release();
+  }
+});
+
+/**
+ * Phase 11 Block 2D — preflight. Unsigned and read-only, checks the
+ * credential's role can actually do what staged writes will need: create/
+ * drop in the `nia` staging database, and write to the destination
+ * entity's database. MySQL has no has_table_privilege() builtin (unlike
+ * postgres) — write-destination is checked via information_schema.
+ * table_privileges, matching the connector's own CURRENT_USER() against
+ * the 'user'@'host' GRANTEE format that view reports.
+ */
+app.post("/preflight", async (req): Promise<PreflightResponse> => {
+  const body = PreflightRequest.parse(req.body);
+  const pool = await getWritePool(body.credential, body.config);
+  const checks: PreflightResponse["checks"] = [];
+
+  try {
+    await pool.query("CREATE DATABASE IF NOT EXISTS `nia`");
+    checks.push({ name: "create-schema-nia", ok: true });
+  } catch (e) {
+    checks.push({
+      name: "create-schema-nia",
+      ok: false,
+      message: e instanceof Error ? e.message : "unknown error",
+      grantSql: "GRANT CREATE ON *.* TO '<user>'@'%';",
+    });
+  }
+
+  const probeTable = "`nia`.`__nia_preflight_probe`";
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS ${probeTable} (id int)`);
+    await pool.query(`DROP TABLE IF EXISTS ${probeTable}`);
+    checks.push({ name: "create-drop-staging-table", ok: true });
+  } catch (e) {
+    checks.push({
+      name: "create-drop-staging-table",
+      ok: false,
+      message: e instanceof Error ? e.message : "unknown error",
+      grantSql: "GRANT CREATE, DROP ON `nia`.* TO '<user>'@'%';",
+    });
+  }
+
+  try {
+    const [rows] = await pool.query(
+      `SELECT COUNT(*) AS n FROM information_schema.table_privileges
+       WHERE table_schema = ? AND table_name = ? AND privilege_type = 'INSERT'
+         AND grantee = CONCAT("'", SUBSTRING_INDEX(CURRENT_USER(),'@',1), "'@'", SUBSTRING_INDEX(CURRENT_USER(),'@',-1), "'")`,
+      [body.entity.namespace, body.entity.name],
+    );
+    const n = Number((rows as Array<{ n: number }>)[0]?.n ?? 0);
+    const ok = n > 0;
+    checks.push({
+      name: "write-destination",
+      ok,
+      message: ok ? undefined : `role lacks INSERT on \`${body.entity.namespace}\`.\`${body.entity.name}\``,
+      grantSql: ok ? undefined : `GRANT INSERT, UPDATE, DELETE ON \`${body.entity.namespace}\`.\`${body.entity.name}\` TO '<user>'@'%';`,
+    });
+  } catch (e) {
+    checks.push({
+      name: "write-destination",
+      ok: false,
+      message: e instanceof Error ? e.message : "unknown error",
+      grantSql: `GRANT INSERT, UPDATE, DELETE ON \`${body.entity.namespace}\`.\`${body.entity.name}\` TO '<user>'@'%';`,
+    });
+  }
+
+  return { ok: checks.every((c) => c.ok), checks };
 });
 
 app.post("/invalidate", async (req) => {

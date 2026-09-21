@@ -103,6 +103,12 @@ function graph(opts: { dialect?: string } = {}): GraphDoc {
           entity: { namespace: "public", name: "users_dest" },
           mapping: { version: 1, entries: [{ from: "email", to: "email_address" }], approvedAt: "2026-01-01T00:00:00.000Z" },
           upsertKeys: ["email_address"],
+          // This suite (Block 3.5) covers chunk-loop/cursor/resume mechanics
+          // via dispatchWrite, predating Phase 11's staging lifecycle —
+          // pinned to "direct" so it keeps exercising exactly that path
+          // unaffected by the now-default "staged" mode's preflight/stage
+          // calls (covered separately by stagedWrite's own tests).
+          writeMode: "direct",
         },
       },
     ],
@@ -265,6 +271,7 @@ describe("runEtl — aggregate pagination (Phase 9 Part 3)", () => {
               approvedAt: "2026-01-01T00:00:00.000Z",
             },
             upsertKeys: ["cohort"],
+            writeMode: "direct",
           },
         },
       ],
@@ -341,6 +348,7 @@ describe("runEtl — aggregate pagination (Phase 9 Part 3)", () => {
               approvedAt: "2026-01-01T00:00:00.000Z",
             },
             upsertKeys: ["cohort"],
+            writeMode: "direct",
           },
         },
       ],
@@ -398,6 +406,7 @@ describe("runEtl — aggregate pagination (Phase 9 Part 3)", () => {
               approvedAt: "2026-01-01T00:00:00.000Z",
             },
             upsertKeys: ["cohort"],
+            writeMode: "direct",
           },
         },
       ],
@@ -493,6 +502,7 @@ describe("runEtl — onFailure abort / failure-count threading (Phase 8b-3)", ()
             entity: { namespace: "public", name: "users_dest" },
             mapping: { version: 1, entries: [{ from: mapFrom, to: mapFrom }], approvedAt: "2026-01-01T00:00:00.000Z" },
             upsertKeys: [mapFrom],
+            writeMode: "direct",
           },
         },
       ],
@@ -720,6 +730,7 @@ describe("runEtl — stateful residual op (Phase 9 Part 1)", () => {
               approvedAt: "2026-01-01T00:00:00.000Z",
             },
             upsertKeys: ["cohort"],
+            writeMode: "direct",
           },
         },
       ],

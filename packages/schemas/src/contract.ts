@@ -130,6 +130,9 @@ export const WriteEntityRef = z.object({
 });
 export type WriteEntityRef = z.infer<typeof WriteEntityRef>;
 
+export const WriteMode = z.enum(["upsert", "replace"]);
+export type WriteMode = z.infer<typeof WriteMode>;
+
 /**
  * The worker computes this (writeSignature.ts) before dispatch and
  * connector-supabase independently recomputes + verifies it (its own copy
@@ -141,12 +144,27 @@ export type WriteEntityRef = z.infer<typeof WriteEntityRef>;
  * NOT a JWT/existing-auth-token reuse — this asserts something a user JWT
  * doesn't ("the worker re-checked this exact entity+columns against a
  * confirmed grant just now"), not identity.
+ *
+ * Phase 11: `runId`/`mode`/`stagingEntity`/`quarantineEntity` extend the
+ * signed assertion to cover the staging lifecycle (createStaging/
+ * applyStaging/dropStaging — StageRequest below), not just row upserts. A
+ * /stage request is only ever honored by a connector when its
+ * stagingEntity/quarantineEntity/mode/runId deep-equal the SAME fields
+ * inside this signed context — i.e. staging DDL follows the exact same
+ * "structured request, signed context, connector re-checks before
+ * mutating" model as the row-write path, never a new raw-SQL surface.
+ * `stagingEntity`/`quarantineEntity` are null for a plain row-upsert
+ * WriteRequest context (today's only use before Phase 11).
  */
 export const WriteContext = z.object({
   connectionId: z.string().uuid(),
   grantId: z.string().uuid(),
+  runId: z.string().uuid().nullable().default(null),
   entity: WriteEntityRef,
   columns: z.array(SqlIdentifier).min(1),
+  mode: WriteMode.default("upsert"),
+  stagingEntity: WriteEntityRef.nullable().default(null),
+  quarantineEntity: WriteEntityRef.nullable().default(null),
   issuedAt: z.number().int(),
   signature: z.string(),
 });
@@ -170,6 +188,117 @@ export const WriteResponse = z.object({
   durationMs: z.number().int().nonnegative(),
 });
 export type WriteResponse = z.infer<typeof WriteResponse>;
+
+/**
+ * Phase 11 Block 2E — post-assertions run by the connector against the
+ * staging table, in the SAME transaction as the apply DML, before it. Fixed
+ * kinds only (no raw predicate text) so every assertion compiles to a
+ * connector-authored, dialect-specific SQL template — same "structured
+ * request, connector builds the SQL" posture as the rest of the write path.
+ * `noNullKeys` is always run by the worker in addition to whatever the op
+ * registry declares (see packages/schemas/src/ops/types.ts's
+ * `OpModule.stagingAssertions`); `uniqueColumns` is what the aggregate op
+ * declares for its groupBy columns. `maxFailureRate`/`replaceShrinkGuard`
+ * are evaluated by the connector from counts it already has mid-transaction
+ * (quarantine rows for this run; staging vs. destination row counts) rather
+ * than a client-supplied number, so a caller can't lie about the ratio.
+ */
+export const AssertionSpec = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("noNullKeys"), columns: z.array(SqlIdentifier).min(1) }),
+  z.object({ kind: z.literal("uniqueColumns"), columns: z.array(SqlIdentifier).min(1) }),
+  z.object({ kind: z.literal("maxFailureRate"), maxRate: z.number().min(0).max(1) }),
+  z.object({
+    kind: z.literal("replaceShrinkGuard"),
+    minRatio: z.number().min(0).max(1).default(0.5),
+    allowShrink: z.boolean().default(false),
+  }),
+]);
+export type AssertionSpec = z.infer<typeof AssertionSpec>;
+
+export const AssertionResult = z.object({
+  spec: AssertionSpec,
+  ok: z.boolean(),
+  detail: z.string().optional(),
+});
+export type AssertionResult = z.infer<typeof AssertionResult>;
+
+/**
+ * Phase 11 Block 2A/2B — the staging lifecycle. One endpoint, discriminated
+ * by `op`, rather than three endpoints, since all three share the same
+ * signed-context re-check (entity/stagingEntity/quarantineEntity/mode/runId
+ * must deep-equal the SAME fields inside `context` — see WriteContext's
+ * doc comment) before touching anything. `create`/`drop` act only on
+ * `stagingEntity` (and `drop` additionally drops `quarantineEntity`'s
+ * *pending* rows for this run, never the quarantine table itself — that
+ * table is shared across runs). `apply` is the one destination-mutating op:
+ * it runs `assertions` against staging, and only on success applies staging
+ * to `entity` per `mode` and marks this run's quarantine rows committed —
+ * all inside one connector-side transaction (see each connector's
+ * `stagingSql.ts` for the exact DDL/DML templates).
+ */
+export const StageOp = z.enum(["create", "apply", "drop"]);
+export type StageOp = z.infer<typeof StageOp>;
+
+export const StageRequest = z.object({
+  credential: CredentialRef,
+  config: ConnectorConfig,
+  op: StageOp,
+  entity: WriteEntityRef,
+  stagingEntity: WriteEntityRef,
+  quarantineEntity: WriteEntityRef.nullable().default(null),
+  runId: z.string().uuid(),
+  mode: WriteMode.default("upsert"),
+  /** Same convention as WriteRequest.upsertKeys — real column identifiers, used by `create` (LIKE dest) and `apply` (ON CONFLICT/DUPLICATE KEY). */
+  upsertKeys: z.array(SqlIdentifier).min(1),
+  /** Only consulted by `apply`; ignored by `create`/`drop`. */
+  assertions: z.array(AssertionSpec).default([]),
+  timeoutMs: z.number().int().positive().default(30000),
+  context: WriteContext,
+});
+export type StageRequest = z.infer<typeof StageRequest>;
+
+export const StageResponse = z.object({
+  op: StageOp,
+  ok: z.boolean(),
+  /** `apply` only: each assertion's outcome, in the order they were declared. Empty for create/drop. */
+  assertionResults: z.array(AssertionResult).default([]),
+  /** `apply` only: rows moved from staging into the destination. */
+  applied: z.number().int().nonnegative().optional(),
+  /** `apply` only: this run's quarantine rows marked committed. */
+  quarantined: z.number().int().nonnegative().optional(),
+  durationMs: z.number().int().nonnegative(),
+});
+export type StageResponse = z.infer<typeof StageResponse>;
+
+/**
+ * Phase 11 Block 2D — preflight. Unsigned and read-only (mirrors
+ * `/introspect`'s posture: no mutation, so no signed context needed),
+ * called once before extraction starts. Each check names the privilege it
+ * verified and, on failure, the exact grant SQL an operator needs to run —
+ * so a missing-privilege run fails fast with an actionable message instead
+ * of partway through staging DDL.
+ */
+export const PreflightRequest = z.object({
+  credential: CredentialRef,
+  config: ConnectorConfig,
+  entity: WriteEntityRef,
+  upsertKeys: z.array(SqlIdentifier).min(1),
+});
+export type PreflightRequest = z.infer<typeof PreflightRequest>;
+
+export const PreflightCheck = z.object({
+  name: z.string(),
+  ok: z.boolean(),
+  message: z.string().optional(),
+  grantSql: z.string().optional(),
+});
+export type PreflightCheck = z.infer<typeof PreflightCheck>;
+
+export const PreflightResponse = z.object({
+  ok: z.boolean(),
+  checks: z.array(PreflightCheck),
+});
+export type PreflightResponse = z.infer<typeof PreflightResponse>;
 
 export const HealthResponse = z.object({
   status: z.literal("ok"),

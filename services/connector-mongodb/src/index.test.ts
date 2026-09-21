@@ -75,3 +75,67 @@ describe("connector-mongodb /execute (route-level)", () => {
     expect(res.json().message).toMatch(/only accepts mongo queries, got kind: sql/);
   });
 });
+
+// Phase 11 — connector-mongodb has no staging-lifecycle implementation
+// (standalone mongo can't do atomic multi-document transactions); both
+// routes refuse unconditionally with a message pointing to direct mode.
+// See index.ts's comment above these routes for the full rationale.
+const baseEntity = { namespace: "testdb", name: "orders" };
+const baseContext = {
+  connectionId: baseCredential.connectionId,
+  grantId: "22222222-2222-2222-2222-222222222222",
+  runId: "33333333-3333-3333-3333-333333333333",
+  entity: baseEntity,
+  columns: ["id", "total"],
+  mode: "upsert" as const,
+  stagingEntity: { namespace: "nia", name: "nia_stg_abc123" },
+  quarantineEntity: null,
+  issuedAt: Date.now(),
+  signature: "irrelevant-never-checked",
+};
+
+describe("connector-mongodb /stage (route-level)", () => {
+  it("refuses staged mode with a message pointing to direct mode, without touching Mongo", async () => {
+    const app = await freshApp();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/stage",
+      payload: {
+        credential: baseCredential,
+        config: baseConfig,
+        op: "create",
+        entity: baseEntity,
+        stagingEntity: baseContext.stagingEntity,
+        quarantineEntity: null,
+        runId: baseContext.runId,
+        mode: "upsert",
+        upsertKeys: ["id"],
+        context: baseContext,
+      },
+    });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json().message).toMatch(/does not support staged writes/);
+    expect(collectionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("connector-mongodb /preflight (route-level)", () => {
+  it("reports staged mode as unavailable", async () => {
+    const app = await freshApp();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/preflight",
+      payload: { credential: baseCredential, config: baseConfig, entity: baseEntity, upsertKeys: ["id"] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(body.checks).toEqual([
+      expect.objectContaining({ name: "stagedModeSupported", ok: false, message: expect.stringMatching(/does not support staged writes/) }),
+    ]);
+  });
+});

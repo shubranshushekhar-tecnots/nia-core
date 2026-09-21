@@ -14,6 +14,17 @@ export type WriteDispatchInput = {
   rows: unknown[][];
   upsertKeys: string[];
   timeoutMs?: number;
+  /**
+   * Phase 11: set by the ETL runner when a chunk is being upserted into a
+   * run's staging table (or its quarantine sink) instead of the
+   * destination directly — see stagedWriteDispatch.ts. Left undefined for
+   * today's direct-mode writes, which sign/send a plain row-upsert context
+   * (runId/stagingEntity/quarantineEntity null, mode "upsert").
+   */
+  runId?: string | null;
+  mode?: WriteContext["mode"];
+  stagingEntity?: WriteEntityRef | null;
+  quarantineEntity?: WriteEntityRef | null;
 };
 
 /**
@@ -55,12 +66,20 @@ export async function dispatchWrite(
   }
 
   const issuedAt = Date.now();
+  const runId = input.runId ?? null;
+  const mode = input.mode ?? "upsert";
+  const stagingEntity = input.stagingEntity ?? null;
+  const quarantineEntity = input.quarantineEntity ?? null;
   const signature = signWriteContext(
     {
       connectionId: connection.id,
       grantId: grant.value.grantId,
+      runId,
       entity: input.entity,
       columns: input.columns,
+      mode,
+      stagingEntity,
+      quarantineEntity,
       issuedAt,
     },
     env.WRITE_DISPATCH_SIGNING_SECRET,
@@ -68,8 +87,12 @@ export async function dispatchWrite(
   const context: WriteContext = {
     connectionId: connection.id,
     grantId: grant.value.grantId,
+    runId,
     entity: input.entity,
     columns: input.columns,
+    mode,
+    stagingEntity,
+    quarantineEntity,
     issuedAt,
     signature,
   };
