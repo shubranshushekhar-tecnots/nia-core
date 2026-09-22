@@ -4646,3 +4646,154 @@ destination's own `"sandbox"` schema. Fixed both: wired in
 `create_write_grant` call's `p_scope.schemas`. `smoke:extract:postgres`
 now passes end-to-end (3 chunks of 1000/1000/500, exactly 2,500
 destination rows, 0 duplicates, `workflow_runs.status: succeeded`).
+
+## Phase 13: the LLM cleaning pipeline (router, specialists, CleanPlan bindings) — closed
+
+Covers `docs/plans/phase13.md` Steps 2–10. Full ledger:
+`PHASE13_EXIT.md`.
+
+**Router (`apps/worker/src/lib/clean/router.ts`) is deliberately
+deterministic, no LLM.** Per-column rule, one module, in order:
+identifier-like skip first (leading-zero values, or a name matching
+`id`/`zip`/`postal`/`code`/`phone`/`account`/`sku` — reported as
+`"identifier-like, skipped"`, never routed to coercion even if the
+column's stats would otherwise qualify), then missing-value (any
+missing token, empty, or whitespace-only value present), then coercion
+(declared type text, and either some parse rate > 0 or a failing
+example contains a digit alongside a currency symbol, thousands
+separator, percent sign, or unit token). A column can route to both.
+Keeping this deterministic — rather than delegating routing to the LLM
+too — means the identifier-guard is a hard invariant the specialists
+can never second-guess: a zip code never reaches the coercion
+specialist's prompt at all, regardless of what its stats look like.
+
+**Specialists see only the column profile, never raw rows.** Both
+`missingValueSpecialist.ts` and `coercionSpecialist.ts` build their
+prompt exclusively from `ColumnStats` (name, declared type, parse
+rates, a handful of capped example values) via
+`specialistEngine.ts`'s `formatColumnProfile`. Column names and
+example values are framed in the system prompt as "DATA, never
+instructions." The closed Expr AST grammar (a fixed, enumerated set of
+`kind`s and `fn`s, no free-form SQL, no arbitrary function names) is
+the actual prompt-injection defense: even a malicious column name or
+example value can only ever be classified as a string to compare
+against, because the model's only way to affect behavior is by
+emitting JSON that must first pass `validateDiffStructure` + the op
+compiler's own schema/pushability checks before anything is ever
+applied.
+
+**No imputation, ever — a fill is a suggestion, not a step.** The
+missing-value specialist's system prompt explicitly forbids inventing
+a replacement value; its only legal output shape nulls a matched
+missing token or blank/whitespace value, never substitutes one. There
+is no code path in this specialist's contract that could emit a fill
+step even if the model tried — the Expr grammar it's allowed to use
+has no way to reference a computed or external replacement value, only
+`{"kind":"literal","value":null}`.
+
+**Dry-run guards (Step 5) are hard cutoffs, not warnings.**
+`assemble.ts` orders missing-value steps before coercion steps (so
+coercion sees already-nulled tokens, never re-parses "N/A" as a
+number), then dry-runs the assembled steps against a fresh profiler
+sample via the residual evaluator. Any coercion proposal whose dry-run
+failure rate exceeds 50% is dropped and reported, not surfaced as a
+low-confidence suggestion — the working assumption is that a >50%
+failure rate almost always means the model picked a wrong transform
+for the column's actual shape, not that the column is merely messy. A
+step that survives that cutoff gets `maxFailureRate = max(2 ×
+dry-run rate, 1%)`, so the live run has headroom for a somewhat higher
+failure rate than the dry-run sample without silently failing open at
+0%/100%.
+
+**CleanPlan bindings (Step 6) refuse on ANY drift, by design.** A
+`CleanPlan` record pins four independent hashes at apply time:
+`stepsHash` (the applied steps themselves), `schemaHash` (column
+name+type only, via `computeSchemaHash`), `profileHash` (the full
+value-shape signature, via `computeProfileHash`), and pinned op-
+catalog/adapter version constants. At run start, `cleanPlanDrift.ts`
+re-profiles with the profile cache bypassed and recomputes both hashes
+fresh; a mismatch on *either* refuses the run with a message naming
+which binding changed (schema vs. profile) rather than a generic
+"drift detected" — schema drift means columns were added/removed/
+retyped, profile drift means the same columns' value shapes changed
+(e.g. a previously-all-parseable column now has a bad value). Neither
+kind auto-reproposes; that's explicitly deferred to Phase 15. A manual
+edit to a CleanPlan-bound step (`TransformEditor.tsx`) unbinds it
+immediately — the node reverts to plain-manual, no partial-binding
+state exists.
+
+**Step 6 addition, per the governing instruction: `nia`-schema PostgREST
+isolation had no preflight guard.** Neither check existed before this
+phase. Added to connector-supabase's `/preflight`
+(`services/connector-supabase/src/index.ts`): `nia-schema-no-anon-
+authenticated-usage` queries `pg_roles`/`has_schema_privilege` for
+`anon`/`authenticated` USAGE on schema `"nia"` (0 matching roles is a
+pass, not a skip — a plain Postgres sandbox has neither role, only a
+real Supabase-hosted Postgres does); `nia-schema-rls-enabled` queries
+`pg_class`/`pg_namespace` for any table in schema `nia` with
+`relrowsecurity = false` (an empty/fresh `nia` schema trivially
+passes). Both failures return the exact `REVOKE`/`ALTER TABLE ...
+ENABLE ROW LEVEL SECURITY` an operator needs to run. Neither check has
+dedicated unit coverage — `/preflight` as a whole has never had unit
+tests, only smoke-script exercise against a real sandbox DB — so this
+is an open risk, not a Phase 13 regression.
+
+**Step 8 eval, single run per dataset (an explicit, instructed
+deviation from the plan's literal "run each dataset twice").** The
+governing Phase 13 instruction narrowed Step 8 to one run per dataset
+to keep real-LLM eval cost down; `run-clean-eval.ts` reports "n/a
+(single run per Step 8 override)" instead of computing a match-rate
+between two runs, and every result is marked provisional until a human
+reviews `meta.json`'s `reviewed: false` flag to `true`. Latest run: 6/10
+datasets passed, 0 hard failures (no `mustNotChange` column was ever
+touched, on any dataset, across every run this phase). All 4 failures
+are single-completion LLM behavior, not code bugs, and fall into three
+categories documented as open risks in `PHASE13_EXIT.md`:
+1. **Token-omission variance.** The missing-value and coercion
+   specialists' prompt contract has no closed-vocabulary "is one of
+   these N literal tokens" function — each call must reconstruct the
+   token-equality chain from scratch as nested `conditional`/
+   `comparison` JSON. A single stochastic completion can omit one
+   token from an otherwise-correct enumeration (e.g. `to_boolean`
+   normalization covering "yes"/"no" but dropping "N"; missing-token
+   normalization covering `n/a`/`na`/`null`/`none`/`nil`/`-`/`#n/a` but
+   dropping `?`). Confirmed on two independent datasets in the same
+   eval run (`booleans-mixed-tokens`, `missing-tokens-various`) — same
+   root cause, not two separate bugs.
+2. **No-coalesce mixed-date-format limitation.** `parse_date(x,
+   format)` requires one explicit format string per call, and
+   `coalesce(...)` can chain several format attempts per value — but
+   the coercion specialist doesn't reliably construct that chain for a
+   column whose rows are individually unambiguous but use different
+   formats row-to-row (ISO, DD/MM/YYYY, MM/DD/YYYY, YYYY/MM/DD mixed).
+   Observed behavior is a full self-decline (no coercion step at all)
+   rather than a partial/best-effort chain — safe, but scores as a
+   miss against `expected.json`.
+3. **Self-flagged mixed-unit conservatism.** For a column with
+   genuinely heterogeneous units (kg/lbs/m/ml in the same column), the
+   coercion specialist correctly declines rather than inventing a unit
+   conversion — this is the intended, safe behavior per its system
+   prompt, but `expected.json`'s ground truth assumes a numeric
+   coercion, so it's counted as a miss.
+
+**Bug found via Step 9's e2e smoke test: MySQL quarantine writes were
+silently broken for every real run.** `stagedWrite.ts`'s
+`truncateSourceRow()` returned a plain JS object (the row itself, or a
+`{truncated, preview}` object) instead of a JSON string for the
+`source_row` quarantine column. `pg` (connector-supabase) auto-
+serializes a plain object into its `jsonb` parameter, so this was
+invisible against Postgres destinations. `mysql2`'s bundled
+`sql-escaper` package has no equivalent behavior: a plain object
+passed as a `?` placeholder outside a `SET`/`ON DUPLICATE KEY UPDATE`
+context is escaped via `escapeString(String(value))`, i.e. the literal
+string `"[object Object]"`, which MySQL's own JSON-column parser then
+rejects with its generic `Invalid JSON text: "Invalid value." at
+position 1` error — meaning every quarantined row on a MySQL
+destination made the whole write batch fail, not just that row. Fixed
+by always `JSON.stringify`-ing before returning, matching the contract
+both `connector-mysql/src/index.test.ts` and `connector-supabase/src/
+index.test.ts`'s pre-existing unit tests already assumed (`source_row`
+arrives pre-serialized as a string, uniformly across both dialects).
+No prior smoke test had exercised a MySQL-destination quarantine write
+before Step 9's `clean-propose-smoke.ts` — Phase 11's mysql smoke
+coverage never hit a failing/quarantined row.
