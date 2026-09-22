@@ -7,7 +7,7 @@ export * from "./graph.js";
 export * from "./expression.js";
 export * from "./nodeConfig.js";
 export * from "./pushdown.js";
-export type { OpKind, StepFailureReport, QuarantinedRow, ResidualExecution, ResidualAccumulator } from "./ops/types.js";
+export type { OpKind, StepFailureReport, QuarantinedRow, ResidualExecution, ResidualAccumulator, SchemaResult } from "./ops/types.js";
 export { OP_REGISTRY, opForStep } from "./ops/registry.js";
 // Phase 8b-3: OnFailureAbortError is thrown by ops/onFailure.ts's
 // computeFailureReport (via applyResidual) for policy "fail" — public so
@@ -41,4 +41,9 @@ export { evalExpr } from "./ops/residualEval.js";
 export * from "./niaType.js";
 export * from "./niaAdapters.js";
 export * from "./niaInference.js";
+// Namespaced, not `export *`: this file's typeOfExpr(expr, input) => NiaType
+// would otherwise collide with expression.ts's already-exported, differently-
+// purposed typeOfExpr(expr) => "scalar" | "boolean" grammar classifier. See
+// docs/plans/schema-layer.md's Part 3 plan-update entry.
+export * as niaExprType from "./niaExprType.js";
 export * from "./writeValueCoercion.js";

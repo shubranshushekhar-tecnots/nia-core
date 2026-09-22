@@ -1,6 +1,7 @@
 import { AggregateStep, type AggregateStep as AggregateStepT, type AggregationSpec, exprToConditions } from "../nodeConfig.js";
 import { collectFieldRefs, type Expr } from "../expression.js";
-import type { OpKind, OpModule, ResidualAccumulator, SqlEmitContext } from "./types.js";
+import type { NiaField } from "../niaType.js";
+import type { OpKind, OpModule, ResidualAccumulator, SchemaResult, SqlEmitContext } from "./types.js";
 import { exprFnsPushable } from "./types.js";
 import { evalExpr } from "./residualEval.js";
 import { computeFailureReport, fallibleStepIsPushable, resolveOnFailure } from "./onFailure.js";
@@ -212,6 +213,49 @@ export const aggregateOp: OpModule<AggregateStepT> = {
 
   createDefault(): AggregateStepT {
     return { kind: "aggregate", groupBy: [], aggregations: [] };
+  },
+
+  outputSchema(input, step): SchemaResult {
+    const fields: Record<string, NiaField> = {};
+    for (const f of step.groupBy) {
+      const src = input.fields[f];
+      if (!src) return { ok: false, error: `aggregate step: groupBy references unknown field "${f}".` };
+      fields[f] = src;
+    }
+    for (const agg of step.aggregations) {
+      // "" is a draft/autosave-transient alias (same convention as
+      // checkConfig below) — skip rather than fail on an incomplete
+      // aggregation.
+      if (agg.alias === "") continue;
+      switch (agg.fn) {
+        case "count":
+        case "count_field":
+        case "count_distinct":
+          fields[agg.alias] = { type: { kind: "integer" }, nullable: false };
+          break;
+        case "sum":
+          fields[agg.alias] = { type: { kind: "float" }, nullable: false };
+          break;
+        case "avg":
+          fields[agg.alias] = { type: { kind: "float" }, nullable: true };
+          break;
+        case "min":
+        case "max": {
+          // No field chosen yet is also a draft/autosave-transient state
+          // (checkConfig only warns, doesn't reject) — skip rather than
+          // fail; a genuinely unknown field name IS a real "can't
+          // determine the type" case, so that fails.
+          if (!agg.field) continue;
+          const src = input.fields[agg.field];
+          if (!src) {
+            return { ok: false, error: `aggregate step: "${agg.alias}" (${agg.fn}) references unknown field "${agg.field}".` };
+          }
+          fields[agg.alias] = { type: src.type, nullable: true };
+          break;
+        }
+      }
+    }
+    return { ok: true, schema: { fields } };
   },
 
   isPushable(dialect, step) {

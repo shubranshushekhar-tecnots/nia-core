@@ -485,7 +485,45 @@ export const AggregateStep = z.object({
 });
 export type AggregateStep = z.infer<typeof AggregateStep>;
 
-export const TransformStep = z.discriminatedUnion("kind", [FilterStep, ComputedFieldStep, DropFieldsStep, AggregateStep]);
+/**
+ * Schema layer, Part 3 — to_json(field) -> outputName: copies a field's
+ * value into a new column typed as NiaType "json", unchanged. Never
+ * fallible (any JS value is valid JSON) so, unlike Filter/ComputedField/
+ * Aggregate, this step carries no `onFailure`. `field`/`outputName`
+ * intentionally allow "" — same autosave-transient-draft-state convention
+ * as ComputedFieldStep.name above; checkConfig (below, in the op module)
+ * enforces non-emptiness at check-time.
+ */
+export const ToJsonStep = z.object({
+  kind: z.literal("to_json"),
+  field: z.string(),
+  outputName: z.string(),
+  ...stepIdentityFields,
+});
+export type ToJsonStep = z.infer<typeof ToJsonStep>;
+
+/**
+ * Schema layer, Part 3 — flatten(field, maxDepth): expands an object-typed
+ * field's own fields into new prefixed top-level columns (`field_subfield`),
+ * replacing the original field. `maxDepth` bounds how many levels of
+ * nesting get expanded (1 = only the field's immediate children; a nested
+ * object beyond that depth stays as a single object-typed column under its
+ * own prefixed name). Like to_json, never fallible at the row level — the
+ * "never guess" enforcement (the target field must actually be
+ * object-typed) happens entirely at schema/compile time via the op
+ * module's outputSchema, not as a per-row runtime failure mode, so no
+ * `onFailure` here either. `field` intentionally allows "" — same
+ * draft-state convention as above.
+ */
+export const FlattenStep = z.object({
+  kind: z.literal("flatten"),
+  field: z.string(),
+  maxDepth: z.number().int().positive().default(1),
+  ...stepIdentityFields,
+});
+export type FlattenStep = z.infer<typeof FlattenStep>;
+
+export const TransformStep = z.discriminatedUnion("kind", [FilterStep, ComputedFieldStep, DropFieldsStep, AggregateStep, ToJsonStep, FlattenStep]);
 export type TransformStep = z.infer<typeof TransformStep>;
 
 /** The one place a step's `provenance` field should ever be written from — see StepProvenance's doc comment. */

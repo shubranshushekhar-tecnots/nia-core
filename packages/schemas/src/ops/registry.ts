@@ -4,12 +4,16 @@ import { filterOp } from "./filter.js";
 import { computedFieldOp } from "./computedField.js";
 import { dropFieldsOp } from "./dropFields.js";
 import { aggregateOp } from "./aggregate.js";
+import { toJsonOp } from "./toJson.js";
+import { flattenOp } from "./flatten.js";
 
 export const OP_REGISTRY: { [K in OpKind]: OpModule<Extract<TransformStep, { kind: K }>> } = {
   filter: filterOp,
   computed_field: computedFieldOp,
   drop_fields: dropFieldsOp,
   aggregate: aggregateOp,
+  to_json: toJsonOp,
+  flatten: flattenOp,
 };
 
 export function getOp<K extends OpKind>(kind: K): OpModule<Extract<TransformStep, { kind: K }>> {

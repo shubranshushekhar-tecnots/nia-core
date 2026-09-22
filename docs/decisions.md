@@ -4797,3 +4797,50 @@ arrives pre-serialized as a string, uniformly across both dialects).
 No prior smoke test had exercised a MySQL-destination quarantine write
 before Step 9's `clean-propose-smoke.ts` — Phase 11's mysql smoke
 coverage never hit a failing/quarantined row.
+
+## Schema layer, Part 2: JSON write-layer bug — object/array values from a jsonb/JSON source column were silently corrupted on every MySQL write, not just quarantine rows
+
+Found while adding `writeValueCoercion.ts`'s destination-column-type
+guard (`docs/plans/schema-layer.md` Part 2). This is the same root
+cause as the Phase 13 quarantine-write bug above (mysql2's `sql-
+escaper`, unlike `pg`, never JSON-encodes a plain object/array bound
+to a `?` placeholder — it stringifies via `String(value)`, producing
+the literal text `[object Object]`), but a distinct, wider-reaching
+instance: the quarantine fix only covered `stagedWrite.ts`'s one
+hardcoded `source_row` column; this bug was in `buildUpsertSql`'s
+general `INSERT ... VALUES (?, ?) ON DUPLICATE KEY UPDATE` path used
+by **every** MySQL `/write` call, for **any** column.
+
+**Confirmed live, not theoretical.** Traced the full path with no
+serialization anywhere in it before this fix:
+1. `pg`'s default type parsing (no custom `setTypeParser` for OID 114/
+   3802 in `connector-supabase/src/pool-manager.ts`) returns a real JS
+   object/array for any `json`/`jsonb` source column — confirmed via
+   `services/connector-supabase/src/index.ts`'s `/execute` endpoint.
+2. `WriteRequest.rows` (`packages/schemas/src/contract.ts`) is typed
+   `z.array(z.array(z.unknown()))` — no coercion.
+3. `apps/worker/src/lib/writeDispatch.ts` and `runEtl.ts`'s mapping
+   step pass row values straight through unchanged; the only
+   `JSON.stringify` calls anywhere in the worker's write path
+   (`connectorClient.ts`) serialize the *whole HTTP request body*, not
+   individual values — a nested object stays a real JS object inside
+   that body until it reaches a connector's own SQL layer.
+4. Reproduced directly: `mysql.format('INSERT INTO t (a,b) VALUES (?,
+   ?)', [{x:1,y:2}, 5])` → `` INSERT INTO t (a,b) VALUES
+   ('[object Object]', 5) ``. No prior test exercised this — both
+   connectors' only pre-existing write tests used plain string values;
+   the first test covering an object/array value was added alongside
+   this fix.
+
+**Practical impact:** any ETL workflow reading a `jsonb`/`json` source
+column (Postgres or Mongo) and writing it to a MySQL destination would
+have silently written the literal 8-character string `[object
+Object]` into that row's column instead of the real value — a correct
+write, not an error, so it wouldn't have surfaced as a run failure.
+Postgres-to-Postgres and Mongo-to-Mongo/Postgres writes were unaffected
+(`pg`'s driver and Mongo's driver both serialize objects/arrays
+correctly on their own). Fixed by `writeValueCoercion.ts`:
+`connector-mysql`/`connector-supabase`'s `/write` now look up the
+destination column's actual type and `JSON.stringify` only for real
+`json`/`jsonb` columns, refusing (not silently stringifying) an
+object/array value bound to any other column type.

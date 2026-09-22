@@ -1,5 +1,5 @@
 import { DropFieldsStep, type DropFieldsStep as DropFieldsStepT } from "../nodeConfig.js";
-import type { OpModule, SourceDialect } from "./types.js";
+import type { OpModule, SchemaResult, SourceDialect } from "./types.js";
 
 export const dropFieldsOp: OpModule<DropFieldsStepT> = {
   kind: "drop_fields",
@@ -8,6 +8,12 @@ export const dropFieldsOp: OpModule<DropFieldsStepT> = {
 
   createDefault(): DropFieldsStepT {
     return { kind: "drop_fields", fields: [] };
+  },
+
+  outputSchema(input, step): SchemaResult {
+    const fields = { ...input.fields };
+    for (const f of step.fields) delete fields[f];
+    return { ok: true, schema: { fields } };
   },
 
   isPushable(dialect: SourceDialect, _step: DropFieldsStepT) {

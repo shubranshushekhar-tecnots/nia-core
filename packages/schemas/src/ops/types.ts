@@ -8,6 +8,7 @@ import type {
   OnFailurePolicy,
   TransformStep,
 } from "../nodeConfig.js";
+import type { NiaSchema } from "../niaType.js";
 import type { ParamSink } from "./paramSink.js";
 
 // ---- Dialects -----------------------------------------------------------
@@ -332,6 +333,20 @@ export interface ResidualAccumulator {
   finalize(): { cols: string[]; rows: Record<string, unknown>[]; failures?: StepFailureReport[] };
 }
 
+// ---- Output schema (Schema layer, Part 3) --------------------------------
+//
+// The NiaSchema an op produces given its input NiaSchema and its own step
+// config — same "declared per-op, consulted by a generic caller" pattern as
+// isPushable above, but for shape/type instead of pushability. A result
+// type (not a thrown exception), matching this package's existing
+// result-over-exception style (ExprParseResult, niaType.ts's JoinResult/
+// FieldJoinResult) — see docs/plans/schema-layer.md's Part 3 plan update.
+// Fails (never guesses) whenever the op can't determine its output shape
+// from the input schema alone, e.g. a computed_field expression referencing
+// an unknown field, or a flatten step targeting a non-object field.
+
+export type SchemaResult = { ok: true; schema: NiaSchema } | { ok: false; error: string };
+
 // ---- Op module (the WHAT) ------------------------------------------------
 
 export interface OpModule<TStep extends TransformStep = TransformStep> {
@@ -361,6 +376,17 @@ export interface OpModule<TStep extends TransformStep = TransformStep> {
    * before this widening.
    */
   isPushable(dialect: SourceDialect, step: TStep): boolean;
+
+  /**
+   * Schema layer, Part 3 — the NiaSchema this step produces given its
+   * input NiaSchema. See SchemaResult's doc comment above. Every op
+   * implements this (unlike emitSql/emitMongo, which are absent for
+   * non-pushable ops) since every op runs somewhere (pushed or residual)
+   * and every op's output shape needs to be knowable for the next step's
+   * own outputSchema call to consume.
+   */
+  outputSchema(input: NiaSchema, step: TStep): SchemaResult;
+
   /**
    * Constrains where in the pushed prefix this op may land, given the
    * kinds already pushed ahead of it on this node. Absent = always true.

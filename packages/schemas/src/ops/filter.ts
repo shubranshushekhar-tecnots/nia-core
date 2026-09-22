@@ -14,6 +14,11 @@ export const filterOp: OpModule<FilterStepT> = {
     return { kind: "filter", expr: { kind: "literal", value: true } };
   },
 
+  outputSchema(input) {
+    // filter never changes a row's shape — only which rows survive.
+    return { ok: true, schema: input };
+  },
+
   isPushable(dialect, step) {
     // Phase 8b-3: a fallible call's NULL result already excludes the row
     // via the WHERE clause under three-valued logic (null ≡ drop for

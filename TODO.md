@@ -361,3 +361,58 @@
     can't enumerate or query `nia.nia_stg_*`/`nia.nia_quarantine`.
   - Mongo staged mode on a real replica set, if still skipped by then —
     see this file's "Mongo staged-mode testing" entry above.
+- **Schema-layer Part 3: pushdown for `to_json`/`flatten` (added
+  2026-09-22).** Both new ops (`packages/schemas/src/ops/{toJson,flatten}.ts`)
+  are declared `isPushable() { return false; }` unconditionally on every
+  dialect — residual-only, per the schema-layer plan's explicit scope
+  (`docs/plans/schema-layer.md` Part 3). Real pushdown is possible on at
+  least some dialects and was deliberately deferred, not found infeasible:
+  - `to_json`: postgres has native `to_jsonb(col)`/`row_to_json`; mysql 5.7+
+    has `CAST(col AS JSON)`/`JSON_OBJECT`; mongo's aggregation values are
+    already BSON-native, so a `to_json` step there is closer to a no-op
+    relabel than a real transform. Each dialect's adapter would need an
+    `emitSql`/`emitMongo` arm plus a `checkConfig`/fixture pass proving the
+    pushed shape round-trips identically to the residual path's
+    `JSON.stringify`-equivalent semantics (residual `applyResidual` today
+    just copies the value through unchanged under the new field name —
+    pushed emission must match that, not just "produce valid JSON").
+  - `flatten`: postgres/mysql JSON path expressions (`col->>'key'`,
+    `JSON_EXTRACT`) or mongo's `$replaceRoot`/`$mergeObjects`/dotted-path
+    `$project` could express single-level flattening; `maxDepth > 1`
+    recursion pushed into SQL/Mongo gets progressively less ergonomic
+    (nested `JSON_EXTRACT` chains, repeated `$mergeObjects`) and may not be
+    worth pushing past depth 1. Needs a design decision on how deep to push
+    vs. fall back to residual, plus the same column-collision-detection
+    logic `outputSchema` already does at schema time (see `flatten.ts`) —
+    a pushed emission must fail the same way, not push a query that
+    silently produces colliding columns.
+  Both need conformance fixtures in
+  `packages/schemas/src/ops/__conformance__/fixtures.ts` once pushdown
+  lands, following the existing per-dialect-skip-arm pattern used for
+  `dropFields`'s mongo-only pushability.
+- **Unify `expression.ts`'s `typeOfExpr` with `niaExprType.ts`'s
+  `typeOfExpr` (added 2026-09-22).** Two functions with the same name now
+  coexist by construction, not by plan: `expression.ts`'s
+  `typeOfExpr(expr: Expr): ExprValueType` is a narrow grammar-well-
+  formedness classifier (`"scalar" | "boolean"` only, used by the parser/
+  `ExprSchema`'s `superRefine` to reject ill-typed source); `niaExprType.ts`'s
+  `typeOfExpr(expr: Expr, input: NiaSchema): ExprTypeResult` (Schema-layer
+  Part 3) returns a full `NiaType`. They're exported side-by-side from
+  `index.ts` today only by namespacing the newer one
+  (`export * as niaExprType from "./niaExprType.js"`) to dodge a real
+  `TS2308` ambiguous-export compile error — see `docs/plans/schema-layer.md`'s
+  Part 3 plan-update entry for why. One `typeOfExpr` with one source of
+  truth for "what type does this expression have" would be cleaner:
+  candidates are (a) have `niaExprType.ts`'s version subsume
+  `expression.ts`'s — every `"scalar"`/`"boolean"` classification is
+  recoverable from a `NiaType` (`boolean` kind ↔ `"boolean"`, everything
+  else ↔ `"scalar"`), so the parser/`superRefine` call sites could switch
+  to calling the NiaType-returning version and deriving the coarser
+  classification themselves, OR (b) rename one of the two so they stop
+  sharing a name at all and the `export *` ambiguity (and the reader
+  confusion of "which typeOfExpr is this") goes away without either
+  function changing behavior. Not done now: `expression.ts`'s version has
+  no `NiaSchema` to consult (it runs during parsing, before any op's
+  input schema is known) and is called from hot parser code paths — folding
+  it into (a) needs to confirm that's not a performance or ordering problem,
+  which is real investigation, not a quick rename.

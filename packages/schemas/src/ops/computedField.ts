@@ -1,6 +1,7 @@
 import { ComputedFieldStep, type ComputedFieldStep as ComputedFieldStepT } from "../nodeConfig.js";
 import { buildFailureExpr } from "../expression.js";
-import type { OpModule } from "./types.js";
+import { typeOfExpr } from "../niaExprType.js";
+import type { OpModule, SchemaResult } from "./types.js";
 import { exprFnsPushable } from "./types.js";
 import { evalExpr } from "./residualEval.js";
 import {
@@ -17,6 +18,20 @@ export const computedFieldOp: OpModule<ComputedFieldStepT> = {
 
   createDefault(): ComputedFieldStepT {
     return { kind: "computed_field", name: "", expression: { kind: "literal", value: "" } };
+  },
+
+  outputSchema(input, step): SchemaResult {
+    // "" is a draft/autosave-transient state (same convention as
+    // checkConfig below) — pass the input through unchanged rather than
+    // failing on an incomplete step.
+    if (step.name === "") return { ok: true, schema: input };
+    const result = typeOfExpr(step.expression, input);
+    if (!result.ok) return { ok: false, error: `computed field "${step.name}": ${result.error}` };
+    // Always nullable: a precise nullable=false would require tracking
+    // onFailure/fallible-call semantics through typeOfExpr, which the plan
+    // doesn't require — over-approximating nullable is always safe, just
+    // possibly imprecise.
+    return { ok: true, schema: { fields: { ...input.fields, [step.name]: { type: result.type, nullable: true } } } };
   },
 
   isPushable(dialect, step) {
