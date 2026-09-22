@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { flattenOp } from "./flatten.js";
+import { ResidualAbortError } from "./onFailure.js";
 import type { FlattenStep } from "../nodeConfig.js";
 import type { NiaSchema } from "../niaType.js";
 
@@ -47,9 +48,16 @@ describe("flattenOp.outputSchema", () => {
 });
 
 describe("flattenOp.applyResidual", () => {
-  it("throws (does not silently NULL) when a row's value isn't an object despite an object-typed schema", () => {
+  it("throws a ResidualAbortError (does not silently NULL) when a row's value isn't an object despite an object-typed schema — routed by runEtl.ts to a clean run-abort, not an uncaught exception", () => {
     const input = { cols: ["profile"], rows: [{ profile: "not-an-object" }] };
+    expect(() => flattenOp.applyResidual(input, step("profile"))).toThrow(ResidualAbortError);
     expect(() => flattenOp.applyResidual(input, step("profile"))).toThrow(/not an object/);
+  });
+
+  it("names both the field and the failing row's index in the thrown message", () => {
+    const input = { cols: ["profile"], rows: [{ profile: { name: "ok" } }, { profile: "not an object" }] };
+    expect(() => flattenOp.applyResidual(input, step("profile"))).toThrow(/"profile"/);
+    expect(() => flattenOp.applyResidual(input, step("profile"))).toThrow(/row index 1/);
   });
 
   it("treats null as a legitimate absent value, not a throw", () => {

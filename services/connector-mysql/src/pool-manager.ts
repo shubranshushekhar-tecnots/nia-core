@@ -64,7 +64,16 @@ async function resolveVaultSecret(vaultRef: string): Promise<{ user: string; pas
   return { user: (data as { user: string }).user, password: (data as { password: string }).password };
 }
 
-function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): Promise<mysql.Pool> {
+// Follow-up item 1 — non-strict sql_mode lets MySQL silently coerce bad
+// writes instead of erroring (invalid string -> 0, over-length strings
+// truncated, invalid dates stored as 0000-00-00), with only a warning.
+// Every write-pool connection gets this set once, right after it's
+// established (below), so it's in effect for every query run over it —
+// staging inserts, the staging->dest apply, and the direct /write upsert
+// path all share this one write pool per connection/credVersion.
+const STRICT_SQL_MODE = "STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE,ERROR_FOR_DIVISION_BY_ZERO";
+
+function createPool(key: string, cred: CredentialRef, config: ConnectorConfig, opts: { strictSqlMode?: boolean } = {}): Promise<mysql.Pool> {
   const existing = pools.get(key);
   if (existing) {
     existing.lastUsed = Date.now();
@@ -77,7 +86,7 @@ function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): 
   const poolPromise = (async () => {
     const { host, port, database } = parseMysqlConfig(config);
     const secret = await resolveVaultSecret(cred.vaultRef);
-    return mysql.createPool({
+    const pool = mysql.createPool({
       host,
       port,
       database,
@@ -94,6 +103,21 @@ function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): 
       // preserve arbitrary-precision decimals beyond float64.
       decimalNumbers: true,
     });
+    if (opts.strictSqlMode) {
+      // mysql2 queues queries per-connection in issue order, so this
+      // fire-and-forget SET SESSION (issued the instant the connection is
+      // established, before the pool ever hands it out) always runs before
+      // any caller's query on that same connection — no explicit await
+      // needed here, and none of this pool's callers need to know about it.
+      pool.on("connection", (connection) => {
+        connection.query(`SET SESSION sql_mode = '${STRICT_SQL_MODE}'`).catch(() => {
+          // Best-effort: a failure here surfaces as normal write errors on
+          // the connection's next real query rather than being swallowed
+          // silently — nothing else to do with it in this event handler.
+        });
+      });
+    }
+    return pool;
   })();
   pools.set(key, { poolPromise, lastUsed: Date.now() });
   poolPromise.catch(() => {
@@ -115,7 +139,7 @@ export async function getPool(cred: CredentialRef, config: ConnectorConfig): Pro
  * (0016_write_grants.sql), not the connection's read-side one.
  */
 export async function getWritePool(cred: CredentialRef, config: ConnectorConfig): Promise<mysql.Pool> {
-  return createPool(`${cred.connectionId}:write:${cred.credVersion}`, cred, config);
+  return createPool(`${cred.connectionId}:write:${cred.credVersion}`, cred, config, { strictSqlMode: true });
 }
 
 /**

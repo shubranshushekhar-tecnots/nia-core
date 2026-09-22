@@ -263,6 +263,51 @@ describe("runEtl — failed write", () => {
   });
 });
 
+describe("runEtl — mapping references a field missing after transforms (item 0 regression)", () => {
+  it("fails before any write, naming the missing field, instead of writing null for it", async () => {
+    resolveGraphMock.mockResolvedValue({
+      nodes: [
+        {
+          id: "src",
+          type: "source",
+          manifestId: "mysql",
+          connectionId: SOURCE_CONN,
+          position: { x: 0, y: 0 },
+          config: { operation: "read", entity: { namespace: "public", name: "users" } },
+        },
+        {
+          id: "dest",
+          type: "destination",
+          manifestId: "supabase",
+          connectionId: DEST_CONN,
+          position: { x: 0, y: 0 },
+          config: {
+            operation: "insert",
+            entity: { namespace: "public", name: "users_dest" },
+            // "phone" is not a field on the `users` schema fixture (only
+            // id/email) and there's no transform node to produce it, so
+            // it's absent from residualColumns at mapping-resolution time.
+            mapping: { version: 1, entries: [{ from: "phone", to: "phone_number" }], approvedAt: "2026-01-01T00:00:00.000Z" },
+            upsertKeys: ["phone_number"],
+            writeMode: "direct",
+          },
+        },
+      ],
+      edges: [{ id: "e0", source: "src", target: "dest" }],
+    });
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result.status).toBe("failed");
+    expect(result.message).toContain("phone");
+    expect(dispatchWriteMock).not.toHaveBeenCalled();
+    expect(recordChunkProgressMock).not.toHaveBeenCalled();
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
+  });
+});
+
 describe("runEtl — aggregate pagination (Phase 9 Part 3)", () => {
   it("pages by group key instead of failing when a pushed aggregate's fetched rows hit the cap", async () => {
     const aggregateGraph: GraphDoc = {

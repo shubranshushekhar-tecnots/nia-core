@@ -8,10 +8,12 @@ import {
   WriteRequest,
   StageRequest,
   PreflightRequest,
+  CreateEntityRequest,
   type TabularResult,
   type WriteResponse,
   type StageResponse,
   type PreflightResponse,
+  type CreateEntityResponse,
 } from "@nia/schemas";
 import { getDb, getWriteDb, evict, poolCount, verifyActiveWriteGrant } from "./pool-manager.js";
 import { flattenDocuments } from "./flatten.js";
@@ -64,7 +66,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-mongodb",
   pools: poolCount(),
-  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight"],
+  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight", "create-entity"],
 }));
 
 app.post("/test", async (req) => {
@@ -256,6 +258,84 @@ app.post("/preflight", async (req): Promise<PreflightResponse> => {
     ok: false,
     checks: [{ name: "stagedModeSupported", ok: false, message: STAGED_MODE_UNSUPPORTED_MESSAGE }],
   };
+});
+
+/**
+ * Schema layer, Part 4 — destination creation. `kind` must be
+ * "collection". Mongo has no column DDL to run (a collection has no fixed
+ * schema) — `body.columns` is still signature-bound and validated for
+ * name-set match (same posture as the SQL connectors: the signed context
+ * names exactly what's being created), but only `keys` drives an actual
+ * mutation, as a unique index. `createCollection` is called through
+ * `listCollections`-first (idempotent equivalent of the SQL connectors'
+ * `IF NOT EXISTS` — the MongoDB driver's createCollection throws
+ * NamespaceExists on a second call, unlike SQL's `IF NOT EXISTS` clause).
+ */
+app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
+  const body = CreateEntityRequest.parse(req.body);
+  const start = Date.now();
+
+  if (body.kind !== "collection") {
+    throw new Error(`connector-mongodb only creates collections, got kind: ${body.kind}`);
+  }
+  if (body.context.connectionId !== body.credential.connectionId) {
+    throw new Error("signed context connectionId does not match the request credential");
+  }
+  if (body.entity.namespace !== body.context.entity.namespace || body.entity.name !== body.context.entity.name) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+  const requestColumns = new Set(body.columns.map((c) => c.name));
+  const contextColumns = new Set(body.context.columns);
+  const columnsMatch =
+    requestColumns.size === contextColumns.size && [...requestColumns].every((c) => contextColumns.has(c));
+  if (!columnsMatch) {
+    throw new Error("request columns do not match the signed context's columns");
+  }
+  for (const key of body.keys) {
+    if (!requestColumns.has(key)) {
+      throw new Error(`key column "${key}" is not present in columns`);
+    }
+  }
+
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const signatureValid = verifyWriteContext(
+    {
+      connectionId: body.context.connectionId,
+      grantId: body.context.grantId,
+      runId: body.context.runId,
+      entity: body.context.entity,
+      columns: body.context.columns,
+      mode: body.context.mode,
+      stagingEntity: body.context.stagingEntity,
+      quarantineEntity: body.context.quarantineEntity,
+      issuedAt: body.context.issuedAt,
+    },
+    body.context.signature,
+    secret,
+  );
+  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+
+  const grantActive = await verifyActiveWriteGrant(
+    body.context.grantId,
+    body.context.connectionId,
+    body.entity.namespace,
+  );
+  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+
+  const db = await getWriteDb(body.credential, body.config);
+  const existing = await db.listCollections({ name: body.entity.name }, { nameOnly: true }).toArray();
+  let created = false;
+  if (existing.length === 0) {
+    await db.createCollection(body.entity.name);
+    created = true;
+  }
+  if (body.keys.length > 0) {
+    const indexSpec = Object.fromEntries(body.keys.map((k) => [k, 1] as const));
+    await db.collection(body.entity.name).createIndex(indexSpec, { unique: true });
+  }
+
+  return { created, durationMs: Date.now() - start };
 });
 
 app.post("/invalidate", async (req) => {

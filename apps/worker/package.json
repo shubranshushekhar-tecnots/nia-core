@@ -24,6 +24,8 @@
     "smoke:write:mysql-mongo": "tsx scripts/write-smoke-mysql-mongo.ts",
     "presmoke:staged": "docker compose -f ../../docker-compose.yml up -d --build redis dev-mysql dev-postgres connector-mysql connector-supabase",
     "smoke:staged": "tsx scripts/write-smoke-staged.ts",
+    "presmoke:destination-contract": "docker compose -f ../../docker-compose.yml up -d --build redis dev-mongo dev-postgres connector-mongodb connector-supabase",
+    "smoke:destination-contract": "tsx scripts/destination-contract-smoke.ts",
     "presmoke:clean": "docker compose -f ../../docker-compose.yml up -d --build redis dev-mysql dev-postgres connector-mysql connector-supabase && pnpm run build:deps",
     "smoke:clean": "tsx scripts/clean-propose-smoke.ts",
     "smoke:chat": "tsx scripts/chat-smoke.ts",

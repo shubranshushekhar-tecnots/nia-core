@@ -60,8 +60,30 @@ export function fallibleStepIsPushable(step: { onFailure?: OnFailurePolicy }, ex
   return true;
 }
 
-/** Thrown by computeFailureReport for policy "fail" once count > 0. runEtl.ts catches this and converts it into a clean run-abort — message names the step, the function(s), and the failing-row count only (no raw row values). */
-export class OnFailureAbortError extends Error {
+/**
+ * Thrown by an op's applyResidual to request a clean run-abort: runEtl.ts
+ * catches any ResidualAbortError (in its three applyResidualTransforms(Chunk)
+ * try/catch sites) and routes it through failStaged — staging for this run
+ * is dropped, the run is marked "failed", and the message is published as
+ * the run's `error` event, all without throwing further (so BullMQ never
+ * retries and the destination is never reached, since staging-apply/direct-
+ * write only ever happens after this point in the pipeline). Reserve this
+ * for anticipated, data-shape-level failures an op can name precisely (a
+ * structural mismatch between design-time schema and an actual row, e.g.
+ * flatten.ts's non-object-row case) — a genuine programming bug should
+ * still throw a plain Error so it propagates as an unexpected exception
+ * (BullMQ retries, logged loudly) instead of being reported to the user as
+ * a clean, expected "run failed" data issue.
+ */
+export class ResidualAbortError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResidualAbortError";
+  }
+}
+
+/** Thrown by computeFailureReport for policy "fail" once count > 0 — a ResidualAbortError whose message names the step, the function(s), and the failing-row count only (no raw row values). */
+export class OnFailureAbortError extends ResidualAbortError {
   constructor(label: string, fns: CallFn[], count: number) {
     super(`${label}: ${fns.join(", ")} failed on ${count} row(s).`);
     this.name = "OnFailureAbortError";

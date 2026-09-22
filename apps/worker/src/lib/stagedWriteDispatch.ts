@@ -1,5 +1,9 @@
 import type {
   AssertionSpec,
+  CreateColumnSpec,
+  CreateEntityKind,
+  CreateEntityRequest,
+  CreateEntityResponse,
   PreflightRequest,
   PreflightResponse,
   StageOp,
@@ -11,7 +15,7 @@ import type {
 } from "@nia/schemas";
 import { resolveConnection, type ResolvedConnection } from "./resolveConnection.js";
 import { resolveWriteGrant } from "./resolveWriteGrant.js";
-import { sendStageRequest, sendPreflightRequest } from "./connectorClient.js";
+import { sendStageRequest, sendPreflightRequest, sendCreateEntityRequest } from "./connectorClient.js";
 import { signWriteContext } from "./writeSignature.js";
 import { logExecutionAudit } from "./executionAudit.js";
 import { env } from "../env.js";
@@ -180,4 +184,108 @@ export async function dispatchPreflight(
     upsertKeys: input.upsertKeys,
   };
   return sendPreflightRequest(connection.manifest, request);
+}
+
+/**
+ * Schema layer, Part 4 — destination creation. Same resolveConnection ->
+ * resolveWriteGrant -> sign -> send -> audit shape as `dispatchStage`, and
+ * reuses WriteContext/signWriteContext for the signed binding rather than
+ * a new signed-payload shape (see contract.ts's CreateEntityRequest doc
+ * comment): `columns` in the signed context is just the create-entity
+ * column names, `stagingEntity`/`quarantineEntity` are null (a create-
+ * entity call never touches staging), `mode` is the schema default
+ * ("upsert" — unused by /create-entity but required by WriteContext's
+ * shape). Grant check is against `input.entity.namespace`, the real
+ * destination namespace, same as dispatchStage.
+ */
+export type CreateEntityDispatchInput = {
+  kind: CreateEntityKind;
+  entity: WriteEntityRef;
+  columns: CreateColumnSpec[];
+  keys: string[];
+  runId: string;
+  timeoutMs?: number;
+};
+
+export async function dispatchCreateEntity(
+  connectionId: string,
+  input: CreateEntityDispatchInput,
+  scope: WorkspaceScope,
+  actorUserId: string,
+): Promise<DispatchResult<CreateEntityResponse>> {
+  const resolved = await resolveConnection(connectionId, scope);
+  if (!resolved.ok) return resolved;
+  const connection = resolved.value;
+
+  const grant = await resolveWriteGrant(connection.id, input.entity.namespace);
+  if (!grant.ok) {
+    await auditCreateEntity(connection, actorUserId, input, `rejected: ${grant.error.message}`);
+    return grant;
+  }
+
+  const columnNames = input.columns.map((c) => c.name);
+  const issuedAt = Date.now();
+  const signature = signWriteContext(
+    {
+      connectionId: connection.id,
+      grantId: grant.value.grantId,
+      runId: input.runId,
+      entity: input.entity,
+      columns: columnNames,
+      mode: "upsert",
+      stagingEntity: null,
+      quarantineEntity: null,
+      issuedAt,
+    },
+    env.WRITE_DISPATCH_SIGNING_SECRET,
+  );
+  const context: WriteContext = {
+    connectionId: connection.id,
+    grantId: grant.value.grantId,
+    runId: input.runId,
+    entity: input.entity,
+    columns: columnNames,
+    mode: "upsert",
+    stagingEntity: null,
+    quarantineEntity: null,
+    issuedAt,
+    signature,
+  };
+
+  const request: CreateEntityRequest = {
+    credential: { connectionId: connection.id, credVersion: grant.value.credVersion, vaultRef: grant.value.vaultRef },
+    config: connection.config,
+    kind: input.kind,
+    entity: input.entity,
+    columns: input.columns,
+    keys: input.keys,
+    timeoutMs: input.timeoutMs ?? 30000,
+    context,
+  };
+
+  const result = await sendCreateEntityRequest(connection.manifest, request, { timeoutMs: input.timeoutMs });
+  await auditCreateEntity(
+    connection,
+    actorUserId,
+    input,
+    result.ok ? `created=${result.value.created}` : result.error.message,
+  );
+  return result;
+}
+
+async function auditCreateEntity(
+  connection: ResolvedConnection,
+  actorUserId: string,
+  input: CreateEntityDispatchInput,
+  outcome: string,
+): Promise<void> {
+  await logExecutionAudit({
+    connectionId: connection.id,
+    connectionOwnerUserId: connection.ownerUserId,
+    connectorId: connection.connectorId,
+    handle: connection.handle,
+    operation: "create-entity",
+    query: `CREATE ${input.kind.toUpperCase()} run=${input.runId} ${input.entity.namespace}.${input.entity.name} -> ${outcome}`,
+    actorUserId,
+  });
 }

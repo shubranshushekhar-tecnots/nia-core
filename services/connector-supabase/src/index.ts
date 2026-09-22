@@ -7,6 +7,7 @@ import {
   WriteRequest,
   StageRequest,
   PreflightRequest,
+  CreateEntityRequest,
   rowsNeedJsonCoercion,
   coerceJsonWriteValues,
   type TabularResult,
@@ -15,12 +16,13 @@ import {
   type PreflightResponse,
   type AssertionResult,
   type WriteEntityRef,
+  type CreateEntityResponse,
 } from "@nia/schemas";
 import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant } from "./pool-manager.js";
 import { mapPostgresColumnType } from "./column-types.js";
 import { executeWithStatementTimeout } from "./query.js";
 import { verifyWriteContext } from "./writeSignature.js";
-import { buildUpsertSql } from "./writeSql.js";
+import { buildUpsertSql, buildCreateTableSql, buildEnableRlsSql } from "./writeSql.js";
 import {
   buildCreateStagingSql,
   buildDropStagingSql,
@@ -57,7 +59,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-supabase",
   pools: poolCount(),
-  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight"],
+  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight", "create-entity"],
 }));
 
 app.post("/test", async (req) => {
@@ -599,6 +601,92 @@ app.post("/preflight", async (req): Promise<PreflightResponse> => {
   }
 
   return { ok: checks.every((c) => c.ok), checks };
+});
+
+/**
+ * Schema layer, Part 4 — destination creation. Signed the same way as
+ * /write/​/stage: verifies the WriteContext HMAC, then requires the
+ * request's entity/columns to deep-equal the signed context's before
+ * anything runs, then re-checks the write grant. `kind` must be "table"
+ * (this connector never creates a "collection"). Idempotent
+ * (`IF NOT EXISTS` throughout, from writeSql.ts's buildCreateTableSql) —
+ * the caller (runEtl.ts, via destinationContract.ts) has already confirmed
+ * via /introspect that the entity doesn't exist, but this stays safe
+ * against a redelivered first-chunk job racing a concurrent create.
+ * RLS is enabled on the new table only when this project actually has
+ * PostgREST-facing anon/authenticated roles (Part 4's "If anon/
+ * authenticated roles exist, enable RLS on created tables" bullet) — same
+ * existence check preflight already runs for its own anon/authenticated
+ * guard below.
+ */
+app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
+  const body = CreateEntityRequest.parse(req.body);
+  const start = Date.now();
+
+  if (body.kind !== "table") {
+    throw new Error(`connector-supabase only creates SQL tables, got kind: ${body.kind}`);
+  }
+  if (body.context.connectionId !== body.credential.connectionId) {
+    throw new Error("signed context connectionId does not match the request credential");
+  }
+  if (!entityMatches(body.entity, body.context.entity)) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+  const requestColumns = new Set(body.columns.map((c) => c.name));
+  const contextColumns = new Set(body.context.columns);
+  const columnsMatch =
+    requestColumns.size === contextColumns.size && [...requestColumns].every((c) => contextColumns.has(c));
+  if (!columnsMatch) {
+    throw new Error("request columns do not match the signed context's columns");
+  }
+  for (const key of body.keys) {
+    if (!requestColumns.has(key)) {
+      throw new Error(`key column "${key}" is not present in columns`);
+    }
+  }
+
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const signatureValid = verifyWriteContext(
+    {
+      connectionId: body.context.connectionId,
+      grantId: body.context.grantId,
+      runId: body.context.runId,
+      entity: body.context.entity,
+      columns: body.context.columns,
+      mode: body.context.mode,
+      stagingEntity: body.context.stagingEntity,
+      quarantineEntity: body.context.quarantineEntity,
+      issuedAt: body.context.issuedAt,
+    },
+    body.context.signature,
+    secret,
+  );
+  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+
+  const grantActive = await verifyActiveWriteGrant(
+    body.context.grantId,
+    body.context.connectionId,
+    body.entity.namespace,
+  );
+  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+
+  const pool = await getWritePool(body.credential, body.config);
+  const client = await pool.connect();
+  try {
+    for (const sql of buildCreateTableSql(body.entity, body.columns, body.keys)) await client.query(sql);
+
+    const roleCheck = await client.query(
+      `SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')`,
+    );
+    if ((roleCheck.rowCount ?? 0) > 0) {
+      await client.query(buildEnableRlsSql(body.entity));
+    }
+  } finally {
+    client.release();
+  }
+
+  return { created: true, durationMs: Date.now() - start };
 });
 
 app.post("/invalidate", async (req) => {

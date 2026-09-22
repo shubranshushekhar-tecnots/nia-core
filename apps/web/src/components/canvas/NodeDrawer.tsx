@@ -343,6 +343,8 @@ function SourceDestForm({
   const entities = useConnectionEntities(connectionId);
   const grants = useWriteGrants(connectionId);
   const grantedNamespaces = useGrantedNamespaces(grants);
+  /** Schema layer Part 4's "type a new name" toggle — see NewTargetInputs's doc comment. Declared unconditionally (before the slot==='detail' early return below) since this component renders twice (ribbon + detail slots) and hooks must stay in the same order every render. */
+  const [newTargetMode, setNewTargetMode] = useState(false);
   const selectedKey = config.entity ? entityKey(config.entity) : '';
   const namespace = config.entity?.namespace;
   const grantCovers = namespace !== undefined && grantedNamespaces.has(namespace);
@@ -413,10 +415,18 @@ function SourceDestForm({
           <span style={{ fontSize: 12, color: 'var(--ink4)', whiteSpace: 'nowrap' }}>
             {connectionId ? 'Loading tables…' : 'Select a connection first.'}
           </span>
+        ) : newTargetMode ? (
+          <NewTargetInputs entity={config.entity} onChange={(entity) => onChange({ ...config, entity })} onCancel={() => setNewTargetMode(false)} />
         ) : (
           <select
             value={selectedKey}
-            onChange={(e) => onChange({ ...config, entity: e.target.value ? parseEntityKey(e.target.value) : undefined })}
+            onChange={(e) => {
+              if (e.target.value === NEW_TARGET_SENTINEL) {
+                setNewTargetMode(true);
+                return;
+              }
+              onChange({ ...config, entity: e.target.value ? parseEntityKey(e.target.value) : undefined });
+            }}
             style={configPanelSelectStyle}
           >
             <option value="">{nodeType === 'source' ? 'Infer from mapping…' : 'Select a table…'}</option>
@@ -425,10 +435,60 @@ function SourceDestForm({
                 {e.namespace ? `${e.namespace}.${e.name}` : e.name}
               </option>
             ))}
+            {/* Schema layer Part 4: "choose an existing target or type a new name" — destination only, since ensureDestination.ts (apps/worker) auto-creates a missing destination target from the contract, but a source still requires a pre-existing table to read from. */}
+            {nodeType === 'destination' && <option value={NEW_TARGET_SENTINEL}>+ Create new…</option>}
           </select>
         )}
       </div>
     </>
+  );
+}
+
+/** Sentinel `<option>` value distinguishing "create new" from parseEntityKey's real namespace/name strings — NUL (ENTITY_KEY_SEP) can never appear in a typed option value, so this can never collide with a real entity key. */
+const NEW_TARGET_SENTINEL = '__new__';
+
+/**
+ * Schema layer Part 4's "type a new name" half of the target picker.
+ * Deliberately two plain text inputs writing straight through to
+ * `config.entity` via the same `onChange` prop every other control in this
+ * form already uses — no new state mechanism, so this can't interact with
+ * the pre-existing entity-picker reload-persistence bug noted in this
+ * component's header comment (that bug lives in the `<select>`/entities
+ * list path, untouched here).
+ */
+function NewTargetInputs({
+  entity,
+  onChange,
+  onCancel,
+}: {
+  entity: EntityRef | undefined;
+  onChange: (entity: EntityRef) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <input
+        value={entity?.namespace ?? ''}
+        onChange={(e) => onChange({ namespace: e.target.value, name: entity?.name ?? '' })}
+        placeholder="namespace"
+        style={{ ...configPanelSelectStyle, width: 90, fontFamily: 'var(--font-data)' }}
+      />
+      <span style={{ color: 'var(--ink4)', fontSize: 12 }}>.</span>
+      <input
+        value={entity?.name ?? ''}
+        onChange={(e) => onChange({ namespace: entity?.namespace ?? '', name: e.target.value })}
+        placeholder="new table name"
+        style={{ ...configPanelSelectStyle, flex: 1, fontFamily: 'var(--font-data)' }}
+      />
+      <button
+        type="button"
+        aria-label="Back to existing tables"
+        onClick={onCancel}
+        style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+      >
+        {'\u2715'}
+      </button>
+    </div>
   );
 }
 
@@ -443,7 +503,7 @@ export default function NodeDrawer({
 }: {
   node: CanvasNode;
   workflowId: string;
-  upstreamSource?: { connectionId?: string; manifestId?: string; transformConfigs?: Record<string, unknown>[] };
+  upstreamSource?: { connectionId?: string; manifestId?: string; entity?: EntityRef; transformConfigs?: Record<string, unknown>[] };
   /** Latest persisted check-run results, forwarded to MappingEditor to gate Preview. See MappingEditor.tsx's prop comment. */
   checkResults?: CheckResult[] | null;
   onConfigChange: (config: Record<string, unknown>) => void;
@@ -591,7 +651,10 @@ export default function NodeDrawer({
             workflowId={workflowId}
             destNodeId={node.id}
             destConnectionId={data.connectionId}
+            destManifestId={data.manifestId}
             sourceConnectionId={upstreamSource?.connectionId}
+            sourceManifestId={upstreamSource?.manifestId}
+            sourceEntity={upstreamSource?.entity}
             sourceFieldsOverride={sourceFieldsOverride}
             checkResults={checkResults}
             onChange={(next) => onConfigChange(next)}

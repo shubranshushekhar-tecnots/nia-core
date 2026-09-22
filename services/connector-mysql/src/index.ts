@@ -7,6 +7,7 @@ import {
   WriteRequest,
   StageRequest,
   PreflightRequest,
+  CreateEntityRequest,
   rowsNeedJsonCoercion,
   coerceJsonWriteValues,
   type TabularResult,
@@ -15,10 +16,11 @@ import {
   type PreflightResponse,
   type AssertionResult,
   type WriteEntityRef,
+  type CreateEntityResponse,
 } from "@nia/schemas";
 import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant } from "./pool-manager.js";
 import { verifyWriteContext } from "./writeSignature.js";
-import { buildUpsertSql } from "./writeSql.js";
+import { buildUpsertSql, buildCreateTableSql } from "./writeSql.js";
 import {
   buildCreateStagingSql,
   buildDropStagingSql,
@@ -54,7 +56,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-mysql",
   pools: poolCount(),
-  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight"],
+  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight", "create-entity"],
 }));
 
 app.post("/test", async (req) => {
@@ -504,6 +506,75 @@ app.post("/preflight", async (req): Promise<PreflightResponse> => {
   }
 
   return { ok: checks.every((c) => c.ok), checks };
+});
+
+/**
+ * Schema layer, Part 4 — destination creation. MySQL-dialect mirror of
+ * connector-supabase's /create-entity (same signed-context verification
+ * order); `kind` must be "table". No RLS concept in MySQL, so no
+ * equivalent of connector-supabase's anon/authenticated-role check here.
+ */
+app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
+  const body = CreateEntityRequest.parse(req.body);
+  const start = Date.now();
+
+  if (body.kind !== "table") {
+    throw new Error(`connector-mysql only creates SQL tables, got kind: ${body.kind}`);
+  }
+  if (body.context.connectionId !== body.credential.connectionId) {
+    throw new Error("signed context connectionId does not match the request credential");
+  }
+  if (!entityMatches(body.entity, body.context.entity)) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+  const requestColumns = new Set(body.columns.map((c) => c.name));
+  const contextColumns = new Set(body.context.columns);
+  const columnsMatch =
+    requestColumns.size === contextColumns.size && [...requestColumns].every((c) => contextColumns.has(c));
+  if (!columnsMatch) {
+    throw new Error("request columns do not match the signed context's columns");
+  }
+  for (const key of body.keys) {
+    if (!requestColumns.has(key)) {
+      throw new Error(`key column "${key}" is not present in columns`);
+    }
+  }
+
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const signatureValid = verifyWriteContext(
+    {
+      connectionId: body.context.connectionId,
+      grantId: body.context.grantId,
+      runId: body.context.runId,
+      entity: body.context.entity,
+      columns: body.context.columns,
+      mode: body.context.mode,
+      stagingEntity: body.context.stagingEntity,
+      quarantineEntity: body.context.quarantineEntity,
+      issuedAt: body.context.issuedAt,
+    },
+    body.context.signature,
+    secret,
+  );
+  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+
+  const grantActive = await verifyActiveWriteGrant(
+    body.context.grantId,
+    body.context.connectionId,
+    body.entity.namespace,
+  );
+  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+
+  const pool = await getWritePool(body.credential, body.config);
+  const conn = await pool.getConnection();
+  try {
+    for (const sql of buildCreateTableSql(body.entity, body.columns, body.keys)) await conn.query(sql);
+  } finally {
+    conn.release();
+  }
+
+  return { created: true, durationMs: Date.now() - start };
 });
 
 app.post("/invalidate", async (req) => {

@@ -87,6 +87,32 @@ export async function proposeMapping(workflowId: string, destNodeId: string, sco
   const sourceFields = fieldNamesForSource(sourceSchema.value, sourceEntity).sort();
   const destFields = uniqueFieldNames(destSchema.value);
 
+  // Follow-up item 3: a destination field whose name exactly matches a
+  // source field (case-insensitive) is mapped deterministically, without
+  // spending an LLM call on it. Only the remaining, genuinely unmatched
+  // fields go to the LLM below — the user still approves the whole merged
+  // mapping (deterministic + LLM-proposed) afterward, same as today.
+  const destByLower = new Map<string, string>();
+  for (const f of destFields) destByLower.set(f.toLowerCase(), f);
+  const deterministicEntries: MappingEntry[] = [];
+  const matchedDestLower = new Set<string>();
+  for (const f of sourceFields) {
+    const destMatch = destByLower.get(f.toLowerCase());
+    if (destMatch && !matchedDestLower.has(destMatch.toLowerCase())) {
+      deterministicEntries.push({ from: f, to: destMatch });
+      matchedDestLower.add(destMatch.toLowerCase());
+    }
+  }
+  const matchedSourceLower = new Set(deterministicEntries.map((e) => e.from.toLowerCase()));
+  const unmatchedSourceFields = sourceFields.filter((f) => !matchedSourceLower.has(f.toLowerCase()));
+  const unmatchedDestFields = destFields.filter((f) => !matchedDestLower.has(f.toLowerCase()));
+
+  // Every destination field already resolved deterministically — nothing
+  // left for the LLM to do.
+  if (unmatchedDestFields.length === 0) {
+    return { ok: true, value: { entries: deterministicEntries } };
+  }
+
   try {
     const raw = await completeJson(
       [
@@ -100,7 +126,7 @@ export async function proposeMapping(workflowId: string, destNodeId: string, sco
         },
         {
           role: "user",
-          content: `Source fields: ${JSON.stringify(sourceFields)}\nDestination fields: ${JSON.stringify(destFields)}`,
+          content: `Source fields: ${JSON.stringify(unmatchedSourceFields)}\nDestination fields: ${JSON.stringify(unmatchedDestFields)}`,
         },
       ],
       { node: "propose-mapping" },
@@ -112,12 +138,13 @@ export async function proposeMapping(workflowId: string, destNodeId: string, sco
     }
 
     // Defense in depth: never surface a pairing that hallucinates a field
-    // name outside either side's actual introspected schema.
-    const sourceSet = new Set(sourceFields);
-    const destSet = new Set(destFields);
-    const entries = parsed.data.entries.filter((e) => sourceSet.has(e.from) && destSet.has(e.to));
+    // name outside either side's actual introspected schema (scoped to the
+    // fields the LLM was actually offered, i.e. the unmatched sets above).
+    const sourceSet = new Set(unmatchedSourceFields);
+    const destSet = new Set(unmatchedDestFields);
+    const llmEntries = parsed.data.entries.filter((e) => sourceSet.has(e.from) && destSet.has(e.to));
 
-    return { ok: true, value: { entries } };
+    return { ok: true, value: { entries: [...deterministicEntries, ...llmEntries] } };
   } catch (err) {
     if (err instanceof JsonExtractionError) {
       return { ok: false, error: { kind: "llm-failed", message: err.message } };

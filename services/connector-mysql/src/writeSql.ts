@@ -42,3 +42,31 @@ export function buildUpsertSql(
 
   return `INSERT INTO ${table} (${colList}) VALUES ${valueRows} ON DUPLICATE KEY UPDATE ${updateClause}`;
 }
+
+/**
+ * Schema layer, Part 4 — /create-entity's fixed CREATE TABLE template.
+ * Mirrors connector-supabase/src/writeSql.ts's buildCreateTableSql, MySQL-
+ * dialect: backtick identifiers, no separate `CREATE SCHEMA` statement
+ * (namespace here is a MySQL database, created directly), and a composite
+ * key becomes a `UNIQUE KEY` clause inside the same CREATE TABLE rather
+ * than a follow-up CREATE INDEX statement (MySQL allows both; this is
+ * fewer round-trips).
+ */
+export function buildCreateTableSql(
+  entity: { namespace: string; name: string },
+  columns: { name: string; nativeType: string; nullable: boolean }[],
+  keyColumns: string[],
+): string[] {
+  const table = `${quoteIdent(entity.namespace)}.${quoteIdent(entity.name)}`;
+  const colDefs = columns.map((c) => `${quoteIdent(c.name)} ${c.nativeType}${c.nullable ? "" : " NOT NULL"}`);
+  if (keyColumns.length === 1) {
+    colDefs.push(`PRIMARY KEY (${quoteIdent(keyColumns[0]!)})`);
+  } else if (keyColumns.length > 1) {
+    const idxName = `${entity.name}_nia_key_idx`.slice(0, 64);
+    colDefs.push(`UNIQUE KEY ${quoteIdent(idxName)} (${keyColumns.map(quoteIdent).join(", ")})`);
+  }
+  return [
+    `CREATE DATABASE IF NOT EXISTS ${quoteIdent(entity.namespace)}`,
+    `CREATE TABLE IF NOT EXISTS ${table} (${colDefs.join(", ")})`,
+  ];
+}

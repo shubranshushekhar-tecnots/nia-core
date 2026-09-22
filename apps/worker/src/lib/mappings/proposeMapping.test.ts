@@ -202,4 +202,25 @@ describe("proposeMapping", () => {
 
     expect(result).toEqual({ ok: false, error: { kind: "homogeneous-path", message: expect.stringContaining("no field mapping is needed") } });
   });
+
+  // Follow-up item 3: an exact (case-insensitive) name match is mapped
+  // deterministically, without spending the LLM on it — only the remaining
+  // unmatched fields go into the LLM prompt, and the final entries merge
+  // both sets.
+  it("maps exact (case-insensitive) name matches deterministically and only sends the LLM the unmatched remainder", async () => {
+    getSchemaMock.mockImplementation(async (connection: { id: string }) =>
+      connection.id === SOURCE_CONN ? schema(["Email", "first_name"]) : schema(["email", "full_name"]),
+    );
+    completeMock.mockResolvedValueOnce('{"entries":[{"from":"first_name","to":"full_name"}]}');
+
+    const result = await proposeMapping("wf-1", "dest", SCOPE);
+
+    expect(result).toEqual({
+      ok: true,
+      value: { entries: [{ from: "Email", to: "email" }, { from: "first_name", to: "full_name" }] },
+    });
+    const [, userMsg] = completeMock.mock.calls[0]![0] as { role: string; content: string }[];
+    expect(userMsg!.content).not.toContain("Email");
+    expect(userMsg!.content).toContain("first_name");
+  });
 });

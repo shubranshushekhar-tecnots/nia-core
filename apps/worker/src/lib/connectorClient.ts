@@ -1,6 +1,8 @@
 import type {
   ConnectorConfig,
   ConnectorManifest,
+  CreateEntityRequest,
+  CreateEntityResponse,
   CredentialRef,
   IntrospectResponse,
   PreflightRequest,
@@ -12,6 +14,7 @@ import type {
   WriteResponse,
 } from "@nia/schemas";
 import {
+  CreateEntityResponse as CreateEntityResponseSchema,
   ExecuteResponse,
   IntrospectResponse as IntrospectResponseSchema,
   PreflightResponse as PreflightResponseSchema,
@@ -31,6 +34,7 @@ const DEFAULT_TEST_TIMEOUT_MS = 15000;
 const DEFAULT_WRITE_TIMEOUT_MS = 15000;
 const DEFAULT_STAGE_TIMEOUT_MS = 30000;
 const DEFAULT_PREFLIGHT_TIMEOUT_MS = 15000;
+const DEFAULT_CREATE_ENTITY_TIMEOUT_MS = 30000;
 
 function baseUrl(manifest: ConnectorManifest): string {
   // Same CONNECTOR_DEV_HOST override apps/api/src/lib/connectorDispatch.ts
@@ -479,6 +483,76 @@ export async function sendPreflightRequest(
       error: {
         kind: "service-error",
         message: `Malformed /preflight response from connector "${manifest.id}": ${parsed.error.message}`,
+      },
+    };
+  }
+  return { ok: true, value: parsed.data };
+}
+
+/**
+ * Schema layer, Part 4 — calls a connector service's /create-entity
+ * endpoint. Same signed-request posture as sendWriteRequest/
+ * sendStageRequest (the WriteContext HMAC is verified connector-side, not
+ * here); this is purely the HTTP hop, mirroring sendStageRequest's
+ * template exactly.
+ */
+export async function sendCreateEntityRequest(
+  manifest: ConnectorManifest,
+  request: CreateEntityRequest,
+  opts: { timeoutMs?: number } = {},
+): Promise<DispatchResult<CreateEntityResponse>> {
+  warnIfRouteMissing(manifest, "create-entity");
+  const timeoutMs = opts.timeoutMs ?? request.timeoutMs ?? DEFAULT_CREATE_ENTITY_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(manifest)}/create-entity`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return {
+        ok: false,
+        error: {
+          kind: "query-timeout",
+          message: `create-entity against connector "${manifest.id}" timed out after ${timeoutMs}ms.`,
+        },
+      };
+    }
+    return {
+      ok: false,
+      error: {
+        kind: "service-unreachable",
+        message: `Could not reach connector service "${manifest.id}": ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    let message = `connector service "${manifest.id}" responded ${res.status}`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) message = body.message;
+    } catch {
+      // Non-JSON error body — keep the generic message.
+    }
+    return { ok: false, error: { kind: "service-error", message } };
+  }
+
+  const parsed = CreateEntityResponseSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: {
+        kind: "service-error",
+        message: `Malformed /create-entity response from connector "${manifest.id}": ${parsed.error.message}`,
       },
     };
   }

@@ -300,6 +300,59 @@ export const PreflightResponse = z.object({
 });
 export type PreflightResponse = z.infer<typeof PreflightResponse>;
 
+/**
+ * Schema layer, Part 4 — destination-contract creation. One new signed
+ * request kind, `/create-entity`, structured the same way as StageRequest:
+ * the worker (destinationContract.ts's buildDestinationContract) already
+ * resolved every column's dialect-native type via niaAdapters.ts's
+ * fromNiaType() before this ever gets built, so the connector's own job is
+ * purely mechanical — build `CREATE TABLE/COLLECTION IF NOT EXISTS` from a
+ * fixed template using these pre-resolved native-type strings, never a
+ * NiaType translation of its own. This keeps exactly one place (the
+ * worker, via niaAdapters.ts) owning the NiaType -> native-type mapping,
+ * matching Part 1's "N + M mappings, not N x M" framing — a connector
+ * never needs its own copy of that logic.
+ *
+ * Reuses WriteContext for the signed binding (entity + columns, the same
+ * two fields a plain WriteRequest signs) rather than inventing new signed
+ * fields: `columns` in the signed context is `columns.map(c => c.name)`,
+ * `stagingEntity`/`quarantineEntity` are null, `mode` is the schema
+ * default ("upsert", unused by create-entity but required by
+ * WriteContext's shape), and `runId` is the run this creation happens
+ * inside of (Part 4's "Runs in preflight, before staging" — always called
+ * from within a run, job.cursor === null, same gate as ensureStaging).
+ */
+export const CreateColumnSpec = z.object({
+  name: SqlIdentifier,
+  /** Dialect-native column/field type string, already resolved by niaAdapters.ts's fromNiaType() — verbatim SQL DDL type text (e.g. "BIGINT", "JSONB") for SQL dialects, a BSON type name for Mongo. */
+  nativeType: z.string().min(1),
+  nullable: z.boolean(),
+});
+export type CreateColumnSpec = z.infer<typeof CreateColumnSpec>;
+
+export const CreateEntityKind = z.enum(["table", "collection"]);
+export type CreateEntityKind = z.infer<typeof CreateEntityKind>;
+
+export const CreateEntityRequest = z.object({
+  credential: CredentialRef,
+  config: ConnectorConfig,
+  kind: CreateEntityKind,
+  entity: WriteEntityRef,
+  columns: z.array(CreateColumnSpec).min(1),
+  /** Key column(s) — become the primary key (SQL) or a unique index (Mongo). */
+  keys: z.array(SqlIdentifier).min(1),
+  timeoutMs: z.number().int().positive().default(30000),
+  context: WriteContext,
+});
+export type CreateEntityRequest = z.infer<typeof CreateEntityRequest>;
+
+export const CreateEntityResponse = z.object({
+  /** True if this call actually issued the CREATE (first time). False if the entity already existed (idempotent no-op — caller compares its contract against a fresh /introspect instead of trusting this call did anything). */
+  created: z.boolean(),
+  durationMs: z.number().int().nonnegative(),
+});
+export type CreateEntityResponse = z.infer<typeof CreateEntityResponse>;
+
 export const HealthResponse = z.object({
   status: z.literal("ok"),
   service: z.string(),

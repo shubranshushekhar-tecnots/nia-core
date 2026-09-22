@@ -2,7 +2,18 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { CheckResult, FieldMapping, MappingEntry, PreviewValue, SourceDestConfig } from '@nia/schemas';
+import {
+  buildDestinationContract,
+  manifestDialect,
+  schemaFromIntrospection,
+  type CheckResult,
+  type DestinationContract,
+  type FieldMapping,
+  type MappingEntry,
+  type PreviewValue,
+  type SourceDestConfig,
+} from '@nia/schemas';
+import type { EntityRef, IntrospectResponse } from '@nia/schemas';
 import { getConnectionSchema } from '@/lib/api/connectionsClient';
 import { proposeMapping, MappingsApiError } from '@/lib/api/mappingsClient';
 import { previewDestination, PreviewApiError } from '@/lib/api/previewClient';
@@ -132,18 +143,24 @@ function driftedField(value: string, fields: string[]): boolean {
 }
 
 function useEntityFields(connectionId?: string): string[] {
-  const { data: schema } = useQuery({
-    queryKey: ['connection-schema', connectionId],
-    queryFn: () => getConnectionSchema(connectionId!),
-    enabled: !!connectionId,
-    staleTime: 5 * 60_000,
-  });
+  const schema = useEntitySchema(connectionId);
   return useMemo(() => {
     if (!schema) return [];
     const set = new Set<string>();
     for (const entity of schema.entities) for (const f of entity.fields) set.add(f.name);
     return Array.from(set).sort();
   }, [schema]);
+}
+
+/** Shares the `['connection-schema', connectionId]` query (and its react-query cache entry) with useEntityFields above — this just returns the raw IntrospectResponse instead of a flattened field-name union, since the contract preview below needs one specific entity's typed fields, not a cross-entity name union. */
+function useEntitySchema(connectionId?: string): IntrospectResponse | undefined {
+  const { data: schema } = useQuery({
+    queryKey: ['connection-schema', connectionId],
+    queryFn: () => getConnectionSchema(connectionId!),
+    enabled: !!connectionId,
+    staleTime: 5 * 60_000,
+  });
+  return schema;
 }
 
 const emptyMapping: FieldMapping = { version: 1, entries: [], approvedAt: null };
@@ -153,7 +170,10 @@ export default function MappingEditor({
   workflowId,
   destNodeId,
   destConnectionId,
+  destManifestId,
   sourceConnectionId,
+  sourceManifestId,
+  sourceEntity,
   sourceFieldsOverride,
   checkResults,
   onChange,
@@ -162,7 +182,13 @@ export default function MappingEditor({
   workflowId: string;
   destNodeId: string;
   destConnectionId?: string;
+  /** Schema layer Part 4 — the destination node's own manifestId (NodeDrawer.tsx's `data.manifestId`), needed to resolve a dialect for the contract preview below. */
+  destManifestId?: string;
   sourceConnectionId?: string;
+  /** Schema layer Part 4 — mirrors destManifestId above, sourced from upstream.ts's findUpstreamSource. */
+  sourceManifestId?: string;
+  /** Schema layer Part 4 — the upstream source node's persisted entity ref (upstream.ts's findUpstreamSource), needed to look up its typed field list for the contract preview. Undefined when no entity is selected yet, same as the source node's own picker state. */
+  sourceEntity?: EntityRef;
   /**
    * When a single Aggregate transform sits between the source and this
    * destination, NodeDrawer.tsx computes the transform's actual output
@@ -244,6 +270,50 @@ export default function MappingEditor({
   const unmappedDestFields = destFields.filter((f) => !mappedDestFields.has(f));
   const mappedDestFieldsList = Array.from(mappedDestFields).filter((f) => f !== '').sort();
   const upsertKeys = config.upsertKeys ?? [];
+
+  /**
+   * Schema layer Part 4 — "the preview shows source path -> destination
+   * name -> type, a fidelity badge, ... Degraded fields are highlighted."
+   * Computed client-side with the same pure functions ensureDestination.ts
+   * (apps/worker) uses server-side at run time — no new API endpoint,
+   * since both the source and destination schemas are already fetched
+   * here for the field dropdowns above.
+   *
+   * Disclosed scope narrowing: only built for a declared-schema source
+   * (schemaFromIntrospection) with no aggregate transform upstream
+   * (sourceFieldsOverride unset) — an inferred (Mongo/file) or
+   * post-aggregate source's real NiaTypes require the profiler sample /
+   * transformOutputFields' compiled output schema, neither of which this
+   * panel has on hand. ensureDestination.ts itself has no such limit (it
+   * always has the full resolved entity at run time); this is a preview-
+   * only gap, not a run-time one.
+   */
+  const sourceSchemaResponse = useEntitySchema(sourceConnectionId);
+  const sourceDialect = manifestDialect(sourceManifestId);
+  const destDialect = manifestDialect(destManifestId);
+  const sourceEntityDef =
+    sourceEntity && sourceSchemaResponse
+      ? sourceSchemaResponse.entities.find((e) => e.namespace === sourceEntity.namespace && e.name === sourceEntity.name)
+      : undefined;
+  const contract = useMemo<DestinationContract | undefined>(() => {
+    if (sourceFieldsOverride || !sourceEntityDef || !sourceDialect || !destDialect || !config.entity) return undefined;
+    if (mapping.entries.length === 0 || upsertKeys.length === 0) return undefined;
+    if (mapping.entries.some((e) => e.from === '' || e.to === '')) return undefined;
+    try {
+      const { schema: sourceSchema } = schemaFromIntrospection(sourceEntityDef, sourceDialect);
+      const keySourcePaths = mapping.entries.filter((e) => upsertKeys.includes(e.to)).map((e) => e.from);
+      return buildDestinationContract({
+        dialect: destDialect,
+        entity: config.entity,
+        sourceSchema,
+        mapping: mapping.entries.map((e) => ({ from: e.from, to: e.to })),
+        keySourcePaths,
+      });
+    } catch {
+      return undefined;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceFieldsOverride, sourceEntityDef, sourceDialect, destDialect, config.entity, mapping.entries, upsertKeys]);
 
   /** Destination-only, see nodeConfig.ts's SourceDestConfig comment — the runner (runEtl.ts) upserts on these dest field names, required for this node to actually run. */
   function toggleUpsertKey(field: string) {
@@ -412,6 +482,21 @@ export default function MappingEditor({
       </div>
 
       <div style={{ borderTop: '1px solid var(--line2)', marginTop: 16, paddingTop: 16 }}>
+        <div style={sectionHeaderStyle}>Destination contract</div>
+        {sourceFieldsOverride ? (
+          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 4 }}>
+            Preview unavailable with an Aggregate transform upstream.
+          </div>
+        ) : contract ? (
+          <ContractPreview contract={contract} />
+        ) : (
+          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 4 }}>
+            Map at least one field, pick a destination table, and select an upsert key to preview the contract.
+          </div>
+        )}
+      </div>
+
+      <div style={{ borderTop: '1px solid var(--line2)', marginTop: 16, paddingTop: 16 }}>
         <button
           type="button"
           onClick={handlePreview}
@@ -452,5 +537,91 @@ export default function MappingEditor({
         {preview && <PreviewTable preview={preview} />}
       </div>
     </div>
+  );
+}
+
+const contractTableStyle = { width: '100%', borderCollapse: 'collapse', fontSize: 11.5 } as const;
+const contractThStyle = {
+  textAlign: 'left',
+  fontWeight: 600,
+  color: 'var(--ink4)',
+  textTransform: 'uppercase',
+  letterSpacing: '.03em',
+  fontSize: 10,
+  padding: '0 8px 6px 0',
+  borderBottom: '1px solid var(--line2)',
+} as const;
+const contractTdStyle = { padding: '5px 8px 5px 0', borderBottom: '1px solid var(--line2)', verticalAlign: 'top' } as const;
+
+/**
+ * Schema layer Part 4's UI bullet: "The preview shows source path ->
+ * destination name -> type, a fidelity badge, and a JSON/flatten toggle
+ * per nested field. Degraded fields are highlighted."
+ *
+ * Disclosed scope narrowings:
+ *  - "Degraded" here means `fidelity.kind === 'lossy'` (niaAdapters.ts) —
+ *    the only per-column fidelity signal this contract actually carries.
+ *    NiaType's own `degraded` flag (niaType.ts) is a join()-time concept
+ *    from multi-sample inference; a contract built from
+ *    schemaFromIntrospection's single declared type per field never
+ *    produces one, so there's nothing else to highlight against.
+ *  - The "JSON/flatten toggle" is rendered as a static badge, not an
+ *    interactive control: destinationContract.ts's own doc comment on
+ *    `nestedFieldStrategy` says plainly there's "no behavior behind
+ *    'flatten' yet" (real flattening only happens via an upstream
+ *    `flatten` TransformStep, Part 3) — a working toggle here would imply
+ *    a write-path effect that doesn't exist.
+ */
+function ContractPreview({ contract }: { contract: DestinationContract }) {
+  return (
+    <table style={contractTableStyle}>
+      <thead>
+        <tr>
+          <th style={contractThStyle}>Source</th>
+          <th style={contractThStyle}>Destination</th>
+          <th style={contractThStyle}>Type</th>
+          <th style={contractThStyle}>Fidelity</th>
+          <th style={contractThStyle}>Key</th>
+        </tr>
+      </thead>
+      <tbody>
+        {contract.columns.map((col) => {
+          const lossy = col.fidelity.kind === 'lossy';
+          const isNested = col.niaType.kind === 'object' || col.niaType.kind === 'array';
+          return (
+            <tr key={col.destinationName}>
+              <td style={{ ...contractTdStyle, fontFamily: 'var(--font-data)', color: 'var(--ink3)' }}>{col.sourcePath}</td>
+              <td style={{ ...contractTdStyle, fontFamily: 'var(--font-data)' }}>
+                {col.destinationName}
+                {isNested && (
+                  <span
+                    style={{
+                      marginLeft: 6,
+                      fontSize: 9.5,
+                      fontWeight: 600,
+                      color: 'var(--ink4)',
+                      border: '1px solid var(--line2)',
+                      borderRadius: 999,
+                      padding: '1px 6px',
+                    }}
+                  >
+                    {col.nestedFieldStrategy}
+                  </span>
+                )}
+              </td>
+              <td style={contractTdStyle}>{col.niaType.kind}</td>
+              <td style={contractTdStyle} title={col.fidelity.kind === 'lossy' ? col.fidelity.reason : undefined}>
+                {lossy ? (
+                  <span style={{ fontWeight: 600, color: 'var(--warn)' }}>lossy</span>
+                ) : (
+                  <span style={{ color: 'var(--ink4)' }}>lossless</span>
+                )}
+              </td>
+              <td style={contractTdStyle}>{col.isKey ? '\u2713' : ''}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }

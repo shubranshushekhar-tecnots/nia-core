@@ -11,6 +11,7 @@ import {
   OnFailureAbortError,
   opForStep,
   parseNodeConfig,
+  ResidualAbortError,
   resolveSourceEntity,
   rowsToObjects,
   type DialectQuery,
@@ -31,6 +32,7 @@ import { getSchema } from "../introspection.js";
 import { dispatch } from "../dispatch.js";
 import { findSourcePath } from "../preview/runPreview.js";
 import { checkCleanPlanDrift } from "./cleanPlanDrift.js";
+import { ensureDestination } from "./ensureDestination.js";
 import { buildEtlReadQuery, buildFailurePreCheckQuery, MAX_CHUNK_ROWS } from "./queryBuilder.js";
 import { startRun, recordChunkProgress, finishRun, getRunCheckpoint } from "./workflowRuns.js";
 import { publishRunEvent } from "./publish.js";
@@ -239,7 +241,7 @@ async function runStatefulResidual(args: {
           preSteps,
         ));
       } catch (err) {
-        if (err instanceof OnFailureAbortError) return failStaged(err.message);
+        if (err instanceof ResidualAbortError) return failStaged(err.message);
         throw err;
       }
       preFailures = mergeFailureReports(preFailures, chunkFailures);
@@ -297,7 +299,7 @@ async function runStatefulResidual(args: {
       finalFailures = mergeFailureReports(finalFailures, post.failures);
     }
   } catch (err) {
-    if (err instanceof OnFailureAbortError) return failStaged(err.message);
+    if (err instanceof ResidualAbortError) return failStaged(err.message);
     throw err;
   }
 
@@ -454,7 +456,74 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       .catch(() => undefined)
       .then(() => fail(scope, job.runId, job.nodeId, message));
 
+  // Schema layer Part 4: source path/connection/schema/entity/dialect are
+  // resolved here now (moved up from after the preflight/staging block)
+  // because ensureDestination() needs the source schema+entity to build a
+  // DestinationContract, and it must run BEFORE runPreflight — preflight's
+  // has_table_privilege check requires the destination to already exist,
+  // so entity creation has to happen first. Nothing here has created
+  // staging yet, so failures below use plain `fail()`, not `failStaged()`
+  // (same reasoning as the workflow/destination/mapping checks above).
+  const path = findSourcePath(dest.id, graph);
+  const sourceConnectionId = path?.source.connectionId;
+  if (!path || !sourceConnectionId) {
+    return fail(scope, job.runId, job.nodeId, "Destination node has no upstream source node with a connection selected.");
+  }
+  const { source, transforms } = path;
+
+  const resolvedSource = await resolveConnection(sourceConnectionId, scope);
+  if (!resolvedSource.ok) return fail(scope, job.runId, job.nodeId, `Source connection: ${resolvedSource.error.message}`);
+  const sourceSchema = await getSchema(resolvedSource.value);
+  if (!sourceSchema.ok) return fail(scope, job.runId, job.nodeId, `Source schema: ${sourceSchema.error.message}`);
+
+  const parsedSource = parseNodeConfig(source.type, source.config);
+  const persistedEntity = !parsedSource.unrecognized && parsedSource.type !== "transform" ? parsedSource.value.entity : undefined;
+  // Block 3.5 item 2: unlike preview (runPreview.ts), which happily infers
+  // the source table from the mapping's field names when no entity is
+  // persisted, the authoritative run path hard-fails instead of guessing —
+  // restores the Block 1a(1) ledger line ("source entity is required to
+  // run") that checkConfig's own entity check never actually enforced (see
+  // packages/schemas/src/checks.ts's amended comment on that check: it
+  // stays a pre-flight `warn`, this is the real gate). Checked before
+  // findPersistedEntity/resolveSourceEntity below even run, so a run never
+  // silently succeeds against an inferred table the user never picked.
+  if (!persistedEntity) {
+    return fail(scope, job.runId, job.nodeId, `Source node "${source.id}" has no target table/collection selected yet.`);
+  }
+  let entity = findPersistedEntity(sourceSchema.value, persistedEntity);
+  if (!entity) {
+    const entityResult = resolveSourceEntity(sourceSchema.value, mapping.entries.map((e) => e.from));
+    if (!entityResult.ok) return fail(scope, job.runId, job.nodeId, entityResult.message);
+    entity = entityResult.entity;
+  }
+
+  const dialect = manifestDialect(source.manifestId);
+  if (!dialect) {
+    return fail(scope, job.runId, job.nodeId, `Source connector "${source.manifestId ?? "unknown"}" has no supported query dialect.`);
+  }
+
   if (job.cursor === null && stagedTarget.mode === "staged") {
+    // Schema layer Part 4: entity creation/comparison runs in preflight,
+    // before staging (docs/plans/schema-layer.md's Part 4). Staged-mode
+    // only, same gate as runPreflight/ensureStaging below — direct-mode
+    // destinations are unchanged by Part 4 and still require a
+    // pre-existing table.
+    const destDialect = manifestDialect(dest.manifestId);
+    if (!destDialect) {
+      return fail(scope, job.runId, job.nodeId, `Destination connector "${dest.manifestId ?? "unknown"}" has no supported query dialect.`);
+    }
+    const ensured = await ensureDestination(
+      dest.connectionId,
+      destDialect,
+      entity,
+      dialect,
+      destConfig,
+      scope,
+      job.triggeredByUserId,
+      job.runId,
+    );
+    if (!ensured.ok) return fail(scope, job.runId, job.nodeId, ensured.message);
+
     const preflight = await runPreflight(dest.connectionId, destConfig, scope);
     if (!preflight.ok) return fail(scope, job.runId, job.nodeId, preflight.message);
     const staging = await ensureStaging(
@@ -469,46 +538,14 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     if (!staging.ok) return fail(scope, job.runId, job.nodeId, staging.message);
   }
 
-  const path = findSourcePath(dest.id, graph);
-  const sourceConnectionId = path?.source.connectionId;
-  if (!path || !sourceConnectionId) {
-    return failStaged("Destination node has no upstream source node with a connection selected.");
-  }
-  const { source, transforms } = path;
-
-  const resolvedSource = await resolveConnection(sourceConnectionId, scope);
-  if (!resolvedSource.ok) return failStaged(`Source connection: ${resolvedSource.error.message}`);
-  const sourceSchema = await getSchema(resolvedSource.value);
-  if (!sourceSchema.ok) return failStaged(`Source schema: ${sourceSchema.error.message}`);
-
-  const parsedSource = parseNodeConfig(source.type, source.config);
-  const persistedEntity = !parsedSource.unrecognized && parsedSource.type !== "transform" ? parsedSource.value.entity : undefined;
-  // Block 3.5 item 2: unlike preview (runPreview.ts), which happily infers
-  // the source table from the mapping's field names when no entity is
-  // persisted, the authoritative run path hard-fails instead of guessing —
-  // restores the Block 1a(1) ledger line ("source entity is required to
-  // run") that checkConfig's own entity check never actually enforced (see
-  // packages/schemas/src/checks.ts's amended comment on that check: it
-  // stays a pre-flight `warn`, this is the real gate). Checked before
-  // findPersistedEntity/resolveSourceEntity below even run, so a run never
-  // silently succeeds against an inferred table the user never picked.
-  if (!persistedEntity) {
-    return failStaged(`Source node "${source.id}" has no target table/collection selected yet.`);
-  }
-  let entity = findPersistedEntity(sourceSchema.value, persistedEntity);
-  if (!entity) {
-    const entityResult = resolveSourceEntity(sourceSchema.value, mapping.entries.map((e) => e.from));
-    if (!entityResult.ok) return failStaged(entityResult.message);
-    entity = entityResult.entity;
-  }
-
   // Phase 13 Step 6: once per run, before any extraction, refuse if any
   // CleanPlan-bound transform node on this path has drifted from the
   // schema/profile/version it was proposed against. Checked here (not
   // earlier) because it needs the resolved source connection + entity;
-  // checked before `dialect`/pushdown compilation so a stale binding
-  // never gets a chance to execute even once. Never auto-re-proposes —
-  // that's Phase 15 (phase13.md Step 6).
+  // checked before pushdown compilation so a stale binding never gets a
+  // chance to execute even once. Never auto-re-proposes — that's Phase 15
+  // (phase13.md Step 6). Uses `failStaged()` now (not `fail()`) since
+  // staging may already exist by this point.
   if (job.cursor === null) {
     for (const t of transforms) {
       const drift = await checkCleanPlanDrift({
@@ -521,11 +558,6 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       });
       if (!drift.ok) return failStaged(drift.message);
     }
-  }
-
-  const dialect = manifestDialect(source.manifestId);
-  if (!dialect) {
-    return failStaged(`Source connector "${source.manifestId ?? "unknown"}" has no supported query dialect.`);
   }
 
   // Same >1-transform-node degrade-to-residual boundary as runPreview.ts's
@@ -726,10 +758,14 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     : result.value.rows;
   // Phase 8b-3: a residual step whose onFailure policy is "fail" throws
   // OnFailureAbortError (via computeFailureReport, ops/onFailure.ts) once
-  // it counts a failing row — caught here and converted into the same
-  // clean, non-retrying run-failure path as every other business-rule
-  // rejection above (never left to propagate as an unexpected exception,
-  // and never triggers BullMQ's retry/backoff).
+  // it counts a failing row. Schema-layer Part 3 follow-up: flatten.ts
+  // throws the same clean-abort error (its own ResidualAbortError, the
+  // base class OnFailureAbortError extends) for a row whose value doesn't
+  // match its design-time "object" schema. Both are caught here (via the
+  // shared base class) and converted into the same clean, non-retrying
+  // run-failure path as every other business-rule rejection above (never
+  // left to propagate as an unexpected exception, and never triggers
+  // BullMQ's retry/backoff).
   let residualColumns: string[];
   let residualRows: unknown[][];
   let residualFailures: ReturnType<typeof applyResidualTransforms>["failures"];
@@ -743,7 +779,7 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       residualSteps,
     ));
   } catch (err) {
-    if (err instanceof OnFailureAbortError) {
+    if (err instanceof ResidualAbortError) {
       return failStaged(err.message);
     }
     throw err;

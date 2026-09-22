@@ -49,6 +49,19 @@ export const CleanPlanRecord = z.object({
   opCatalogVersion: z.number(),
   adapterVersion: z.number(),
   profileSignatureVersion: z.number(),
+  /**
+   * Schema-layer Part 4 — "the contract's hash joins the CleanPlan
+   * bindings" (docs/plans/schema-layer.md). Optional: a CleanPlan bound
+   * before Part 4 shipped, or one whose node has no destination contract
+   * yet, has no value here. Same disclosed-scope-narrowing as
+   * nodeConfig.ts's SourceDestConfig.contractHash — nothing in this
+   * codebase writes this field yet (apps/api's applyCleaningPlanDiff has
+   * no destination-contract input to compute it from); it exists so a
+   * future apply-time write path, and a future run-start drift check
+   * alongside checkCleanPlanDrift's existing schema/profile/version
+   * checks, has somewhere to read/write the value.
+   */
+  contractHash: z.string().optional(),
   appliedAt: z.string(),
 });
 export type CleanPlanRecord = z.infer<typeof CleanPlanRecord>;

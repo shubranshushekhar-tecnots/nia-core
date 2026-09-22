@@ -114,6 +114,22 @@ export type EntityRef = z.infer<typeof EntityRef>;
  * pre-existing behavior. Named `DestinationWriteMode` (not `WriteMode`) to
  * avoid colliding with contract.ts's `WriteMode` (upsert/replace — a
  * different axis, both exported via this package's `export *` index).
+ *
+ * `contractHash` (Schema layer, Part 4): destination-only, optional. The
+ * hex sha256 of a `DestinationContract` this node's mapping was approved
+ * against (destinationContract.ts's `canonicalizeContractForHash`, hashed
+ * by apps/worker/src/lib/etl/destinationContractHash.ts's
+ * `computeContractHash` — same crypto-free/crypto-wrapper split as
+ * CleanPlan's `stepsHash`). Read-only from runEtl.ts's perspective: when
+ * set, `ensureDestination()` recomputes the contract from the current
+ * source schema and refuses the run on a hash mismatch (drift — the
+ * mapped source shape changed since this was approved) instead of
+ * silently re-deriving a different contract. Absent means "no approved
+ * contract yet" — `ensureDestination()` builds and uses one on the fly
+ * without a drift check. Nothing in this codebase writes this field yet
+ * (disclosed Part 4 scope narrowing — see destinationContract.ts's header
+ * comment); it exists so a future apply-time write path has somewhere to
+ * put the value.
  */
 export const DestinationWriteMode = z.enum(["staged", "direct"]);
 export type DestinationWriteMode = z.infer<typeof DestinationWriteMode>;
@@ -124,6 +140,7 @@ export const SourceDestConfig = z.object({
   entity: EntityRef.optional(),
   upsertKeys: z.array(z.string()).optional(),
   writeMode: DestinationWriteMode.optional(),
+  contractHash: z.string().optional(),
 });
 export type SourceDestConfig = z.infer<typeof SourceDestConfig>;
 

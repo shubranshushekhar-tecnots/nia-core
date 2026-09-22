@@ -1,5 +1,6 @@
 import { FlattenStep, type FlattenStep as FlattenStepT } from "../nodeConfig.js";
 import type { NiaField, NiaTypeObject } from "../niaType.js";
+import { ResidualAbortError } from "./onFailure.js";
 import type { OpModule, SchemaResult } from "./types.js";
 
 /**
@@ -42,22 +43,33 @@ function flattenObjectFields(prefix: string, obj: NiaTypeObject, parentNullable:
  * every sampled row was an object. Silently emitting no keys for such a row
  * would make its flattened columns read as NULL, indistinguishable from a
  * genuinely absent/null field — exactly the "must not silently become
- * NULLs" case this function must not produce. Throwing surfaces the
- * schema/data mismatch loudly (an uncaught run failure, same as any other
- * "unhandled" throw in this ops/ tree) instead.
+ * NULLs" case this function must not produce. Throws ResidualAbortError
+ * (not a plain Error) naming both the field and the failing row's index in
+ * this chunk, so runEtl.ts's applyResidualTransforms(Chunk) catch sites
+ * route it through the same clean run-abort path as an onFailure "fail"
+ * policy: staging for this run is dropped, the run is marked "failed" (not
+ * left orphaned "running"), the message is published to the client as-is,
+ * and — because this happens before any staging/destination write for the
+ * run — the destination is never touched. This also avoids BullMQ's
+ * retry/backoff, which would otherwise re-run the same doomed chunk three
+ * times before giving up. Until Part 5's run-time conformance/quarantine
+ * step exists, this throw is the only handling for this case — see
+ * docs/plans/schema-layer.md's Part 5 section for the planned follow-up
+ * (route these rows through quarantine, counted, instead of aborting the
+ * whole run).
  */
-function flattenObjectValue(prefix: string, value: unknown, remainingDepth: number): Record<string, unknown> {
+function flattenObjectValue(prefix: string, value: unknown, remainingDepth: number, rowIndex: number): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (value === null || value === undefined) return out;
   if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(
-      `flatten step: field "${prefix}" was typed "object" at design time, but this row's actual value is ${Array.isArray(value) ? "an array" : typeof value}, not an object — design-time schema inference is sample-based and missed this row's shape. Re-profile the source before flattening this field.`,
+    throw new ResidualAbortError(
+      `flatten step: field "${prefix}" was typed "object" at design time, but row index ${rowIndex} of this chunk has a value that is ${Array.isArray(value) ? "an array" : typeof value}, not an object — design-time schema inference is sample-based and missed this row's shape. Re-profile the source before flattening this field.`,
     );
   }
   for (const [key, sub] of Object.entries(value as Record<string, unknown>)) {
     const name = `${prefix}_${key}`;
     if (remainingDepth > 0 && sub !== null && typeof sub === "object" && !Array.isArray(sub)) {
-      Object.assign(out, flattenObjectValue(name, sub, remainingDepth - 1));
+      Object.assign(out, flattenObjectValue(name, sub, remainingDepth - 1, rowIndex));
     } else {
       out[name] = sub;
     }
@@ -117,9 +129,9 @@ export const flattenOp: OpModule<FlattenStepT> = {
   applyResidual(input, step) {
     if (step.field === "") return { cols: input.cols, rows: input.rows };
     const remainingDepth = Math.max(0, step.maxDepth - 1);
-    const rows = input.rows.map((row) => {
+    const rows = input.rows.map((row, rowIndex) => {
       const { [step.field]: target, ...rest } = row;
-      return { ...rest, ...flattenObjectValue(step.field, target, remainingDepth) };
+      return { ...rest, ...flattenObjectValue(step.field, target, remainingDepth, rowIndex) };
     });
     // Union the flattened key set across every row (not just row[0]) —
     // rows sourced from loosely-typed data (Mongo, JSON) can genuinely

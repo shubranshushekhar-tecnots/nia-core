@@ -12,8 +12,13 @@ export { OP_REGISTRY, opForStep } from "./ops/registry.js";
 // Phase 8b-3: OnFailureAbortError is thrown by ops/onFailure.ts's
 // computeFailureReport (via applyResidual) for policy "fail" — public so
 // runEtl.ts can catch it specifically and convert it into a clean run
-// failure instead of an unexpected-exception path.
-export { OnFailureAbortError, resolveOnFailure } from "./ops/onFailure.js";
+// failure instead of an unexpected-exception path. ResidualAbortError
+// (Schema-layer Part 3 follow-up) is OnFailureAbortError's base class,
+// for ops whose applyResidual needs the same clean-abort treatment but
+// isn't Expr/CallFn-shaped (e.g. flatten.ts's non-object-row case) —
+// runEtl.ts catches this base class, not just the OnFailureAbortError
+// subclass, so both routes land in the same failStaged path.
+export { OnFailureAbortError, ResidualAbortError, resolveOnFailure } from "./ops/onFailure.js";
 // Deliberately public (not just internal to this package's own tests):
 // Phase 8b-2a's apps/worker/scripts/ops-db-conformance.ts reuses this same
 // array for DB-execution assertions rather than duplicating fixture
@@ -47,3 +52,4 @@ export * from "./niaInference.js";
 // docs/plans/schema-layer.md's Part 3 plan-update entry.
 export * as niaExprType from "./niaExprType.js";
 export * from "./writeValueCoercion.js";
+export * from "./destinationContract.js";

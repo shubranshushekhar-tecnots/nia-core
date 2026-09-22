@@ -13,13 +13,22 @@ vi.mock("@supabase/supabase-js", () => ({
 const endMock = vi.fn(async () => undefined);
 const constructedOptions: Array<{ connectionLimit?: number }> = [];
 let instanceCount = 0;
+// Captured per constructed pool, in construction order, so a test can
+// simulate mysql2's Pool "connection" event firing on a fresh connection.
+let connectionHandlers: Array<(conn: { query: ReturnType<typeof vi.fn> }) => void> = [];
 
 vi.mock("mysql2/promise", () => ({
   default: {
     createPool: (options: { connectionLimit?: number }) => {
       instanceCount++;
       constructedOptions.push(options);
-      return { end: endMock, query: vi.fn() };
+      return {
+        end: endMock,
+        query: vi.fn(),
+        on: (event: string, cb: (conn: { query: ReturnType<typeof vi.fn> }) => void) => {
+          if (event === "connection") connectionHandlers.push(cb);
+        },
+      };
     },
   },
 }));
@@ -45,6 +54,7 @@ describe("connector-mysql pool-manager", () => {
     endMock.mockClear();
     constructedOptions.length = 0;
     instanceCount = 0;
+    connectionHandlers = [];
   });
 
   it("reuses the same pool for repeated calls with the same credVersion", async () => {
@@ -116,5 +126,25 @@ describe("connector-mysql pool-manager", () => {
     expect(pool).toBeTruthy();
     expect(instanceCount).toBe(1);
     expect(poolCount()).toBe(1);
+  });
+
+  // Follow-up item 1: strict sql_mode must be set on every write-pool
+  // connection (staging + apply share this same pool), but never on the
+  // read pool — a read-only session has no need for it.
+  it("sets a strict sql_mode on every write-pool connection, and not on the read pool", async () => {
+    const { getPool, getWritePool } = await freshPoolManager();
+    const c = cred();
+
+    await getPool(c, config);
+    expect(connectionHandlers).toHaveLength(0);
+
+    await getWritePool(c, config);
+    expect(connectionHandlers).toHaveLength(1);
+
+    const fakeConn = { query: vi.fn().mockResolvedValue(undefined) };
+    connectionHandlers[0]!(fakeConn);
+    expect(fakeConn.query).toHaveBeenCalledWith(
+      "SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE,ERROR_FOR_DIVISION_BY_ZERO'",
+    );
   });
 });
