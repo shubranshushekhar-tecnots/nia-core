@@ -39,6 +39,7 @@ const boundRow = {
   profile_hash: "profile-hash-a",
   op_catalog_version: 1,
   adapter_version: 1,
+  profile_signature_version: 1,
 };
 
 function callArgs() {
@@ -97,6 +98,22 @@ describe("checkCleanPlanDrift", () => {
       reason: "profile-changed",
       message: expect.stringContaining(NODE_ID),
     });
+  });
+
+  it("refuses the run and says the profile format changed (not that the data drifted) when the profile signature version has moved on, even if the profile hash would also mismatch", async () => {
+    maybeSingle.mockResolvedValue({ data: { ...boundRow, profile_signature_version: 0 } });
+    profileEntity.mockResolvedValue({ columns: [] as ColumnStats[], profileHash: "profile-hash-CHANGED" });
+    computeSchemaHash.mockReturnValue("schema-hash-a");
+
+    const result = await checkCleanPlanDrift(callArgs());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("profile-signature-version-changed");
+      expect(result.nodeId).toBe(NODE_ID);
+      expect(result.message).toContain("format changed");
+      expect(result.message).not.toContain("data drifted");
+    }
   });
 
   it("refuses the run when the op catalog version has moved on", async () => {

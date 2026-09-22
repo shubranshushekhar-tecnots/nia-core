@@ -1,6 +1,7 @@
 import {
   ADAPTER_VERSION,
   OP_CATALOG_VERSION,
+  PROFILE_SIGNATURE_VERSION,
   type CleanPlanDriftResult,
   type EntityRef,
   type ProfileRunJob,
@@ -46,7 +47,7 @@ export async function checkCleanPlanDrift(args: {
 
   const { data: row, error } = await supabase
     .from("clean_plans")
-    .select("source_schema_hash, profile_hash, op_catalog_version, adapter_version")
+    .select("source_schema_hash, profile_hash, op_catalog_version, adapter_version, profile_signature_version")
     .eq("workflow_id", workflowId)
     .eq("node_id", nodeId)
     .maybeSingle();
@@ -75,6 +76,19 @@ export async function checkCleanPlanDrift(args: {
       nodeId,
       reason: "schema-changed",
       message: `Node "${nodeId}"'s cleaning steps were proposed against a different source column shape (columns added/removed/retyped since). Refusing to run — use "Re-propose" to regenerate the cleaning plan.`,
+    };
+  }
+  // Checked before the profileHash comparison below: if the hash *format*
+  // itself changed, the two hashes are near-certain to differ regardless of
+  // whether the underlying data did — comparing them first would surface as
+  // a misleading "profile-changed" (data drifted) refusal instead of the
+  // actual cause.
+  if (PROFILE_SIGNATURE_VERSION !== row.profile_signature_version) {
+    return {
+      ok: false,
+      nodeId,
+      reason: "profile-signature-version-changed",
+      message: `Node "${nodeId}"'s cleaning steps were proposed against an older profile hash format (version ${row.profile_signature_version}, now ${PROFILE_SIGNATURE_VERSION}) — the profile format changed, not the data. Refusing to run — use "Re-propose" to regenerate the cleaning plan.`,
     };
   }
   if (profile.profileHash !== row.profile_hash) {

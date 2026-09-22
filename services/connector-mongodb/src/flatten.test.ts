@@ -45,4 +45,30 @@ describe("flattenDocuments", () => {
     const r2 = flattenDocuments([{ a: 2 }, { z: 1 }]);
     expect(r1.columns).toEqual(r2.columns);
   });
+
+  it("flags a top-level field name that itself contains a literal '.' as degraded, without merging it into a nested path", () => {
+    const result = flattenDocuments([{ "a.b": 1, c: 2 }]);
+    expect(result.columns).toEqual(["a.b", "c"]);
+    expect(result.degradedColumns.has("a.b")).toBe(true);
+    expect(result.degradedColumns.has("c")).toBe(false);
+    expect(result.rows).toEqual([{ "a.b": 1, c: 2 }]);
+  });
+
+  it("does not flag a genuinely nested path built from non-dotted keys as degraded", () => {
+    const result = flattenDocuments([{ a: { b: 1 } }]);
+    expect(result.degradedColumns.size).toBe(0);
+  });
+
+  it("stops descending and JSON.stringify's an object value under a dotted key, flagging it degraded", () => {
+    const result = flattenDocuments([{ "a.b": { c: 1, d: 2 } }]);
+    expect(result.columns).toEqual(["a.b"]);
+    expect(result.degradedColumns.has("a.b")).toBe(true);
+    expect(result.rows[0]!["a.b"]).toBe(JSON.stringify({ c: 1, d: 2 }));
+  });
+
+  it("still marks an array under a dotted key as an arrayColumn, in addition to degraded", () => {
+    const result = flattenDocuments([{ "a.b": [1, 2] }]);
+    expect(result.arrayColumns.has("a.b")).toBe(true);
+    expect(result.degradedColumns.has("a.b")).toBe(true);
+  });
 });

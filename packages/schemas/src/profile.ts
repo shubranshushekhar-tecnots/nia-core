@@ -53,6 +53,16 @@ export const ColumnStats = z.object({
   declaredType: z.string(),
   /** Distinct observed JS value shapes in the sample: "null" | "string" | "number" | "boolean" | "date" | "other". */
   observedTypes: z.array(z.string()),
+  /**
+   * Schema layer (Part 2, docs/plans/schema-layer.md) — per-shape sample
+   * counts, keyed by the same finer-grained vocabulary niaInference.ts
+   * joins into a NiaType: "null" | "string" | "integer" | "float" |
+   * "boolean" | "date" | "other" (splits observedTypes' coarse "number"
+   * into "integer"/"float" so integer⊔float=float has something to join
+   * over). `.default({})` so profiles persisted before this field existed
+   * still parse.
+   */
+  observedTypeCounts: z.record(z.string(), z.number().int().nonnegative()).default({}),
   sampleCount: z.number().int().nonnegative(),
   nullCount: z.number().int().nonnegative(),
   emptyStringCount: z.number().int().nonnegative(),
@@ -96,6 +106,18 @@ export const ColumnSignature = z.object({
   missingTokenPresence: z.enum(["yes", "no"]),
   /** Null when the column isn't a text column (no parse funcs run). */
   parseBuckets: z.record(z.enum(PARSE_STAT_KEYS), z.enum(["all", "some", "none"])).nullable(),
+  /**
+   * Schema layer (Part 2) — bucketed observedTypeCounts, one entry per
+   * shape key that occurred at least once (a key with 0 occurrences is
+   * omitted, matching parseBuckets' pattern of only encoding what was
+   * observed). Drops exact counts like every other signature field, but a
+   * genuinely new value shape (e.g. a field that used to be all-string
+   * starts seeing numbers) flips a bucket and moves profileHash, which is
+   * the whole point of including field paths' types in the signature.
+   * `.default({})` so profiles persisted before this field existed still
+   * parse.
+   */
+  typePresence: z.record(z.string(), z.enum(["none", "some", "all"])).default({}),
 });
 export type ColumnSignature = z.infer<typeof ColumnSignature>;
 

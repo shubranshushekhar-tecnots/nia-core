@@ -35,6 +35,11 @@ export function useHeroScrollProgress(refs: HeroPinRefs) {
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       const isMobile = vw < MOBILE_BREAKPOINT;
+      // Hoisted so both the desktop (size growth) and mobile (reveal-only)
+      // branches below can use it — see HeroCanvasLayer's `--reveal`-driven
+      // node/connector stagger, which this continues from where the
+      // approach block's own `eased` left off.
+      const sizeEased = heroEase(raw);
 
       // Sticky elements still render at their normal in-flow position
       // *before* they've actually stuck (i.e. while scrolled near but not
@@ -66,7 +71,6 @@ export function useHeroScrollProgress(refs: HeroPinRefs) {
         w = rect.width;
         h = rect.height;
       } else {
-        const sizeEased = heroEase(raw);
         // w/h grow from the size the approach block already grew the
         // window to (HANDOFF_WINDOW) up to fullscreen. No extra `scale()`
         // bridging needed here (unlike the approach block) — by the time
@@ -86,6 +90,16 @@ export function useHeroScrollProgress(refs: HeroPinRefs) {
       const canvasTx = w / 2 - PRIMARY_NODE_CENTER.x;
       const canvasTy = h / 2 - PRIMARY_NODE_CENTER.y;
       canvasEl.style.transform = `translate3d(${canvasTx}px, ${canvasTy}px, 0)`;
+
+      // Always fully revealed here — this is a *separate* DOM instance from
+      // the approach block's canvas (each block renders its own
+      // HeroCanvasLayer), so by the time this block takes over at the
+      // handoff instant, the approach block's own `--reveal` has already
+      // finished (see useHeroApproachProgress). Driving this instance's
+      // `--reveal` off this block's own `raw`/`sizeEased` instead — which
+      // restarts at 0 — would snap already-revealed nodes back to faint
+      // for a moment right at the handoff, a visible regression flash.
+      canvasEl.style.setProperty('--reveal', '1');
 
       if (isMobile) return;
 

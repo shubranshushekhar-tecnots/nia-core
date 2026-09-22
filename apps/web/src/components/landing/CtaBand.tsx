@@ -1,35 +1,30 @@
-import type { RefObject } from 'react';
-import Reveal from './Reveal';
-import { whiteBtn } from './styles';
+import Container from './hairline/Container';
+import Eyebrow from './hairline/Eyebrow';
+import Button from './hairline/Button';
+import { bandH2 } from './hairline/styles';
 
-export default function CtaBand({ bandRef }: { bandRef: RefObject<HTMLElement> }) {
+const APP = 'Nia Core Shell.dc.html';
+
+// Closing CTA band — ported from the "CLOSING BAND" block shared by
+// designs/Connectors — full page-html/Connectors.dc.html and
+// designs/Pricing — full page-html/Pricing.dc.html (identical copy in
+// both). Flat #101014 ground, no gradient/rounded card — matches the
+// hairline system now that Footer.tsx sits on the same flat dark band
+// with no "rise from under" seam. (Previously took a bandRef used for a
+// scroll-driven 3D scale/blur/rotate effect designed for the old rounded
+// gradient card + overlapping footer; both are gone with the flat
+// hairline layout, so the ref was dropped along with the effect.)
+export default function CtaBand() {
   return (
-    <Reveal
-      as="section"
-      ref={bandRef}
-      style={{ position: 'relative', zIndex: 1, maxWidth: 1180, margin: '0 auto', boxSizing: 'border-box', padding: '74px 24px 0', willChange: 'transform, opacity' }}
-    >
-      <div
-        style={{
-          position: 'relative',
-          overflow: 'hidden',
-          boxSizing: 'border-box',
-          padding: '96px 32px 104px',
-          borderRadius: 26,
-          background: 'linear-gradient(130deg,#4F46E5,#6D28D9 60%,#0E7490)',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 18,
-          textAlign: 'center',
-        }}
-      >
-        <span aria-hidden="true" style={{ position: 'absolute', inset: 0, opacity: 0.16, backgroundImage: 'radial-gradient(circle,#FFFFFF 1px,transparent 1px)', backgroundSize: '20px 20px' }} />
-        <h2 style={{ position: 'relative', margin: 0, maxWidth: 620, fontSize: 'clamp(26px,3.6vw,38px)', fontWeight: 700, letterSpacing: '-.03em', color: '#FFFFFF' }}>
-          Move your first million rows tonight
-        </h2>
-        <a href="/signup" style={whiteBtn}>Start free — no card</a>
-      </div>
-    </Reveal>
+    <section className="hl-scope" style={{ background: 'var(--hl-ink)' }}>
+      <Container style={{ paddingTop: 104, paddingBottom: 104 }}>
+        <Eyebrow tone="inverted">No card &middot; five minutes &middot; cancel whenever</Eyebrow>
+        <h2 style={{ ...bandH2, marginTop: 28, maxWidth: 820 }}>Move your first million rows tonight.</h2>
+        <div style={{ marginTop: 44, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <Button href={APP} variant="solid" ground="dark">Start free — no card</Button>
+          <Button href="#sales" variant="outline" ground="dark">Talk to sales</Button>
+        </div>
+      </Container>
+    </section>
   );
 }

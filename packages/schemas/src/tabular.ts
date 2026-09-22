@@ -20,6 +20,16 @@ export type ColumnType = z.infer<typeof ColumnType>;
 export const Column = z.object({
   name: z.string(),
   type: ColumnType,
+  /**
+   * True when this column's name is itself ambiguous with the connector's
+   * own path-flattening convention (currently only connector-mongodb: a
+   * source field name containing a literal "." collides with its
+   * dotted-path nesting notation). Consumers (mapping UI, write-side
+   * un-flatten) must treat a degraded column as a single opaque field —
+   * never split its name on "." to guess a nested shape. Defaults to
+   * false for every connector that has no such ambiguity (SQL dialects).
+   */
+  degraded: z.boolean().optional(),
 });
 export type Column = z.infer<typeof Column>;
 

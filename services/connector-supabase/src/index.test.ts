@@ -163,6 +163,81 @@ describe("connector-supabase /write (route-level)", () => {
     expect(verifyActiveWriteGrantMock).toHaveBeenCalledWith(baseGrantId, baseCredential.connectionId, "sales");
   });
 
+  it("JSON.stringify's an object/array value bound for a JSON-typed destination column, after looking up its type", async () => {
+    const { app, signWriteContext } = await freshApp();
+    // queryMock is the direct pool.query call used for the destination-
+    // column-type lookup (rowsNeedJsonCoercion sees an object value in the
+    // batch); execMock is the real data write, issued separately via
+    // executeWithStatementTimeout's checked-out client.
+    queryMock.mockResolvedValueOnce({
+      rows: [
+        { column_name: "id", data_type: "integer" },
+        { column_name: "payload", data_type: "jsonb" },
+      ],
+    });
+    execMock.mockResolvedValue({ rows: [], rowCount: 1 });
+
+    const columns = ["id", "payload"];
+    const issuedAt = Date.now();
+    const signature = signWriteContext(
+      { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, ...stagingFields },
+      "a".repeat(32),
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/write",
+      payload: {
+        credential: baseCredential,
+        config: baseConfig,
+        entity,
+        columns,
+        rows: [[1, { a: 1, b: [2, 3] }]],
+        upsertKeys: ["id"],
+        context: { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, signature, ...stagingFields },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ written: 1 });
+    expect(execMock).toHaveBeenCalledWith(
+      expect.objectContaining({ values: [1, JSON.stringify({ a: 1, b: [2, 3] })] }),
+    );
+  });
+
+  it("refuses with a clear error when an object/array value targets a non-JSON destination column, without writing anything", async () => {
+    const { app, signWriteContext } = await freshApp();
+    queryMock.mockResolvedValueOnce({
+      rows: [
+        { column_name: "id", data_type: "integer" },
+        { column_name: "total", data_type: "numeric" },
+      ],
+    });
+
+    const columns = ["id", "total"];
+    const issuedAt = Date.now();
+    const signature = signWriteContext(
+      { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, ...stagingFields },
+      "a".repeat(32),
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/write",
+      payload: {
+        credential: baseCredential,
+        config: baseConfig,
+        entity,
+        columns,
+        rows: [[1, { not: "a scalar" }]],
+        upsertKeys: ["id"],
+        context: { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, signature, ...stagingFields },
+      },
+    });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json().message).toMatch(/destination type is not JSON — refusing to write it/);
+    expect(execMock).not.toHaveBeenCalled();
+  });
+
   it("rejects when rows exceed the row cap", async () => {
     const original = process.env.WRITE_ROW_CAP;
     process.env.WRITE_ROW_CAP = "1";

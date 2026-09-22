@@ -16,6 +16,15 @@
  *     seen across all documents, sorted alphabetically — so column order
  *     never depends on which document happened to be processed first.
  *   - A document missing a given path gets `null` for that column.
+ *   - A field name that itself contains a literal "." is ambiguous — its
+ *     dotted-path column can't be told apart from a genuinely nested
+ *     field with the same path. Rather than guess, that key's whole
+ *     subtree stops descending right there (any object/array value under
+ *     it is JSON.stringify'd as-is, not merged into further dotted
+ *     columns) and the resulting column is flagged in `degradedColumns`
+ *     — callers (schema/mapping UI, and the write-side un-flatten in
+ *     writeOps.ts) should treat it as a single opaque field, not
+ *     something safe to split on ".".
  */
 
 export type FlattenedRow = Record<string, unknown>;
@@ -39,16 +48,32 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function flattenDocument(
   doc: Record<string, unknown>,
   arrayColumns: Set<string>,
+  degradedColumns: Set<string>,
   prefix = "",
 ): FlattenedRow {
   const out: FlattenedRow = {};
   for (const [key, value] of Object.entries(doc)) {
     const path = prefix ? `${prefix}.${key}` : key;
+    if (key.includes(".")) {
+      // Ambiguous: this key's own dotted path can't be distinguished from
+      // a genuinely nested field of the same name — stop descending here
+      // instead of guessing, and flag the resulting column.
+      degradedColumns.add(path);
+      if (Array.isArray(value)) {
+        out[path] = JSON.stringify(value);
+        arrayColumns.add(path);
+      } else if (isPlainObject(value)) {
+        out[path] = JSON.stringify(value);
+      } else {
+        out[path] = value;
+      }
+      continue;
+    }
     if (Array.isArray(value)) {
       out[path] = JSON.stringify(value);
       arrayColumns.add(path);
     } else if (isPlainObject(value)) {
-      Object.assign(out, flattenDocument(value, arrayColumns, path));
+      Object.assign(out, flattenDocument(value, arrayColumns, degradedColumns, path));
     } else {
       out[path] = value;
     }
@@ -60,12 +85,15 @@ export type FlattenedResult = {
   columns: string[];
   /** Columns whose value is a JSON.stringify'd array — caller should type these "json", not infer from the value. */
   arrayColumns: Set<string>;
+  /** Columns built from a field name that itself contains a literal "." — ambiguous with a genuinely nested path of the same name; callers must not treat these as splittable dotted paths. */
+  degradedColumns: Set<string>;
   rows: FlattenedRow[];
 };
 
 export function flattenDocuments(docs: Record<string, unknown>[]): FlattenedResult {
   const arrayColumns = new Set<string>();
-  const flatRows = docs.map((d) => flattenDocument(d, arrayColumns));
+  const degradedColumns = new Set<string>();
+  const flatRows = docs.map((d) => flattenDocument(d, arrayColumns, degradedColumns));
   const columnSet = new Set<string>();
   for (const row of flatRows) {
     for (const col of Object.keys(row)) columnSet.add(col);
@@ -76,5 +104,5 @@ export function flattenDocuments(docs: Record<string, unknown>[]): FlattenedResu
     for (const col of columns) normalized[col] = col in row ? row[col] : null;
     return normalized;
   });
-  return { columns, arrayColumns, rows };
+  return { columns, arrayColumns, degradedColumns, rows };
 }

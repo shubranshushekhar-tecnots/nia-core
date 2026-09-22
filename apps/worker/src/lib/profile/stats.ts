@@ -36,6 +36,23 @@ function classifyValue(v: unknown): string {
   return "other";
 }
 
+/**
+ * Schema layer (Part 2) — same shapes as classifyValue, except "number"
+ * splits into "integer"/"float" (Number.isInteger) so niaInference.ts's
+ * join over observedTypeCounts has an integer⊔float=float case to hit.
+ * Kept as a separate function rather than changing classifyValue itself,
+ * since observedTypes (ColumnStats' existing field) is already persisted
+ * with the coarser vocabulary and isn't worth a breaking rename.
+ */
+function classifyNiaShape(v: unknown): string {
+  if (v === null || v === undefined) return "null";
+  if (v instanceof Date) return "date";
+  if (typeof v === "string") return "string";
+  if (typeof v === "number") return Number.isInteger(v) ? "integer" : "float";
+  if (typeof v === "boolean") return "boolean";
+  return "other";
+}
+
 function fieldExpr(): Expr {
   return { kind: "field", name: "v" };
 }
@@ -68,6 +85,7 @@ export function computeColumnStats(name: string, declaredType: string, values: u
   let missingTokenCount = 0;
   let hasLeadingZeroStrings = false;
   const observedTypes = new Set<string>();
+  const observedTypeCounts: Record<string, number> = {};
   const distinctKeys = new Set<string>();
   const nonNullStrings: string[] = [];
   const numbers: number[] = [];
@@ -79,6 +97,8 @@ export function computeColumnStats(name: string, declaredType: string, values: u
 
   for (const v of values) {
     observedTypes.add(classifyValue(v));
+    const shape = classifyNiaShape(v);
+    observedTypeCounts[shape] = (observedTypeCounts[shape] ?? 0) + 1;
     distinctKeys.add(v instanceof Date ? `date:${v.toISOString()}` : JSON.stringify(v));
 
     if (v === null || v === undefined) {
@@ -135,6 +155,7 @@ export function computeColumnStats(name: string, declaredType: string, values: u
     name,
     declaredType,
     observedTypes: [...observedTypes].sort(),
+    observedTypeCounts,
     sampleCount,
     nullCount,
     emptyStringCount,

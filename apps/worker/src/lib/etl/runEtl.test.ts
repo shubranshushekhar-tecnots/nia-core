@@ -6,9 +6,23 @@ import type { Queue } from "bullmq";
 /**
  * Block 3.5 item 5 — the minimal runner test suite. Mocks only the I/O
  * boundary (resolveGraph/resolveConnection/getSchema/dispatch/dispatchWrite/
- * workflowRuns.js/publish.js), same pattern as runPreview.test.ts, so the
- * real findSourcePath/findPersistedEntity/resolveSourceEntity/
- * compilePushdown/manifestDialect/buildEtlReadQuery all run for real.
+ * workflowRuns.js/publish.js/cleanPlanDrift.js), same pattern as
+ * runPreview.test.ts, so the real findSourcePath/findPersistedEntity/
+ * resolveSourceEntity/compilePushdown/manifestDialect/buildEtlReadQuery all
+ * run for real.
+ *
+ * cleanPlanDrift.js is mocked to always report "no drift" (defaulted below)
+ * — Phase 13 Step 6 wired checkCleanPlanDrift's real Supabase read into
+ * runEtl.ts's `job.cursor === null` start-of-run path, and every test here
+ * whose graph has a transform node hits it. Left unmocked, it isn't a
+ * silent no-op: checkCleanPlanDrift only fails open on an actual query
+ * *error*, so it still issues a real fetch() to the fake test
+ * SUPABASE_URL (http://localhost:54321, nothing listening) and *waits*
+ * for Node's fetch to give up — ~7s per call, serially, once per
+ * transform node on the path — before falling back to { ok: true }. That
+ * masqueraded as 10 flaky-looking timeouts/slow tests here (multiples of
+ * ~7s matching 1/2/4 drift-check calls) until traced to this missing
+ * mock; see cleanPlanDrift.test.ts for the real function's own coverage.
  *
  * Covers, per the Block 3.5 spec: chunk loop happy path (both the
  * not-last-chunk and last-chunk/done branches); failed write -> no cursor
@@ -56,6 +70,11 @@ vi.mock("./workflowRuns.js", () => ({
 const publishRunEventMock = vi.fn();
 vi.mock("./publish.js", () => ({
   publishRunEvent: (...args: unknown[]) => publishRunEventMock(...args),
+}));
+
+const checkCleanPlanDriftMock = vi.fn();
+vi.mock("./cleanPlanDrift.js", () => ({
+  checkCleanPlanDrift: (...args: unknown[]) => checkCleanPlanDriftMock(...args),
 }));
 
 const { runEtl } = await import("./runEtl.js");
@@ -161,8 +180,10 @@ beforeEach(() => {
   finishRunMock.mockReset();
   getRunCheckpointMock.mockReset();
   publishRunEventMock.mockReset();
+  checkCleanPlanDriftMock.mockReset();
 
   resolveGraphMock.mockResolvedValue(graph());
+  checkCleanPlanDriftMock.mockResolvedValue({ ok: true });
   resolveConnectionMock.mockImplementation(async (connectionId: string) => ({
     ok: true,
     value: { id: connectionId, manifest: {}, credential: {}, config: {} },

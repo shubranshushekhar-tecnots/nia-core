@@ -21,9 +21,19 @@ import type { TransformStep } from "./nodeConfig.js";
  * Bump these by hand when such a change ships; there's no automation for
  * detecting "semantics changed," same as any other manually-tracked
  * schema-version constant in this codebase.
+ *
+ * `profileSignatureVersion` is the same idea for computeProfileHash's own
+ * canonicalization format (apps/worker/src/lib/profile/signature.ts): a
+ * binding's `profile_hash` is only comparable against a freshly-recomputed
+ * one if both were produced by the same hash *format*. Bumping this when
+ * the signature/canonicalization shape changes lets the drift check catch
+ * that up front and say so plainly ("the profile format changed"), instead
+ * of the two hashes simply failing to match and surfacing as a misleading
+ * "profile-changed" (data drifted) refusal.
  */
 export const OP_CATALOG_VERSION = 1;
 export const ADAPTER_VERSION = 1;
+export const PROFILE_SIGNATURE_VERSION = 1;
 
 export const CleanPlanRecord = z.object({
   id: z.string(),
@@ -38,6 +48,7 @@ export const CleanPlanRecord = z.object({
   profileHash: z.string(),
   opCatalogVersion: z.number(),
   adapterVersion: z.number(),
+  profileSignatureVersion: z.number(),
   appliedAt: z.string(),
 });
 export type CleanPlanRecord = z.infer<typeof CleanPlanRecord>;
@@ -45,7 +56,17 @@ export type CleanPlanRecord = z.infer<typeof CleanPlanRecord>;
 /** One binding's drift-check outcome — used by both the run-start refusal (runEtl.ts) and its unit test. */
 export type CleanPlanDriftResult =
   | { ok: true }
-  | { ok: false; nodeId: string; reason: "schema-changed" | "profile-changed" | "catalog-version-changed" | "adapter-version-changed"; message: string };
+  | {
+      ok: false;
+      nodeId: string;
+      reason:
+        | "schema-changed"
+        | "profile-changed"
+        | "catalog-version-changed"
+        | "adapter-version-changed"
+        | "profile-signature-version-changed";
+      message: string;
+    };
 
 /**
  * Shared, crypto-free canonicalization for stepsHash — lives here (not

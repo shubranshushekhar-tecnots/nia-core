@@ -86,6 +86,12 @@ export function useHeroApproachProgress(refs: HeroApproachRefs) {
       const canvasTx = w / 2 - PRIMARY_NODE_CENTER.x;
       const canvasTy = h / 2 - PRIMARY_NODE_CENTER.y;
       canvasEl.style.transform = `translate3d(${canvasTx}px, ${canvasTy}px, 0)`;
+
+      // Drives HeroCanvasLayer's staggered node/connector reveal (see its
+      // `--reveal`-based CSS there) — same `eased` value already driving the
+      // window's own growth, so neighboring nodes/connectors build in as the
+      // window opens rather than popping in fully formed.
+      canvasEl.style.setProperty('--reveal', eased.toFixed(3));
     };
 
     let raf = 0;

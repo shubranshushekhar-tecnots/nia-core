@@ -201,6 +201,72 @@ describe("connector-mysql /write (route-level)", () => {
     expect(queryMock).not.toHaveBeenCalled();
   });
 
+  it("JSON.stringify's an object/array value bound for a JSON-typed destination column, after looking up its type", async () => {
+    const { app, signWriteContext } = await freshApp();
+    // First pool.query call is the destination-column-type lookup
+    // (rowsNeedJsonCoercion sees an object value in the batch), second is
+    // the UPSERT itself — queryMock is shared, so each call is queued in
+    // call order via mockResolvedValueOnce.
+    queryMock.mockResolvedValueOnce([[{ column_name: "id", data_type: "int" }, { column_name: "payload", data_type: "json" }]]);
+    queryMock.mockResolvedValueOnce([{ affectedRows: 1 }, undefined]);
+
+    const issuedAt = Date.now();
+    const columns = ["id", "payload"];
+    const signature = signWriteContext(
+      { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, ...stagingFields },
+      "a".repeat(32),
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/write",
+      payload: {
+        credential: baseCredential,
+        config: baseConfig,
+        entity,
+        columns,
+        rows: [[1, { a: 1, b: [2, 3] }]],
+        upsertKeys: ["id"],
+        context: { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, signature, ...stagingFields },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ written: 1 });
+    expect(queryMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ values: [1, JSON.stringify({ a: 1, b: [2, 3] })] }),
+    );
+  });
+
+  it("refuses with a clear error when an object/array value targets a non-JSON destination column, without writing anything", async () => {
+    const { app, signWriteContext } = await freshApp();
+    queryMock.mockResolvedValueOnce([[{ column_name: "id", data_type: "int" }, { column_name: "total", data_type: "decimal" }]]);
+
+    const issuedAt = Date.now();
+    const columns = ["id", "total"];
+    const signature = signWriteContext(
+      { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, ...stagingFields },
+      "a".repeat(32),
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/write",
+      payload: {
+        credential: baseCredential,
+        config: baseConfig,
+        entity,
+        columns,
+        rows: [[1, { not: "a scalar" }]],
+        upsertKeys: ["id"],
+        context: { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, signature, ...stagingFields },
+      },
+    });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json().message).toMatch(/destination type is not JSON — refusing to write it/);
+    // Only the type-lookup query ran — no UPSERT was ever issued.
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
   it("writes a quarantine row (entity == context.quarantineEntity) via the fixed quarantine-table INSERT, not the upsert path", async () => {
     const { app, signWriteContext } = await freshApp();
     execMock.mockResolvedValue([{ affectedRows: 1 }, undefined]);

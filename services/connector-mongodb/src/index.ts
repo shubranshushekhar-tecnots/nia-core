@@ -89,10 +89,11 @@ app.post("/introspect", async (req) => {
       .collection(collInfo.name)
       .aggregate([{ $sample: { size: SAMPLE_SIZE } }])
       .toArray();
-    const { columns, arrayColumns, rows } = flattenDocuments(samples);
+    const { columns, arrayColumns, degradedColumns, rows } = flattenDocuments(samples);
     const fields = columns.map((name) => ({
       name,
       type: resolveColumnType(arrayColumns.has(name), rows.map((r) => r[name])),
+      degraded: degradedColumns.has(name),
     }));
     // primaryKey stays null — queryBuilder.ts always keys Mongo off `_id`
     // (unconditionally unique) regardless of this field, so there's
@@ -118,10 +119,11 @@ app.post("/execute", async (req): Promise<TabularResult> => {
     .toArray();
   const truncated = docs.length > body.rowCap;
   const capped = truncated ? docs.slice(0, body.rowCap) : docs;
-  const { columns, arrayColumns, rows } = flattenDocuments(capped);
+  const { columns, arrayColumns, degradedColumns, rows } = flattenDocuments(capped);
   const columnDefs = columns.map((name) => ({
     name,
     type: resolveColumnType(arrayColumns.has(name), rows.map((r) => r[name])),
+    degraded: degradedColumns.has(name),
   }));
   return {
     columns: columnDefs,

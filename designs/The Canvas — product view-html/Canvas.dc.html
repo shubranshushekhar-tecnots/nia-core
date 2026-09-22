@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Canvas</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;500&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body { margin: 0; background: #ffffff; font-family: "Helvetica Neue", Helvetica, Archivo, "Segoe UI", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+
+.tool { transition: background-color 120ms linear, border-color 120ms linear; }
+.tool:hover { border-color: #8e9096; }
+.tool:focus-visible, .node:focus-visible, .chip:focus-visible { outline: 2px solid #594cdf; outline-offset: 2px; }
+.node { transition: border-color 120ms linear; }
+.node:hover { border-color: #8e9096; }
+
+/* ── entrance ────────────────────────────────────────────── */
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* ── the run: one 7.5s cycle through the whole graph ─────── */
+@keyframes actA { 0%, 1% { border-color: #e4e5e8; } 2%, 5% { border-color: #101014; } 7%, 100% { border-color: #e4e5e8; } }
+@keyframes actB { 0%, 8% { border-color: #e4e5e8; } 9%, 15% { border-color: #101014; } 17%, 100% { border-color: #e4e5e8; } }
+@keyframes actC { 0%, 21% { border-color: #e4e5e8; } 22%, 50% { border-color: #101014; } 52%, 100% { border-color: #e4e5e8; } }
+@keyframes actD { 0%, 71% { border-color: #e4e5e8; } 72%, 78% { border-color: #101014; } 80%, 100% { border-color: #e4e5e8; } }
+@keyframes actE { 0%, 85% { border-color: #e4e5e8; } 86%, 96% { border-color: #101014; } 98%, 100% { border-color: #e4e5e8; } }
+
+@keyframes ledA { 0%, 1% { opacity: 0; } 2%, 5% { opacity: 1; } 7%, 100% { opacity: 0; } }
+@keyframes ledB { 0%, 8% { opacity: 0; } 9%, 15% { opacity: 1; } 17%, 100% { opacity: 0; } }
+@keyframes ledC { 0%, 21% { opacity: 0; } 22%, 50% { opacity: 1; } 52%, 100% { opacity: 0; } }
+@keyframes ledD { 0%, 71% { opacity: 0; } 72%, 78% { opacity: 1; } 80%, 100% { opacity: 0; } }
+@keyframes ledE { 0%, 85% { opacity: 0; } 86%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+
+.na { animation: rise .5s cubic-bezier(.2,.8,.2,1) .05s both, actA 7.5s linear infinite; }
+.nb { animation: rise .5s cubic-bezier(.2,.8,.2,1) .13s both, actB 7.5s linear infinite; }
+.nc { animation: rise .5s cubic-bezier(.2,.8,.2,1) .21s both, actC 7.5s linear infinite; }
+.nd { animation: rise .5s cubic-bezier(.2,.8,.2,1) .29s both, actD 7.5s linear infinite; }
+.ne { animation: rise .5s cubic-bezier(.2,.8,.2,1) .37s both, actE 7.5s linear infinite; }
+.nf { animation: rise .5s cubic-bezier(.2,.8,.2,1) .45s both, actE 7.5s linear infinite; }
+
+.la { animation: ledA 7.5s linear infinite; }
+.lb { animation: ledB 7.5s linear infinite; }
+.lc { animation: ledC 7.5s linear infinite; }
+.ld { animation: ledD 7.5s linear infinite; }
+.le { animation: ledE 7.5s linear infinite; }
+
+/* ── edges ───────────────────────────────────────────────── */
+.wire { animation: fadeIn .6s ease-out .3s both; }
+.pk { stroke: #594cdf; stroke-width: 3; stroke-linecap: round; fill: none; }
+@keyframes p1 { 0% { stroke-dashoffset: 20; opacity: 0; } 3% { opacity: 1; } 9% { stroke-dashoffset: -80; opacity: 1; } 11%, 100% { stroke-dashoffset: -80; opacity: 0; } }
+@keyframes p2 { 0%, 14% { stroke-dashoffset: 20; opacity: 0; } 16% { opacity: 1; } 22% { stroke-dashoffset: -80; opacity: 1; } 24%, 100% { stroke-dashoffset: -80; opacity: 0; } }
+@keyframes p3 { 0%, 49% { stroke-dashoffset: 20; opacity: 0; } 51% { opacity: 1; } 72% { stroke-dashoffset: -1076; opacity: 1; } 74%, 100% { stroke-dashoffset: -1076; opacity: 0; } }
+@keyframes p4 { 0%, 77% { stroke-dashoffset: 20; opacity: 0; } 79% { opacity: 1; } 86% { stroke-dashoffset: -80; opacity: 1; } 88%, 100% { stroke-dashoffset: -80; opacity: 0; } }
+@keyframes p5 { 0%, 77% { stroke-dashoffset: 20; opacity: 0; } 79% { opacity: 1; } 90% { stroke-dashoffset: -248; opacity: 1; } 92%, 100% { stroke-dashoffset: -248; opacity: 0; } }
+.pk1 { stroke-dasharray: 20 4000; animation: p1 7.5s linear infinite; }
+.pk2 { stroke-dasharray: 20 4000; animation: p2 7.5s linear infinite; }
+.pk3 { stroke-dasharray: 20 4000; animation: p3 7.5s linear infinite; }
+.pk4 { stroke-dasharray: 20 4000; animation: p4 7.5s linear infinite; }
+.pk5 { stroke-dasharray: 20 4000; animation: p5 7.5s linear infinite; }
+
+/* ── status bar ──────────────────────────────────────────── */
+@keyframes sweep { 0% { width: 0%; } 96%, 100% { width: 100%; } }
+.bar { animation: sweep 7.5s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .na, .nb, .nc, .nd, .ne, .nf, .la, .lb, .lc, .ld, .le,
+  .pk1, .pk2, .pk3, .pk4, .pk5, .wire, .bar { animation: none !important; }
+  .pk1, .pk2, .pk3, .pk4, .pk5 { opacity: 0; }
+}
+</style>
+</helmet>
+
+<div style="width: 1440px; height: 900px; box-sizing: border-box; background: #ffffff; display: flex; flex-direction: column; overflow: hidden;">
+
+  <!-- TOP RAIL -->
+  <div style="height: 52px; flex-shrink: 0; box-sizing: border-box; padding: 0 20px; border-bottom: 1px solid #e4e5e8; display: flex; align-items: center; justify-content: space-between; background: #ffffff;">
+    <div style="display: flex; align-items: center; gap: 16px;">
+      <svg width="18" height="18" viewBox="0 0 20 20" fill="#101014" aria-hidden="true"><rect x="0" y="0" width="20" height="20"></rect><rect x="7" y="7" width="6" height="6" fill="#ffffff"></rect></svg>
+      <span style="font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: #101014;">Reel 01 — The Nightly</span>
+      <span style="font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 400; letter-spacing: 0.12em; text-transform: uppercase; color: #8e9096;">Run 4,118</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 20px;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="width: 6px; height: 6px; background: #594cdf;"></div>
+        <span style="font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: #101014;">Checks 5/5</span>
+      </div>
+      <span style="font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 400; letter-spacing: 0.12em; color: #8e9096;">00:01:04:12</span>
+    </div>
+  </div>
+
+  <div style="flex-grow: 1; display: flex; min-height: 0;">
+
+    <!-- LEFT TOOL RAIL -->
+    <div style="width: 64px; flex-shrink: 0; box-sizing: border-box; border-right: 1px solid #e4e5e8; padding: 16px 0; display: flex; flex-direction: column; align-items: center; gap: 8px; background: #ffffff;">
+      <sc-for list="{{tools}}" as="t" hint-placeholder-count="5">
+        <button type="button" class="tool" onClick="{{t.pick}}" aria-label="{{t.name}}" aria-pressed="{{t.on}}" title="{{t.name}}" style="width: 40px; height: 40px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; background: {{t.bg}}; border: 1px solid {{t.bd}};">
+          <sc-if value="{{t.isTrigger}}" hint-placeholder-val="{{ true }}"><svg width="20" height="20" viewBox="0 0 24 24" fill="{{t.fg}}" aria-hidden="true"><rect x="2" y="9" width="6" height="6"></rect><rect x="10" y="11" width="12" height="2"></rect></svg></sc-if>
+          <sc-if value="{{t.isData}}" hint-placeholder-val="{{ true }}"><svg width="20" height="20" viewBox="0 0 24 24" fill="{{t.fg}}" aria-hidden="true"><rect x="4" y="4" width="16" height="4"></rect><rect x="4" y="11" width="16" height="3"></rect><rect x="4" y="17" width="16" height="2"></rect></svg></sc-if>
+          <sc-if value="{{t.isAction}}" hint-placeholder-val="{{ true }}"><svg width="20" height="20" viewBox="0 0 24 24" fill="{{t.fg}}" aria-hidden="true"><rect x="10" y="3" width="4" height="18"></rect><rect x="3" y="10" width="18" height="4"></rect></svg></sc-if>
+          <sc-if value="{{t.isCond}}" hint-placeholder-val="{{ true }}"><svg width="20" height="20" viewBox="0 0 24 24" fill="{{t.fg}}" aria-hidden="true"><rect x="2" y="10" width="8" height="4"></rect><rect x="10" y="5" width="2" height="14"></rect><rect x="14" y="3" width="8" height="4"></rect><rect x="14" y="17" width="8" height="4"></rect></svg></sc-if>
+          <sc-if value="{{t.isAi}}" hint-placeholder-val="{{ true }}"><svg width="20" height="20" viewBox="0 0 24 24" fill="{{t.fg}}" aria-hidden="true"><rect x="3" y="3" width="5" height="5"></rect><rect x="10" y="3" width="5" height="5"></rect><rect x="17" y="3" width="4" height="5"></rect><rect x="3" y="10" width="5" height="5"></rect><rect x="10" y="10" width="5" height="5"></rect><rect x="17" y="10" width="4" height="5"></rect><rect x="3" y="17" width="5" height="4"></rect><rect x="10" y="17" width="5" height="4"></rect><rect x="17" y="17" width="4" height="4"></rect></svg></sc-if>
+        </button>
+      </sc-for>
+      <div style="width: 24px; height: 1px; background: #e4e5e8; margin: 8px 0;"></div>
+      <span style="font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.1em; color: #8e9096;">100%</span>
+    </div>
+
+    <!-- CANVAS -->
+    <div style="position: relative; flex-grow: 1; background-color: #fafafa; background-image: radial-gradient(#dfe1e5 1px, transparent 1px); background-size: 24px 24px; overflow: hidden;">
+
+      <!-- wires -->
+      <svg width="1376" height="800" viewBox="0 0 1376 800" style="position: absolute; left: 0; top: 0; pointer-events: none;" aria-hidden="true">
+        <g class="wire" fill="none" stroke="#c9cbd1" stroke-width="1.5">
+          <path d="M360 202 H440"></path>
+          <path d="M720 202 H800"></path>
+          <path d="M1080 202 H1126 Q1140 202 1140 216 V261 Q1140 275 1126 275 H414 Q400 275 400 289 V428 Q400 442 414 442 H440"></path>
+          <path d="M720 442 H800"></path>
+          <path d="M720 482 H746 Q760 482 760 496 V628 Q760 642 774 642 H800"></path>
+        </g>
+        <path class="pk pk1" d="M360 202 H440"></path>
+        <path class="pk pk2" d="M720 202 H800"></path>
+        <path class="pk pk3" d="M1080 202 H1126 Q1140 202 1140 216 V261 Q1140 275 1126 275 H414 Q400 275 400 289 V428 Q400 442 414 442 H440"></path>
+        <path class="pk pk4" d="M720 442 H800"></path>
+        <path class="pk pk5" d="M720 482 H746 Q760 482 760 496 V628 Q760 642 774 642 H800"></path>
+      </svg>
+
+      <!-- SCHEDULE -->
+      <button type="button" class="node na" onClick="{{pickA}}" aria-pressed="{{selA}}" style="position: absolute; left: 80px; top: 110px; width: 280px; height: 112px; box-sizing: border-box; padding: 0; text-align: left; font-family: inherit; cursor: pointer; background: #ffffff; border: 1px solid #e4e5e8; border-radius: 12px; display: flex; flex-direction: column; outline: {{outA}}; outline-offset: -2px;">
+        <div style="flex-grow: 1; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
+          <div style="width: 32px; height: 32px; flex-shrink: 0; border: 1px solid #e4e5e8; border-radius: 8px; display: flex; align-items: center; justify-content: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="2" y="9" width="6" height="6"></rect><rect x="10" y="11" width="12" height="2"></rect></svg></div>
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 15px; font-weight: 500; line-height: 20px; color: #101014;">Schedule</div>
+            <div style="margin-top: 3px; font-size: 13px; line-height: 18px; color: #64696f;">Every night at 02:00</div>
+          </div>
+          <div class="la" style="width: 6px; height: 6px; background: #594cdf; margin-top: 7px; flex-shrink: 0;"></div>
+        </div>
+        <div style="height: 40px; flex-shrink: 0; border-top: 1px solid #f0f1f3; display: flex; align-items: center; justify-content: flex-end; padding: 0 12px; gap: 10px;">
+          <span style="font-size: 12px; color: #64696f;">Trigger</span>
+          <div style="width: 8px; height: 8px; background: #101014;"></div>
+        </div>
+      </button>
+
+      <!-- POSTGRESQL -->
+      <button type="button" class="node nb" onClick="{{pickB}}" aria-pressed="{{selB}}" style="position: absolute; left: 440px; top: 110px; width: 280px; height: 112px; box-sizing: border-box; padding: 0; text-align: left; font-family: inherit; cursor: pointer; background: #ffffff; border: 1px solid #e4e5e8; border-radius: 12px; display: flex; flex-direction: column; outline: {{outB}}; outline-offset: -2px;">
+        <div style="flex-grow: 1; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
+          <div style="width: 32px; height: 32px; flex-shrink: 0; border: 1px solid #e4e5e8; border-radius: 8px; display: flex; align-items: center; justify-content: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="4" y="4" width="16" height="4"></rect><rect x="4" y="11" width="16" height="3"></rect><rect x="4" y="17" width="16" height="2"></rect></svg></div>
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 15px; font-weight: 500; line-height: 20px; color: #101014;">PostgreSQL</div>
+            <div style="margin-top: 3px; font-size: 13px; line-height: 18px; color: #64696f;">Read orders view</div>
+          </div>
+          <div class="lb" style="width: 6px; height: 6px; background: #594cdf; margin-top: 7px; flex-shrink: 0;"></div>
+        </div>
+        <div style="height: 40px; flex-shrink: 0; border-top: 1px solid #f0f1f3; display: flex; align-items: center; justify-content: space-between; padding: 0 12px;">
+          <div style="display: flex; align-items: center; gap: 10px;"><div style="width: 8px; height: 8px; background: #101014;"></div><span style="font-size: 12px; color: #64696f;">Input</span></div>
+          <div style="display: flex; align-items: center; gap: 10px;"><span style="font-size: 12px; color: #64696f;">Output</span><div style="width: 8px; height: 8px; background: #101014;"></div></div>
+        </div>
+      </button>
+
+      <!-- CLAUDE -->
+      <button type="button" class="node nc" onClick="{{pickC}}" aria-pressed="{{selC}}" style="position: absolute; left: 800px; top: 110px; width: 280px; height: 112px; box-sizing: border-box; padding: 0; text-align: left; font-family: inherit; cursor: pointer; background: #ffffff; border: 1px solid #e4e5e8; border-radius: 12px; display: flex; flex-direction: column; outline: {{outC}}; outline-offset: -2px;">
+        <div style="flex-grow: 1; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
+          <div style="width: 32px; height: 32px; flex-shrink: 0; border: 1px solid #e4e5e8; border-radius: 8px; display: flex; align-items: center; justify-content: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="3" y="3" width="5" height="5"></rect><rect x="10" y="3" width="5" height="5"></rect><rect x="17" y="3" width="4" height="5"></rect><rect x="3" y="10" width="5" height="5"></rect><rect x="10" y="10" width="5" height="5" fill="#594cdf"></rect><rect x="17" y="10" width="4" height="5"></rect><rect x="3" y="17" width="5" height="4"></rect><rect x="10" y="17" width="5" height="4"></rect><rect x="17" y="17" width="4" height="4"></rect></svg></div>
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 15px; font-weight: 500; line-height: 20px; color: #101014;">Claude</div>
+            <div style="margin-top: 3px; font-size: 13px; line-height: 18px; color: #64696f;">Classify order notes</div>
+          </div>
+          <div class="lc" style="width: 6px; height: 6px; background: #594cdf; margin-top: 7px; flex-shrink: 0;"></div>
+        </div>
+        <div style="height: 40px; flex-shrink: 0; border-top: 1px solid #f0f1f3; display: flex; align-items: center; justify-content: space-between; padding: 0 12px;">
+          <div style="display: flex; align-items: center; gap: 10px;"><div style="width: 8px; height: 8px; background: #101014;"></div><span style="font-size: 12px; color: #64696f;">Input</span></div>
+          <div style="display: flex; align-items: center; gap: 10px;"><span style="font-size: 12px; color: #64696f;">Output</span><div style="width: 8px; height: 8px; background: #101014;"></div></div>
+        </div>
+      </button>
+
+      <!-- ROUTE BY TYPE -->
+      <button type="button" class="node nd" onClick="{{pickD}}" aria-pressed="{{selD}}" style="position: absolute; left: 440px; top: 350px; width: 280px; height: 152px; box-sizing: border-box; padding: 0; text-align: left; font-family: inherit; cursor: pointer; background: #ffffff; border: 1px solid #e4e5e8; border-radius: 12px; display: flex; flex-direction: column; outline: {{outD}}; outline-offset: -2px;">
+        <div style="flex-grow: 1; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
+          <div style="width: 32px; height: 32px; flex-shrink: 0; border: 1px solid #e4e5e8; border-radius: 8px; display: flex; align-items: center; justify-content: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="2" y="10" width="8" height="4"></rect><rect x="10" y="5" width="2" height="14"></rect><rect x="14" y="3" width="8" height="4"></rect><rect x="14" y="17" width="8" height="4"></rect></svg></div>
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 15px; font-weight: 500; line-height: 20px; color: #101014;">Route by Type</div>
+            <div style="margin-top: 3px; font-size: 13px; line-height: 18px; color: #64696f;">Multi-way branch by value</div>
+          </div>
+          <div class="ld" style="width: 6px; height: 6px; background: #594cdf; margin-top: 7px; flex-shrink: 0;"></div>
+        </div>
+        <div style="height: 40px; flex-shrink: 0; border-top: 1px solid #f0f1f3; display: flex; align-items: center; justify-content: space-between; padding: 0 12px;">
+          <div style="display: flex; align-items: center; gap: 10px;"><div style="width: 8px; height: 8px; background: #101014;"></div><span style="font-size: 12px; color: #64696f;">Input</span></div>
+          <div style="display: flex; align-items: center; gap: 10px;"><span style="font-size: 12px; color: #101014;">New rows</span><div style="width: 8px; height: 8px; background: #101014;"></div></div>
+        </div>
+        <div style="height: 40px; flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 12px; gap: 10px;">
+          <span style="font-size: 12px; color: #64696f;">Nothing new</span>
+          <div style="width: 8px; height: 8px; background: #c9cbd1;"></div>
+        </div>
+      </button>
+
+      <!-- POWER BI -->
+      <button type="button" class="node ne" onClick="{{pickE}}" aria-pressed="{{selE}}" style="position: absolute; left: 800px; top: 350px; width: 280px; height: 112px; box-sizing: border-box; padding: 0; text-align: left; font-family: inherit; cursor: pointer; background: #ffffff; border: 1px solid #e4e5e8; border-radius: 12px; display: flex; flex-direction: column; outline: {{outE}}; outline-offset: -2px;">
+        <div style="flex-grow: 1; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
+          <div style="width: 32px; height: 32px; flex-shrink: 0; border: 1px solid #e4e5e8; border-radius: 8px; display: flex; align-items: center; justify-content: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="10" y="3" width="4" height="18"></rect><rect x="3" y="10" width="18" height="4"></rect></svg></div>
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 15px; font-weight: 500; line-height: 20px; color: #101014;">Power BI</div>
+            <div style="margin-top: 3px; font-size: 13px; line-height: 18px; color: #64696f;">Push dataset</div>
+          </div>
+          <div class="le" style="width: 6px; height: 6px; background: #594cdf; margin-top: 7px; flex-shrink: 0;"></div>
+        </div>
+        <div style="height: 40px; flex-shrink: 0; border-top: 1px solid #f0f1f3; display: flex; align-items: center; padding: 0 12px; gap: 10px;">
+          <div style="width: 8px; height: 8px; background: #101014;"></div>
+          <span style="font-size: 12px; color: #64696f;">Input</span>
+        </div>
+      </button>
+
+      <!-- SLACK -->
+      <button type="button" class="node nf" onClick="{{pickF}}" aria-pressed="{{selF}}" style="position: absolute; left: 800px; top: 550px; width: 280px; height: 112px; box-sizing: border-box; padding: 0; text-align: left; font-family: inherit; cursor: pointer; background: #ffffff; border: 1px solid #e4e5e8; border-radius: 12px; display: flex; flex-direction: column; outline: {{outF}}; outline-offset: -2px;">
+        <div style="flex-grow: 1; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
+          <div style="width: 32px; height: 32px; flex-shrink: 0; border: 1px solid #e4e5e8; border-radius: 8px; display: flex; align-items: center; justify-content: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="10" y="3" width="4" height="18"></rect><rect x="3" y="10" width="18" height="4"></rect></svg></div>
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 15px; font-weight: 500; line-height: 20px; color: #101014;">Slack</div>
+            <div style="margin-top: 3px; font-size: 13px; line-height: 18px; color: #64696f;">Notify #data-ops</div>
+          </div>
+          <div class="le" style="width: 6px; height: 6px; background: #594cdf; margin-top: 7px; flex-shrink: 0;"></div>
+        </div>
+        <div style="height: 40px; flex-shrink: 0; border-top: 1px solid #f0f1f3; display: flex; align-items: center; padding: 0 12px; gap: 10px;">
+          <div style="width: 8px; height: 8px; background: #101014;"></div>
+          <span style="font-size: 12px; color: #64696f;">Input</span>
+        </div>
+      </button>
+
+      <!-- EDITORIAL READOUT -->
+      <div style="position: absolute; left: 80px; top: 600px; width: 280px;">
+        <div style="font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: #64696f;">Read · supabase-orders</div>
+        <div style="margin-top: 14px; font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 56px; line-height: 60px; letter-spacing: -0.03em; font-weight: 400; color: #101014;">{{rows}}</div>
+        <div style="margin-top: 12px; height: 1px; background: #101014;"></div>
+        <div style="margin-top: 14px; font-size: 13px; line-height: 20px; color: #64696f;">Rows read since 02:00. Classified, routed and landed without anyone awake to watch it.</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- STATUS BAR -->
+  <div style="height: 48px; flex-shrink: 0; box-sizing: border-box; padding: 0 20px; border-top: 1px solid #e4e5e8; display: flex; align-items: center; justify-content: space-between; background: #ffffff;">
+    <span style="font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: #101014; width: 300px;">{{status}}</span>
+    <div style="flex-grow: 1; max-width: 520px; height: 3px; background: #e4e5e8; overflow: hidden;">
+      <div class="bar" style="height: 3px; background: #594cdf;"></div>
+    </div>
+    <div style="width: 300px; display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
+      <button type="button" class="chip" style="height: 32px; padding: 0 14px; border: 1px solid #e4e5e8; border-radius: 8px; background: #ffffff; color: #4a4d55; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer;">Logs</button>
+      <button type="button" class="chip" style="height: 32px; padding: 0 14px; border: 1px solid #101014; border-radius: 8px; background: #101014; color: #ffffff; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer;">Run now</button>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sel: null, tool: 'Trigger', rows: 0 };
+    this._raf = null;
+  }
+  componentDidMount() {
+    const target = 748494;
+    const dur = 1800;
+    const t0 = Date.now();
+    const tick = () => {
+      const p = Math.min(1, (Date.now() - t0) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      this.setState({ rows: Math.round(target * eased) });
+      if (p < 1) { this._raf = requestAnimationFrame(tick); }
+    };
+    this._raf = requestAnimationFrame(tick);
+  }
+  componentWillUnmount() {
+    if (this._raf) { cancelAnimationFrame(this._raf); }
+  }
+  renderVals() {
+    const sel = this.state.sel;
+    const tool = this.state.tool ?? 'Trigger';
+    const ring = (k) => (sel === k ? '2px solid #594cdf' : 'none');
+    const toolDefs = [
+      { name: 'Trigger', key: 'isTrigger' },
+      { name: 'Data', key: 'isData' },
+      { name: 'Action', key: 'isAction' },
+      { name: 'Condition', key: 'isCond' },
+      { name: 'AI', key: 'isAi' }
+    ];
+    const tools = toolDefs.map((d) => ({
+      name: d.name,
+      on: d.name === tool,
+      bg: d.name === tool ? '#101014' : '#ffffff',
+      bd: d.name === tool ? '#101014' : '#e4e5e8',
+      fg: d.name === tool ? '#ffffff' : '#4a4d55',
+      isTrigger: d.key === 'isTrigger',
+      isData: d.key === 'isData',
+      isAction: d.key === 'isAction',
+      isCond: d.key === 'isCond',
+      isAi: d.key === 'isAi',
+      pick: () => this.setState({ tool: d.name })
+    }));
+    const labels = {
+      a: 'Selected · Schedule',
+      b: 'Selected · PostgreSQL',
+      c: 'Selected · Claude',
+      d: 'Selected · Route by Type',
+      e: 'Selected · Power BI',
+      f: 'Selected · Slack'
+    };
+    return {
+      tools: tools,
+      rows: (this.state.rows ?? 0).toLocaleString('en-US'),
+      status: sel ? labels[sel] : 'Nightly · 5 of 5 checks passed',
+      selA: sel === 'a', selB: sel === 'b', selC: sel === 'c',
+      selD: sel === 'd', selE: sel === 'e', selF: sel === 'f',
+      outA: ring('a'), outB: ring('b'), outC: ring('c'),
+      outD: ring('d'), outE: ring('e'), outF: ring('f'),
+      pickA: () => this.setState({ sel: sel === 'a' ? null : 'a' }),
+      pickB: () => this.setState({ sel: sel === 'b' ? null : 'b' }),
+      pickC: () => this.setState({ sel: sel === 'c' ? null : 'c' }),
+      pickD: () => this.setState({ sel: sel === 'd' ? null : 'd' }),
+      pickE: () => this.setState({ sel: sel === 'e' ? null : 'e' }),
+      pickF: () => this.setState({ sel: sel === 'f' ? null : 'f' })
+    };
+  }
+}
+</script>
+</body>
+</html>

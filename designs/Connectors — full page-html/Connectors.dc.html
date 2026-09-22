@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Connectors</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;500&amp;display=swap">
+<style>
+body { margin: 0; background: #ffffff; font-family: "Helvetica Neue", Helvetica, Archivo, "Segoe UI", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #101014; text-decoration: none; } a:hover { color: #594cdf; }
+.pill { transition: background-color 140ms linear, border-color 140ms linear, color 140ms linear; }
+.pill:hover { border-color: #8e9096; }
+.pill:focus-visible, .btn:focus-visible, .nav-link:focus-visible { outline: 2px solid #101014; outline-offset: 4px; }
+.btn { transition: opacity 140ms linear; } .btn:hover { opacity: .78; }
+.cell { transition: color 140ms linear; }
+.ring-a { transform-box: view-box; transform-origin: 180px 180px; animation: spin 64s linear infinite; }
+.ring-b { transform-box: view-box; transform-origin: 180px 180px; animation: spinBack 88s linear infinite; }
+.ring-c { transform-box: view-box; transform-origin: 180px 180px; animation: spin 46s linear infinite; }
+.core { transform-box: fill-box; transform-origin: center; animation: pulse 4.2s ease-in-out infinite; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes spinBack { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
+@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(.92); } }
+@media (prefers-reduced-motion: reduce) { .ring-a, .ring-b, .ring-c, .core { animation: none !important; } }
+</style>
+</helmet>
+
+<div style="width: 1440px; height: 2560px; box-sizing: border-box; background: #ffffff; display: flex; flex-direction: column;">
+
+  <!-- NAV -->
+  <div style="height: 88px; flex-shrink: 0; box-sizing: border-box; padding: 0 112px; border-bottom: 1px solid #e4e5e8; display: flex; align-items: center; justify-content: space-between;">
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="#101014" aria-hidden="true"><rect x="0" y="0" width="20" height="20"></rect><rect x="7" y="7" width="6" height="6" fill="#ffffff"></rect></svg>
+      <span style="font-size: 16px; font-weight: 500; letter-spacing: -0.01em; color: #101014;">Nia Core</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 32px;">
+      <a class="nav-link" href="#product" style="font-size: 15px; color: #4a4d55;">Product</a>
+      <a class="nav-link" href="#connectors" style="font-size: 15px; color: #101014; border-bottom: 1px solid #101014; padding-bottom: 2px;">Connectors</a>
+      <a class="nav-link" href="#pricing" style="font-size: 15px; color: #4a4d55;">Pricing</a>
+      <a class="nav-link" href="#docs" style="font-size: 15px; color: #4a4d55;">Docs</a>
+      <a class="nav-link" href="#changelog" style="font-size: 15px; color: #4a4d55;">Changelog</a>
+    </div>
+    <div style="display: flex; align-items: center; gap: 20px;">
+      <a class="nav-link" href="#signin" style="font-size: 15px; color: #4a4d55;">Sign in</a>
+      <a class="btn" href="#start" style="height: 40px; padding: 0 20px; background: #101014; color: #ffffff; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center;">Start free</a>
+    </div>
+  </div>
+
+  <!-- HERO -->
+  <div style="box-sizing: border-box; padding: 104px 112px 104px 112px; display: flex; gap: 80px; align-items: flex-start;">
+    <div style="width: 760px;">
+      <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Sixty-plus connectors · read and write</div>
+      <h1 style="margin: 24px 0 0 0; font-size: 80px; line-height: 86px; letter-spacing: -0.018em; font-weight: 300; color: #101014;">Every source you run on, on one canvas.</h1>
+      <p style="margin: 32px 0 0 0; font-size: 18px; line-height: 30px; color: #4a4d55; max-width: 520px;">Databases, warehouses, object stores, BI tools and the SaaS apps in between. Authenticate once with a read-only role and reuse it in every pipeline you draw after.</p>
+      <div style="margin-top: 40px; display: flex; gap: 12px;">
+        <a class="btn" href="#browse" style="height: 52px; padding: 0 28px; background: #101014; color: #ffffff; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center;">Browse connectors</a>
+        <a class="btn" href="#start" style="height: 52px; padding: 0 28px; background: #ffffff; color: #101014; border: 1px solid #101014; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center; box-sizing: border-box;">Start free</a>
+      </div>
+    </div>
+
+    <div style="width: 376px; display: flex; justify-content: center; padding-top: 8px;">
+      <svg width="360" height="360" viewBox="0 0 360 360" role="img" aria-label="Sources orbiting a single canvas">
+        <circle cx="180" cy="180" r="168" fill="none" stroke="#e4e5e8" stroke-width="1"></circle>
+        <circle cx="180" cy="180" r="124" fill="none" stroke="#e4e5e8" stroke-width="1"></circle>
+        <circle cx="180" cy="180" r="80" fill="none" stroke="#e4e5e8" stroke-width="1"></circle>
+        <g class="ring-a" fill="#101014">
+          <rect x="173" y="5" width="14" height="14"></rect>
+          <rect x="311" y="122" width="14" height="14"></rect>
+          <rect x="88" y="299" width="14" height="14"></rect>
+        </g>
+        <g class="ring-b" fill="#101014">
+          <rect x="173" y="49" width="14" height="14"></rect>
+          <rect x="285" y="230" width="14" height="14"></rect>
+          <rect x="61" y="230" width="14" height="14"></rect>
+          <rect x="49" y="100" width="14" height="14" fill="#594cdf"></rect>
+        </g>
+        <g class="ring-c" fill="#101014">
+          <rect x="173" y="93" width="14" height="14"></rect>
+          <rect x="246" y="218" width="14" height="14"></rect>
+          <rect x="100" y="218" width="14" height="14"></rect>
+        </g>
+        <rect class="core" x="152" y="152" width="56" height="56" fill="#101014"></rect>
+        <rect x="170" y="170" width="20" height="20" fill="#ffffff"></rect>
+      </svg>
+    </div>
+  </div>
+
+  <!-- NODE TYPES -->
+  <div style="box-sizing: border-box; padding: 0 112px;">
+    <div style="height: 1px; background: #101014;"></div>
+    <div style="padding: 48px 0; display: flex; align-items: center; gap: 48px;">
+      <div style="width: 200px; flex-shrink: 0; font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f; line-height: 18px;">One colour language<br>Five node types</div>
+      <div style="flex-grow: 1; display: flex;">
+        <div style="flex-grow: 1; display: flex; align-items: center; gap: 14px; padding-left: 28px; border-left: 1px solid #e4e5e8;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="2" y="9" width="6" height="6"></rect><rect x="10" y="11" width="12" height="2"></rect></svg>
+          <span style="font-size: 17px; color: #101014;">Trigger</span>
+        </div>
+        <div style="flex-grow: 1; display: flex; align-items: center; gap: 14px; padding-left: 28px; border-left: 1px solid #e4e5e8;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="4" y="4" width="16" height="4"></rect><rect x="4" y="11" width="16" height="3"></rect><rect x="4" y="17" width="16" height="2"></rect></svg>
+          <span style="font-size: 17px; color: #101014;">Data</span>
+        </div>
+        <div style="flex-grow: 1; display: flex; align-items: center; gap: 14px; padding-left: 28px; border-left: 1px solid #e4e5e8;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="10" y="3" width="4" height="18"></rect><rect x="3" y="10" width="18" height="4"></rect></svg>
+          <span style="font-size: 17px; color: #101014;">Action</span>
+        </div>
+        <div style="flex-grow: 1; display: flex; align-items: center; gap: 14px; padding-left: 28px; border-left: 1px solid #e4e5e8;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="2" y="10" width="8" height="4"></rect><rect x="10" y="5" width="2" height="14"></rect><rect x="14" y="3" width="8" height="4"></rect><rect x="14" y="17" width="8" height="4"></rect></svg>
+          <span style="font-size: 17px; color: #101014;">Condition</span>
+        </div>
+        <div style="flex-grow: 1; display: flex; align-items: center; gap: 14px; padding-left: 28px; border-left: 1px solid #e4e5e8;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="#101014" aria-hidden="true"><rect x="3" y="3" width="5" height="5"></rect><rect x="10" y="3" width="5" height="5"></rect><rect x="17" y="3" width="4" height="5"></rect><rect x="3" y="10" width="5" height="5"></rect><rect x="10" y="10" width="5" height="5" fill="#594cdf"></rect><rect x="17" y="10" width="4" height="5"></rect><rect x="3" y="17" width="5" height="4"></rect><rect x="10" y="17" width="5" height="4"></rect><rect x="17" y="17" width="4" height="4"></rect></svg>
+          <span style="font-size: 17px; color: #101014;">AI</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DIRECTORY -->
+  <div style="box-sizing: border-box; padding: 0 112px 112px 112px;">
+    <div style="height: 1px; background: #101014;"></div>
+
+    <div style="padding-top: 80px; display: flex; align-items: flex-end; justify-content: space-between;">
+      <div>
+        <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">The directory</div>
+        <h2 style="margin: 24px 0 0 0; font-size: 56px; line-height: 62px; letter-spacing: -0.018em; font-weight: 300; color: #101014;">Sixty-plus, and counting</h2>
+      </div>
+      <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">{{countLabel}}</div>
+    </div>
+
+    <div style="margin-top: 40px; display: flex; gap: 8px; flex-wrap: wrap;">
+      <sc-for list="{{filters}}" as="f" hint-placeholder-count="6">
+        <button type="button" class="pill" onClick="{{f.pick}}" aria-pressed="{{f.on}}" style="height: 38px; padding: 0 18px; border-radius: 8px; font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer; background: {{f.bg}}; color: {{f.fg}}; border: 1px solid {{f.bd}};">{{f.name}}</button>
+      </sc-for>
+    </div>
+
+    <div style="margin-top: 48px; min-height: 540px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: 24px;">
+      <sc-for list="{{rows}}" as="c" hint-placeholder-count="30">
+        <div class="cell" style="border-top: 1px solid #e4e5e8; padding: 20px 0 26px 0;">
+          <div style="font-size: 18px; line-height: 26px; letter-spacing: -0.008em; color: #101014;">{{c.name}}</div>
+          <div style="margin-top: 8px; font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: {{c.modeColor}};">{{c.mode}}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <p style="margin: 40px 0 0 0; font-size: 14px; line-height: 22px; color: #64696f;">Read and write means Nia can land rows back into the source. Read-only connectors are extract-only by design — ask us and we will tell you why.</p>
+  </div>
+
+  <!-- CLOSING BAND -->
+  <div style="box-sizing: border-box; padding: 104px 112px; background: #101014;">
+    <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #8e9096;">No card · five minutes · cancel whenever</div>
+    <h2 style="margin: 28px 0 0 0; font-size: 64px; line-height: 70px; letter-spacing: -0.018em; font-weight: 300; color: #ffffff; max-width: 820px;">Connect your first source tonight.</h2>
+    <div style="margin-top: 44px; display: flex; gap: 12px;">
+      <a class="btn" href="#start" style="height: 52px; padding: 0 28px; background: #ffffff; color: #101014; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center;">Start free</a>
+      <a class="btn" href="#talk" style="height: 52px; padding: 0 28px; background: transparent; color: #ffffff; border: 1px solid #4a4d55; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center; box-sizing: border-box;">Talk to us</a>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div style="flex-grow: 1; box-sizing: border-box; padding: 72px 112px 48px 112px; display: flex; flex-direction: column; justify-content: space-between;">
+    <div style="display: flex; gap: 80px;">
+      <div style="width: 320px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="#101014" aria-hidden="true"><rect x="0" y="0" width="20" height="20"></rect><rect x="7" y="7" width="6" height="6" fill="#ffffff"></rect></svg>
+          <span style="font-size: 16px; font-weight: 500; color: #101014;">Nia Core</span>
+        </div>
+        <p style="margin: 20px 0 0 0; font-size: 14px; line-height: 22px; color: #64696f;">Draw the pipeline, schedule it, and wake up to dashboards that filled themselves.</p>
+      </div>
+      <div style="flex-grow: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 24px;">
+        <div>
+          <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Product</div>
+          <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 12px;">
+            <a href="#canvas" style="font-size: 15px; color: #4a4d55;">Canvas</a>
+            <a href="#connectors" style="font-size: 15px; color: #4a4d55;">Connectors</a>
+            <a href="#pricing" style="font-size: 15px; color: #4a4d55;">Pricing</a>
+            <a href="#signin" style="font-size: 15px; color: #4a4d55;">Sign in</a>
+          </div>
+        </div>
+        <div>
+          <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Resources</div>
+          <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 12px;">
+            <a href="#docs" style="font-size: 15px; color: #4a4d55;">Docs</a>
+            <a href="#changelog" style="font-size: 15px; color: #4a4d55;">Changelog</a>
+            <a href="#status" style="font-size: 15px; color: #4a4d55;">Status</a>
+            <a href="#support" style="font-size: 15px; color: #4a4d55;">Support</a>
+          </div>
+        </div>
+        <div>
+          <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Company</div>
+          <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 12px;">
+            <a href="#about" style="font-size: 15px; color: #4a4d55;">About</a>
+            <a href="#careers" style="font-size: 15px; color: #4a4d55;">Careers</a>
+            <a href="#privacy" style="font-size: 15px; color: #4a4d55;">Privacy</a>
+            <a href="#terms" style="font-size: 15px; color: #4a4d55;">Terms</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top: 56px; padding-top: 28px; border-top: 1px solid #e4e5e8; display: flex; justify-content: space-between;">
+      <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">© 2026 Nia Core · Rows moved responsibly</span>
+      <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Reel 02 · 00:00:00:00</span>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":2560}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { cat: 'All' };
+  }
+  renderVals() {
+    const cat = this.state.cat ?? 'All';
+    const all = [
+      { name: 'PostgreSQL', g: 'Databases', mode: 'Read · Write' },
+      { name: 'MySQL', g: 'Databases', mode: 'Read · Write' },
+      { name: 'SQL Server', g: 'Databases', mode: 'Read · Write' },
+      { name: 'MongoDB', g: 'Databases', mode: 'Read · Write' },
+      { name: 'Oracle', g: 'Databases', mode: 'Read only' },
+      { name: 'Redis', g: 'Databases', mode: 'Read · Write' },
+      { name: 'Snowflake', g: 'Warehouses', mode: 'Read · Write' },
+      { name: 'BigQuery', g: 'Warehouses', mode: 'Read · Write' },
+      { name: 'Redshift', g: 'Warehouses', mode: 'Read · Write' },
+      { name: 'Databricks', g: 'Warehouses', mode: 'Read · Write' },
+      { name: 'ClickHouse', g: 'Warehouses', mode: 'Read · Write' },
+      { name: 'DuckDB', g: 'Warehouses', mode: 'Read · Write' },
+      { name: 'Amazon S3', g: 'Files', mode: 'Read · Write' },
+      { name: 'Cloud Storage', g: 'Files', mode: 'Read · Write' },
+      { name: 'Azure Blob', g: 'Files', mode: 'Read · Write' },
+      { name: 'SFTP', g: 'Files', mode: 'Read · Write' },
+      { name: 'CSV upload', g: 'Files', mode: 'Read only' },
+      { name: 'Parquet', g: 'Files', mode: 'Read · Write' },
+      { name: 'Looker', g: 'BI and sheets', mode: 'Read only' },
+      { name: 'Tableau', g: 'BI and sheets', mode: 'Read only' },
+      { name: 'Metabase', g: 'BI and sheets', mode: 'Read only' },
+      { name: 'Google Sheets', g: 'BI and sheets', mode: 'Read · Write' },
+      { name: 'Excel Online', g: 'BI and sheets', mode: 'Read · Write' },
+      { name: 'Power BI', g: 'BI and sheets', mode: 'Read only' },
+      { name: 'Salesforce', g: 'SaaS', mode: 'Read · Write' },
+      { name: 'HubSpot', g: 'SaaS', mode: 'Read · Write' },
+      { name: 'Stripe', g: 'SaaS', mode: 'Read only' },
+      { name: 'Shopify', g: 'SaaS', mode: 'Read only' },
+      { name: 'Zendesk', g: 'SaaS', mode: 'Read only' },
+      { name: 'Notion', g: 'SaaS', mode: 'Read · Write' }
+    ];
+    const names = ['All', 'Databases', 'Warehouses', 'Files', 'BI and sheets', 'SaaS'];
+    const filters = names.map((n) => ({
+      name: n,
+      on: n === cat,
+      bg: n === cat ? '#101014' : '#ffffff',
+      fg: n === cat ? '#ffffff' : '#4a4d55',
+      bd: n === cat ? '#101014' : '#e4e5e8',
+      pick: () => this.setState({ cat: n })
+    }));
+    const rows = all
+      .filter((c) => cat === 'All' || c.g === cat)
+      .map((c) => ({
+        name: c.name,
+        mode: c.mode,
+        modeColor: c.mode === 'Read only' ? '#8e9096' : '#594cdf'
+      }));
+    return {
+      filters: filters,
+      rows: rows,
+      countLabel: 'Showing ' + rows.length + ' of ' + all.length
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -427,3 +427,362 @@ body.armed .reveal.in { opacity: 1; transform: none; }
   * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   .reveal { opacity: 1 !important; transform: none !important; }
 }
+
+/* ------------------------------------------------------------
+   "What Nia Does" landing section — ported from
+   designs/What Nia Does — section-html/Main.dc.html. `wnd-` prefixed to
+   avoid clashing with unrelated classes/keyframes above (its own riseIn
+   is renamed wndRiseIn since Landing's riseIn above has different values
+   and is used elsewhere). The reduced-motion block above already
+   disables every animation here via the universal `*` selector, so no
+   separate rule is needed.
+   ------------------------------------------------------------ */
+.wnd-row { transition: border-color 160ms linear; }
+.wnd-label, .wnd-num { transition: color 160ms linear; }
+.wnd-row:hover .wnd-label { color: var(--text); }
+.wnd-row:hover .wnd-num { color: var(--text); }
+.wnd-arrow { animation: wndArrowIn .34s cubic-bezier(.2,.8,.2,1) both; }
+.wnd-pfade { animation: wndRiseIn .42s cubic-bezier(.2,.8,.2,1) both; }
+
+.wnd-mk { width: 140px; height: 140px; }
+.wnd-panel-copy { font-size: 15px; line-height: 25px; }
+
+@keyframes wndArrowIn { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+@keyframes wndRiseIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes wndPop { from { opacity: 0; transform: scale(.55); } to { opacity: 1; transform: scale(1); } }
+@keyframes wndWipeX { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes wndWipeY { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes wndSweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes wndBreathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(.78); } }
+@keyframes wndShimmer { 0%, 100% { opacity: 1; } 50% { opacity: .22; } }
+@keyframes wndWave { 0%, 100% { transform: translateY(0); } 45% { transform: translateY(-7px); } }
+
+.wnd-mk rect { transform-box: fill-box; transform-origin: center; }
+
+/* 01 — a drawn graph, with a row of data running the path */
+@keyframes wndRunPath {
+  0%   { opacity: 0; transform: translate(0, 0); }
+  7%   { opacity: 1; transform: translate(0, 0); }
+  26%  { transform: translate(62px, 0); }
+  40%  { transform: translate(62px, 54px); }
+  62%  { transform: translate(124px, 54px); }
+  78%  { transform: translate(124px, 108px); }
+  90%  { opacity: 1; transform: translate(124px, 108px); }
+  100% { opacity: 0; transform: translate(124px, 108px); }
+}
+.wnd-m1 rect:nth-of-type(1) { animation: wndPop .52s cubic-bezier(.2,.8,.2,1) .02s both; }
+.wnd-m1 rect:nth-of-type(2) { transform-origin: left center; animation: wndWipeX .32s ease-out .20s both; }
+.wnd-m1 rect:nth-of-type(3) { transform-origin: center top; animation: wndWipeY .28s ease-out .42s both; }
+.wnd-m1 rect:nth-of-type(4) { animation: wndPop .52s cubic-bezier(.2,.8,.2,1) .58s both; }
+.wnd-m1 rect:nth-of-type(5) { transform-origin: left center; animation: wndWipeX .32s ease-out .82s both; }
+.wnd-m1 rect:nth-of-type(6) { transform-origin: center top; animation: wndWipeY .28s ease-out 1.02s both; }
+.wnd-m1 rect:nth-of-type(7) { animation: wndPop .52s cubic-bezier(.2,.8,.2,1) 1.18s both; }
+.wnd-m1 rect:nth-of-type(8) { transform-box: view-box; animation: wndRunPath 3.6s linear 1.8s infinite; }
+
+/* 02 — four sources arriving at one hub */
+@keyframes wndInFromTop    { 0% { opacity: 0; transform: translate(0, 0); } 14% { opacity: 1; } 64% { opacity: 1; transform: translate(0, 68px); } 100% { opacity: 0; transform: translate(0, 68px); } }
+@keyframes wndInFromLeft   { 0% { opacity: 0; transform: translate(0, 0); } 14% { opacity: 1; } 64% { opacity: 1; transform: translate(68px, 0); } 100% { opacity: 0; transform: translate(68px, 0); } }
+@keyframes wndInFromRight  { 0% { opacity: 0; transform: translate(0, 0); } 14% { opacity: 1; } 64% { opacity: 1; transform: translate(-68px, 0); } 100% { opacity: 0; transform: translate(-68px, 0); } }
+@keyframes wndInFromBottom { 0% { opacity: 0; transform: translate(0, 0); } 14% { opacity: 1; } 64% { opacity: 1; transform: translate(0, -68px); } 100% { opacity: 0; transform: translate(0, -68px); } }
+.wnd-m2 rect:nth-of-type(1) { animation: wndPop .5s cubic-bezier(.2,.8,.2,1) .02s both; }
+.wnd-m2 rect:nth-of-type(2) { transform-origin: center bottom; animation: wndWipeY .28s ease-out .30s both; }
+.wnd-m2 rect:nth-of-type(3) { animation: wndPop .44s cubic-bezier(.2,.8,.2,1) .52s both; }
+.wnd-m2 rect:nth-of-type(4) { transform-origin: right center; animation: wndWipeX .28s ease-out .40s both; }
+.wnd-m2 rect:nth-of-type(5) { animation: wndPop .44s cubic-bezier(.2,.8,.2,1) .62s both; }
+.wnd-m2 rect:nth-of-type(6) { transform-origin: left center; animation: wndWipeX .28s ease-out .50s both; }
+.wnd-m2 rect:nth-of-type(7) { animation: wndPop .44s cubic-bezier(.2,.8,.2,1) .72s both; }
+.wnd-m2 rect:nth-of-type(8) { transform-origin: center top; animation: wndWipeY .28s ease-out .60s both; }
+.wnd-m2 rect:nth-of-type(9) { animation: wndPop .44s cubic-bezier(.2,.8,.2,1) .82s both; }
+.wnd-m2 rect:nth-of-type(10) { transform-box: view-box; animation: wndInFromTop 2.6s ease-in-out 1.15s infinite; }
+.wnd-m2 rect:nth-of-type(11) { transform-box: view-box; animation: wndInFromLeft 2.6s ease-in-out 1.45s infinite; }
+.wnd-m2 rect:nth-of-type(12) { transform-box: view-box; animation: wndInFromRight 2.6s ease-in-out 1.75s infinite; }
+.wnd-m2 rect:nth-of-type(13) { transform-box: view-box; animation: wndInFromBottom 2.6s ease-in-out 2.05s infinite; }
+
+/* 03 — a schedule dial with a hand sweeping the night */
+.wnd-m3 g rect { animation: wndPop .42s cubic-bezier(.2,.8,.2,1) both; }
+.wnd-m3 g:nth-of-type(1) rect { animation-delay: .04s; }
+.wnd-m3 g:nth-of-type(2) rect { animation-delay: .09s; }
+.wnd-m3 g:nth-of-type(3) rect { animation-delay: .14s; }
+.wnd-m3 g:nth-of-type(4) rect { animation-delay: .19s; }
+.wnd-m3 g:nth-of-type(5) rect { animation-delay: .24s; }
+.wnd-m3 g:nth-of-type(6) rect { animation-delay: .29s; }
+.wnd-m3 g:nth-of-type(7) rect { animation-delay: .34s; }
+.wnd-m3 g:nth-of-type(8) rect { animation-delay: .39s; }
+.wnd-m3 g:nth-of-type(9) rect { animation-delay: .44s; }
+.wnd-m3 g:nth-of-type(10) rect { animation-delay: .49s; }
+.wnd-m3 g:nth-of-type(11) rect { animation-delay: .54s; }
+.wnd-m3 g:nth-of-type(12) rect { animation-delay: .59s; }
+.wnd-m3 > rect:nth-of-type(1) { animation: wndPop .5s cubic-bezier(.2,.8,.2,1) .66s both, wndBreathe 3.4s ease-in-out 1.3s infinite; }
+.wnd-m3 > rect:nth-of-type(2) { transform-box: view-box; transform-origin: 90px 90px; animation: wndSweep 7.5s linear .7s infinite; }
+
+/* 04 — one block resolving into fields */
+.wnd-m4 rect:nth-of-type(1)  { animation: wndPop .5s cubic-bezier(.2,.8,.2,1) .02s both; }
+.wnd-m4 rect:nth-of-type(2)  { transform-origin: left center; animation: wndWipeX .3s ease-out .34s both; }
+.wnd-m4 rect:nth-of-type(3)  { animation: wndPop .4s cubic-bezier(.2,.8,.2,1) .58s both, wndShimmer 2.8s ease-in-out 1.30s infinite; }
+.wnd-m4 rect:nth-of-type(4)  { animation: wndPop .4s cubic-bezier(.2,.8,.2,1) .64s both, wndShimmer 2.8s ease-in-out 1.42s infinite; }
+.wnd-m4 rect:nth-of-type(5)  { animation: wndPop .4s cubic-bezier(.2,.8,.2,1) .70s both, wndShimmer 2.8s ease-in-out 1.54s infinite; }
+.wnd-m4 rect:nth-of-type(6)  { animation: wndPop .4s cubic-bezier(.2,.8,.2,1) .76s both, wndShimmer 2.8s ease-in-out 1.66s infinite; }
+.wnd-m4 rect:nth-of-type(7)  { animation: wndPop .4s cubic-bezier(.2,.8,.2,1) .82s both, wndShimmer 2.8s ease-in-out 1.78s infinite; }
+.wnd-m4 rect:nth-of-type(8)  { animation: wndPop .4s cubic-bezier(.2,.8,.2,1) .88s both, wndShimmer 2.8s ease-in-out 1.90s infinite; }
+.wnd-m4 rect:nth-of-type(9)  { animation: wndPop .4s cubic-bezier(.2,.8,.2,1) .94s both, wndShimmer 2.8s ease-in-out 2.02s infinite; }
+.wnd-m4 rect:nth-of-type(10) { animation: wndPop .4s cubic-bezier(.2,.8,.2,1) 1.00s both, wndShimmer 2.8s ease-in-out 2.14s infinite; }
+.wnd-m4 rect:nth-of-type(11) { animation: wndPop .4s cubic-bezier(.2,.8,.2,1) 1.06s both, wndShimmer 2.8s ease-in-out 2.26s infinite; }
+
+/* 05 — the checks landing, one after another */
+.wnd-m5 rect:nth-of-type(1) { animation: wndPop .46s cubic-bezier(.2,.8,.2,1) .04s both, wndWave 3.2s ease-in-out 1.10s infinite; }
+.wnd-m5 rect:nth-of-type(2) { animation: wndPop .46s cubic-bezier(.2,.8,.2,1) .16s both, wndWave 3.2s ease-in-out 1.22s infinite; }
+.wnd-m5 rect:nth-of-type(3) { animation: wndPop .46s cubic-bezier(.2,.8,.2,1) .28s both, wndWave 3.2s ease-in-out 1.34s infinite; }
+.wnd-m5 rect:nth-of-type(4) { animation: wndPop .46s cubic-bezier(.2,.8,.2,1) .40s both, wndWave 3.2s ease-in-out 1.46s infinite; }
+.wnd-m5 rect:nth-of-type(5) { animation: wndPop .46s cubic-bezier(.2,.8,.2,1) .52s both, wndWave 3.2s ease-in-out 1.58s infinite; }
+
+/* 1024–1279px: same two-column tab layout, tighter gap, panel height
+   follows content instead of the desktop-fixed 465px. */
+@media (max-width: 1279px) {
+  .wnd-cols { gap: 48px; }
+  .wnd-cols .wnd-panel { height: auto; }
+}
+@media (max-width: 639px) {
+  .wnd-mk { width: 120px; height: 120px; }
+  .wnd-panel-copy { font-size: 14px; line-height: 23px; }
+}
+
+/* ------------------------------------------------------------
+   "Hairline" design system — Connectors + Pricing sections,
+   ported from designs/Connectors — full page-html/Connectors.dc.html
+   and designs/Pricing — full page-html/Pricing.dc.html. Deliberately a
+   *separate* token set from the :root indigo/soft-shadow landing theme
+   above (not remapped onto --primary/--text like wnd- was) — this is a
+   different visual language (hairlines + flat color, no shadows, no
+   gradients) scoped to `.hl-scope` so it never leaks outside the two
+   sections that use it. Font stack is the brief's own
+   `"Helvetica Neue", Helvetica, Archivo, "Segoe UI", Arial, sans-serif` —
+   no webfont added, this degrades to system Helvetica Neue/Arial (which
+   has the 300 weight the type scale needs) without loading Archivo.
+   ------------------------------------------------------------ */
+.hl-scope {
+  --hl-ground: #ffffff;
+  --hl-ink: #101014;
+  --hl-ink-2: #4a4d55;
+  --hl-ink-3: #64696f;
+  --hl-ink-4: #8e9096;
+  --hl-panel: #f4f4f6;
+  --hl-rule: #101014;
+  --hl-rule-hairline: #e4e5e8;
+  --hl-accent: #594cdf;
+  font-family: "Helvetica Neue", Helvetica, Archivo, "Segoe UI", Arial, sans-serif;
+}
+
+.hl-btn { transition: opacity 140ms linear; }
+.hl-btn:hover { opacity: .78; }
+
+/* Stepped gutter primitive (discrete breakpoint values per the design
+   files, not a fluid clamp): 112px down to 20px. */
+.hl-container {
+  box-sizing: border-box;
+  padding-left: 112px;
+  padding-right: 112px;
+}
+@media (max-width: 1024px) {
+  .hl-container { padding-left: 56px; padding-right: 56px; }
+}
+@media (max-width: 768px) {
+  .hl-container { padding-left: 32px; padding-right: 32px; }
+}
+@media (max-width: 640px) {
+  .hl-container { padding-left: 20px; padding-right: 20px; }
+}
+
+.hl-btn:focus-visible {
+  outline: 2px solid var(--hl-ink);
+  outline-offset: 4px;
+}
+
+/* Lead paragraph — responsive size step (below 640px per the brief:
+   16px/26px instead of 18px/30px). CSS class instead of a JS
+   matchMedia hook so consuming sections (ConnectorsOrbit) can stay
+   server components. */
+.hl-lead {
+  font-size: 18px;
+  line-height: 30px;
+}
+@media (max-width: 640px) {
+  .hl-lead { font-size: 16px; line-height: 26px; }
+}
+
+/* Filter pills — directory section. Real <button>s, 38px desktop /
+   44px touch target below 1024px per the accessibility spec. */
+.hl-pill {
+  box-sizing: border-box;
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 8px;
+  border: 1px solid var(--hl-rule-hairline);
+  background: var(--hl-ground);
+  color: var(--hl-ink-2);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 140ms linear, border-color 140ms linear, color 140ms linear;
+}
+.hl-pill:hover { border-color: var(--hl-ink-4); }
+.hl-pill:focus-visible {
+  outline: 2px solid var(--hl-ink);
+  outline-offset: 4px;
+}
+.hl-pill[aria-pressed="true"] {
+  background: var(--hl-ink);
+  border-color: var(--hl-ink);
+  color: var(--hl-ground);
+}
+@media (max-width: 1024px) {
+  .hl-pill { height: 44px; }
+}
+
+/* Connector directory grid — 5 columns desktop, stepping down to 1
+   below 640px. */
+.hl-directory-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  column-gap: 24px;
+  min-height: 540px;
+}
+@media (max-width: 1280px) {
+  .hl-directory-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 1024px) {
+  .hl-directory-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 768px) {
+  .hl-directory-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .hl-directory-grid { grid-template-columns: 1fr; }
+}
+
+/* Node types band — 200px label rail + 5-item row, each item divided
+   by a left hairline. Collapses to a 3-col then 1-col grid with the
+   divider moving from left to top as the row can no longer fit. */
+.hl-nodetypes-wrap {
+  display: flex;
+  gap: 48px;
+  align-items: flex-start;
+}
+.hl-nodetypes-grid {
+  flex-grow: 1;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+}
+.hl-nodetype {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-left: 28px;
+  border-left: 1px solid var(--hl-rule-hairline);
+  min-height: 24px;
+}
+@media (max-width: 1024px) {
+  .hl-nodetypes-wrap { flex-direction: column; gap: 24px; }
+  .hl-nodetypes-grid { grid-template-columns: repeat(3, 1fr); row-gap: 24px; width: 100%; }
+}
+@media (max-width: 640px) {
+  .hl-nodetypes-grid { grid-template-columns: 1fr; row-gap: 20px; }
+  .hl-nodetype {
+    border-left: none;
+    border-top: 1px solid var(--hl-rule-hairline);
+    padding-left: 0;
+    padding-top: 16px;
+  }
+}
+
+/* Pricing — stats band. Staggered scroll-reveal for the 4 figures,
+   nested inside the project's existing .reveal/body.armed mechanism
+   (rather than a page-load-only animation) since this section sits
+   well below the fold. Killed under prefers-reduced-motion via the
+   project-wide .reveal override already in this file. */
+body.armed .hl-stats-grid .hl-fig {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity .6s cubic-bezier(.2,.8,.2,1), transform .6s cubic-bezier(.2,.8,.2,1);
+}
+body.armed .hl-stats-grid.in .hl-fig { opacity: 1; transform: none; }
+body.armed .hl-stats-grid.in .hl-fig:nth-child(1) { transition-delay: .02s; }
+body.armed .hl-stats-grid.in .hl-fig:nth-child(2) { transition-delay: .10s; }
+body.armed .hl-stats-grid.in .hl-fig:nth-child(3) { transition-delay: .18s; }
+body.armed .hl-stats-grid.in .hl-fig:nth-child(4) { transition-delay: .26s; }
+@media (prefers-reduced-motion: reduce) {
+  .hl-stats-grid .hl-fig { opacity: 1 !important; transform: none !important; transition: none !important; }
+}
+
+/* Pricing — Monthly/Annual segmented toggle. */
+.hl-seg {
+  box-sizing: border-box;
+  height: 40px;
+  padding: 0 18px;
+  border: none;
+  background: var(--hl-ground);
+  color: var(--hl-ink-2);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 140ms linear, color 140ms linear;
+}
+.hl-seg + .hl-seg { border-left: 1px solid var(--hl-rule-hairline); }
+.hl-seg:focus-visible {
+  outline: 2px solid var(--hl-ink);
+  outline-offset: -2px;
+}
+.hl-seg[aria-checked="true"] {
+  background: var(--hl-ink);
+  color: var(--hl-ground);
+}
+
+/* Pricing — 3-column plan grid, collapsing to a single column with
+   top-hairline dividers below 1024px (same pattern as .hl-directory-grid
+   / .hl-nodetypes-wrap). */
+.hl-plans-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.hl-plan-col {
+  box-sizing: border-box;
+  padding-right: 48px;
+}
+.hl-plan-col + .hl-plan-col {
+  padding-left: 48px;
+  border-left: 1px solid var(--hl-rule-hairline);
+}
+@media (max-width: 1024px) {
+  .hl-plans-grid { grid-template-columns: 1fr; row-gap: 48px; }
+  .hl-plan-col,
+  .hl-plan-col + .hl-plan-col {
+    padding-left: 0;
+    padding-right: 0;
+    border-left: none;
+  }
+  .hl-plan-col + .hl-plan-col {
+    padding-top: 48px;
+    border-top: 1px solid var(--hl-rule-hairline);
+  }
+}
+
+/* Footer — 3-column link grid, collapsing to 2 then 1 columns; the
+   brand block + link grid row itself stacks below 768px. */
+.hl-footer-cols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 24px;
+}
+@media (max-width: 640px) {
+  .hl-footer-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 32px; }
+}
+.hl-footer-link {
+  text-decoration: none;
+  transition: color 140ms linear;
+}
+.hl-footer-link:hover { color: var(--hl-ink); }
+.hl-footer-link:focus-visible {
+  outline: 2px solid var(--hl-ink);
+  outline-offset: 2px;
+}

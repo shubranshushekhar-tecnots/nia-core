@@ -32,12 +32,18 @@ export function computeColumnSignature(stats: ColumnStats): ColumnSignature {
     parseBuckets = buckets as Record<(typeof PARSE_STAT_KEYS)[number], "all" | "some" | "none">;
   }
 
+  const typePresence: Record<string, "all" | "some" | "none"> = {};
+  for (const [shape, count] of Object.entries(stats.observedTypeCounts)) {
+    if (count > 0) typePresence[shape] = bucket(count, stats.sampleCount);
+  }
+
   return {
     name: stats.name,
     declaredType: stats.declaredType,
     nullPresence,
     missingTokenPresence,
     parseBuckets,
+    typePresence,
   };
 }
 
@@ -62,6 +68,7 @@ function canonicalize(sig: ColumnSignature): Record<string, unknown> {
     parseBuckets: sig.parseBuckets
       ? Object.fromEntries(PARSE_STAT_KEYS.filter((k) => sig.parseBuckets![k] !== undefined).map((k) => [k, sig.parseBuckets![k]]))
       : null,
+    typePresence: Object.fromEntries(Object.keys(sig.typePresence).sort().map((k) => [k, sig.typePresence[k]])),
   };
 }
 

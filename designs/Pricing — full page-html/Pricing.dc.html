@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pricing</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;500&amp;display=swap">
+<style>
+body { margin: 0; background: #ffffff; font-family: "Helvetica Neue", Helvetica, Archivo, "Segoe UI", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #101014; text-decoration: none; } a:hover { color: #594cdf; }
+.btn { transition: opacity 140ms linear; } .btn:hover { opacity: .78; }
+.seg { transition: background-color 140ms linear, color 140ms linear; }
+.seg:focus-visible, .btn:focus-visible, .nav-link:focus-visible { outline: 2px solid #101014; outline-offset: 4px; }
+.fig { animation: rise .6s cubic-bezier(.2,.8,.2,1) both; }
+.fig:nth-of-type(1) { animation-delay: .02s; }
+.fig:nth-of-type(2) { animation-delay: .10s; }
+.fig:nth-of-type(3) { animation-delay: .18s; }
+.fig:nth-of-type(4) { animation-delay: .26s; }
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .fig { animation: none !important; } }
+</style>
+</helmet>
+
+<div style="width: 1440px; height: 2560px; box-sizing: border-box; background: #ffffff; display: flex; flex-direction: column;">
+
+  <!-- NAV -->
+  <div style="height: 88px; flex-shrink: 0; box-sizing: border-box; padding: 0 112px; border-bottom: 1px solid #e4e5e8; display: flex; align-items: center; justify-content: space-between;">
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="#101014" aria-hidden="true"><rect x="0" y="0" width="20" height="20"></rect><rect x="7" y="7" width="6" height="6" fill="#ffffff"></rect></svg>
+      <span style="font-size: 16px; font-weight: 500; letter-spacing: -0.01em; color: #101014;">Nia Core</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 32px;">
+      <a class="nav-link" href="#product" style="font-size: 15px; color: #4a4d55;">Product</a>
+      <a class="nav-link" href="Connectors.dc.html" style="font-size: 15px; color: #4a4d55;">Connectors</a>
+      <a class="nav-link" href="#pricing" style="font-size: 15px; color: #101014; border-bottom: 1px solid #101014; padding-bottom: 2px;">Pricing</a>
+      <a class="nav-link" href="#docs" style="font-size: 15px; color: #4a4d55;">Docs</a>
+      <a class="nav-link" href="#changelog" style="font-size: 15px; color: #4a4d55;">Changelog</a>
+    </div>
+    <div style="display: flex; align-items: center; gap: 20px;">
+      <a class="nav-link" href="#signin" style="font-size: 15px; color: #4a4d55;">Sign in</a>
+      <a class="btn" href="#start" style="height: 40px; padding: 0 20px; background: #101014; color: #ffffff; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center;">Start free</a>
+    </div>
+  </div>
+
+  <!-- HEADER -->
+  <div style="box-sizing: border-box; padding: 104px 112px 96px 112px;">
+    <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Pricing</div>
+    <h1 style="margin: 24px 0 0 0; font-size: 80px; line-height: 86px; letter-spacing: -0.018em; font-weight: 300; color: #101014; max-width: 980px;">Start free. Upgrade when the rows do.</h1>
+    <p style="margin: 32px 0 0 0; font-size: 18px; line-height: 30px; color: #4a4d55; max-width: 520px;">Rows per run are the only meter. No per-seat surprise, no charge for a run that failed, no invoice you have to reverse-engineer.</p>
+  </div>
+
+  <!-- STATS -->
+  <div style="box-sizing: border-box; padding: 0 112px;">
+    <div style="height: 1px; background: #101014;"></div>
+    <div style="padding: 64px 0 0 0; display: flex;">
+      <div class="fig" style="flex-grow: 1;">
+        <div style="font-size: 56px; line-height: 60px; letter-spacing: -0.02em; font-weight: 300; color: #101014;">2.4M</div>
+        <div style="margin-top: 14px; font-size: 14px; line-height: 22px; color: #64696f;">Runs a month across the platform</div>
+      </div>
+      <div class="fig" style="flex-grow: 1; padding-left: 40px; border-left: 1px solid #e4e5e8;">
+        <div style="font-size: 56px; line-height: 60px; letter-spacing: -0.02em; font-weight: 300; color: #101014;">38.2M</div>
+        <div style="margin-top: 14px; font-size: 14px; line-height: 22px; color: #64696f;">Rows moved every night</div>
+      </div>
+      <div class="fig" style="flex-grow: 1; padding-left: 40px; border-left: 1px solid #e4e5e8;">
+        <div style="font-size: 56px; line-height: 60px; letter-spacing: -0.02em; font-weight: 300; color: #101014;">96.4%</div>
+        <div style="margin-top: 14px; font-size: 14px; line-height: 22px; color: #64696f;">Runs that finish first time</div>
+      </div>
+      <div class="fig" style="flex-grow: 1; padding-left: 40px; border-left: 1px solid #e4e5e8;">
+        <div style="font-size: 56px; line-height: 60px; letter-spacing: -0.02em; font-weight: 300; color: #594cdf;">60+</div>
+        <div style="margin-top: 14px; font-size: 14px; line-height: 22px; color: #64696f;">Connectors ready to use</div>
+      </div>
+    </div>
+    <p style="margin: 36px 0 72px 0; font-size: 13px; line-height: 20px; color: #8e9096;">Placeholder figures pending marketing review — not live product metrics.</p>
+  </div>
+
+  <!-- PLANS -->
+  <div style="box-sizing: border-box; padding: 0 112px 104px 112px;">
+    <div style="height: 1px; background: #101014;"></div>
+
+    <div style="padding-top: 72px; display: flex; align-items: center; justify-content: space-between;">
+      <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Three plans · {{cycleLabel}}</div>
+      <div style="display: flex; align-items: center; gap: 20px;">
+        <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: {{saveColor}};">Two months free on annual</span>
+        <div style="display: flex; border: 1px solid #e4e5e8; border-radius: 8px; overflow: hidden;">
+          <button type="button" class="seg" onClick="{{setMonthly}}" aria-pressed="{{isMonthly}}" style="height: 40px; padding: 0 20px; border: 0; cursor: pointer; font-family: inherit; font-size: 14px; font-weight: 500; background: {{mBg}}; color: {{mFg}};">Monthly</button>
+          <button type="button" class="seg" onClick="{{setAnnual}}" aria-pressed="{{isAnnual}}" style="height: 40px; padding: 0 20px; border: 0; border-left: 1px solid #e4e5e8; cursor: pointer; font-family: inherit; font-size: 14px; font-weight: 500; background: {{aBg}}; color: {{aFg}};">Annual</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 56px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));">
+
+      <!-- FREE -->
+      <div style="box-sizing: border-box; padding-right: 48px; display: flex; flex-direction: column;">
+        <div style="display: flex; align-items: baseline; justify-content: space-between;">
+          <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; color: #64696f;">01</span>
+        </div>
+        <h3 style="margin: 20px 0 0 0; font-size: 28px; line-height: 36px; letter-spacing: -0.01em; font-weight: 500; color: #101014;">Free</h3>
+        <div style="margin-top: 20px; display: flex; align-items: baseline; gap: 8px;">
+          <span style="font-size: 64px; line-height: 68px; letter-spacing: -0.02em; font-weight: 300; color: #101014;">$0</span>
+          <span style="font-size: 15px; color: #64696f;">{{per}}</span>
+        </div>
+        <p style="margin: 20px 0 0 0; font-size: 15px; line-height: 24px; color: #4a4d55; min-height: 48px;">For the first pipeline you draw on a Sunday afternoon.</p>
+        <div style="margin-top: 28px;">
+          <div style="border-top: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">1 project</span></div>
+          <div style="border-top: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">2 workflows</span></div>
+          <div style="border-top: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">100k rows per run</span></div>
+          <div style="border-top: 1px solid #e4e5e8; border-bottom: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">Community support</span></div>
+        </div>
+        <div style="flex-grow: 1;"></div>
+        <a class="btn" href="#start-free" style="margin-top: 40px; height: 52px; background: #ffffff; color: #101014; border: 1px solid #101014; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">Start free</a>
+      </div>
+
+      <!-- PRO -->
+      <div style="box-sizing: border-box; padding: 0 48px; border-left: 1px solid #e4e5e8; display: flex; flex-direction: column;">
+        <div style="display: flex; align-items: baseline; justify-content: space-between;">
+          <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; color: #64696f;">02</span>
+        </div>
+        <h3 style="margin: 20px 0 0 0; font-size: 28px; line-height: 36px; letter-spacing: -0.01em; font-weight: 500; color: #101014;">Pro</h3>
+        <div style="margin-top: 20px; display: flex; align-items: baseline; gap: 8px;">
+          <span style="font-size: 64px; line-height: 68px; letter-spacing: -0.02em; font-weight: 300; color: #101014;">{{proPrice}}</span>
+          <span style="font-size: 15px; color: #64696f;">{{per}}</span>
+        </div>
+        <p style="margin: 20px 0 0 0; font-size: 15px; line-height: 24px; color: #4a4d55; min-height: 48px;">For the analyst who now has a schedule to keep.</p>
+        <div style="margin-top: 28px;">
+          <div style="border-top: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">10 projects</span></div>
+          <div style="border-top: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">25 workflows</span></div>
+          <div style="border-top: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">1M rows per run</span></div>
+          <div style="border-top: 1px solid #e4e5e8; border-bottom: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">Email support</span></div>
+        </div>
+        <div style="flex-grow: 1;"></div>
+        <a class="btn" href="#start-pro" style="margin-top: 40px; height: 52px; background: #ffffff; color: #101014; border: 1px solid #101014; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">Start with Pro</a>
+      </div>
+
+      <!-- ORGANIZATION -->
+      <div style="box-sizing: border-box; padding-left: 48px; border-left: 1px solid #e4e5e8; display: flex; flex-direction: column;">
+        <div style="display: flex; align-items: baseline; justify-content: space-between;">
+          <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; color: #64696f;">03</span>
+          <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #594cdf;">Recommended</span>
+        </div>
+        <h3 style="margin: 20px 0 0 0; font-size: 28px; line-height: 36px; letter-spacing: -0.01em; font-weight: 500; color: #101014;">Organization</h3>
+        <div style="margin-top: 20px; display: flex; align-items: baseline; gap: 8px;">
+          <span style="font-size: 64px; line-height: 68px; letter-spacing: -0.02em; font-weight: 300; color: #101014;">{{orgPrice}}</span>
+          <span style="font-size: 15px; color: #64696f;">{{per}}</span>
+        </div>
+        <p style="margin: 20px 0 0 0; font-size: 15px; line-height: 24px; color: #4a4d55; min-height: 48px;">For the team where somebody else has to be able to read it.</p>
+        <div style="margin-top: 28px;">
+          <div style="border-top: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">Seats and roles</span></div>
+          <div style="border-top: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">Unlimited projects and workflows</span></div>
+          <div style="border-top: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">50M rows per run</span></div>
+          <div style="border-top: 1px solid #e4e5e8; border-bottom: 1px solid #e4e5e8; padding: 16px 0; display: flex; align-items: center; gap: 14px;"><svg width="8" height="8" viewBox="0 0 8 8" fill="#101014" aria-hidden="true"><rect width="8" height="8"></rect></svg><span style="font-size: 15px; color: #101014;">SSO and activity log</span></div>
+        </div>
+        <div style="flex-grow: 1;"></div>
+        <a class="btn" href="#start-org" style="margin-top: 40px; height: 52px; background: #101014; color: #ffffff; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center; justify-content: center;">Start with your team</a>
+      </div>
+
+    </div>
+
+    <p style="margin: 40px 0 0 0; font-size: 14px; line-height: 22px; color: #64696f;">Every plan is billed {{billedWord}} and cancels from the dashboard. No run-based surprise bills — rows per run are the only meter, and a failed run is never metered.</p>
+  </div>
+
+  <!-- CLOSING BAND -->
+  <div style="box-sizing: border-box; padding: 104px 112px; background: #101014;">
+    <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #8e9096;">No card · five minutes · cancel whenever</div>
+    <h2 style="margin: 28px 0 0 0; font-size: 64px; line-height: 70px; letter-spacing: -0.018em; font-weight: 300; color: #ffffff; max-width: 820px;">Move your first million rows tonight.</h2>
+    <div style="margin-top: 44px; display: flex; gap: 12px;">
+      <a class="btn" href="#start" style="height: 52px; padding: 0 28px; background: #ffffff; color: #101014; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center;">Start free — no card</a>
+      <a class="btn" href="#sales" style="height: 52px; padding: 0 28px; background: transparent; color: #ffffff; border: 1px solid #4a4d55; border-radius: 8px; font-size: 15px; font-weight: 500; display: flex; align-items: center; box-sizing: border-box;">Talk to sales</a>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div style="flex-grow: 1; box-sizing: border-box; padding: 72px 112px 48px 112px; display: flex; flex-direction: column; justify-content: space-between;">
+    <div style="display: flex; gap: 80px;">
+      <div style="width: 320px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="#101014" aria-hidden="true"><rect x="0" y="0" width="20" height="20"></rect><rect x="7" y="7" width="6" height="6" fill="#ffffff"></rect></svg>
+          <span style="font-size: 16px; font-weight: 500; color: #101014;">Nia Core</span>
+        </div>
+        <p style="margin: 20px 0 0 0; font-size: 14px; line-height: 22px; color: #64696f;">Draw the pipeline, schedule it, and wake up to dashboards that filled themselves.</p>
+      </div>
+      <div style="flex-grow: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 24px;">
+        <div>
+          <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Product</div>
+          <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 12px;">
+            <a href="#canvas" style="font-size: 15px; color: #4a4d55;">Canvas</a>
+            <a href="Connectors.dc.html" style="font-size: 15px; color: #4a4d55;">Connectors</a>
+            <a href="#pricing" style="font-size: 15px; color: #4a4d55;">Pricing</a>
+            <a href="#signin" style="font-size: 15px; color: #4a4d55;">Sign in</a>
+          </div>
+        </div>
+        <div>
+          <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Resources</div>
+          <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 12px;">
+            <a href="#docs" style="font-size: 15px; color: #4a4d55;">Docs</a>
+            <a href="#changelog" style="font-size: 15px; color: #4a4d55;">Changelog</a>
+            <a href="#status" style="font-size: 15px; color: #4a4d55;">Status</a>
+            <a href="#support" style="font-size: 15px; color: #4a4d55;">Support</a>
+          </div>
+        </div>
+        <div>
+          <div style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Company</div>
+          <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 12px;">
+            <a href="#about" style="font-size: 15px; color: #4a4d55;">About</a>
+            <a href="#careers" style="font-size: 15px; color: #4a4d55;">Careers</a>
+            <a href="#privacy" style="font-size: 15px; color: #4a4d55;">Privacy</a>
+            <a href="#terms" style="font-size: 15px; color: #4a4d55;">Terms</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top: 56px; padding-top: 28px; border-top: 1px solid #e4e5e8; display: flex; justify-content: space-between;">
+      <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">© 2026 Nia Core · Rows moved responsibly</span>
+      <span style="font-size: 11px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Reel 03 · 00:00:00:00</span>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":2560}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { annual: false };
+  }
+  renderVals() {
+    const annual = this.state.annual === true;
+    return {
+      isMonthly: !annual,
+      isAnnual: annual,
+      mBg: annual ? '#ffffff' : '#101014',
+      mFg: annual ? '#4a4d55' : '#ffffff',
+      aBg: annual ? '#101014' : '#ffffff',
+      aFg: annual ? '#ffffff' : '#4a4d55',
+      saveColor: annual ? '#594cdf' : '#8e9096',
+      cycleLabel: annual ? 'Billed annually' : 'Billed monthly',
+      billedWord: annual ? 'annually' : 'monthly',
+      per: annual ? '/ month, billed yearly' : '/ month',
+      proPrice: annual ? '$15' : '$19',
+      orgPrice: annual ? '$79' : '$99',
+      setMonthly: () => this.setState({ annual: false }),
+      setAnnual: () => this.setState({ annual: true })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 import type { RefObject } from 'react';
 import Logo from '@/components/Logo';
-import { plexSans } from './heroFonts';
+import { hlFontFamily } from './hairline/styles';
 
 // Sits above the hero, which is now a dark island (hero-canvas/
 // HeroCanvasSection): Nav starts transparent-on-black, goes solid black
@@ -30,7 +30,6 @@ export default function Nav({ navRef }: { navRef: RefObject<HTMLElement> }) {
   return (
     <nav
       ref={navRef}
-      className={plexSans.variable}
       style={{
         position: 'sticky',
         top: 0,
@@ -43,7 +42,7 @@ export default function Nav({ navRef }: { navRef: RefObject<HTMLElement> }) {
         WebkitBackdropFilter: 'var(--nav-blur, none)',
         borderBottom: '1px solid transparent',
         transition: 'background .2s ease, backdrop-filter .2s ease, border-color .2s ease, box-shadow .2s ease',
-        fontFamily: 'var(--font-plex-sans)',
+        fontFamily: hlFontFamily,
       }}
     >
       <div
@@ -77,7 +76,7 @@ export default function Nav({ navRef }: { navRef: RefObject<HTMLElement> }) {
               alignItems: 'center',
               height: 34,
               padding: '0 15px',
-              borderRadius: 8,
+              borderRadius: 0,
               fontSize: 13.5,
               fontWeight: 600,
               color: '#07090c',

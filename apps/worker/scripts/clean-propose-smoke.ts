@@ -62,6 +62,7 @@ import type { Queue } from "bullmq";
 import {
   ADAPTER_VERSION,
   OP_CATALOG_VERSION,
+  PROFILE_SIGNATURE_VERSION,
   canonicalizeStepsForHash,
   ensureGraphStepIds,
   parseNodeConfig,
@@ -495,6 +496,7 @@ async function applyCleaningDiff(
       profile_hash: binding.profileHash,
       op_catalog_version: OP_CATALOG_VERSION,
       adapter_version: ADAPTER_VERSION,
+      profile_signature_version: PROFILE_SIGNATURE_VERSION,
     },
     { onConflict: "workflow_id,node_id" },
   );

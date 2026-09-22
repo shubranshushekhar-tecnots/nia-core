@@ -7,6 +7,8 @@ import {
   WriteRequest,
   StageRequest,
   PreflightRequest,
+  rowsNeedJsonCoercion,
+  coerceJsonWriteValues,
   type TabularResult,
   type WriteResponse,
   type StageResponse,
@@ -276,9 +278,34 @@ app.post("/write", async (req): Promise<WriteResponse> => {
   }
 
   const pool = await getWritePool(body.credential, body.config);
+
+  // Phase (JSON write-layer guard): pg's jsonb binding for a plain object/
+  // array value is undocumented/unverified for every non-jsonb destination
+  // type — only pay for a destination-column-type lookup when the batch
+  // actually contains an object/array value; a normal all-scalar write
+  // (every write today, and every existing test) never triggers this
+  // query. See writeValueCoercion.ts's header comment.
+  let rows: unknown[][] = body.rows;
+  if (rowsNeedJsonCoercion(body.rows)) {
+    const typeResult = await pool.query(
+      `SELECT column_name, data_type
+       FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = $2`,
+      [body.entity.namespace, body.entity.name],
+    );
+    const jsonColumns = new Set(
+      (typeResult.rows as Array<{ column_name: string; data_type: string }>)
+        .filter((r) => r.data_type === "json" || r.data_type === "jsonb")
+        .map((r) => r.column_name),
+    );
+    const coerced = coerceJsonWriteValues(body.columns, body.rows, (c) => jsonColumns.has(c));
+    if (!coerced.ok) throw new Error(coerced.error);
+    rows = coerced.rows;
+  }
+
   const sql = buildUpsertSql(body.entity, body.columns, body.upsertKeys, body.rows.length);
   const start = Date.now();
-  const result = await executeWithStatementTimeout(pool, sql, body.rows.flat(), body.timeoutMs);
+  const result = await executeWithStatementTimeout(pool, sql, rows.flat(), body.timeoutMs);
   return { written: result.rowCount ?? 0, durationMs: Date.now() - start };
 });
 

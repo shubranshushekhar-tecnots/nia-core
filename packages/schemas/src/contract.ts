@@ -53,7 +53,7 @@ export const IntrospectResponse = z.object({
     z.object({
       namespace: z.string(),
       name: z.string(),
-      fields: z.array(z.object({ name: z.string(), type: z.string() })),
+      fields: z.array(z.object({ name: z.string(), type: z.string(), degraded: z.boolean().optional() })),
       /**
        * Single-column verified-unique key for this entity, if one exists
        * (SQL: the sole PRIMARY KEY column; null if the table has no PK or a

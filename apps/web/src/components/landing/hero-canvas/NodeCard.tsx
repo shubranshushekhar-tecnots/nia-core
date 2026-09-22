@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { hlFontFamily } from '../hairline/styles';
 import { CARD_W, COLOR, type CanvasNode } from './config';
 import NodeGlyphIcon from './icons';
 
@@ -7,54 +8,79 @@ import NodeGlyphIcon from './icons';
 // absolutely positioned at their exact `dy` from the card top so they line
 // up pixel-for-pixel with the connector SVG paths in config.ts, regardless
 // of how the header content reflows.
-export default function NodeCard({ node, style }: { node: CanvasNode; style?: CSSProperties }) {
-  const active = node.state === 'active';
-  const notTaken = node.state === 'not-taken';
-  const maxDy = Math.max(...node.ports.map((p) => p.dy));
+//
+// Visual identity ("active"/"running") is driven entirely by CSS classes
+// (`animClass`/`ledClass`) supplied by the caller — see HeroCanvasLayer's
+// slot→class mapping — rather than a static prop, since the shared 7.5s
+// run-animation loop cycles every card's border/LED continuously.
+export default function NodeCard({
+  node,
+  animClass,
+  ledClass,
+  selected = false,
+  onSelect,
+  style,
+}: {
+  node: CanvasNode;
+  animClass?: string;
+  ledClass?: string;
+  selected?: boolean;
+  onSelect?: () => void;
+  style?: CSSProperties;
+}) {
+  const rows = groupPortsByRow(node.ports);
 
   return (
-    <div
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={animClass}
       style={{
         position: 'absolute',
         left: node.x,
         top: node.y,
         width: CARD_W,
+        height: node.height,
         boxSizing: 'border-box',
         borderRadius: 12,
         background: COLOR.cardSurface,
-        border: `1px solid ${active ? COLOR.brandViolet : COLOR.cardBorder}`,
-        borderStyle: notTaken ? 'dashed' : 'solid',
-        boxShadow: COLOR.cardShadow,
-        opacity: notTaken ? 0.55 : 1,
-        padding: '13px 14px 11px',
-        height: maxDy + 9 + 11,
-        fontFamily: 'var(--font-hero-sans)',
+        border: `1px solid ${COLOR.cardBorder}`,
+        outline: selected ? `2px solid ${COLOR.brandViolet}` : 'none',
+        outlineOffset: -2,
+        padding: 0,
+        margin: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        textAlign: 'left',
+        cursor: 'pointer',
+        fontFamily: hlFontFamily,
         ...style,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 11 }}>
+      <div style={{ flexGrow: 1, padding: '16px', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
         <span
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: 28,
-            height: 28,
+            width: 32,
+            height: 32,
             flex: 'none',
             borderRadius: 8,
-            background: COLOR.iconTile,
             border: `1px solid ${COLOR.iconTileBorder}`,
             color: node.color,
           }}
         >
-          <NodeGlyphIcon glyph={node.glyph} />
+          <NodeGlyphIcon glyph={node.glyph} size={18} />
         </span>
-        <span style={{ minWidth: 0 }}>
+        <span style={{ minWidth: 0, flexGrow: 1 }}>
           <span
             style={{
               display: 'block',
-              fontSize: 14,
+              fontSize: 15,
               fontWeight: 500,
+              lineHeight: '20px',
               letterSpacing: '-.015em',
               color: COLOR.chromeStrong,
               whiteSpace: 'nowrap',
@@ -67,7 +93,9 @@ export default function NodeCard({ node, style }: { node: CanvasNode; style?: CS
           <span
             style={{
               display: 'block',
-              fontSize: 11.5,
+              marginTop: 3,
+              fontSize: 13,
+              lineHeight: '18px',
               color: COLOR.textMuted,
               whiteSpace: 'nowrap',
               overflow: 'hidden',
@@ -77,37 +105,78 @@ export default function NodeCard({ node, style }: { node: CanvasNode; style?: CS
             {node.subtitle}
           </span>
         </span>
+        <span
+          aria-hidden="true"
+          className={ledClass}
+          style={{ width: 6, height: 6, marginTop: 7, flex: 'none', background: COLOR.brandViolet }}
+        />
       </div>
 
-      <div style={{ height: 1, background: COLOR.divider, marginBottom: 10 }} />
-
-      {node.ports.map((port) => {
-        const isOut = port.side === 'out';
-        const dotColor = isOut && active ? COLOR.brandViolet : COLOR.inactiveDot;
+      {rows.map(({ dy, ports }, i) => {
+        const hasIn = ports.some((p) => p.side === 'in');
+        const hasOut = ports.some((p) => p.side === 'out');
+        const justify = hasIn && hasOut ? 'space-between' : hasIn ? 'flex-start' : 'flex-end';
         return (
           <div
-            key={`${port.side}-${port.label}`}
+            key={dy}
             style={{
               position: 'absolute',
-              top: port.dy - 9,
-              [isOut ? 'right' : 'left']: 14,
+              top: dy - 20,
+              left: 0,
+              right: 0,
+              height: 40,
+              boxSizing: 'border-box',
+              borderTop: i === 0 ? `1px solid ${COLOR.divider}` : 'none',
               display: 'flex',
               alignItems: 'center',
-              flexDirection: isOut ? 'row-reverse' : 'row',
-              gap: 7,
-              fontSize: 11.5,
-              color: COLOR.textMuted,
-              whiteSpace: 'nowrap',
+              justifyContent: justify,
+              padding: '0 12px',
+              gap: 10,
             }}
           >
-            <span
-              aria-hidden="true"
-              style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flex: 'none' }}
-            />
-            <span>{port.label}</span>
+            {ports.map((port) => (
+              <span
+                key={`${port.side}-${port.label}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  flexDirection: port.side === 'out' ? 'row-reverse' : 'row',
+                  gap: 10,
+                  fontSize: 12,
+                  color: COLOR.textMuted,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: 8,
+                    height: 8,
+                    flex: 'none',
+                    background: port.connected ? COLOR.connectedPort : COLOR.inactiveDot,
+                  }}
+                />
+                <span>{port.label}</span>
+              </span>
+            ))}
           </div>
         );
       })}
-    </div>
+    </button>
   );
+}
+
+// Groups a node's ports by their `dy` (row position) so rows with both an
+// `in` and an `out` port at the same height render as one space-between
+// row instead of two overlapping absolutely-positioned rows.
+function groupPortsByRow(ports: CanvasNode['ports']) {
+  const byDy = new Map<number, CanvasNode['ports']>();
+  for (const port of ports) {
+    const existing = byDy.get(port.dy);
+    if (existing) existing.push(port);
+    else byDy.set(port.dy, [port]);
+  }
+  return Array.from(byDy.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([dy, rowPorts]) => ({ dy, ports: rowPorts }));
 }

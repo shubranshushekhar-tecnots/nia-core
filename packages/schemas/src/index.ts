@@ -38,3 +38,7 @@ export * from "./profile.js";
 export * from "./cleanPlan.js";
 export * from "./cleanPropose.js";
 export { evalExpr } from "./ops/residualEval.js";
+export * from "./niaType.js";
+export * from "./niaAdapters.js";
+export * from "./niaInference.js";
+export * from "./writeValueCoercion.js";

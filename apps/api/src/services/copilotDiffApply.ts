@@ -14,6 +14,7 @@ import {
   type CleanBindingInput as CleanBindingInputType,
   OP_CATALOG_VERSION,
   ADAPTER_VERSION,
+  PROFILE_SIGNATURE_VERSION,
 } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
@@ -206,6 +207,7 @@ export async function applyPlanDiff(
         profile_hash: input.cleanBinding.profileHash,
         op_catalog_version: OP_CATALOG_VERSION,
         adapter_version: ADAPTER_VERSION,
+        profile_signature_version: PROFILE_SIGNATURE_VERSION,
       },
       { onConflict: "workflow_id,node_id" },
     );

@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>What Nia Does</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;500&amp;display=swap">
+<style>
+body { margin: 0; background: #ffffff; font-family: "Helvetica Neue", Helvetica, Archivo, "Segoe UI", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #594cdf; } a:hover { color: #3f34b8; }
+
+.nc-row { transition: border-color 160ms linear; }
+.nc-label, .nc-num { transition: color 160ms linear; }
+.nc-row:hover .nc-label { color: #101014; }
+.nc-row:hover .nc-num { color: #101014; }
+.nc-row:focus-visible { outline: 2px solid #101014; outline-offset: 4px; }
+.nc-arrow { animation: arrowIn .34s cubic-bezier(.2,.8,.2,1) both; }
+.pfade { animation: riseIn .42s cubic-bezier(.2,.8,.2,1) both; }
+
+@keyframes arrowIn { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+@keyframes riseIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes pop { from { opacity: 0; transform: scale(.55); } to { opacity: 1; transform: scale(1); } }
+@keyframes wipeX { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes wipeY { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes sweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(.78); } }
+@keyframes shimmer { 0%, 100% { opacity: 1; } 50% { opacity: .22; } }
+@keyframes wave { 0%, 100% { transform: translateY(0); } 45% { transform: translateY(-7px); } }
+
+.mk rect { transform-box: fill-box; transform-origin: center; }
+
+/* 01 — a drawn graph, with a row of data running the path */
+@keyframes runPath {
+  0%   { opacity: 0; transform: translate(0, 0); }
+  7%   { opacity: 1; transform: translate(0, 0); }
+  26%  { transform: translate(62px, 0); }
+  40%  { transform: translate(62px, 54px); }
+  62%  { transform: translate(124px, 54px); }
+  78%  { transform: translate(124px, 108px); }
+  90%  { opacity: 1; transform: translate(124px, 108px); }
+  100% { opacity: 0; transform: translate(124px, 108px); }
+}
+.m1 rect:nth-of-type(1) { animation: pop .52s cubic-bezier(.2,.8,.2,1) .02s both; }
+.m1 rect:nth-of-type(2) { transform-origin: left center; animation: wipeX .32s ease-out .20s both; }
+.m1 rect:nth-of-type(3) { transform-origin: center top; animation: wipeY .28s ease-out .42s both; }
+.m1 rect:nth-of-type(4) { animation: pop .52s cubic-bezier(.2,.8,.2,1) .58s both; }
+.m1 rect:nth-of-type(5) { transform-origin: left center; animation: wipeX .32s ease-out .82s both; }
+.m1 rect:nth-of-type(6) { transform-origin: center top; animation: wipeY .28s ease-out 1.02s both; }
+.m1 rect:nth-of-type(7) { animation: pop .52s cubic-bezier(.2,.8,.2,1) 1.18s both; }
+.m1 rect:nth-of-type(8) { transform-box: view-box; animation: runPath 3.6s linear 1.8s infinite; }
+
+/* 02 — four sources arriving at one hub */
+@keyframes inFromTop    { 0% { opacity: 0; transform: translate(0, 0); } 14% { opacity: 1; } 64% { opacity: 1; transform: translate(0, 68px); } 100% { opacity: 0; transform: translate(0, 68px); } }
+@keyframes inFromLeft   { 0% { opacity: 0; transform: translate(0, 0); } 14% { opacity: 1; } 64% { opacity: 1; transform: translate(68px, 0); } 100% { opacity: 0; transform: translate(68px, 0); } }
+@keyframes inFromRight  { 0% { opacity: 0; transform: translate(0, 0); } 14% { opacity: 1; } 64% { opacity: 1; transform: translate(-68px, 0); } 100% { opacity: 0; transform: translate(-68px, 0); } }
+@keyframes inFromBottom { 0% { opacity: 0; transform: translate(0, 0); } 14% { opacity: 1; } 64% { opacity: 1; transform: translate(0, -68px); } 100% { opacity: 0; transform: translate(0, -68px); } }
+.m2 rect:nth-of-type(1) { animation: pop .5s cubic-bezier(.2,.8,.2,1) .02s both; }
+.m2 rect:nth-of-type(2) { transform-origin: center bottom; animation: wipeY .28s ease-out .30s both; }
+.m2 rect:nth-of-type(3) { animation: pop .44s cubic-bezier(.2,.8,.2,1) .52s both; }
+.m2 rect:nth-of-type(4) { transform-origin: right center; animation: wipeX .28s ease-out .40s both; }
+.m2 rect:nth-of-type(5) { animation: pop .44s cubic-bezier(.2,.8,.2,1) .62s both; }
+.m2 rect:nth-of-type(6) { transform-origin: left center; animation: wipeX .28s ease-out .50s both; }
+.m2 rect:nth-of-type(7) { animation: pop .44s cubic-bezier(.2,.8,.2,1) .72s both; }
+.m2 rect:nth-of-type(8) { transform-origin: center top; animation: wipeY .28s ease-out .60s both; }
+.m2 rect:nth-of-type(9) { animation: pop .44s cubic-bezier(.2,.8,.2,1) .82s both; }
+.m2 rect:nth-of-type(10) { transform-box: view-box; animation: inFromTop 2.6s ease-in-out 1.15s infinite; }
+.m2 rect:nth-of-type(11) { transform-box: view-box; animation: inFromLeft 2.6s ease-in-out 1.45s infinite; }
+.m2 rect:nth-of-type(12) { transform-box: view-box; animation: inFromRight 2.6s ease-in-out 1.75s infinite; }
+.m2 rect:nth-of-type(13) { transform-box: view-box; animation: inFromBottom 2.6s ease-in-out 2.05s infinite; }
+
+/* 03 — a schedule dial with a hand sweeping the night */
+.m3 g rect { animation: pop .42s cubic-bezier(.2,.8,.2,1) both; }
+.m3 g:nth-of-type(1) rect { animation-delay: .04s; }
+.m3 g:nth-of-type(2) rect { animation-delay: .09s; }
+.m3 g:nth-of-type(3) rect { animation-delay: .14s; }
+.m3 g:nth-of-type(4) rect { animation-delay: .19s; }
+.m3 g:nth-of-type(5) rect { animation-delay: .24s; }
+.m3 g:nth-of-type(6) rect { animation-delay: .29s; }
+.m3 g:nth-of-type(7) rect { animation-delay: .34s; }
+.m3 g:nth-of-type(8) rect { animation-delay: .39s; }
+.m3 g:nth-of-type(9) rect { animation-delay: .44s; }
+.m3 g:nth-of-type(10) rect { animation-delay: .49s; }
+.m3 g:nth-of-type(11) rect { animation-delay: .54s; }
+.m3 g:nth-of-type(12) rect { animation-delay: .59s; }
+.m3 > rect:nth-of-type(1) { animation: pop .5s cubic-bezier(.2,.8,.2,1) .66s both, breathe 3.4s ease-in-out 1.3s infinite; }
+.m3 > rect:nth-of-type(2) { transform-box: view-box; transform-origin: 90px 90px; animation: sweep 7.5s linear .7s infinite; }
+
+/* 04 — one block resolving into fields */
+.m4 rect:nth-of-type(1)  { animation: pop .5s cubic-bezier(.2,.8,.2,1) .02s both; }
+.m4 rect:nth-of-type(2)  { transform-origin: left center; animation: wipeX .3s ease-out .34s both; }
+.m4 rect:nth-of-type(3)  { animation: pop .4s cubic-bezier(.2,.8,.2,1) .58s both, shimmer 2.8s ease-in-out 1.30s infinite; }
+.m4 rect:nth-of-type(4)  { animation: pop .4s cubic-bezier(.2,.8,.2,1) .64s both, shimmer 2.8s ease-in-out 1.42s infinite; }
+.m4 rect:nth-of-type(5)  { animation: pop .4s cubic-bezier(.2,.8,.2,1) .70s both, shimmer 2.8s ease-in-out 1.54s infinite; }
+.m4 rect:nth-of-type(6)  { animation: pop .4s cubic-bezier(.2,.8,.2,1) .76s both, shimmer 2.8s ease-in-out 1.66s infinite; }
+.m4 rect:nth-of-type(7)  { animation: pop .4s cubic-bezier(.2,.8,.2,1) .82s both, shimmer 2.8s ease-in-out 1.78s infinite; }
+.m4 rect:nth-of-type(8)  { animation: pop .4s cubic-bezier(.2,.8,.2,1) .88s both, shimmer 2.8s ease-in-out 1.90s infinite; }
+.m4 rect:nth-of-type(9)  { animation: pop .4s cubic-bezier(.2,.8,.2,1) .94s both, shimmer 2.8s ease-in-out 2.02s infinite; }
+.m4 rect:nth-of-type(10) { animation: pop .4s cubic-bezier(.2,.8,.2,1) 1.00s both, shimmer 2.8s ease-in-out 2.14s infinite; }
+.m4 rect:nth-of-type(11) { animation: pop .4s cubic-bezier(.2,.8,.2,1) 1.06s both, shimmer 2.8s ease-in-out 2.26s infinite; }
+
+/* 05 — the checks landing, one after another */
+.m5 rect:nth-of-type(1) { animation: pop .46s cubic-bezier(.2,.8,.2,1) .04s both, wave 3.2s ease-in-out 1.10s infinite; }
+.m5 rect:nth-of-type(2) { animation: pop .46s cubic-bezier(.2,.8,.2,1) .16s both, wave 3.2s ease-in-out 1.22s infinite; }
+.m5 rect:nth-of-type(3) { animation: pop .46s cubic-bezier(.2,.8,.2,1) .28s both, wave 3.2s ease-in-out 1.34s infinite; }
+.m5 rect:nth-of-type(4) { animation: pop .46s cubic-bezier(.2,.8,.2,1) .40s both, wave 3.2s ease-in-out 1.46s infinite; }
+.m5 rect:nth-of-type(5) { animation: pop .46s cubic-bezier(.2,.8,.2,1) .52s both, wave 3.2s ease-in-out 1.58s infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mk rect, .nc-arrow, .pfade { animation: none !important; }
+}
+</style>
+</helmet>
+<div style="width: 1440px; height: 890px; box-sizing: border-box; padding: 96px 112px; background: #ffffff; display: flex; flex-direction: column;">
+
+  <div style="font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #64696f;">Five things, one canvas</div>
+
+  <h2 style="margin: 24px 0 0 0; font-size: 88px; line-height: 96px; letter-spacing: -0.015em; font-weight: 300; color: #101014;">What Nia does</h2>
+
+  <div style="margin-top: 40px; height: 1px; background: #101014;"></div>
+
+  <div style="margin-top: 56px; display: flex; gap: 80px; align-items: flex-start;">
+
+    <div style="width: 576px; display: flex; flex-direction: column;">
+      <sc-for list="{{items}}" as="item" hint-placeholder-count="5">
+        <button type="button" class="nc-row" onClick="{{item.pick}}" aria-pressed="{{item.isActive}}" style="appearance: none; -webkit-appearance: none; width: 100%; box-sizing: border-box; margin: 0; padding: 24px 0; background: transparent; border: 0; border-bottom: 1px solid {{item.lineColor}}; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 24px; font-family: inherit;">
+          <span class="nc-num" style="flex-shrink: 0; width: 24px; font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.16em; color: {{item.numColor}};">{{item.n}}</span>
+          <span class="nc-label" style="flex-grow: 1; font-size: 34px; line-height: 44px; letter-spacing: -0.012em; font-weight: 400; color: {{item.labelColor}};">{{item.label}}</span>
+          <sc-if value="{{item.isActive}}" hint-placeholder-val="{{ true }}">
+            <svg class="nc-arrow" width="48" height="16" viewBox="0 0 48 16" fill="none" aria-hidden="true" style="flex-shrink: 0;">
+              <path d="M0 8 H45 M38 1 L45 8 L38 15" stroke="#101014" stroke-width="1.6" fill="none"></path>
+            </svg>
+          </sc-if>
+        </button>
+      </sc-for>
+    </div>
+
+    <div style="width: 560px; height: 465px; box-sizing: border-box; padding: 40px; background: #f4f4f6; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden;">
+
+      <div style="font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.16em; color: #5c6068;">{{counter}}</div>
+
+      <div style="margin-top: 24px;">
+        <sc-if value="{{is1}}" hint-placeholder-val="{{ true }}">
+          <p class="pfade" style="margin: 0; font-size: 18px; line-height: 30px; color: #4a4d55; max-width: 460px;">Skip the YAML. Sources, transforms and destinations drag onto a grid, connect by hand, and run the moment you press the button — the canvas is the config.</p>
+        </sc-if>
+        <sc-if value="{{is2}}" hint-placeholder-val="{{ true }}">
+          <p class="pfade" style="margin: 0; font-size: 18px; line-height: 30px; color: #4a4d55; max-width: 460px;">Authenticate once. Databases, warehouses, files and BI tools become reusable handles that appear in every pipeline you build after, already wired.</p>
+        </sc-if>
+        <sc-if value="{{is3}}" hint-placeholder-val="{{ true }}">
+          <p class="pfade" style="margin: 0; font-size: 18px; line-height: 30px; color: #4a4d55; max-width: 460px;">Set it and close the laptop. Nia moves the rows overnight, retries what fails on its own, and stamps every run with a timecode you can read back.</p>
+        </sc-if>
+        <sc-if value="{{is4}}" hint-placeholder-val="{{ true }}">
+          <p class="pfade" style="margin: 0; font-size: 18px; line-height: 30px; color: #4a4d55; max-width: 460px;">Ask in plain words. Describe the pipeline you want, or drop an AI step mid-flow to classify, extract and clean the fields no regular expression was going to reach.</p>
+        </sc-if>
+        <sc-if value="{{is5}}" hint-placeholder-val="{{ true }}">
+          <p class="pfade" style="margin: 0; font-size: 18px; line-height: 30px; color: #4a4d55; max-width: 460px;">Know before they do. Row counts, schema drift and freshness run as checks on every pass, so a dashboard is either correct or it tells you exactly why not.</p>
+        </sc-if>
+      </div>
+
+      <div style="flex-grow: 1; display: flex; align-items: center; justify-content: center;">
+
+        <sc-if value="{{is1}}" hint-placeholder-val="{{ true }}">
+          <svg class="mk m1" width="180" height="180" viewBox="0 0 180 180" fill="#101014" role="img" aria-label="Three nodes joined by drawn connections, with data running along the path">
+            <rect x="8" y="16" width="40" height="40"></rect>
+            <rect x="48" y="32" width="42" height="8"></rect>
+            <rect x="86" y="36" width="8" height="34"></rect>
+            <rect x="70" y="70" width="40" height="40"></rect>
+            <rect x="110" y="86" width="42" height="8"></rect>
+            <rect x="148" y="90" width="8" height="34"></rect>
+            <rect x="132" y="124" width="40" height="40"></rect>
+            <rect x="24" y="32" width="8" height="8" fill="{{accent}}"></rect>
+          </svg>
+        </sc-if>
+
+        <sc-if value="{{is2}}" hint-placeholder-val="{{ true }}">
+          <svg class="mk m2" width="180" height="180" viewBox="0 0 180 180" fill="#101014" role="img" aria-label="Four sources feeding one hub">
+            <rect x="68" y="68" width="44" height="44"></rect>
+            <rect x="86" y="36" width="8" height="32"></rect>
+            <rect x="76" y="8" width="28" height="28"></rect>
+            <rect x="36" y="86" width="32" height="8"></rect>
+            <rect x="8" y="76" width="28" height="28"></rect>
+            <rect x="112" y="86" width="32" height="8"></rect>
+            <rect x="144" y="76" width="28" height="28"></rect>
+            <rect x="86" y="112" width="8" height="32"></rect>
+            <rect x="76" y="144" width="28" height="28"></rect>
+            <rect x="86" y="18" width="8" height="8" fill="{{accent}}"></rect>
+            <rect x="18" y="86" width="8" height="8" fill="{{accent}}"></rect>
+            <rect x="154" y="86" width="8" height="8" fill="{{accent}}"></rect>
+            <rect x="86" y="154" width="8" height="8" fill="{{accent}}"></rect>
+          </svg>
+        </sc-if>
+
+        <sc-if value="{{is3}}" hint-placeholder-val="{{ true }}">
+          <svg class="mk m3" width="180" height="180" viewBox="0 0 180 180" fill="#101014" role="img" aria-label="A schedule dial with a hand sweeping around it">
+            <g transform="rotate(0 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(30 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(60 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(90 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(120 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(150 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(180 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(210 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(240 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(270 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(300 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <g transform="rotate(330 90 90)"><rect x="86" y="8" width="8" height="18"></rect></g>
+            <rect x="78" y="78" width="24" height="24"></rect>
+            <rect x="86" y="8" width="8" height="40" fill="{{accent}}"></rect>
+          </svg>
+        </sc-if>
+
+        <sc-if value="{{is4}}" hint-placeholder-val="{{ true }}">
+          <svg class="mk m4" width="180" height="180" viewBox="0 0 180 180" fill="#101014" role="img" aria-label="One block resolving into a grid of extracted fields">
+            <rect x="8" y="58" width="64" height="64"></rect>
+            <rect x="72" y="86" width="34" height="8"></rect>
+            <rect x="106" y="58" width="16" height="16"></rect>
+            <rect x="130" y="58" width="16" height="16"></rect>
+            <rect x="154" y="58" width="16" height="16"></rect>
+            <rect x="106" y="82" width="16" height="16"></rect>
+            <rect x="130" y="82" width="16" height="16" fill="{{accent}}"></rect>
+            <rect x="154" y="82" width="16" height="16"></rect>
+            <rect x="106" y="106" width="16" height="16"></rect>
+            <rect x="130" y="106" width="16" height="16"></rect>
+            <rect x="154" y="106" width="16" height="16"></rect>
+          </svg>
+        </sc-if>
+
+        <sc-if value="{{is5}}" hint-placeholder-val="{{ true }}">
+          <svg class="mk m5" width="180" height="180" viewBox="0 0 180 180" fill="#101014" role="img" aria-label="A check mark built from blocks">
+            <rect x="22" y="100" width="28" height="28"></rect>
+            <rect x="50" y="128" width="28" height="28"></rect>
+            <rect x="78" y="100" width="28" height="28"></rect>
+            <rect x="106" y="72" width="28" height="28"></rect>
+            <rect x="134" y="44" width="28" height="28" fill="{{accent}}"></rect>
+          </svg>
+        </sc-if>
+
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#594CDF","options":["#594CDF","#101014","#0F766E","#B45309"]},"$preview":{"width":1440,"height":890}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { active: 0 };
+  }
+  renderVals() {
+    const accent = this.props.accent ?? '#594CDF';
+    const active = this.state.active ?? 0;
+    const rows = [
+      { n: '01', label: 'Draw the pipeline' },
+      { n: '02', label: 'Connect every source once' },
+      { n: '03', label: 'Run it while you sleep' },
+      { n: '04', label: 'Put AI in the flow' },
+      { n: '05', label: 'Trust what lands' }
+    ];
+    const items = rows.map((r, i) => ({
+      n: r.n,
+      label: r.label,
+      isActive: i === active,
+      labelColor: i === active ? '#101014' : '#8e9096',
+      numColor: i === active ? accent : '#64696f',
+      lineColor: i === active ? '#101014' : '#e4e5e8',
+      pick: () => this.setState({ active: i })
+    }));
+    return {
+      items: items,
+      accent: accent,
+      counter: rows[active].n + ' / 05',
+      is1: active === 0,
+      is2: active === 1,
+      is3: active === 2,
+      is4: active === 3,
+      is5: active === 4
+    };
+  }
+}
+</script>
+</body>
+</html>

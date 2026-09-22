@@ -13,6 +13,9 @@ const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  // Next's dev-mode corner badge otherwise overlaps the hero canvas's own
+  // fullscreen chrome (status bar / tool rail) during local dev.
+  devIndicators: false,
   transpilePackages: ['@nia/ui'],
   outputFileTracingRoot: path.join(__dirname, '../..'),
   async rewrites() {

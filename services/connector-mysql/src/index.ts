@@ -7,6 +7,8 @@ import {
   WriteRequest,
   StageRequest,
   PreflightRequest,
+  rowsNeedJsonCoercion,
+  coerceJsonWriteValues,
   type TabularResult,
   type WriteResponse,
   type StageResponse,
@@ -247,11 +249,36 @@ app.post("/write", async (req): Promise<WriteResponse> => {
   }
 
   const pool = await getWritePool(body.credential, body.config);
+
+  // Phase (JSON write-layer guard): mysql2 stringifies a plain object/array
+  // value via `.toString()` (producing the literal text "[object Object]")
+  // rather than JSON-encoding it — only pay for a destination-column-type
+  // lookup when the batch actually contains an object/array value; a normal
+  // all-scalar write (every write today, and every existing test) never
+  // triggers this query. See writeValueCoercion.ts's header comment.
+  let rows: unknown[][] = body.rows;
+  if (rowsNeedJsonCoercion(body.rows)) {
+    const [typeRows] = await pool.query(
+      `SELECT column_name AS column_name, data_type AS data_type
+       FROM information_schema.columns
+       WHERE table_schema = ? AND table_name = ?`,
+      [body.entity.namespace, body.entity.name],
+    );
+    const jsonColumns = new Set(
+      (typeRows as Array<{ column_name: string; data_type: string }>)
+        .filter((r) => r.data_type === "json")
+        .map((r) => r.column_name),
+    );
+    const coerced = coerceJsonWriteValues(body.columns, body.rows, (c) => jsonColumns.has(c));
+    if (!coerced.ok) throw new Error(coerced.error);
+    rows = coerced.rows;
+  }
+
   const sql = buildUpsertSql(body.entity, body.columns, body.upsertKeys, body.rows.length);
   const start = Date.now();
   const [result] = await pool.query({
     sql,
-    values: body.rows.flat(),
+    values: rows.flat(),
     timeout: body.timeoutMs,
   });
   const written = (result as { affectedRows?: number }).affectedRows ?? 0;

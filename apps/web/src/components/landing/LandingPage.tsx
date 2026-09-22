@@ -3,10 +3,10 @@
 import { useEffect, useRef } from 'react';
 import Nav, { NAV_HEIGHT } from './Nav';
 import HeroCanvasSection from './hero-canvas/HeroCanvasSection';
-import TrustedBy from './TrustedBy';
-import Features from './Features';
+import WhatNiaDoes from './WhatNiaDoes';
 import ConnectorsOrbit from './ConnectorsOrbit';
 import TypeChips from './TypeChips';
+import ConnectorDirectory from './ConnectorDirectory';
 import Stats from './Stats';
 import Pricing from './Pricing';
 import CtaBand from './CtaBand';
@@ -15,8 +15,6 @@ import Footer from './Footer';
 export default function LandingPage() {
   const navRef = useRef<HTMLElement>(null);
   const heroRef = useRef<HTMLElement>(null);
-  const bandRef = useRef<HTMLElement>(null);
-  const footRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -60,21 +58,6 @@ export default function LandingPage() {
       } else {
         nav.style.removeProperty('--nav-fg');
       }
-      if (reduce) return;
-
-      const band = bandRef.current;
-      const foot = footRef.current;
-      if (band && foot) {
-        const r = band.getBoundingClientRect();
-        const vh = window.innerHeight || 1;
-        const q = Math.max(0, Math.min(1, (vh - r.bottom) / (vh * 0.6)));
-        const e2 = q * q * (3 - 2 * q);
-        band.style.transform = `perspective(1200px) scale(${1 - e2 * 0.12}) translateY(${-e2 * 54}px) rotateX(${e2 * 6}deg)`;
-        band.style.opacity = String(1 - e2 * 0.7);
-        band.style.filter = `blur(${(e2 * 4).toFixed(2)}px)`;
-        foot.style.transform = `translateY(${-e2 * 36}px)`;
-        foot.style.borderTopLeftRadius = foot.style.borderTopRightRadius = `${36 - e2 * 22}px`;
-      }
     };
 
     window.addEventListener('scroll', onScroll, { passive: true });
@@ -89,14 +72,14 @@ export default function LandingPage() {
     <div style={{ width: '100%', minHeight: '100vh', boxSizing: 'border-box', background: 'var(--bg)' }}>
       <Nav navRef={navRef} />
       <HeroCanvasSection heroRef={heroRef} />
-      <TrustedBy />
-      <Features />
+      <WhatNiaDoes />
       <ConnectorsOrbit />
       <TypeChips />
+      <ConnectorDirectory />
       <Stats />
       <Pricing />
-      <CtaBand bandRef={bandRef} />
-      <Footer footRef={footRef} />
+      <CtaBand />
+      <Footer />
     </div>
   );
 }
