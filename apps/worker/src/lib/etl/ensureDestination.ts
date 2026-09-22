@@ -1,14 +1,17 @@
 import {
   buildDestinationContract,
   compareContractToExisting,
+  compileTransformOutputSchema,
   schemaFromIntrospection,
   findPersistedEntity,
   type CreateColumnSpec,
   type CreateEntityKind,
+  type DestinationContract,
   type DestinationMappingEntry,
   type SchemaEntity,
   type SourceDestConfig,
   type SourceDialect,
+  type TransformStep,
   type WriteEntityRef,
 } from "@nia/schemas";
 import { resolveConnection } from "../resolveConnection.js";
@@ -18,6 +21,80 @@ import { computeContractHash } from "./destinationContractHash.js";
 import type { WorkspaceScope } from "../workspaceScope.js";
 
 type SimpleResult = { ok: true } | { ok: false; message: string };
+type ContractResult = { ok: true; contract: DestinationContract } | { ok: false; message: string };
+
+/**
+ * Schema layer, Part 5 — the pure, no-I/O contract-building step factored
+ * out of ensureDestination() below so runEtl.ts can call it unconditionally
+ * (every chunk, every write mode), not just staged-mode-first-chunk. Same
+ * "build once, compare hash if one's already approved" logic
+ * ensureDestination() always had; ensureDestination() now just calls this
+ * instead of duplicating it.
+ *
+ * The contract is built from the pipeline's OUTPUT schema, not the raw
+ * source schema: `transformSteps` (every TransformStep on the path from
+ * source to destination, in execution order, across however many
+ * transform nodes sit between them — see runEtl.ts's call site) is run
+ * through compileTransformOutputSchema before the mapping is applied, so
+ * an Aggregate alias or a computed_field's cleaned type (e.g. `amount`
+ * after `to_number` is decimal, not text) resolves to its REAL output
+ * type, not the pre-transform source column's type. A mapped column that
+ * still can't be resolved against that output schema (a genuinely unknown
+ * field, not a transform-produced one) fails here, naming it — same "never
+ * guess" bar as buildDestinationContract's own mapping-resolution check
+ * below. No more "unresolved" soft-fallback: Part 4's v1 gap (contract
+ * building only ever saw the raw source schema, so an Aggregate-sourced
+ * mapping could never resolve) is what this function now fixes, not a
+ * case to degrade gracefully around.
+ */
+export function buildRuntimeContract(
+  destDialect: SourceDialect,
+  sourceEntity: SchemaEntity,
+  sourceDialect: SourceDialect,
+  destConfig: SourceDestConfig,
+  transformSteps: TransformStep[],
+): ContractResult {
+  const mapping = destConfig.mapping!;
+  const destEntity = destConfig.entity as WriteEntityRef;
+  const upsertKeys = destConfig.upsertKeys ?? [];
+
+  const { schema: rawSourceSchema } = schemaFromIntrospection(sourceEntity, sourceDialect);
+  const outputSchemaResult = compileTransformOutputSchema(rawSourceSchema, transformSteps);
+  if (!outputSchemaResult.ok) {
+    return { ok: false, message: `Destination contract: ${outputSchemaResult.error}` };
+  }
+  const sourceSchema = outputSchemaResult.schema;
+  const mappingEntries: DestinationMappingEntry[] = mapping.entries.map((e) => ({ from: e.from, to: e.to }));
+  const keySourcePaths = mapping.entries.filter((e) => upsertKeys.includes(e.to)).map((e) => e.from);
+
+  let contract: DestinationContract;
+  try {
+    contract = buildDestinationContract({
+      dialect: destDialect,
+      entity: destEntity,
+      sourceSchema,
+      mapping: mappingEntries,
+      keySourcePaths,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : "Failed to build the destination contract.",
+    };
+  }
+
+  if (destConfig.contractHash) {
+    const freshHash = computeContractHash(contract);
+    if (freshHash !== destConfig.contractHash) {
+      return {
+        ok: false,
+        message: `Destination contract drift: the approved contract hash no longer matches the current mapping/source schema for "${destEntity.namespace}.${destEntity.name}". Re-review and re-approve the mapping before running again.`,
+      };
+    }
+  }
+
+  return { ok: true, contract };
+}
 
 /**
  * Schema layer, Part 4 — the destination-contract counterpart to
@@ -51,40 +128,16 @@ export async function ensureDestination(
   sourceEntity: SchemaEntity,
   sourceDialect: SourceDialect,
   destConfig: SourceDestConfig,
+  transformSteps: TransformStep[],
   scope: WorkspaceScope,
   actorUserId: string,
   runId: string,
 ): Promise<SimpleResult> {
-  const mapping = destConfig.mapping!;
   const destEntity = destConfig.entity as WriteEntityRef;
-  const upsertKeys = destConfig.upsertKeys!;
 
-  const { schema: sourceSchema } = schemaFromIntrospection(sourceEntity, sourceDialect);
-  const mappingEntries: DestinationMappingEntry[] = mapping.entries.map((e) => ({ from: e.from, to: e.to }));
-  const keySourcePaths = mapping.entries.filter((e) => upsertKeys.includes(e.to)).map((e) => e.from);
-
-  let contract;
-  try {
-    contract = buildDestinationContract({
-      dialect: destDialect,
-      entity: destEntity,
-      sourceSchema,
-      mapping: mappingEntries,
-      keySourcePaths,
-    });
-  } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : "Failed to build the destination contract." };
-  }
-
-  if (destConfig.contractHash) {
-    const freshHash = computeContractHash(contract);
-    if (freshHash !== destConfig.contractHash) {
-      return {
-        ok: false,
-        message: `Destination contract drift: the approved contract hash no longer matches the current mapping/source schema for "${destEntity.namespace}.${destEntity.name}". Re-review and re-approve the mapping before running again.`,
-      };
-    }
-  }
+  const built = buildRuntimeContract(destDialect, sourceEntity, sourceDialect, destConfig, transformSteps);
+  if (!built.ok) return { ok: false, message: built.message };
+  const contract = built.contract;
 
   const keyColumns = contract.columns.filter((c) => c.isKey).map((c) => c.destinationName);
   if (keyColumns.length === 0) {

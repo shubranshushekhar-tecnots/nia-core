@@ -34,6 +34,7 @@ import {
   buildStagingCountSql,
   buildApplyFromStagingSql,
   buildAssertionQuery,
+  buildAdvanceSequencesSql,
 } from "./stagingSql.js";
 
 function entityMatches(a: WriteEntityRef, b: WriteEntityRef): boolean {
@@ -460,6 +461,13 @@ app.post("/stage", async (req): Promise<StageResponse> => {
       applied = r.rowCount ?? applied;
     }
 
+    // Sequence fix: any applied column that's sequence-backed on dest just
+    // had explicit values written into it (OVERRIDING SYSTEM VALUE above),
+    // which never advances the sequence on its own — see
+    // buildAdvanceSequencesSql's doc comment. Same transaction as the apply
+    // above, so this rolls back with everything else if COMMIT never runs.
+    await client.query(buildAdvanceSequencesSql(body.entity, body.context.columns));
+
     let quarantined = 0;
     if (body.quarantineEntity) {
       const { sql } = buildQuarantineCommitSql(body.quarantineEntity);
@@ -536,6 +544,51 @@ app.post("/preflight", async (req): Promise<PreflightResponse> => {
       ok: false,
       message: e instanceof Error ? e.message : "unknown error",
       grantSql: `GRANT INSERT, UPDATE, DELETE ON "${body.entity.namespace}"."${body.entity.name}" TO <role>;`,
+    });
+  }
+
+  // Sequence fix — advancing a sequence-backed destination column's
+  // sequence after writing explicit ids (buildAdvanceSequencesSql) reads
+  // the sequence's current value and calls setval() on it, which need
+  // SELECT and UPDATE on the sequence itself — separate privileges from
+  // the INSERT/UPDATE/DELETE write-destination checks above. Scoped to
+  // the whole entity (every sequence-backed column on the table), same as
+  // write-destination's own scope, not just columns this particular run
+  // happens to map. Zero sequence-backed columns is a trivial pass, same
+  // "nothing to guard" posture as the checks above.
+  try {
+    const r = await pool.query(
+      `SELECT pg_get_serial_sequence(format('%I.%I', $1::text, $2::text), a.attname) AS seq
+       FROM pg_attribute a
+       JOIN pg_class c ON c.oid = a.attrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped`,
+      [body.entity.namespace, body.entity.name],
+    );
+    const seqs = (r.rows as Array<{ seq: string | null }>).map((row) => row.seq).filter((s): s is string => s !== null);
+    const missing: string[] = [];
+    for (const seq of seqs) {
+      const priv = await pool.query(
+        `SELECT has_sequence_privilege(current_user, $1::regclass, 'SELECT') AS can_select, has_sequence_privilege(current_user, $1::regclass, 'UPDATE') AS can_update`,
+        [seq],
+      );
+      const row = priv.rows[0] as { can_select: boolean; can_update: boolean };
+      if (!row.can_select || !row.can_update) missing.push(seq);
+    }
+    const ok = missing.length === 0;
+    checks.push({
+      name: "sequence-privileges",
+      ok,
+      message: ok
+        ? undefined
+        : `role lacks SELECT+UPDATE on sequence(s) ${missing.join(", ")} (needed to advance them after writing explicit ids)`,
+      grantSql: ok ? undefined : missing.map((s) => `GRANT USAGE, SELECT, UPDATE ON SEQUENCE ${s} TO <role>;`).join(" "),
+    });
+  } catch (e) {
+    checks.push({
+      name: "sequence-privileges",
+      ok: false,
+      message: e instanceof Error ? e.message : "unknown error",
     });
   }
 

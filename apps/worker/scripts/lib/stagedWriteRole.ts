@@ -57,6 +57,31 @@ export async function grantStagedPostgresWriteRole(client: pg.Client, database: 
 }
 
 /**
+ * Sequence fix (docs/plans/schema-layer.md) — a destination table the
+ * write role does NOT own (e.g. admin-created, like DEST_HAPPY etc.
+ * below) only gets DML privileges via an explicit per-table GRANT (see
+ * each script's own `grant select, insert, update on ${table}` calls);
+ * unlike the table itself, granting DML on the table does NOT also grant
+ * anything on its identity/serial columns' backing sequences. Writing an
+ * explicit id (OVERRIDING SYSTEM VALUE) into such a column now also
+ * advances that sequence (stagingSql.ts's buildAdvanceSequencesSql, run
+ * inside the same apply transaction), which needs SELECT (read the
+ * sequence's current value) and UPDATE (setval) on the sequence itself —
+ * privileges table ownership would have implied for free, but a plain
+ * per-table DML grant does not. Call this once per sequence-backed
+ * destination column a script's write role needs to write explicit ids
+ * into, alongside its existing per-table `grant select, insert, update`
+ * calls. `column` must already be sequence-backed (identity or serial) on
+ * `table` — this doesn't create one.
+ */
+export async function grantPostgresSequencePrivileges(client: pg.Client, table: string, column: string, roleUser: string): Promise<void> {
+  const { rows } = await client.query<{ seq: string }>(`select pg_get_serial_sequence($1, $2) as seq`, [table, column]);
+  const seq = rows[0]?.seq;
+  if (!seq) throw new Error(`column "${column}" on ${table} is not sequence-backed (identity or serial) — nothing to grant`);
+  await client.query(`grant usage, select, update on sequence ${seq} to ${roleUser}`);
+}
+
+/**
  * Grants a MySQL role the staged-mode preflight privileges (global CREATE,
  * needed for `CREATE DATABASE IF NOT EXISTS nia`; CREATE+DROP scoped to the
  * `nia` database, needed to create/drop the staging table) plus the DML

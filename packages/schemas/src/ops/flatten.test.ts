@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { flattenOp } from "./flatten.js";
-import { ResidualAbortError } from "./onFailure.js";
 import type { FlattenStep } from "../nodeConfig.js";
 import type { NiaSchema } from "../niaType.js";
 
@@ -48,16 +47,29 @@ describe("flattenOp.outputSchema", () => {
 });
 
 describe("flattenOp.applyResidual", () => {
-  it("throws a ResidualAbortError (does not silently NULL) when a row's value isn't an object despite an object-typed schema — routed by runEtl.ts to a clean run-abort, not an uncaught exception", () => {
+  it("quarantines (does not throw or silently NULL) a row whose value isn't an object despite an object-typed schema — Schema layer Part 5 routes this through the same quarantine reporting as any other fallible row, not a run-abort", () => {
     const input = { cols: ["profile"], rows: [{ profile: "not-an-object" }] };
-    expect(() => flattenOp.applyResidual(input, step("profile"))).toThrow(ResidualAbortError);
-    expect(() => flattenOp.applyResidual(input, step("profile"))).toThrow(/not an object/);
+    const result = flattenOp.applyResidual(input, step("profile"));
+    expect(result.rows).toEqual([]);
+    expect(result.failures).toEqual([
+      {
+        label: 'flatten "profile"',
+        fns: ["flatten_non_object"],
+        policy: "quarantine",
+        count: 1,
+        quarantinedRows: [{ fn: "flatten_non_object", inputValue: "not-an-object", sourceRow: { profile: "not-an-object" } }],
+      },
+    ]);
   });
 
-  it("names both the field and the failing row's index in the thrown message", () => {
+  it("keeps a passing row and quarantines only the failing one, naming the field in the failure report's label", () => {
     const input = { cols: ["profile"], rows: [{ profile: { name: "ok" } }, { profile: "not an object" }] };
-    expect(() => flattenOp.applyResidual(input, step("profile"))).toThrow(/"profile"/);
-    expect(() => flattenOp.applyResidual(input, step("profile"))).toThrow(/row index 1/);
+    const result = flattenOp.applyResidual(input, step("profile"));
+    expect(result.rows).toEqual([{ profile_name: "ok" }]);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures![0]!.label).toBe('flatten "profile"');
+    expect(result.failures![0]!.count).toBe(1);
+    expect(result.failures![0]!.quarantinedRows![0]!.sourceRow).toEqual({ profile: "not an object" });
   });
 
   it("treats null as a legitimate absent value, not a throw", () => {

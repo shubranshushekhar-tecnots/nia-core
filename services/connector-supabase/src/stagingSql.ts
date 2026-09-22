@@ -201,6 +201,46 @@ export function buildApplyFromStagingSql(
   return [`INSERT INTO ${destTable} (${colList}) OVERRIDING SYSTEM VALUE SELECT ${colList} FROM ${stagingTable} ${conflictClause}`];
 }
 
+/**
+ * Sequence fix: writing explicit ids via OVERRIDING SYSTEM VALUE (above)
+ * bypasses the column's sequence entirely — Postgres never advances a
+ * sequence just because a value landed in the column it backs. Left
+ * alone, the customer's own app later inserting a row *without* an id
+ * (letting the column self-generate, the normal case) can collide with an
+ * id this run just wrote explicitly, once the sequence's next value
+ * catches up to one already taken. Runs inside the same apply transaction
+ * as the INSERT/SELECT above, once per applied column: `seqname` is only
+ * non-null when that column is actually sequence-backed (identity or
+ * plain `serial` — `pg_get_serial_sequence` covers both), so this is safe
+ * to call unconditionally with every applied column, not just ones known
+ * ahead of time to need it. Never lowers the sequence: the new value is
+ * `GREATEST(its own current last_value, MAX(column) in dest now)` —
+ * reading `last_value` needs dynamic SQL (EXECUTE ... INTO) since
+ * `seqname` is only known at run time, but `MAX(column)` doesn't, since
+ * `dest`/the column are fixed identifiers already known when this SQL is
+ * built.
+ */
+export function buildAdvanceSequencesSql(dest: WriteEntityRef, columns: string[]): string {
+  const destTable = qualifiedTable(dest);
+  const steps = columns
+    .map((c) => {
+      const col = quoteIdent(c);
+      return `
+  seqname := pg_get_serial_sequence('${destTable}', '${c}');
+  IF seqname IS NOT NULL THEN
+    EXECUTE format('SELECT last_value FROM %s', seqname) INTO cur_val;
+    PERFORM setval(seqname, GREATEST(cur_val, (SELECT COALESCE(MAX(${col}), 0) FROM ${destTable})));
+  END IF;`;
+    })
+    .join("\n");
+  return `DO $$
+DECLARE
+  seqname text;
+  cur_val bigint;
+BEGIN${steps}
+END $$`;
+}
+
 export type AssertionQuery = { kind: AssertionSpec["kind"]; sql: string; evaluate: (row: Record<string, unknown>) => { ok: boolean; detail?: string } };
 
 /**

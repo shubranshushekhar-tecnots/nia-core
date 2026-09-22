@@ -237,8 +237,17 @@ export default function MappingEditor({
     updateEntries([...mapping.entries, { from: sourceFields[0] ?? '', to: destFields[0] ?? '' }]);
   }
 
+  /** Schema layer, Part 5 — snapshots the source's current live field list alongside the approval, so every run can later diff against it to detect new source columns (nodeConfig.ts's FieldMapping.sourceColumnsAtApproval doc comment). */
   function approve() {
-    onChange({ ...config, mapping: { version: mapping.version + 1, entries: mapping.entries, approvedAt: new Date().toISOString() } });
+    onChange({
+      ...config,
+      mapping: {
+        version: mapping.version + 1,
+        entries: mapping.entries,
+        approvedAt: new Date().toISOString(),
+        sourceColumnsAtApproval: sourceFields,
+      },
+    });
   }
 
   async function handlePropose() {

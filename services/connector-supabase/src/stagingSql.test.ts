@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildApplyFromStagingSql, buildCreateQuarantineSql, buildCreateStagingSql, buildStagingUpsertSql } from "./stagingSql.js";
+import { buildAdvanceSequencesSql, buildApplyFromStagingSql, buildCreateQuarantineSql, buildCreateStagingSql, buildStagingUpsertSql } from "./stagingSql.js";
 
 /**
  * Phase 13 Step 6 addition — regression guard for the RLS + no-USAGE
@@ -71,6 +71,19 @@ describe("staging SQL — nia schema RLS + grants preflight", () => {
 
     const [, replaceInsertSql] = buildApplyFromStagingSql(dest, stagingEntity, ["id", "name"], ["id"], "replace");
     expect(replaceInsertSql).toContain("OVERRIDING SYSTEM VALUE");
+  });
+
+  // Sequence fix: OVERRIDING SYSTEM VALUE (above) writes explicit values
+  // into a sequence-backed column without ever advancing its sequence —
+  // this builder is the apply-transaction follow-up that does, guarded
+  // per-column by pg_get_serial_sequence so it's a no-op for any applied
+  // column that isn't actually sequence-backed.
+  it("advances every applied column's sequence, guarded by pg_get_serial_sequence, without ever lowering it", () => {
+    const sql = buildAdvanceSequencesSql(dest, ["id", "name"]);
+    expect(sql).toContain(`pg_get_serial_sequence('"sales"."orders"', 'id')`);
+    expect(sql).toContain(`pg_get_serial_sequence('"sales"."orders"', 'name')`);
+    expect(sql).toContain("setval(seqname, GREATEST(cur_val, (SELECT COALESCE(MAX(\"id\"), 0) FROM \"sales\".\"orders\")))");
+    expect(sql).toContain("IF seqname IS NOT NULL THEN");
   });
 
   it("runs the REVOKE before the table is created, for both staging and quarantine", () => {

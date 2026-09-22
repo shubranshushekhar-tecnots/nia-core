@@ -51,6 +51,24 @@ export const RunStreamEvent = z.discriminatedUnion("type", [
      * filtered out.
      */
     failures: z.array(RunStepFailureReport).optional(),
+    /**
+     * Schema layer, Part 5 — source fields never covered by the approved
+     * mapping's entries at all, per the destination contract's
+     * unknownFieldPolicy ("count": present here, run proceeds; "fail": the
+     * run aborts before any write instead — this field is never populated
+     * for an aborted run, since there's no `done` event in that case).
+     * Computed once per run (job.cursor === null), not per chunk.
+     */
+    unknownFields: z.array(z.string()).optional(),
+    /**
+     * Schema layer, Part 5 — source columns present in the source's live
+     * schema now but absent from the approved mapping's
+     * sourceColumnsAtApproval snapshot (nodeConfig.ts's FieldMapping).
+     * Always just counted/surfaced here, never causes an abort. Omitted
+     * (not even an empty array) when the mapping predates
+     * sourceColumnsAtApproval and there's nothing to diff against.
+     */
+    newSourceColumns: z.array(z.string()).optional(),
   }),
   z.object({
     type: z.literal("error"),

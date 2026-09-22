@@ -57,11 +57,23 @@ export type MappingEntry = z.infer<typeof MappingEntry>;
  * `version` increments on every approval (starts at 1) — a simple audit
  * trail of how many times this mapping has been (re-)approved, not
  * currently read by any check.
+ *
+ * `sourceColumnsAtApproval` (Schema layer, Part 5): the source entity's full
+ * live field-name list, snapshotted at the moment Approve was clicked
+ * (MappingEditor.tsx's approve()) — independent of which fields actually
+ * ended up in `entries`. Every run diffs the source's CURRENT live column
+ * list against this snapshot; a column present now but absent here is a new
+ * source column, counted and surfaced in the run result (never silently
+ * ignored), regardless of whether a CleanPlan is bound to the pipeline.
+ * Optional/additive: a mapping approved before this field existed simply has
+ * none, and runEtl.ts skips the diff entirely when it's absent (nothing to
+ * diff against) rather than treating every current column as "new".
  */
 export const FieldMapping = z.object({
   version: z.number().int().min(1).default(1),
   entries: z.array(MappingEntry).default([]),
   approvedAt: z.string().nullable().default(null),
+  sourceColumnsAtApproval: z.array(z.string()).optional(),
 });
 export type FieldMapping = z.infer<typeof FieldMapping>;
 

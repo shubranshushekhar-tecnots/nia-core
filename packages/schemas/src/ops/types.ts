@@ -253,7 +253,16 @@ export interface MongoDialectAdapter {
  * itself, since a single op module only ever sees one step's data.
  */
 export interface QuarantinedRow {
-  fn: CallFn;
+  /**
+   * Almost always a real CallFn (the fallible expression function that
+   * failed). Widened to `| string` only for failure modes with no
+   * corresponding CallFn — currently just flatten's "value wasn't an
+   * object" case (flatten.ts), which uses the descriptive label
+   * "flatten_non_object" here. The wire-level shape (runEvents.ts's
+   * RunStepFailureReport.fns) was already loosely `string[]`-typed, so
+   * this widening is additive/backward-compatible, not a new constraint.
+   */
+  fn: CallFn | string;
   inputValue: unknown;
   sourceRow: Record<string, unknown>;
 }
@@ -261,7 +270,8 @@ export interface QuarantinedRow {
 export interface StepFailureReport {
   /** Human-readable step identity for the abort error, e.g. `computed_field "discount"`. */
   label: string;
-  fns: CallFn[];
+  /** See QuarantinedRow.fn's doc comment for why this is `| string`, not just `CallFn[]`. */
+  fns: (CallFn | string)[];
   policy: OnFailurePolicy;
   count: number;
   /** Present only when `policy === "quarantine"` and `count > 0` — one entry per failing row, in row order. */

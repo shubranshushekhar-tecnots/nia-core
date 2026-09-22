@@ -1,7 +1,6 @@
 import { FlattenStep, type FlattenStep as FlattenStepT } from "../nodeConfig.js";
 import type { NiaField, NiaTypeObject } from "../niaType.js";
-import { ResidualAbortError } from "./onFailure.js";
-import type { OpModule, SchemaResult } from "./types.js";
+import type { OpModule, QuarantinedRow, SchemaResult, StepFailureReport } from "./types.js";
 
 /**
  * Schema-time expansion of an object-typed NiaField's own fields into
@@ -29,47 +28,48 @@ function flattenObjectFields(prefix: string, obj: NiaTypeObject, parentNullable:
   return out;
 }
 
+/** Thrown internally by flattenObjectValue and caught per-row by applyResidual below — never escapes this file. Carries just enough to build a QuarantinedRow at the catch site (applyResidual has the full source row; this function only ever sees the target field's own sub-value). */
+class FlattenNonObjectError extends Error {
+  constructor(readonly value: unknown) {
+    super("flatten: non-object value");
+  }
+}
+
 /**
  * Runtime counterpart of flattenObjectFields, applied to one row's actual
  * value. `null`/`undefined` contribute no keys (a legitimate "no value" —
  * already accounted for by nullable in the design-time schema). A non-null
  * value that isn't a plain object (a string/number/boolean/array — the
- * "degraded field, mixed shape" case) THROWS rather than silently
- * contributing no keys: design-time schema (Part 2's profiler-sample
- * inference) types a genuinely mixed-shape field as "json"/degraded, not
- * "object", so outputSchema already refuses to flatten it — see this file's
- * outputSchema. But that guarantee is only as good as the sample: a live
- * row outside the profiled sample can still turn out non-object even when
- * every sampled row was an object. Silently emitting no keys for such a row
- * would make its flattened columns read as NULL, indistinguishable from a
- * genuinely absent/null field — exactly the "must not silently become
- * NULLs" case this function must not produce. Throws ResidualAbortError
- * (not a plain Error) naming both the field and the failing row's index in
- * this chunk, so runEtl.ts's applyResidualTransforms(Chunk) catch sites
- * route it through the same clean run-abort path as an onFailure "fail"
- * policy: staging for this run is dropped, the run is marked "failed" (not
- * left orphaned "running"), the message is published to the client as-is,
- * and — because this happens before any staging/destination write for the
- * run — the destination is never touched. This also avoids BullMQ's
- * retry/backoff, which would otherwise re-run the same doomed chunk three
- * times before giving up. Until Part 5's run-time conformance/quarantine
- * step exists, this throw is the only handling for this case — see
- * docs/plans/schema-layer.md's Part 5 section for the planned follow-up
- * (route these rows through quarantine, counted, instead of aborting the
- * whole run).
+ * "degraded field, mixed shape" case) THROWS a FlattenNonObjectError rather
+ * than silently contributing no keys: design-time schema (Part 2's
+ * profiler-sample inference) types a genuinely mixed-shape field as
+ * "json"/degraded, not "object", so outputSchema already refuses to flatten
+ * it — see this file's outputSchema. But that guarantee is only as good as
+ * the sample: a live row outside the profiled sample can still turn out
+ * non-object even when every sampled row was an object. Silently emitting
+ * no keys for such a row would make its flattened columns read as NULL,
+ * indistinguishable from a genuinely absent/null field — exactly the "must
+ * not silently become NULLs" case this function must not produce.
+ *
+ * Schema layer, Part 5: this used to throw ResidualAbortError, aborting the
+ * whole run. Now the whole ROW is quarantined and counted instead (like any
+ * other fallible row) — see applyResidual's catch site below, which turns
+ * this exception into a QuarantinedRow with fn "flatten_non_object" (no
+ * real CallFn represents "value wasn't an object" — see QuarantinedRow.fn's
+ * doc comment in types.ts) and drops just that row from this step's output.
+ * FlattenStep has no `onFailure` config (nodeConfig.ts's FlattenStep doc
+ * comment) — this failure mode is always quarantine, not configurable.
  */
-function flattenObjectValue(prefix: string, value: unknown, remainingDepth: number, rowIndex: number): Record<string, unknown> {
+function flattenObjectValue(prefix: string, value: unknown, remainingDepth: number): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (value === null || value === undefined) return out;
   if (typeof value !== "object" || Array.isArray(value)) {
-    throw new ResidualAbortError(
-      `flatten step: field "${prefix}" was typed "object" at design time, but row index ${rowIndex} of this chunk has a value that is ${Array.isArray(value) ? "an array" : typeof value}, not an object — design-time schema inference is sample-based and missed this row's shape. Re-profile the source before flattening this field.`,
-    );
+    throw new FlattenNonObjectError(value);
   }
   for (const [key, sub] of Object.entries(value as Record<string, unknown>)) {
     const name = `${prefix}_${key}`;
     if (remainingDepth > 0 && sub !== null && typeof sub === "object" && !Array.isArray(sub)) {
-      Object.assign(out, flattenObjectValue(name, sub, remainingDepth - 1, rowIndex));
+      Object.assign(out, flattenObjectValue(name, sub, remainingDepth - 1));
     } else {
       out[name] = sub;
     }
@@ -129,10 +129,21 @@ export const flattenOp: OpModule<FlattenStepT> = {
   applyResidual(input, step) {
     if (step.field === "") return { cols: input.cols, rows: input.rows };
     const remainingDepth = Math.max(0, step.maxDepth - 1);
-    const rows = input.rows.map((row, rowIndex) => {
+    const rows: Record<string, unknown>[] = [];
+    const quarantinedRows: QuarantinedRow[] = [];
+    for (const row of input.rows) {
       const { [step.field]: target, ...rest } = row;
-      return { ...rest, ...flattenObjectValue(step.field, target, remainingDepth, rowIndex) };
-    });
+      try {
+        rows.push({ ...rest, ...flattenObjectValue(step.field, target, remainingDepth) });
+      } catch (err) {
+        if (!(err instanceof FlattenNonObjectError)) throw err;
+        // Schema layer, Part 5: quarantine the whole row (not just the
+        // flatten field) and drop it from this step's output — see
+        // flattenObjectValue's doc comment above for why this is no longer
+        // a run-abort.
+        quarantinedRows.push({ fn: "flatten_non_object", inputValue: err.value, sourceRow: row });
+      }
+    }
     // Union the flattened key set across every row (not just row[0]) —
     // rows sourced from loosely-typed data (Mongo, JSON) can genuinely
     // produce different flattened keys per row.
@@ -144,7 +155,19 @@ export const flattenOp: OpModule<FlattenStepT> = {
     }
     extraCols.delete(step.field);
     const cols = [...input.cols.filter((c) => c !== step.field), ...extraCols];
-    return { cols, rows };
+    const failures: StepFailureReport[] | undefined =
+      quarantinedRows.length > 0
+        ? [
+            {
+              label: `flatten "${step.field}"`,
+              fns: ["flatten_non_object"],
+              policy: "quarantine",
+              count: quarantinedRows.length,
+              quarantinedRows,
+            },
+          ]
+        : undefined;
+    return { cols, rows, failures };
   },
 
   checkConfig(step, ctx) {

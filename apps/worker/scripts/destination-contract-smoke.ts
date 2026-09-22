@@ -1,11 +1,19 @@
 /**
- * Schema-layer Part 4 — live smoke test: mongo nested documents into a
+ * Schema-layer Part 4/5 — live smoke test: mongo nested documents into a
  * brand-new postgres destination table (ensureDestination's CREATE path),
  * proving: (1) the created columns' native types, including a mongo array
  * field collapsed to a single JSONB column, (2) that array's values
- * round-trip as valid JSON, and (3) a row whose `amount_text` fails a
- * fallible transform (to_number) is quarantined — never reaches the
- * destination — while the rest of the run still succeeds.
+ * round-trip as valid JSON, (3) a row whose `amount_text` fails an
+ * EXPLICIT fallible transform (to_number, onFailure="quarantine") is
+ * quarantined — never reaches the destination, and (4) Part 5's IMPLICIT
+ * run-time conformance cast independently quarantines a row whose `qty`
+ * column doesn't match its contract type (double precision, correctly
+ * derived from the pipeline's post-transform output schema — Part 5
+ * follow-up's compileTransformOutputSchema) because that one document has
+ * a non-numeric string underneath a field mongo's own sampling-based
+ * introspection otherwise infers as numeric — proving the cast-to-
+ * contract-type step fires with no explicit onFailure config on that
+ * column at all. The rest of the run still succeeds in both cases.
  *
  * NOT a substitute for destinationContract.test.ts/ensureDestination's own
  * unit coverage of buildDestinationContract/compareContractToExisting in
@@ -13,10 +21,10 @@
  * (through connector-mongodb's /introspect + flatten.ts), runEtl.ts's
  * Part 4 reordered staged-mode flow (ensureDestination runs before
  * preflight/staging), a real connector-supabase /create-entity CREATE
- * TABLE, and the existing onFailure="quarantine" residual pipeline
- * (composed here, not new machinery — Part 4 has no native type-mismatch
- * detector of its own; that's Part 5's conformance step, per
- * docs/plans/schema-layer.md).
+ * TABLE, the existing onFailure="quarantine" residual pipeline (composed
+ * here, not new machinery), and Part 5's applyConformance (packages/
+ * schemas/src/ops/conformance.ts), wired unconditionally into every run by
+ * runEtl.ts's buildRuntimeContract call.
  *
  * Run with (from apps/worker/):
  *   npx tsx scripts/destination-contract-smoke.ts
@@ -105,11 +113,35 @@ async function seedMongo(): Promise<void> {
   await withMongo(async (db) => {
     await db.collection(SRC_COLLECTION).drop().catch(() => {});
     await db.collection(SRC_COLLECTION).insertMany([
-      { id: 1, address: { city: "Springfield", zip: "11111" }, tags: ["a", "b"], amount_text: "12.5" },
+      // Schema layer Part 5 follow-up: the transform graph below overwrites
+      // qty's runtime value from qty_override_text via a bare field-
+      // reference computed_field step, so the destination contract's type
+      // for "qty" is now built from qty_override_text's OWN inferred type
+      // (compileTransformOutputSchema, run against the post-transform
+      // output schema), not qty's raw pre-transform type. connector-
+      // mongodb's introspection infers a field's type from the first
+      // non-null sampled value (services/connector-mongodb/src/column-
+      // types.ts's inferColumnType) — doc id=1 is inserted (and therefore
+      // sampled) first, and its qty_override_text is a genuine BSON
+      // number, so qty_override_text (and therefore qty, post-transform)
+      // is correctly inferred/typed "number"/"double precision".
+      { id: 1, address: { city: "Springfield", zip: "11111" }, tags: ["a", "b"], amount_text: "12.5", qty: 5, qty_override_text: 5 },
       // amount_text is non-numeric here -> to_number(amount_text) fails ->
-      // quarantined, never reaches the destination.
-      { id: 2, address: { city: "Shelbyville", zip: "22222" }, tags: ["c"], amount_text: "N/A" },
-      { id: 3, address: { city: "Ogdenville", zip: "33333" }, tags: ["d", "e", "f"], amount_text: "7" },
+      // quarantined by the EXPLICIT computed_field step, never reaches the
+      // destination (nor the qty-overwrite step after it).
+      { id: 2, address: { city: "Shelbyville", zip: "22222" }, tags: ["c"], amount_text: "N/A", qty: 3, qty_override_text: 3 },
+      // qty_override_text is a STRING on this doc even though the field's
+      // inferred type (above, from doc id=1) is numeric — a genuine per-
+      // row type-inference edge case (mongo has no per-field schema, and
+      // introspection only samples/infers from the first non-null value)
+      // that the correctly-typed contract can't foresee. After the qty-
+      // overwrite step, qty holds this non-numeric string, which fails
+      // Part 5's implicit conformance cast (to_number, contract type
+      // double precision) -> quarantined by conformance, never reaches
+      // the destination. This is what Part 5's implicit cast exists to
+      // catch — independent of, and not a workaround for, the Part 5
+      // follow-up contract-derivation fix above.
+      { id: 3, address: { city: "Ogdenville", zip: "33333" }, tags: ["d", "e", "f"], amount_text: "7", qty: 7, qty_override_text: "not-a-number" },
     ]);
   });
 }
@@ -269,6 +301,24 @@ async function seedWorkflowGraph(orgId: string, sourceConnId: string, destConnId
               expression: { kind: "call", fn: "to_number", args: [{ kind: "field", name: "amount_text" }] },
               onFailure: "quarantine",
             },
+            // Schema layer, Part 5 follow-up proof: a bare field-reference
+            // expression (no call, so nothing fallible about THIS step —
+            // no onFailure needed) overwrites qty's runtime value with
+            // qty_override_text's. The contract now types qty from
+            // qty_override_text's OWN inferred type (compileTransform
+            // OutputSchema, run through every step's outputSchema in
+            // order) — "number"/"double precision", since doc id=1's
+            // qty_override_text (sampled first by connector-mongodb's
+            // introspection) is a genuine BSON number. Only doc id=3's
+            // qty_override_text is a string — a genuine per-row type-
+            // inference edge case the contract can't foresee — caught
+            // downstream by Part 5's implicit conformance cast, not by
+            // the contract itself.
+            {
+              kind: "computed_field",
+              name: "qty",
+              expression: { kind: "field", name: "qty_override_text" },
+            },
           ],
         },
       },
@@ -289,6 +339,7 @@ async function seedWorkflowGraph(orgId: string, sourceConnId: string, destConnId
               { from: "address.zip", to: "zip" },
               { from: "tags", to: "tags" },
               { from: "amount_text", to: "amount_text" },
+              { from: "qty", to: "qty" },
             ],
             approvedAt: new Date().toISOString(),
           },
@@ -413,8 +464,10 @@ async function main(): Promise<void> {
 
   const run = await getRunStatus(runId);
   track(assert("workflow_runs.status: succeeded", run.status === "succeeded", run));
-  // 3 source rows, 1 quarantined (non-numeric amount_text) -> 2 written.
-  track(assert("workflow_runs.rows_processed: 2 (1 of 3 quarantined)", run.rows_processed === 2, run));
+  // 3 source rows: id=2 quarantined by the explicit computed_field step
+  // (amount_text), id=3 quarantined by Part 5's implicit conformance cast
+  // (qty) -> 1 written.
+  track(assert("workflow_runs.rows_processed: 1 (2 of 3 quarantined)", run.rows_processed === 1, run));
 
   await withHostPg(async (client) => {
     const { rows: cols } = await client.query(
@@ -422,7 +475,7 @@ async function main(): Promise<void> {
       [DEST_TABLE],
     );
     const byName = new Map(cols.map((c) => [c.column_name as string, c]));
-    track(assert("created table exists with exactly the 5 mapped columns", cols.length === 5, cols));
+    track(assert("created table exists with exactly the 6 mapped columns", cols.length === 6, cols));
     track(
       assert(
         "id column: numeric (mongo BSON number -> float -> double precision) and NOT NULL (key)",
@@ -440,10 +493,24 @@ async function main(): Promise<void> {
         byName.get("tags"),
       ),
     );
+    track(
+      assert(
+        "qty column: numeric (contract built from the post-transform output schema — qty's type equals qty_override_text's own inferred type, number)",
+        byName.get("qty")?.data_type === "double precision",
+        byName.get("qty"),
+      ),
+    );
 
-    const { rows: destRows } = await client.query(`select id, city, zip, amount_text, tags from ${DEST_TABLE} order by id`);
-    track(assert("2 rows written to the destination (row id=2 quarantined, not written)", destRows.length === 2, destRows));
-    track(assert("quarantined row (id=2) is absent from the destination", !destRows.some((r) => r.id === 2), destRows));
+    const { rows: destRows } = await client.query(`select id, city, zip, amount_text, tags, qty from ${DEST_TABLE} order by id`);
+    track(
+      assert(
+        "1 row written to the destination (id=2 explicit-quarantine, id=3 conformance-quarantine, neither written)",
+        destRows.length === 1,
+        destRows,
+      ),
+    );
+    track(assert("explicit-quarantine row (id=2) is absent from the destination", !destRows.some((r) => r.id === 2), destRows));
+    track(assert("conformance-quarantine row (id=3) is absent from the destination", !destRows.some((r) => r.id === 3), destRows));
 
     const row1 = destRows.find((r) => r.id === 1);
     track(
@@ -453,25 +520,46 @@ async function main(): Promise<void> {
         row1,
       ),
     );
-    const row3 = destRows.find((r) => r.id === 3);
-    track(
-      assert(
-        "row id=3's tags column is valid JSON matching the source array",
-        JSON.stringify(row3?.tags) === JSON.stringify(["d", "e", "f"]),
-        row3,
-      ),
-    );
+    track(assert("row id=1's qty column: 5 (qty_override_text was numeric, conformance cast a no-op pass)", row1?.qty === 5, row1));
 
     const { rows: quarantined } = await client.query(
-      "select run_id, dest_table, function, status, source_row from nia.nia_quarantine where run_id = $1",
+      "select run_id, dest_table, step_id, function, status, source_row from nia.nia_quarantine where run_id = $1 order by (source_row->>'id')::int",
       [runId],
     );
-    track(assert("exactly 1 quarantined row recorded for this run", quarantined.length === 1, quarantined));
-    const q = quarantined[0] as { dest_table: string; function: string; status: string; source_row: Record<string, unknown> } | undefined;
-    track(assert("quarantine row: status committed (this run's apply succeeded)", q?.status === "committed", q));
-    track(assert("quarantine row: function is to_number", q?.function === "to_number", q));
-    track(assert("quarantine row: dest_table matches the destination entity", q?.dest_table === `public.${DEST_TABLE}`, q));
-    track(assert("quarantine row: source_row captures the original failing document (id=2)", q?.source_row?.id === 2, q));
+    track(assert("exactly 2 quarantined rows recorded for this run", quarantined.length === 2, quarantined));
+    type QRow = { dest_table: string; step_id: string; function: string; status: string; source_row: Record<string, unknown> };
+    const explicitQ = quarantined.find((q) => (q as QRow).source_row?.id === 2) as QRow | undefined;
+    const conformanceQ = quarantined.find((q) => (q as QRow).source_row?.id === 3) as QRow | undefined;
+
+    track(assert("explicit-quarantine row: status committed", explicitQ?.status === "committed", explicitQ));
+    track(assert("explicit-quarantine row: function is to_number", explicitQ?.function === "to_number", explicitQ));
+    track(assert("explicit-quarantine row: step_id names the computed_field step", explicitQ?.step_id === `computed_field "amount_check"`, explicitQ));
+    track(assert("explicit-quarantine row: dest_table matches the destination entity", explicitQ?.dest_table === `public.${DEST_TABLE}`, explicitQ));
+
+    track(
+      assert(
+        "conformance-quarantine row: status committed (Part 5's implicit cast step, no explicit onFailure on qty)",
+        conformanceQ?.status === "committed",
+        conformanceQ,
+      ),
+    );
+    track(
+      assert(
+        "conformance-quarantine row: function is to_number (contract type double precision, from qty_override_text's inferred type)",
+        conformanceQ?.function === "to_number",
+        conformanceQ,
+      ),
+    );
+    track(
+      assert(
+        `conformance-quarantine row: step_id names the conformance step, not any explicit onFailure config`,
+        conformanceQ?.step_id === `conformance "qty"`,
+        conformanceQ,
+      ),
+    );
+    track(
+      assert("conformance-quarantine row: dest_table matches the destination entity", conformanceQ?.dest_table === `public.${DEST_TABLE}`, conformanceQ),
+    );
   });
 
   if (!process.env.SKIP_CLEANUP) {

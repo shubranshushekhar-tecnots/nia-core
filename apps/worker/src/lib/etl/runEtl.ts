@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Queue } from "bullmq";
 import {
+  applyConformance,
   applyResidualTransforms,
   applyResidualTransformsChunk,
   compileFailurePreChecks,
@@ -14,6 +15,7 @@ import {
   ResidualAbortError,
   resolveSourceEntity,
   rowsToObjects,
+  type DestinationContract,
   type DialectQuery,
   type EtlRunJob,
   type SchemaEntity,
@@ -32,7 +34,7 @@ import { getSchema } from "../introspection.js";
 import { dispatch } from "../dispatch.js";
 import { findSourcePath } from "../preview/runPreview.js";
 import { checkCleanPlanDrift } from "./cleanPlanDrift.js";
-import { ensureDestination } from "./ensureDestination.js";
+import { ensureDestination, buildRuntimeContract } from "./ensureDestination.js";
 import { buildEtlReadQuery, buildFailurePreCheckQuery, MAX_CHUNK_ROWS } from "./queryBuilder.js";
 import { startRun, recordChunkProgress, finishRun, getRunCheckpoint } from "./workflowRuns.js";
 import { publishRunEvent } from "./publish.js";
@@ -166,6 +168,11 @@ async function runStatefulResidual(args: {
   pushedPreCheckFailures: StepFailureReport[];
   /** Phase 11 — computed once by the caller (resolveStagedWriteTarget), before either branch is chosen, so a run can never straddle staged/direct mid-flight. */
   stagedTarget: StagedWriteTarget;
+  /** Schema layer Part 5 — built once by the caller (buildRuntimeContract), unconditionally, before either branch is chosen, against the pipeline's real post-transform output schema (compileTransformOutputSchema); drives the implicit conformance cast applied to the mapped rows below. Always present — buildRuntimeContract now hard-fails the run outright if a mapped column can't be resolved, rather than leaving this undefined. */
+  contract: DestinationContract;
+  /** Schema layer Part 5 — computed once by the caller (job.cursor === null gate); see runEtl.ts's own doc comment on that block for why these can't cross a separate job invocation. */
+  unknownFields?: string[];
+  newSourceColumns?: string[];
 }): Promise<RunEtlResult> {
   const {
     scope,
@@ -183,6 +190,9 @@ async function runStatefulResidual(args: {
     destConnectionId,
     pushedPreCheckFailures,
     stagedTarget,
+    contract,
+    unknownFields,
+    newSourceColumns,
   } = args;
 
   const mappedDestColumns = mapping.entries.map((e) => e.to);
@@ -310,7 +320,25 @@ async function runStatefulResidual(args: {
     return failStaged(`Mapping references field "${missing.from}" not present after transforms.`);
   }
   const mappedColumns = mapping.entries.map((e) => e.to);
-  const mappedRows = finalRowsArr.map((row) => indices.map((i) => row[i] ?? null));
+  let mappedRows: unknown[][] = finalRowsArr.map((row) => indices.map((i) => row[i] ?? null));
+
+  // Schema layer Part 5: the implicit conformance cast, run once against
+  // this run's complete mapped output (this path's one and only write —
+  // see this function's own doc comment) — same clean-abort handling as
+  // every other residual step above. Always run — contract is always
+  // present (see this function's `contract` doc comment).
+  try {
+    const conformed = applyConformance(mappedColumns, mappedRows, contract);
+    mappedRows = conformed.rows;
+    // Plain concat, not mergeFailureReports: conformance is a distinct
+    // new step, not a repeat of preSteps/statefulStep/postSteps across
+    // chunks — mergeFailureReports's positional index-summing doesn't
+    // apply here.
+    finalFailures = [...finalFailures, ...conformed.failures];
+  } catch (err) {
+    if (err instanceof ResidualAbortError) return failStaged(err.message);
+    throw err;
+  }
 
   let rowsWritten = 0;
   if (mappedRows.length > 0) {
@@ -378,6 +406,8 @@ async function runStatefulResidual(args: {
     totalRowsProcessed,
     durationMs,
     failures: allFailures.length > 0 ? allFailures : undefined,
+    unknownFields,
+    newSourceColumns,
   });
   return { status: "done" };
 }
@@ -471,6 +501,21 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   }
   const { source, transforms } = path;
 
+  // Schema layer Part 5 follow-up: every TransformStep on the path, across
+  // however many transform nodes sit between source and destination, in
+  // execution order — feeds compileTransformOutputSchema (via
+  // buildRuntimeContract below) so the destination contract is built
+  // against the pipeline's real OUTPUT schema, not the raw source schema.
+  // Parsed independently of residualSteps/cursorPushdownConfig below
+  // (which serve query-execution planning, a different concern) since
+  // outputSchema is a pure design-time shape computation that doesn't
+  // care whether a step ends up pushed down or run residually.
+  const allTransformSteps: TransformStep[] = [];
+  for (const t of transforms) {
+    const parsed = parseNodeConfig("transform", t.config);
+    if (!parsed.unrecognized && parsed.type === "transform") allTransformSteps.push(...parsed.value.steps);
+  }
+
   const resolvedSource = await resolveConnection(sourceConnectionId, scope);
   if (!resolvedSource.ok) return fail(scope, job.runId, job.nodeId, `Source connection: ${resolvedSource.error.message}`);
   const sourceSchema = await getSchema(resolvedSource.value);
@@ -502,22 +547,68 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     return fail(scope, job.runId, job.nodeId, `Source connector "${source.manifestId ?? "unknown"}" has no supported query dialect.`);
   }
 
+  const destDialect = manifestDialect(dest.manifestId);
+  if (!destDialect) {
+    return failStaged(`Destination connector "${dest.manifestId ?? "unknown"}" has no supported query dialect.`);
+  }
+
+  // Schema layer Part 5: built unconditionally, every chunk, every write
+  // mode (unlike ensureDestination() below, which only ever runs staged-
+  // mode-first-chunk) — this is what feeds the runtime conformance step
+  // and the unknown-field-policy check for every invocation, closing the
+  // gap where a direct-mode run or a later chunk previously had no
+  // DestinationContract available at all. ensureDestination() still builds
+  // its own copy internally (same pure/no-I/O function) for creation/
+  // comparison — cheap and simpler than threading this one through. Built
+  // from the pipeline's OUTPUT schema (allTransformSteps, above) — a
+  // mapped column that still can't be resolved against that (a genuinely
+  // unknown field) fails the run outright, naming it; there is no
+  // "unresolved" soft-fallback anymore (see buildRuntimeContract's doc
+  // comment for why the old raw-source-schema-only version needed one).
+  const runtimeContract = buildRuntimeContract(destDialect, entity, dialect, destConfig, allTransformSteps);
+  if (!runtimeContract.ok) return failStaged(runtimeContract.message);
+  const contract = runtimeContract.contract;
+
+  // Schema layer Part 5: unknown-field-policy count and unknown-source-
+  // column diff, once per run (job.cursor === null) — same gate/caveat as
+  // pushedPreCheckFailures below (no workflow_runs column persists these
+  // across separate chunk job invocations, so they only ever surface on
+  // the "done" event when the whole run completes within this same
+  // invocation). "fail" aborts here, before any extraction, same shape as
+  // every other once-per-run precondition in this function.
+  let unknownFields: string[] | undefined;
+  let newSourceColumns: string[] | undefined;
+  if (job.cursor === null) {
+    const sourceFieldNames = entity.fields.map((f) => f.name);
+    const mappedFromFields = new Set(mapping.entries.map((e) => e.from));
+    const unmapped = sourceFieldNames.filter((f) => !mappedFromFields.has(f));
+    if (unmapped.length > 0) {
+      if (contract.unknownFieldPolicy === "fail") {
+        return failStaged(`${unmapped.length} source field(s) are not covered by the approved mapping: ${unmapped.join(", ")}.`);
+      }
+      unknownFields = unmapped;
+    }
+
+    if (mapping.sourceColumnsAtApproval) {
+      const approvedColumns = new Set(mapping.sourceColumnsAtApproval);
+      const added = sourceFieldNames.filter((f) => !approvedColumns.has(f));
+      if (added.length > 0) newSourceColumns = added;
+    }
+  }
+
   if (job.cursor === null && stagedTarget.mode === "staged") {
     // Schema layer Part 4: entity creation/comparison runs in preflight,
     // before staging (docs/plans/schema-layer.md's Part 4). Staged-mode
     // only, same gate as runPreflight/ensureStaging below — direct-mode
     // destinations are unchanged by Part 4 and still require a
     // pre-existing table.
-    const destDialect = manifestDialect(dest.manifestId);
-    if (!destDialect) {
-      return fail(scope, job.runId, job.nodeId, `Destination connector "${dest.manifestId ?? "unknown"}" has no supported query dialect.`);
-    }
     const ensured = await ensureDestination(
       dest.connectionId,
       destDialect,
       entity,
       dialect,
       destConfig,
+      allTransformSteps,
       scope,
       job.triggeredByUserId,
       job.runId,
@@ -679,6 +770,9 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       destConnectionId: dest.connectionId!,
       pushedPreCheckFailures,
       stagedTarget,
+      contract,
+      unknownFields,
+      newSourceColumns,
     });
   }
 
@@ -791,7 +885,20 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     return failStaged(`Mapping references field "${missing.from}" not present after transforms.`);
   }
   const finalColumns = mapping.entries.map((e) => e.to);
-  const finalRows = residualRows.map((row) => indices.map((i) => row[i] ?? null));
+  let finalRows: unknown[][] = residualRows.map((row) => indices.map((i) => row[i] ?? null));
+
+  // Schema layer Part 5: the implicit conformance cast, run every chunk
+  // (this path writes every chunk, not just the last) — same clean-abort
+  // handling as the residual steps above. Always run — contract is always
+  // present (see runStatefulResidual's `contract` doc comment).
+  try {
+    const conformed = applyConformance(finalColumns, finalRows, contract);
+    finalRows = conformed.rows;
+    residualFailures = [...residualFailures, ...conformed.failures];
+  } catch (err) {
+    if (err instanceof ResidualAbortError) return failStaged(err.message);
+    throw err;
+  }
 
   let rowsWritten = 0;
   if (finalRows.length > 0) {
@@ -876,6 +983,8 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       // contributes a report even at count: 0 ("no policy is silent" —
       // see onFailure.test.ts / runEtl.test.ts) — unfiltered here.
       failures: allFailures.length > 0 ? allFailures : undefined,
+      unknownFields,
+      newSourceColumns,
     });
     return { status: "done" };
   }

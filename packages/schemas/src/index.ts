@@ -8,7 +8,7 @@ export * from "./expression.js";
 export * from "./nodeConfig.js";
 export * from "./pushdown.js";
 export type { OpKind, StepFailureReport, QuarantinedRow, ResidualExecution, ResidualAccumulator, SchemaResult } from "./ops/types.js";
-export { OP_REGISTRY, opForStep } from "./ops/registry.js";
+export { OP_REGISTRY, opForStep, compileTransformOutputSchema } from "./ops/registry.js";
 // Phase 8b-3: OnFailureAbortError is thrown by ops/onFailure.ts's
 // computeFailureReport (via applyResidual) for policy "fail" — public so
 // runEtl.ts can catch it specifically and convert it into a clean run
@@ -24,6 +24,7 @@ export { OnFailureAbortError, ResidualAbortError, resolveOnFailure } from "./ops
 // array for DB-execution assertions rather than duplicating fixture
 // authoring in a parallel array — see fixtures.ts's header comment.
 export { OP_FIXTURES, type OpFixture } from "./ops/__conformance__/fixtures.js";
+export { applyConformance } from "./ops/conformance.js";
 export * from "./residualTransform.js";
 export * from "./runEvents.js";
 export * from "./checks.js";
