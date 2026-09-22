@@ -1,0 +1,12 @@
+[
+  {"id": 1, "amount": "$1,200.50", "memo": "Invoice paid"},
+  {"id": 2, "amount": "$45.00", "memo": "Refund issued"},
+  {"id": 3, "amount": "$0.99", "memo": "Small fee"},
+  {"id": 4, "amount": "N/A", "memo": "Pending"},
+  {"id": 5, "amount": "", "memo": "Draft"},
+  {"id": 6, "amount": "  ", "memo": "Draft"},
+  {"id": 7, "amount": "$2,500.00", "memo": "Bulk order"},
+  {"id": 8, "amount": "$10.00", "memo": "Tip"},
+  {"id": 9, "amount": "-", "memo": "Cancelled"},
+  {"id": 10, "amount": "$999.99", "memo": "Standard"}
+]

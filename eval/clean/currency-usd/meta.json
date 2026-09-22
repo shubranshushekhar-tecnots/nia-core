@@ -1,0 +1,5 @@
+{
+  "description": "USD currency strings with a thousands separator and cents, plus a mix of missing-value tokens (N/A, empty, whitespace-only, bare dash). amount should coerce to a plain number with the $ and , stripped; memo is unrelated free text and must be left untouched.",
+  "mustNotChange": ["id", "memo"],
+  "reviewed": false
+}

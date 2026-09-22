@@ -233,7 +233,7 @@ export function exprToConditions(expr: Expr): FilterCondition[] | null {
   const flat = expr.kind === "logical" && expr.op === "and" ? expr.args : [expr];
   const out: FilterCondition[] = [];
   for (const node of flat) {
-    if (node.kind === "comparison" && node.left.kind === "field" && node.right.kind === "literal") {
+    if (node.kind === "comparison" && node.left.kind === "field" && node.right.kind === "literal" && node.right.value !== null) {
       const opMap: Record<Extract<Expr, { kind: "comparison" }>["op"], "eq" | "neq" | "gt" | "gte" | "lt" | "lte"> = {
         eq: "eq",
         neq: "neq",
@@ -249,7 +249,7 @@ export function exprToConditions(expr: Expr): FilterCondition[] | null {
       out.push({ field: node.args[0].name, operator: node.fn });
       continue;
     }
-    if (node.kind === "call" && node.fn === "contains" && node.args[0]?.kind === "field" && node.args[1]?.kind === "literal") {
+    if (node.kind === "call" && node.fn === "contains" && node.args[0]?.kind === "field" && node.args[1]?.kind === "literal" && node.args[1].value !== null) {
       if (node.args.length === 2) {
         out.push({ field: node.args[0].name, operator: "contains", value: node.args[1].value });
         continue;

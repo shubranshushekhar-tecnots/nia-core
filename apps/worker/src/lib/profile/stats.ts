@@ -66,6 +66,7 @@ export function computeColumnStats(name: string, declaredType: string, values: u
   let emptyStringCount = 0;
   let whitespaceOnlyCount = 0;
   let missingTokenCount = 0;
+  let hasLeadingZeroStrings = false;
   const observedTypes = new Set<string>();
   const distinctKeys = new Set<string>();
   const nonNullStrings: string[] = [];
@@ -98,6 +99,7 @@ export function computeColumnStats(name: string, declaredType: string, values: u
     if (v.length === 0) emptyStringCount += 1;
     else if (v.trim().length === 0) whitespaceOnlyCount += 1;
     if (MISSING_VALUE_TOKENS.has(v.trim().toLowerCase())) missingTokenCount += 1;
+    if (/^0\d+$/.test(v.trim())) hasLeadingZeroStrings = true;
   }
 
   const isTextColumn = sawNonNull && allNonNullAreStrings;
@@ -145,5 +147,6 @@ export function computeColumnStats(name: string, declaredType: string, values: u
     max,
     minLength,
     maxLength,
+    hasLeadingZeroStrings,
   };
 }

@@ -272,9 +272,12 @@ export function makeSqlDialectAdapter(
    *   cast decision depends on CONTENT, which can legitimately differ
    *   sibling-to-sibling within one CASE.
    *
-   *   (No `null` case: this grammar's literal AST node's `value` is
-   *   `string | number | boolean`, never `null` — there is no NULL
-   *   literal token.)
+   *   (`null` case: NOT handled here. A null literal is never parameterized
+   *   at all — `compileExpr`'s `case "literal"` emits the raw `NULL`
+   *   keyword directly for it, which sidesteps this whole ambiguous-bind-
+   *   parameter class of problem instead of needing a CAST workaround; see
+   *   that call site's comment for why an unparameterized `NULL` keyword
+   *   doesn't have the same inference failure a bound `$n`/`?` does.)
    */
   const ISO_DATE_LITERAL_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}:[0-9]{2})?Z?$/;
   // Hoisted out of compileCoercionFnSql (batch 4) so batch 6's parse_number
@@ -1375,6 +1378,20 @@ export function makeSqlDialectAdapter(
       case "field":
         return quoteIdent(expr.name);
       case "literal":
+        // A null literal is emitted as the raw SQL `NULL` keyword, never
+        // parameterized. This sidesteps the whole ambiguous-bind-parameter
+        // problem the other branches of this file work around with an
+        // explicit CAST (see castAmbiguousLiteral's doc comment above): an
+        // extended-protocol `$n`/`?` placeholder must have its type pinned
+        // before execution and postgres can't always infer one (a bare
+        // `SELECT $1 AS "col"` with no other context is exactly the "could
+        // not determine data type of parameter $1" failure) — but a literal
+        // `NULL` keyword is untyped/"unknown" the same way a bare string
+        // literal is, so postgres resolves it from surrounding context
+        // (CASE branches, COALESCE siblings, a bare top-level SELECT)
+        // exactly like it already does for non-date-shaped string literals,
+        // with no CAST needed on either dialect.
+        if (expr.value === null) return "NULL";
         return params.push(expr.value);
       case "binary":
         return `(${compileExpr(expr.left, params)} ${expr.op} ${compileExpr(expr.right, params)})`;

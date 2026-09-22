@@ -1,0 +1,5 @@
+{
+  "description": "Control dataset using native JSON types throughout (numbers, booleans, plain non-numeric text with zero missing tokens) so no column triggers either the missing-value or coercion routing rule. Expected output is byte-for-byte identical to input -- proves the pipeline is a no-op on already-clean data.",
+  "mustNotChange": ["id", "category", "is_active", "score"],
+  "reviewed": false
+}

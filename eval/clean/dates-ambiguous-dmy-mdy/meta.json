@@ -1,0 +1,5 @@
+{
+  "description": "Most rows in signup_date are individually ambiguous (day<=12, so DD/MM/YYYY vs MM/DD/YYYY both parse), but row 2 (17/03/2024, day>12) disambiguates the whole column as DD/MM/YYYY. Expected output applies that one column-wide locale to every row, including the ambiguous ones. Flagged for review: this relies on a single disambiguating row generalizing to the whole column, which is a real assumption, not a certainty -- confirm this is the intended interpretation before treating it as ground truth, and don't extend this per-row-guess pattern to columns that never get a disambiguating row.",
+  "mustNotChange": ["id"],
+  "reviewed": false
+}

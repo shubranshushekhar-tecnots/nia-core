@@ -50,4 +50,14 @@ describe("computeColumnStats", () => {
     expect(stats.minLength).toBe(2);
     expect(stats.maxLength).toBe(6);
   });
+
+  it("flags leading-zero numeric strings, which pass to_number and so leave no failing example", () => {
+    const withLeadingZero = computeColumnStats("zip", "varchar", ["00501", "10001", "90210"]);
+    expect(withLeadingZero.hasLeadingZeroStrings).toBe(true);
+    expect(withLeadingZero.parseRates!.to_number!.passed).toBe(3);
+    expect(withLeadingZero.parseRates!.to_number!.failingExamples).toEqual([]);
+
+    const withoutLeadingZero = computeColumnStats("qty", "varchar", ["1", "0", "0.5", "42"]);
+    expect(withoutLeadingZero.hasLeadingZeroStrings).toBe(false);
+  });
 });

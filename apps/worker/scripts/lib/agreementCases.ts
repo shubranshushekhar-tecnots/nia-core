@@ -1786,4 +1786,46 @@ export const AGREEMENT_CASES: AgreementCase[] = [
     expectedPushedResidualCount: 0,
     pageSize: 2,
   },
+  // Null-literal grammar hardening (Phase 13 Step 5 checkpoint follow-up) —
+  // the Expr grammar's literal AST node was widened from
+  // `string | number | boolean` to also allow `null` (needed for the
+  // missing-value specialist, whose only normalization action is nulling a
+  // column out via a conditional's `then` branch). Three cases, one tag,
+  // covering exactly the shapes flagged as needing live cross-evaluator
+  // proof rather than just a unit-test/code read: the specialist's actual
+  // output shape, a bare top-level null literal (the postgres ambiguous-
+  // bind-parameter failure mode fixed in sqlShared.ts's compileExpr — a
+  // null literal is now emitted as the raw `NULL` keyword, never
+  // parameterized, specifically to avoid that), and null as a non-last
+  // `coalesce` argument.
+  {
+    description:
+      'Null-literal grammar — if(<missing-token condition>, null, x) on a text column, the missing-value specialist\'s actual output shape: lower(trim(notes)) = "n/a" -> NULL, else notes unchanged.',
+    seedRows: [
+      { notes: "N/A" },
+      { notes: "  n/a  " },
+      { notes: "real note" },
+      { notes: null },
+    ],
+    filterExpr: "true", // unused (steps set below), required by the type
+    steps: [
+      { kind: "computed_field", name: "y", expression: parseExpr('if(lower(trim(notes)) = "n/a", null, notes)') },
+    ],
+    tag: "null-literal",
+  },
+  {
+    description:
+      "Null-literal grammar — a computed_field whose entire expression is just a bare null literal (postgres ambiguous-bind-parameter case: SELECT of a top-level literal with no other typed context in the query).",
+    seedRows: [{ x: 1 }, { x: 2 }, { x: 3 }],
+    filterExpr: "true", // unused (steps set below), required by the type
+    steps: [{ kind: "computed_field", name: "y", expression: parseExpr("null") }],
+    tag: "null-literal",
+  },
+  {
+    description: "Null-literal grammar — coalesce(null, x): null as a non-last coalesce argument, result always equals x (null or not).",
+    seedRows: [{ x: "hello" }, { x: null }, { x: "" }],
+    filterExpr: "true", // unused (steps set below), required by the type
+    steps: [{ kind: "computed_field", name: "y", expression: parseExpr("coalesce(null, x)") }],
+    tag: "null-literal",
+  },
 ];

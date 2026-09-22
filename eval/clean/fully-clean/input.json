@@ -1,0 +1,7 @@
+[
+  {"id": 1, "category": "electronics", "is_active": true, "score": 87},
+  {"id": 2, "category": "furniture", "is_active": false, "score": 42},
+  {"id": 3, "category": "electronics", "is_active": true, "score": 95},
+  {"id": 4, "category": "clothing", "is_active": true, "score": 61},
+  {"id": 5, "category": "furniture", "is_active": false, "score": 73}
+]

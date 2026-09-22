@@ -17,6 +17,10 @@ describe("parseExpression", () => {
     expect(parseExpression('"usd"')).toEqual({ ok: true, expr: { kind: "literal", value: "usd" } });
   });
 
+  it("parses the null keyword as a null literal", () => {
+    expect(parseExpression("null")).toEqual({ ok: true, expr: { kind: "literal", value: null } });
+  });
+
   it("parses binary arithmetic with left-to-right precedence (+/- lower than */)", () => {
     const result = parseExpression("price * qty + tax");
     expect(result).toEqual({
@@ -94,6 +98,43 @@ describe("parseExpression", () => {
     const text = stringifyExpression(parsed.expr);
     const reparsed = parseExpression(text);
     expect(reparsed).toEqual({ ok: true, expr: parsed.expr });
+  });
+
+  it("round-trips a null literal nested in a conditional's then-branch (the missing-value specialist's output shape)", () => {
+    const expr = {
+      kind: "conditional" as const,
+      branches: [
+        {
+          when: { kind: "comparison" as const, op: "eq" as const, left: { kind: "field" as const, name: "notes" }, right: { kind: "literal" as const, value: "n/a" } },
+          then: { kind: "literal" as const, value: null },
+        },
+      ],
+      else: { kind: "field" as const, name: "notes" },
+    };
+    const text = stringifyExpression(expr);
+    expect(text).toContain("null");
+    const reparsed = parseExpression(text);
+    expect(reparsed).toEqual({ ok: true, expr });
+  });
+
+  it("ExprSchema rejects a null literal used directly as a comparison operand, pointing at is_null/is_not_null", () => {
+    const parsed = ExprSchema.safeParse({ kind: "comparison", op: "eq", left: { kind: "field", name: "notes" }, right: { kind: "literal", value: null } });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some((i) => i.message.includes("is_null()/is_not_null()"))).toBe(true);
+    }
+  });
+
+  it("ExprSchema still allows a null literal as a conditional branch value and as a call argument", () => {
+    const conditional = ExprSchema.safeParse({
+      kind: "conditional",
+      branches: [{ when: { kind: "call", fn: "is_null", args: [{ kind: "field", name: "x" }] }, then: { kind: "literal", value: null } }],
+      else: { kind: "field", name: "x" },
+    });
+    expect(conditional.success).toBe(true);
+
+    const coalesceCall = ExprSchema.safeParse({ kind: "call", fn: "coalesce", args: [{ kind: "literal", value: null }, { kind: "field", name: "x" }] });
+    expect(coalesceCall.success).toBe(true);
   });
 
   it("collectFieldRefs finds every field across nested calls and binary ops", () => {

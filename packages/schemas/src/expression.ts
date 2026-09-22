@@ -21,7 +21,7 @@ import { z } from "zod";
  *   unary      := "-" unary | factor      (Phase 8b-2b: folds into a negative
  *                                          literal when the operand is one, else
  *                                          desugars to `0 - operand`, a plain binary)
- *   factor     := NUMBER | STRING | "true" | "false" | fieldRef | call
+ *   factor     := NUMBER | STRING | "true" | "false" | "null" | fieldRef | call
  *               | "if(" or "," or "," or ")"
  *               | "ifs(" or "," or ("," or "," or)* "," or ")"
  *               | "switch(" or ("," or "," or)+ "," or ")"
@@ -66,7 +66,7 @@ export interface ExprFieldRef {
 }
 export interface ExprLiteral {
   kind: "literal";
-  value: string | number | boolean;
+  value: string | number | boolean | null;
 }
 export interface ExprBinary {
   kind: "binary";
@@ -437,6 +437,12 @@ function walkWellFormed(expr: Expr, path: (string | number)[], issues: WellForme
     case "comparison": {
       if (typeOfExpr(expr.left) === "boolean") issues.push({ path: [...path, "left"], message: "comparison operand must not be boolean." });
       if (typeOfExpr(expr.right) === "boolean") issues.push({ path: [...path, "right"], message: "comparison operand must not be boolean." });
+      if (expr.left.kind === "literal" && expr.left.value === null) {
+        issues.push({ path: [...path, "left"], message: "comparison operand must not be a null literal — SQL/Mongo NULL comparisons never match; use is_null()/is_not_null() instead." });
+      }
+      if (expr.right.kind === "literal" && expr.right.value === null) {
+        issues.push({ path: [...path, "right"], message: "comparison operand must not be a null literal — SQL/Mongo NULL comparisons never match; use is_null()/is_not_null() instead." });
+      }
       walkWellFormed(expr.left, [...path, "left"], issues);
       walkWellFormed(expr.right, [...path, "right"], issues);
       return;
@@ -475,7 +481,7 @@ export const ExprSchema: z.ZodType<Expr> = z.lazy(() =>
   z
     .discriminatedUnion("kind", [
       z.object({ kind: z.literal("field"), name: z.string().min(1) }),
-      z.object({ kind: z.literal("literal"), value: z.union([z.string(), z.number(), z.boolean()]) }),
+      z.object({ kind: z.literal("literal"), value: z.union([z.string(), z.number(), z.boolean(), z.null()]) }),
       z.object({ kind: z.literal("binary"), op: z.enum(["+", "-", "*", "/"]), left: ExprSchema, right: ExprSchema }),
       z.object({
         kind: z.literal("call"),
@@ -896,6 +902,7 @@ export function parseExpression(input: string): ExprParseResult {
     if (t.kind === "ident") {
       if (t.value === "true") return { kind: "literal", value: true };
       if (t.value === "false") return { kind: "literal", value: false };
+      if (t.value === "null") return { kind: "literal", value: null };
 
       const isCallLike = (CALL_FNS.has(t.value) || CONDITIONAL_FNS.has(t.value as ConditionalFn)) && peek()?.kind === "punct" && peek()!.value === "(";
       if (isCallLike) {

@@ -68,6 +68,18 @@ export const ColumnStats = z.object({
   /** Text columns only. */
   minLength: z.number().int().nonnegative().nullable(),
   maxLength: z.number().int().nonnegative().nullable(),
+  /**
+   * Phase 13 — true if any non-null string value is an all-digit string
+   * longer than one character starting with "0" (e.g. "007", "0091234").
+   * Coercion parse rates alone can't surface this risk: a leading-zero
+   * numeric string PASSES to_number/to_integer (evalExpr("007") -> 7), so
+   * it never shows up as a failingExample — this field is the only place
+   * on the profile that flags it. Router (Step 3) uses it to skip
+   * coercion on identifier-like columns whose name doesn't otherwise
+   * match the id/zip/postal/code/phone/account/sku vocabulary. `.default(false)`
+   * so profiles persisted before this field existed still parse.
+   */
+  hasLeadingZeroStrings: z.boolean().default(false),
 });
 export type ColumnStats = z.infer<typeof ColumnStats>;
 

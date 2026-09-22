@@ -1,0 +1,5 @@
+{
+  "description": "Boolean-like text tokens in mixed casing and spelling (yes/no, Y/N, 1/0, true/false in various cases). active coerces to a native boolean via to_boolean.",
+  "mustNotChange": ["id"],
+  "reviewed": false
+}
