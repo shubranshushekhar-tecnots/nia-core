@@ -142,6 +142,7 @@ function CanvasInner({
   const parkedLegacyTriggers = useRef(data!.graph.parkedLegacyTriggers);
   const ghostPlan = useCanvasStore((s) => s.ghostPlan);
   const ghostDiff = useCanvasStore((s) => s.ghostDiff);
+  const cleanProposal = useCanvasStore((s) => s.cleanProposal);
   const clearGhost = useCanvasStore((s) => s.clearGhost);
 
   // Phase 7 Session 2 — Copilot ghost overlay. `ghost` is purely a display
@@ -442,7 +443,16 @@ function CanvasInner({
     setApplyingPlanDiff(true);
     setApplyPlanDiffError(null);
     try {
-      const result = await applyPlanDiff(workflow.id, { diff: ghostDiff });
+      // Phase 13, Step 7 — a ghost diff proposed via "Propose cleaning"
+      // (TransformEditor.tsx) carries its clean_plans binding through
+      // cleanProposal; applyPlanDiff's cleanBinding field is what actually
+      // writes that row (copilotDiffApply.ts). Any other ghost diff (a
+      // Copilot plan-diff) has no cleanProposal set, so this is omitted.
+      const cleanBinding =
+        cleanProposal && cleanProposal.diff === ghostDiff
+          ? { nodeId: cleanProposal.nodeId, sourceSchemaHash: cleanProposal.binding.sourceSchemaHash, profileHash: cleanProposal.binding.profileHash }
+          : undefined;
+      const result = await applyPlanDiff(workflow.id, { diff: ghostDiff, cleanBinding });
       queryClient.setQueryData(queryKey, result);
       const remapped = graphToFlow(result.graph, ctx);
       setNodes(remapped.nodes);
@@ -456,7 +466,7 @@ function CanvasInner({
     } finally {
       setApplyingPlanDiff(false);
     }
-  }, [ghostDiff, workflow.id, queryClient, queryKey, appliedPlansQueryKey, ctx, setNodes, setEdges, setVersion, setSaveState, clearGhost]);
+  }, [ghostDiff, cleanProposal, workflow.id, queryClient, queryKey, appliedPlansQueryKey, ctx, setNodes, setEdges, setVersion, setSaveState, clearGhost]);
 
   const handleDiscardPlanDiff = useCallback(() => {
     setApplyPlanDiffError(null);

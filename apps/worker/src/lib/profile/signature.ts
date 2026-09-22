@@ -70,3 +70,20 @@ export function computeProfileHash(signature: ColumnSignature[]): string {
   const json = JSON.stringify(canonical);
   return createHash("sha256").update(json).digest("hex");
 }
+
+/**
+ * Phase 13, Step 6 — a coarser sibling of computeProfileHash: hashes only
+ * a column's name+declaredType, dropping every value-shape signal
+ * (nullPresence, missingTokenPresence, parseBuckets). CleanPlan's drift
+ * check (runEtl.ts) compares this separately from profileHash so the
+ * refusal message can distinguish "the table's columns changed" (this
+ * hash) from "the same columns' data shape changed" (profileHash) — see
+ * cleanPlan.ts's CleanPlanRecord doc comment.
+ */
+export function computeSchemaHash(columns: ColumnStats[]): string {
+  const canonical = columns
+    .map((c) => ({ name: c.name, declaredType: c.declaredType }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const json = JSON.stringify(canonical);
+  return createHash("sha256").update(json).digest("hex");
+}

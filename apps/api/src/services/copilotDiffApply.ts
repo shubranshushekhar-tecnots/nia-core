@@ -10,9 +10,14 @@ import {
   invertDiff,
   checkRevertConflicts,
   stampDiffStepProvenance,
+  parseNodeConfig,
+  type CleanBindingInput as CleanBindingInputType,
+  OP_CATALOG_VERSION,
+  ADAPTER_VERSION,
 } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
+import { computeStepsHash } from "../lib/cleanStepsHash.js";
 import { getWorkflowGraph, putWorkflowGraph, type WorkflowGraphResult } from "./workflowGraphs.js";
 import { assertWorkflowInScope } from "./checks.js";
 
@@ -95,7 +100,7 @@ export async function applyPlanDiff(
   supabase: SupabaseClient,
   scope: WorkspaceScope,
   workflowId: string,
-  input: { diff: unknown; prompt?: string },
+  input: { diff: unknown; prompt?: string; cleanBinding?: { nodeId: string } & CleanBindingInputType },
 ): Promise<ApplyPlanDiffResult> {
   const diff = PlanDiff.parse(input.diff);
 
@@ -163,6 +168,49 @@ export async function applyPlanDiff(
     p_graph_version: written.version,
   });
   if (auditError) throw new AppError(500, "AUDIT_WRITE_FAILED", auditError.message);
+
+  // Phase 13, Step 6 — the write side of a CleanPlan binding (cleanPlan.ts's
+  // header comment; read side is runEtl.ts's checkCleanPlanDrift). Only
+  // present when this apply came from the "Propose cleaning" flow (Step 7's
+  // UI passes it through); an ordinary Copilot plan-diff apply never sets
+  // it. stepsHash is recomputed here from the just-written graph's node,
+  // never trusted from the caller, so a ghost-preview edit made right
+  // before Apply is still hashed correctly (see CleanBindingInput's doc
+  // comment). onConflict on (workflow_id, node_id) means re-proposing and
+  // re-applying against the same node replaces its prior binding.
+  if (input.cleanBinding) {
+    const node = written.graph.nodes.find((n) => n.id === input.cleanBinding!.nodeId);
+    if (!node) {
+      throw new AppError(
+        422,
+        "CLEAN_BINDING_NODE_NOT_FOUND",
+        `Node "${input.cleanBinding.nodeId}" was not found in the applied graph.`,
+      );
+    }
+    const parsed = parseNodeConfig("transform", node.config);
+    if (parsed.unrecognized || parsed.type !== "transform") {
+      throw new AppError(
+        422,
+        "CLEAN_BINDING_NODE_NOT_TRANSFORM",
+        `Node "${input.cleanBinding.nodeId}" is not a valid transform node.`,
+      );
+    }
+    const stepsHash = computeStepsHash(parsed.value.steps);
+    const { error: bindingError } = await supabase.from("clean_plans").upsert(
+      {
+        workflow_id: workflowId,
+        node_id: input.cleanBinding.nodeId,
+        applied_plan_id: appliedPlanId,
+        steps_hash: stepsHash,
+        source_schema_hash: input.cleanBinding.sourceSchemaHash,
+        profile_hash: input.cleanBinding.profileHash,
+        op_catalog_version: OP_CATALOG_VERSION,
+        adapter_version: ADAPTER_VERSION,
+      },
+      { onConflict: "workflow_id,node_id" },
+    );
+    if (bindingError) throw new AppError(500, "CLEAN_PLAN_WRITE_FAILED", bindingError.message);
+  }
 
   return { ...written, appliedPlanId };
 }

@@ -35,4 +35,6 @@ export * from "./writeGrantStatement.js";
 export * from "./plan.js";
 export * from "./planDiff.js";
 export * from "./profile.js";
+export * from "./cleanPlan.js";
+export * from "./cleanPropose.js";
 export { evalExpr } from "./ops/residualEval.js";

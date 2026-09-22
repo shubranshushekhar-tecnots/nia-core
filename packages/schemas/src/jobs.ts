@@ -223,6 +223,30 @@ export const ProfileRunJob = z.object({
 });
 export type ProfileRunJob = z.infer<typeof ProfileRunJob>;
 
+/**
+ * Phase 13, Step 7 — "Propose cleaning". Carries `nodeId` (a transform
+ * node), not a destNodeId: same reasoning as ProposeMappingJob/PreviewJob
+ * for re-deriving everything else from the workflow's own GraphDoc rather
+ * than trusting client-supplied connection ids, but anchored on the
+ * transform node itself (where a CleanPlan binds, see 0024_clean_plans.sql)
+ * rather than a destination — the worker walks backward from `nodeId` via
+ * findSourcePath (same helper PreviewJob's handler uses) to find the
+ * upstream source it profiles and samples. Same triggeredByUserId contract
+ * as ProfileRunJob (this dispatches a real sample read via dispatch()).
+ * Result is delivered via BullMQ's QueueEvents.waitUntilFinished (see
+ * apps/api/src/lib/cleanQueue.ts) — never persisted by this job itself; a
+ * CleanPlan binding is only ever written by the separate, explicit apply
+ * call (copilotDiffApply.ts's applyPlanDiff, via its `cleanBinding` field).
+ */
+export const CleanProposeJob = z.object({
+  kind: z.literal("clean_propose"),
+  scope: WorkspaceScope,
+  workflowId: z.string().uuid(),
+  nodeId: z.string(),
+  triggeredByUserId: z.string().uuid(),
+});
+export type CleanProposeJob = z.infer<typeof CleanProposeJob>;
+
 export const InteractiveJob = z.discriminatedUnion("kind", [
   ChatQueryJob,
   CheckRunJob,
@@ -231,5 +255,6 @@ export const InteractiveJob = z.discriminatedUnion("kind", [
   SchemaRefreshJob,
   PlanProposeJob,
   ProfileRunJob,
+  CleanProposeJob,
 ]);
 export type InteractiveJob = z.infer<typeof InteractiveJob>;

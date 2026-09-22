@@ -607,6 +607,8 @@ export default function NodeDrawer({
             config={parsed.value as TransformConfig}
             connectionId={upstreamSource?.connectionId}
             manifestId={upstreamSource?.manifestId}
+            workflowId={workflowId}
+            nodeId={node.id}
             onChange={(next) => onConfigChange(next)}
           />
         )}

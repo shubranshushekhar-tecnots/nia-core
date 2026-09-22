@@ -11,6 +11,8 @@ import {
   type TransformStep,
 } from '@nia/schemas';
 import { getConnectionSchema } from '@/lib/api/connectionsClient';
+import { CleanApiError, proposeCleaning } from '@/lib/api/cleanClient';
+import { useCanvasStore } from '@/lib/canvas/store';
 import { OP_EDITOR_REGISTRY } from './ops/registry';
 import { addStepBtnStyle, removeBtnStyle } from './ops/shared';
 
@@ -43,11 +45,16 @@ export default function TransformEditor({
   config,
   connectionId,
   manifestId,
+  workflowId,
+  nodeId,
   onChange,
 }: {
   config: TransformConfig;
   connectionId?: string;
   manifestId?: string;
+  /** Both required only for Step 7's "Propose cleaning" call — the node's own id (clean_plans binds to a transform node) and its workflow. */
+  workflowId: string;
+  nodeId: string;
   onChange: (next: TransformConfig) => void;
 }) {
   const { data: schema } = useQuery({
@@ -67,6 +74,30 @@ export default function TransformEditor({
   const dialect = manifestDialect(manifestId);
   const plan = useMemo(() => compilePushdown(dialect, config), [dialect, config]);
   const [copied, setCopied] = useState(false);
+
+  // Phase 13, Step 7 — "Propose cleaning". `cleanProposal` is store-global
+  // (shared with FlowCanvas's ghost-diff Apply/Discard banner), so this
+  // only renders its own detail panel when the stored proposal targets
+  // THIS node — switching to another node's drawer just hides the panel,
+  // it doesn't clear the pending proposal.
+  const cleanProposal = useCanvasStore((s) => s.cleanProposal);
+  const setCleanProposal = useCanvasStore((s) => s.setCleanProposal);
+  const [proposing, setProposing] = useState(false);
+  const [proposeError, setProposeError] = useState<string | null>(null);
+  const activeProposal = cleanProposal?.nodeId === nodeId ? cleanProposal : null;
+
+  async function handleProposeCleaning() {
+    setProposing(true);
+    setProposeError(null);
+    try {
+      const result = await proposeCleaning(workflowId, nodeId);
+      setCleanProposal({ ...result, nodeId });
+    } catch (err) {
+      setProposeError(err instanceof CleanApiError ? err.message : 'Propose cleaning failed — try again.');
+    } finally {
+      setProposing(false);
+    }
+  }
 
   // Phase 12 — any edit made through this UI is, by definition, manual: it
   // resets/overwrites whatever provenance a step carried (e.g. `copilot`+
@@ -184,6 +215,76 @@ export default function TransformEditor({
           {!fragmentText && <div style={{ fontSize: 11.5, color: 'var(--ink4)' }}>Nothing pushes down for this connection yet.</div>}
         </div>
       )}
+
+      <div style={{ borderTop: '1px solid var(--line2)', paddingTop: 12, marginTop: 16 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>
+          Clean proposal
+        </div>
+        <button type="button" onClick={handleProposeCleaning} disabled={proposing} style={addStepBtnStyle}>
+          {proposing ? 'Proposing\u2026' : 'Propose cleaning'}
+        </button>
+        {proposeError && <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>{proposeError}</div>}
+
+        {activeProposal && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--ink)', marginBottom: 8 }}>{activeProposal.diff.summary}</div>
+
+            {activeProposal.columns.map((col) => (
+              <div key={col.column} style={stepCardStyle}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <span style={{ fontWeight: 600, fontSize: 12.5 }}>{col.column}</span>
+                  <span style={{ fontSize: 11, color: 'var(--ink4)' }}>
+                    {col.specialist} · {col.included ? 'included' : 'dropped'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--ink3)', marginTop: 4 }}>{col.routeReason}</div>
+                <div style={{ fontSize: 12, color: 'var(--ink)', marginTop: 2 }}>{col.rationale}</div>
+                <div style={{ fontSize: 11, color: 'var(--ink4)', marginTop: 4 }}>
+                  onFailure: {col.onFailure} · sample {col.sampleSize} · failures {col.failureCount} (
+                  {(col.failureRate * 100).toFixed(1)}% / max {(col.maxFailureRate * 100).toFixed(1)}%)
+                </div>
+                {!col.included && col.dropReason && (
+                  <div style={{ fontSize: 11, color: 'var(--warn)', marginTop: 4 }}>Dropped: {col.dropReason}</div>
+                )}
+                {col.included && col.before.length > 0 && (
+                  <div style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'var(--ink3)', marginTop: 4, overflowX: 'auto' }}>
+                    {col.before
+                      .slice(0, 3)
+                      .map((b, idx) => `${JSON.stringify(b)} \u2192 ${JSON.stringify(col.after[idx])}`)
+                      .join('  \u00b7  ')}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {activeProposal.skipped.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink4)', marginBottom: 4 }}>Skipped</div>
+                {activeProposal.skipped.map((s, i) => (
+                  <div key={i} style={{ fontSize: 11.5, color: 'var(--ink3)' }}>
+                    {s.column} ({s.specialist}): {s.reason}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {activeProposal.skippedIdentifierLike.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink4)', marginBottom: 4 }}>Skipped (identifier-like)</div>
+                {activeProposal.skippedIdentifierLike.map((s, i) => (
+                  <div key={i} style={{ fontSize: 11.5, color: 'var(--ink3)' }}>
+                    {s.column}: {s.reason}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ fontSize: 11, color: 'var(--ink4)', marginTop: 8 }}>
+              Review the diff banner above the canvas to apply or discard.
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

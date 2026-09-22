@@ -19,6 +19,7 @@ import { runPlanPropose } from "./lib/plan/runPlanPropose.js";
 import { profileEntity } from "./lib/profile/profileEntity.js";
 import { registerStagingSweepSchedule } from "./lib/etl/stagingSweepSchedule.js";
 import { sweepStaleStaging } from "./lib/etl/stagingSweeper.js";
+import { proposeCleaning } from "./lib/clean/proposeCleaning.js";
 
 /**
  * Nia worker — the execution spine.
@@ -119,6 +120,15 @@ const interactive = new Worker(
         // req.supabase.
         console.log(`[interactive] profile_run for connection ${payload.connectionId} entity ${payload.entity.namespace}.${payload.entity.name}`);
         return await profileEntity(payload);
+      case "clean_propose":
+        // Phase 13, Step 7 — proposeCleaning.ts owns path-walking, source
+        // resolution, sampling, routing, specialist proposals, and dry-run
+        // assembly; this handler only computes the proposal, it never
+        // persists a clean_plans binding — same no-persistence-in-index.ts
+        // shape as every other case (that only happens via applyPlanDiff's
+        // explicit `cleanBinding` field).
+        console.log(`[interactive] clean_propose for workflow ${payload.workflowId} node ${payload.nodeId}`);
+        return await proposeCleaning(payload.workflowId, payload.nodeId, payload.scope, payload.triggeredByUserId);
     }
   },
   { connection, concurrency: 10 },

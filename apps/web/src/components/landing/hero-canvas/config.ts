@@ -187,8 +187,15 @@ export const PRIMARY_NODE_CENTER = { x: CARD_W / 2, y: 46 };
 // in useHeroScrollProgress — this constant only fixes the crop's aspect
 // ratio and what's visible, not how large it renders.
 export const REST_WINDOW = { w: 220, h: 84 };
-// Fraction of scrollable range where Phase A (pure centering, no zoom) ends
-// and Phase B (pure zoom, already centered) begins. Kept fairly high so the
-// window spends a real chunk of normal scrolling sliding to dead-center
-// before any growth starts, instead of the two phases blurring together.
-export const PIN_THRESHOLD = 0.35;
+
+// Height of the "approach" block — normal (non-sticky) document flow where
+// the headline scrolls away naturally while the small Supabase window
+// drifts from its rest position to dead-center of the viewport. All of this
+// height is real scroll distance (nothing is frozen/pinned), unlike the pin
+// block below it.
+export const HERO_APPROACH_VH = 140;
+
+// Height of the pin block's tall wrapper — its sticky stage stays stuck for
+// (this - 100vh) of scroll while the window grows from centered-small to
+// fullscreen.
+export const HERO_PIN_VH = 300;

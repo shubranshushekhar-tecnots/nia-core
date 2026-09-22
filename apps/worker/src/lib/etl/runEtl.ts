@@ -30,6 +30,7 @@ import { resolveConnection } from "../resolveConnection.js";
 import { getSchema } from "../introspection.js";
 import { dispatch } from "../dispatch.js";
 import { findSourcePath } from "../preview/runPreview.js";
+import { checkCleanPlanDrift } from "./cleanPlanDrift.js";
 import { buildEtlReadQuery, buildFailurePreCheckQuery, MAX_CHUNK_ROWS } from "./queryBuilder.js";
 import { startRun, recordChunkProgress, finishRun, getRunCheckpoint } from "./workflowRuns.js";
 import { publishRunEvent } from "./publish.js";
@@ -499,6 +500,27 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     const entityResult = resolveSourceEntity(sourceSchema.value, mapping.entries.map((e) => e.from));
     if (!entityResult.ok) return failStaged(entityResult.message);
     entity = entityResult.entity;
+  }
+
+  // Phase 13 Step 6: once per run, before any extraction, refuse if any
+  // CleanPlan-bound transform node on this path has drifted from the
+  // schema/profile/version it was proposed against. Checked here (not
+  // earlier) because it needs the resolved source connection + entity;
+  // checked before `dialect`/pushdown compilation so a stale binding
+  // never gets a chance to execute even once. Never auto-re-proposes —
+  // that's Phase 15 (phase13.md Step 6).
+  if (job.cursor === null) {
+    for (const t of transforms) {
+      const drift = await checkCleanPlanDrift({
+        scope,
+        workflowId: job.workflowId,
+        nodeId: t.id,
+        sourceConnectionId,
+        entity: { namespace: entity.namespace, name: entity.name },
+        triggeredByUserId: job.triggeredByUserId,
+      });
+      if (!drift.ok) return failStaged(drift.message);
+    }
   }
 
   const dialect = manifestDialect(source.manifestId);

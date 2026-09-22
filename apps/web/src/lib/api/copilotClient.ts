@@ -1,4 +1,4 @@
-import type { GraphDoc, Plan, PlanDiff, PlanProposeOutcome } from '@nia/schemas';
+import type { CleanBindingInput, GraphDoc, Plan, PlanDiff, PlanProposeOutcome } from '@nia/schemas';
 import { createClient } from '@/lib/supabase/client';
 
 /**
@@ -102,7 +102,10 @@ export type AppliedPlan = {
  * deliberately untouched). Same "failure preserves ghost" contract:
  * only clear a diff ghost after this resolves successfully.
  */
-export async function applyPlanDiff(workflowId: string, input: { diff: PlanDiff; prompt?: string }): Promise<ApplyPlanDiffResult> {
+export async function applyPlanDiff(
+  workflowId: string,
+  input: { diff: PlanDiff; prompt?: string; cleanBinding?: { nodeId: string } & CleanBindingInput },
+): Promise<ApplyPlanDiffResult> {
   const res = await fetch(`/api/backend/workflows/${workflowId}/plan/apply-diff`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },

@@ -182,9 +182,9 @@ function truncateInputValue(value: unknown): string | null {
   const str = typeof value === "string" ? value : JSON.stringify(value);
   return str.length > 500 ? `${str.slice(0, 500)}…(truncated)` : str;
 }
-function truncateSourceRow(row: Record<string, unknown>): Record<string, unknown> {
+function truncateSourceRow(row: Record<string, unknown>): string {
   const json = JSON.stringify(row);
-  return json.length > 2000 ? { truncated: true, preview: json.slice(0, 2000) } : row;
+  return json.length > 2000 ? JSON.stringify({ truncated: true, preview: json.slice(0, 2000) }) : json;
 }
 
 /**

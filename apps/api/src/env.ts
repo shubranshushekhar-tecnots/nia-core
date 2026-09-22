@@ -100,6 +100,18 @@ const EnvSchema = z.object({
    * unavailable rather than hanging the HTTP request indefinitely.
    */
   PROFILE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  /**
+   * Upper bound on cleanQueue.ts's synchronous await of the worker's
+   * clean_propose job (Phase 13, Step 7). Two LLM calls in parallel
+   * (missing-value + coercion specialists, each with one possible retry)
+   * plus up to ~10 paginated connector dispatches for the sample (same
+   * sampleEntity.ts budget PROFILE_TIMEOUT_MS covers) — budgeted at
+   * PLAN_PROPOSE_TIMEOUT_MS's class rather than MAPPING_PROPOSE_TIMEOUT_MS's,
+   * since it's strictly more work than a single mappings_propose call. Past
+   * this, the route fails clean with a 503 naming the worker unavailable
+   * rather than hanging the HTTP request indefinitely.
+   */
+  CLEAN_PROPOSE_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
 });
 
 export const env = EnvSchema.parse(process.env);

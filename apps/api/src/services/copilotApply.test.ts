@@ -97,6 +97,16 @@ function createFakeClient(state: {
         };
       }
 
+      if (table === "clean_plans") {
+        // Not exercised by this file — an empty result lets
+        // putWorkflowGraph's unbindStaleCleanPlans no-op.
+        return {
+          select: () => ({
+            eq: () => Promise.resolve({ data: [], error: null }),
+          }),
+        };
+      }
+
       throw new Error(`unexpected table "${table}" in fake`);
     },
     rpc: async (fn: string, args: Record<string, unknown>) => {

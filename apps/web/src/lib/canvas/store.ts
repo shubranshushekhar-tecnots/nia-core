@@ -1,5 +1,13 @@
 import { create } from "zustand";
-import type { Plan, PlanDiff } from "@nia/schemas";
+import type { CleanProposalResult, Plan, PlanDiff } from "@nia/schemas";
+
+/**
+ * Phase 13, Step 7 — the full "Propose cleaning" result plus the nodeId it
+ * targets (the API call site already knows this; the result itself doesn't
+ * carry it — see cleanPropose.ts's header comment on why `nodeId` isn't
+ * part of CleanProposalResult).
+ */
+export type CleanProposal = CleanProposalResult & { nodeId: string };
 
 // Canvas UI-only state (same convention as components/app/store.ts). *Committed*
 // node and edge data live in React Flow's own useNodesState/useEdgesState,
@@ -45,6 +53,19 @@ type CanvasState = {
    */
   ghostDiff: PlanDiff | null;
   setGhostDiff: (diff: PlanDiff | null) => void;
+  /**
+   * Phase 13, Step 7 — set alongside ghostDiff (never independently):
+   * cleanProposal.diff IS ghostDiff whenever this is non-null. Kept as a
+   * separate field, rather than folding nodeId/columns/binding into
+   * ghostDiff itself, so Copilot's existing plan-diff call sites
+   * (setGhostDiff, used for a diff with no clean-specific payload) don't
+   * need to carry a shape they have no use for. TransformEditor reads this
+   * to render Step 7's per-column route/rationale/onFailure/dry-run detail
+   * for the node it targets; FlowCanvas reads `.binding` to populate
+   * applyPlanDiff's `cleanBinding` field on Apply.
+   */
+  cleanProposal: CleanProposal | null;
+  setCleanProposal: (proposal: CleanProposal | null) => void;
   clearGhost: () => void;
 };
 
@@ -56,8 +77,10 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   version: 0,
   setVersion: (version) => set({ version }),
   ghostPlan: null,
-  setGhostPlan: (ghostPlan) => set({ ghostPlan, ghostDiff: null }),
+  setGhostPlan: (ghostPlan) => set({ ghostPlan, ghostDiff: null, cleanProposal: null }),
   ghostDiff: null,
-  setGhostDiff: (ghostDiff) => set({ ghostDiff, ghostPlan: null }),
-  clearGhost: () => set({ ghostPlan: null, ghostDiff: null }),
+  setGhostDiff: (ghostDiff) => set({ ghostDiff, ghostPlan: null, cleanProposal: null }),
+  cleanProposal: null,
+  setCleanProposal: (cleanProposal) => set({ cleanProposal, ghostDiff: cleanProposal?.diff ?? null, ghostPlan: null }),
+  clearGhost: () => set({ ghostPlan: null, ghostDiff: null, cleanProposal: null }),
 }));

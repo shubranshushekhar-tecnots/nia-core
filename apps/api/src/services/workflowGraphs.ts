@@ -1,9 +1,50 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { GraphDoc, type GraphDoc as GraphDocType } from "@nia/schemas";
+import { GraphDoc, parseNodeConfig, type GraphDoc as GraphDocType } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
+import { computeStepsHash } from "../lib/cleanStepsHash.js";
 
 export type WorkflowGraphResult = { graph: GraphDocType; version: number };
+
+/**
+ * Phase 13 Step 6, third bullet — a manual edit to a CleanPlan-bound
+ * transform node's steps removes the binding. Called after every
+ * successful graph write (both branches of putWorkflowGraph below), so it
+ * also covers a Copilot-applied diff that isn't going through
+ * applyCleaningPlanDiff's own upsert (e.g. a revert), and a node/edge
+ * deletion that removes a bound node entirely. Deliberately keyed off the
+ * just-written graph, not a re-fetch — putWorkflowGraph's caller already
+ * has the authoritative post-write doc.
+ *
+ * Best-effort: a failure here must never fail the graph save itself (the
+ * save already committed) — worst case a stale binding survives until the
+ * next save or until runEtl.ts's drift check (cleanPlanDrift.ts) catches
+ * it by hash/schema/profile mismatch some other way. Logged, not thrown.
+ */
+async function unbindStaleCleanPlans(supabase: SupabaseClient, workflowId: string, graph: GraphDocType): Promise<void> {
+  const { data: bindings, error } = await supabase.from("clean_plans").select("node_id, steps_hash").eq("workflow_id", workflowId);
+  if (error || !bindings || bindings.length === 0) return;
+
+  const nodesById = new Map(graph.nodes.map((n) => [n.id, n]));
+  const staleNodeIds: string[] = [];
+  for (const binding of bindings) {
+    const node = nodesById.get(binding.node_id);
+    if (!node || node.type !== "transform") {
+      staleNodeIds.push(binding.node_id);
+      continue;
+    }
+    const parsed = parseNodeConfig("transform", node.config);
+    if (parsed.unrecognized || parsed.type !== "transform" || computeStepsHash(parsed.value.steps) !== binding.steps_hash) {
+      staleNodeIds.push(binding.node_id);
+    }
+  }
+  if (staleNodeIds.length === 0) return;
+
+  const { error: deleteError } = await supabase.from("clean_plans").delete().eq("workflow_id", workflowId).in("node_id", staleNodeIds);
+  if (deleteError) {
+    console.error(`unbindStaleCleanPlans: failed to delete stale clean_plans rows for workflow ${workflowId}:`, deleteError.message);
+  }
+}
 
 /**
  * Version 0 is the "never saved" sentinel (documented on GraphDoc and on
@@ -61,7 +102,11 @@ export async function putWorkflowGraph(
       .select("graph, version")
       .maybeSingle();
     if (insertError) throw new AppError(500, "GRAPH_WRITE_FAILED", insertError.message);
-    if (inserted) return { graph: GraphDoc.parse(inserted.graph), version: inserted.version };
+    if (inserted) {
+      const parsedGraph = GraphDoc.parse(inserted.graph);
+      await unbindStaleCleanPlans(supabase, workflowId, parsedGraph);
+      return { graph: parsedGraph, version: inserted.version };
+    }
     // Conflict — someone else's INSERT won. Fall through to the standard
     // conditional UPDATE below; it will affect 0 rows and produce a 409.
   }
@@ -82,5 +127,7 @@ export async function putWorkflowGraph(
   if (error) throw new AppError(500, "GRAPH_WRITE_FAILED", error.message);
   if (!data) throw new AppError(409, "VERSION_CONFLICT", "This workflow was saved by another session. Reload and retry.");
 
-  return { graph: GraphDoc.parse(data.graph), version: data.version };
+  const parsedGraph = GraphDoc.parse(data.graph);
+  await unbindStaleCleanPlans(supabase, workflowId, parsedGraph);
+  return { graph: parsedGraph, version: data.version };
 }

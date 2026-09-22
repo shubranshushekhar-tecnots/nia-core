@@ -510,6 +510,67 @@ app.post("/preflight", async (req): Promise<PreflightResponse> => {
     });
   }
 
+  // Phase 13 addition — the `nia` schema (staging + nia_quarantine) must
+  // never be reachable through PostgREST's anon/authenticated roles, only
+  // through this connector's own write-role credential. `anon`/
+  // `authenticated` only exist on a real Supabase project (a plain
+  // Postgres sandbox has neither) — 0 matching rows means nothing to
+  // guard, not a failure.
+  try {
+    const r = await pool.query(
+      `SELECT rolname, has_schema_privilege(rolname, 'nia', 'USAGE') AS has_usage
+       FROM pg_roles WHERE rolname IN ('anon', 'authenticated')`,
+    );
+    const offenders = (r.rows as Array<{ rolname: string; has_usage: boolean }>).filter((row) => row.has_usage);
+    const ok = offenders.length === 0;
+    checks.push({
+      name: "nia-schema-no-anon-authenticated-usage",
+      ok,
+      message: ok
+        ? undefined
+        : `role(s) ${offenders.map((o) => o.rolname).join(", ")} have USAGE on schema "nia" — PostgREST clients must never reach staging/quarantine tables`,
+      grantSql: ok ? undefined : offenders.map((o) => `REVOKE USAGE ON SCHEMA "nia" FROM ${o.rolname};`).join(" "),
+    });
+  } catch (e) {
+    checks.push({
+      name: "nia-schema-no-anon-authenticated-usage",
+      ok: false,
+      message: e instanceof Error ? e.message : "unknown error",
+    });
+  }
+
+  // Phase 13 addition — every existing table in `nia` (staging + fixed
+  // nia_quarantine sink) must have row-level security enabled, same bar as
+  // buildCreateStagingSql/buildCreateQuarantineSql's own ALTER TABLE. A
+  // fresh/empty `nia` schema (no tables yet) trivially passes — nothing to
+  // guard until a staged run actually creates one.
+  try {
+    const r = await pool.query(
+      `SELECT c.relname, c.relrowsecurity
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'nia' AND c.relkind = 'r'`,
+    );
+    const withoutRls = (r.rows as Array<{ relname: string; relrowsecurity: boolean }>).filter((row) => !row.relrowsecurity);
+    const ok = withoutRls.length === 0;
+    checks.push({
+      name: "nia-schema-rls-enabled",
+      ok,
+      message: ok
+        ? undefined
+        : `table(s) ${withoutRls.map((t) => t.relname).join(", ")} in schema "nia" do not have row-level security enabled`,
+      grantSql: ok
+        ? undefined
+        : withoutRls.map((t) => `ALTER TABLE "nia"."${t.relname}" ENABLE ROW LEVEL SECURITY;`).join(" "),
+    });
+  } catch (e) {
+    checks.push({
+      name: "nia-schema-rls-enabled",
+      ok: false,
+      message: e instanceof Error ? e.message : "unknown error",
+    });
+  }
+
   return { ok: checks.every((c) => c.ok), checks };
 });
 

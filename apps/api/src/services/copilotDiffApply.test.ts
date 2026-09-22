@@ -123,6 +123,17 @@ function createFakeClient(state: {
         };
       }
 
+      if (table === "clean_plans") {
+        // No test in this file exercises CleanPlan bindings — this fake
+        // only needs to satisfy putWorkflowGraph's unbindStaleCleanPlans
+        // lookup (workflowGraphs.ts) with an empty result so it no-ops.
+        return {
+          select: () => ({
+            eq: () => Promise.resolve({ data: [], error: null }),
+          }),
+        };
+      }
+
       throw new Error(`unexpected table "${table}" in fake`);
     },
     rpc: async (fn: string, args: Record<string, unknown>) => {

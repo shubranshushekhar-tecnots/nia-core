@@ -61,6 +61,16 @@ function createFakeWorkflowGraphsClient(): SupabaseClient {
         };
       }
 
+      if (table === "clean_plans") {
+        // Not exercised by this race test — an empty result lets
+        // putWorkflowGraph's unbindStaleCleanPlans no-op.
+        return {
+          select: () => ({
+            eq: () => Promise.resolve({ data: [], error: null }),
+          }),
+        };
+      }
+
       throw new Error(`unexpected table "${table}" in fake`);
     },
   };

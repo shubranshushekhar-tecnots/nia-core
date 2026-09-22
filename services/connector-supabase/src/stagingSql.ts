@@ -34,9 +34,29 @@ function qualifiedStagingTable(entity: WriteEntityRef): string {
   return `${quoteIdent(STAGING_SCHEMA)}.${quoteIdent(entity.name)}`;
 }
 
+/**
+ * Phase 13 Step 6 preflight guard — PostgREST (the anon/authenticated API
+ * surface every Supabase project exposes) can only reach a schema at all
+ * if those roles hold USAGE on it. `nia` is never meant to be
+ * PostgREST-visible (it's an internal staging/quarantine area written
+ * only by this connector's own service-role Postgres connection), so
+ * every staging/quarantine create path explicitly revokes USAGE right
+ * after the schema exists, rather than relying on Postgres's default of
+ * not auto-granting it to a freshly created schema — an explicit REVOKE
+ * survives even if some other process (an extension, an inherited
+ * `ALTER DEFAULT PRIVILEGES`, a future Supabase default change) ever
+ * grants it. Idempotent (REVOKE on a role with no matching grant is a
+ * no-op, not an error), so safe to run on every create call alongside
+ * `CREATE SCHEMA IF NOT EXISTS`.
+ */
+function revokeSchemaUsageSql(): string {
+  return `REVOKE ALL ON SCHEMA ${quoteIdent(STAGING_SCHEMA)} FROM PUBLIC, anon, authenticated`;
+}
+
 export function buildCreateStagingSql(dest: WriteEntityRef, stagingEntity: WriteEntityRef): string[] {
   return [
     `CREATE SCHEMA IF NOT EXISTS ${quoteIdent(STAGING_SCHEMA)}`,
+    revokeSchemaUsageSql(),
     `CREATE TABLE IF NOT EXISTS ${qualifiedStagingTable(stagingEntity)} (LIKE ${qualifiedTable(dest)} INCLUDING DEFAULTS INCLUDING INDEXES)`,
     `ALTER TABLE ${qualifiedStagingTable(stagingEntity)} ENABLE ROW LEVEL SECURITY`,
   ];
@@ -49,6 +69,7 @@ export function buildDropStagingSql(stagingEntity: WriteEntityRef): string {
 export function buildCreateQuarantineSql(quarantineEntity: WriteEntityRef): string[] {
   return [
     `CREATE SCHEMA IF NOT EXISTS ${quoteIdent(STAGING_SCHEMA)}`,
+    revokeSchemaUsageSql(),
     `CREATE TABLE IF NOT EXISTS ${qualifiedStagingTable(quarantineEntity)} (
       id bigint generated always as identity primary key,
       run_id uuid not null,
@@ -60,6 +81,7 @@ export function buildCreateQuarantineSql(quarantineEntity: WriteEntityRef): stri
       status text not null default 'pending',
       created_at timestamptz not null default now()
     )`,
+    `ALTER TABLE ${qualifiedStagingTable(quarantineEntity)} ENABLE ROW LEVEL SECURITY`,
   ];
 }
 

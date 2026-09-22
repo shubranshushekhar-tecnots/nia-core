@@ -1,6 +1,6 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
-import { GraphDoc, Plan, PlanDiff } from "@nia/schemas";
+import { GraphDoc, Plan, PlanDiff, CleanBindingInput } from "@nia/schemas";
 import { requireAuth } from "../middleware/auth.js";
 import { attachActor } from "../middleware/actor.js";
 import { requireCapability } from "../middleware/requireCapability.js";
@@ -15,6 +15,7 @@ import { applyPlanDiff, listAppliedPlans, revertPlan } from "../services/copilot
 import { proposePlanForWorkflow } from "../services/copilotPropose.js";
 import { getLatestCheckRun, listCheckRuns, runAndRecordChecks } from "../services/checks.js";
 import { proposeMappingForWorkflow } from "../services/mappings.js";
+import { proposeCleaningForWorkflow } from "../services/cleanPropose.js";
 import { previewWorkflowDestination } from "../services/preview.js";
 import { getLatestConversationForWorkflow, listMessages } from "../services/chat.js";
 
@@ -120,6 +121,11 @@ workflowsRouter.post(
 const applyPlanDiffBodySchema = z.object({
   diff: PlanDiff,
   prompt: z.string().optional(),
+  // Phase 13 Step 6/7 — present only when this apply is the tail end of the
+  // "Propose cleaning" flow (copilotDiffApply.ts's applyPlanDiff upserts a
+  // clean_plans row iff this is set; an ordinary Copilot diff apply omits
+  // it entirely).
+  cleanBinding: z.object({ nodeId: z.string() }).merge(CleanBindingInput).optional(),
 });
 
 // Phase 12 — diff-based Copilot apply/revert, parallel to the Phase 7
@@ -135,6 +141,31 @@ workflowsRouter.post(
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await applyPlanDiff(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body);
     res.json(data);
+  }),
+);
+
+const proposeCleaningBodySchema = z.object({ nodeId: z.string().min(1) });
+
+// "Propose cleaning" (Phase 13, Step 7). Gated the same as mappings/propose
+// (workflows.updateDefinition, not workflows.run) — a config-editing assist
+// for the drawer, not a workflow execution. No persistence step of its own
+// (services/cleanPropose.ts's header comment): the returned proposal is
+// only ever bound once the user applies it via the existing
+// /plan/apply-diff route's optional `cleanBinding` field.
+workflowsRouter.post(
+  "/:id/clean/propose",
+  requireCapability("workflows.updateDefinition"),
+  validate({ params: workflowParamsSchema, body: proposeCleaningBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await proposeCleaningForWorkflow(
+      req.supabase,
+      scopeFromActor(req.actor),
+      req.params.id!,
+      req.body.nodeId,
+      req.actor.userId,
+    );
+    res.status(201).json(data);
   }),
 );
 
