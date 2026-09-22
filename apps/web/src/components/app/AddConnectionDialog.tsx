@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect } from 'react';
+import { useActionState, useEffect, useRef } from 'react';
 import type { ConfigField } from '@nia/schemas';
 import { createConnectionAction } from '@/lib/connections/actions';
 import type { ActionState } from '@/lib/auth/actions';
@@ -17,6 +17,11 @@ import {
 } from './styles';
 
 const initialState: ActionState = null;
+
+// Generic structural check, not tied to a specific connectorId — any manifest
+// shaped like a plain Postgres/MySQL credential form (host/port/database/
+// user/password) gets the paste-a-URL convenience for free.
+const URL_PASTE_KEYS = ['host', 'port', 'database', 'user', 'password'] as const;
 
 function inputType(field: ConfigField): string {
   if (field.type === 'password') return 'password';
@@ -36,10 +41,32 @@ export default function AddConnectionDialog({
   onClose: () => void;
 }) {
   const [state, formAction, pending] = useActionState(createConnectionAction.bind(null, connectorId), initialState);
+  const fieldRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const showUrlPaste = URL_PASTE_KEYS.every((k) => configSchema.some((f) => f.key === k));
 
   useEffect(() => {
     if (state?.success) onClose();
   }, [state, onClose]);
+
+  function applyPastedUrl(value: string) {
+    if (!value.trim()) return;
+    let url: URL;
+    try {
+      url = new URL(value.trim());
+    } catch {
+      return; // ignore invalid/incomplete URL while typing
+    }
+    const refs = fieldRefs.current;
+    if (refs.host) refs.host.value = url.hostname;
+    if (refs.port) refs.port.value = url.port;
+    if (refs.database) refs.database.value = url.pathname.replace(/^\//, '');
+    if (refs.user) refs.user.value = decodeURIComponent(url.username);
+    if (refs.password) refs.password.value = decodeURIComponent(url.password);
+    if (refs.ssl) {
+      const sslmode = url.searchParams.get('sslmode');
+      refs.ssl.checked = Boolean(sslmode) && sslmode !== 'disable';
+    }
+  }
 
   return (
     <div style={modalOverlayStyle} onClick={onClose}>
@@ -61,21 +88,58 @@ export default function AddConnectionDialog({
             {state?.fieldErrors?.displayName && <span style={modalErrorStyle}>{state.fieldErrors.displayName[0]}</span>}
           </div>
 
-          {configSchema.map((field) => (
-            <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <label htmlFor={`connection-field-${field.key}`} style={modalLabelStyle}>
-                {field.label}
+          {showUrlPaste && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label htmlFor="connection-paste-url" style={modalLabelStyle}>
+                Paste connection URL (optional)
               </label>
               <input
-                id={`connection-field-${field.key}`}
-                name={field.key}
-                type={inputType(field)}
-                required={field.required}
-                placeholder={field.placeholder}
+                id="connection-paste-url"
+                type="text"
+                placeholder="postgres://user:pass@host:5432/db?sslmode=require"
                 style={modalFieldStyle(false)}
+                onChange={(e) => applyPastedUrl(e.target.value)}
               />
             </div>
-          ))}
+          )}
+
+          {configSchema.map((field) => {
+            if (field.type === 'boolean') {
+              return (
+                <div key={field.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    id={`connection-field-${field.key}`}
+                    name={field.key}
+                    type="checkbox"
+                    ref={(el) => {
+                      fieldRefs.current[field.key] = el;
+                    }}
+                  />
+                  <label htmlFor={`connection-field-${field.key}`} style={modalLabelStyle}>
+                    {field.label}
+                  </label>
+                </div>
+              );
+            }
+            return (
+              <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label htmlFor={`connection-field-${field.key}`} style={modalLabelStyle}>
+                  {field.label}
+                </label>
+                <input
+                  id={`connection-field-${field.key}`}
+                  name={field.key}
+                  type={inputType(field)}
+                  required={field.required}
+                  placeholder={field.placeholder}
+                  ref={(el) => {
+                    fieldRefs.current[field.key] = el;
+                  }}
+                  style={modalFieldStyle(false)}
+                />
+              </div>
+            );
+          })}
 
           {state?.error && <span style={modalErrorStyle}>{state.error}</span>}
           <div style={modalActionsStyle}>

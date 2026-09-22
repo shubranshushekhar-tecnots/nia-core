@@ -3,7 +3,8 @@ import type { IntrospectResponse } from "@nia/schemas";
 /**
  * Maps a resolved connection's manifest id to the query-generation dialect.
  * Mirrors @nia/guardrails' GUARDRAIL_REGISTRY key space exactly (mysql /
- * mongodb / supabase) — supabase's underlying dialect is postgres.
+ * mongodb / supabase / postgres) — supabase's and postgres's underlying
+ * dialect is both postgres.
  */
 export type ChatDialect = "mysql" | "postgres" | "mongo";
 
@@ -12,6 +13,8 @@ export function dialectForConnector(connectorId: string): ChatDialect {
     case "mysql":
       return "mysql";
     case "supabase":
+      return "postgres";
+    case "postgres":
       return "postgres";
     case "mongodb":
       return "mongo";

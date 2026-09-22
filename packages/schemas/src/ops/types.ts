@@ -44,6 +44,12 @@ export const FN_PUSHABILITY: Record<CallFn, Record<SourceDialect, boolean>> = {
   is_number: { mysql: true, postgres: true, mongo: true },
   is_text: { mysql: true, postgres: true, mongo: true },
   looks_numeric: { mysql: true, postgres: true, mongo: true },
+  // Phase 13 follow-up: is_missing_token internally needs case-insensitive
+  // token comparison (lower) + blank/whitespace detection (trim) — same
+  // ASCII-only-vs-Unicode divergence as `lower` below, so it's residual
+  // only on mongo (batch 6 doc comment / lower's entry has the full
+  // rationale).
+  is_missing_token: { mysql: true, postgres: true, mongo: false },
   // Phase 8b-2, batch 1: Math core. All 15 are expressible on every
   // dialect — see docs/decisions.md's batch 1 entry for the per-function
   // emission strategy (several are implemented via an explicit formula

@@ -237,6 +237,12 @@ export const AGREEMENT_CASES: AgreementCase[] = [
     filterExpr: "is_not_null(age)",
   },
   {
+    description:
+      "is_missing_token(x) against missing tokens, blank/whitespace-only text, a real value, and a real NULL — Phase 13 follow-up: proves mysql/postgres pushdown (sqlShared.ts), residual JS (residualEval.ts), and mongo's forced-residual fallback (FN_PUSHABILITY.is_missing_token.mongo === false, so this case's mongo arm is expected to WARN-skip via plan.residualCount > 0 rather than hit the defensive throw in mongo.ts) all agree on which rows are missing-token-like. A real NULL (the last row) is deliberately NOT matched — is_missing_token only normalizes TEXT that merely looks missing, it says nothing about a column that's already NULL.",
+    seedRows: [{ x: "N/A" }, { x: "" }, { x: "   " }, { x: "42" }, { x: "none" }, { x: null }],
+    filterExpr: "is_missing_token(x)",
+  },
+  {
     description: "is_number(name) against a numeric-looking string column — Fix 3: true-type check everywhere, so a VARCHAR/string '123' is NOT is_number on any evaluator",
     seedRows: [{ name: "Ada" }, { name: "123" }, { name: null }],
     filterExpr: "is_number(name)",

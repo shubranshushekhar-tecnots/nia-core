@@ -1,4 +1,5 @@
 import type { Expr } from "../expression.js";
+import { MISSING_VALUE_TOKENS } from "../profile.js";
 
 /**
  * Generic per-row evaluation helper shared by multiple ops' `applyResidual`
@@ -905,6 +906,12 @@ export function evalExpr(expr: Expr, row: Record<string, unknown>): unknown {
       if (expr.fn === "is_not_null") {
         const v = evalExpr(expr.args[0]!, row);
         return v !== null && v !== undefined;
+      }
+      if (expr.fn === "is_missing_token") {
+        const v = evalExpr(expr.args[0]!, row);
+        if (typeof v !== "string") return false;
+        const s = v.trim().toLowerCase();
+        return s === "" || MISSING_VALUE_TOKENS.has(s);
       }
       if (expr.fn === "contains") {
         const actual = evalExpr(expr.args[0]!, row);

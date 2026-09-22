@@ -152,6 +152,11 @@ const REAL_CONNECTOR_META: Record<string, { description: string; tags: string[];
     tags: ['credentials', 'queryable', 'etl'],
     graphic: 'cards',
   },
+  postgres: {
+    description: 'Query a self-hosted or managed Postgres database directly over TLS.',
+    tags: ['credentials', 'queryable', 'etl'],
+    graphic: 'cards',
+  },
 };
 
 // Real vendor logo (canvas/icons.tsx's CONNECTOR_ICONS registry — same

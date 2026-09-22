@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildAssembledPlan } from "./assemble.js";
+import { computeColumnStats } from "../profile/stats.js";
 import type { ColumnStepProposal, SpecialistResult } from "./specialistTypes.js";
 
 /**
@@ -89,6 +90,7 @@ describe("buildAssembledPlan", () => {
       ],
       missingValue: missingValueResult([notesMissingValueProposal]),
       coercion: coercionResult([amountCoercionProposal]),
+      columns: [],
     });
 
     expect(result.stepReports.map((r) => r.column)).toEqual(["notes", "amount"]);
@@ -122,6 +124,7 @@ describe("buildAssembledPlan", () => {
       sampleRows: [["N/A", "$10.00"]],
       missingValue: missingValueResult([notesMissingValueProposal]),
       coercion: coercionResult([amountCoercionProposal]),
+      columns: [],
     });
 
     const notesOp = result.diff.ops[0]!;
@@ -150,6 +153,7 @@ describe("buildAssembledPlan", () => {
       sampleRows: [["ABC"], ["XYZ"], ["123"]],
       missingValue: missingValueResult([]),
       coercion: coercionResult([codeCoercionProposalOverGuard]),
+      columns: [],
     });
 
     expect(result.diff.ops).toHaveLength(0);
@@ -193,6 +197,7 @@ describe("buildAssembledPlan", () => {
       sampleRows: [["1"], ["2"], ["3"], ["ABC"]],
       missingValue: missingValueResult([{ ...halfFailingProposal, column: "code" }]),
       coercion: coercionResult([]),
+      columns: [],
     });
 
     const report = result.stepReports[0]!;
@@ -210,6 +215,7 @@ describe("buildAssembledPlan", () => {
       sampleRows: [["Hello world", "$10.00"]],
       missingValue: missingValueResult([notesMissingValueProposal]),
       coercion: coercionResult([amountCoercionProposal]),
+      columns: [],
     });
 
     for (const report of result.stepReports) {
@@ -228,6 +234,7 @@ describe("buildAssembledPlan", () => {
       sampleRows: [["Hello world", "$10.00"]],
       missingValue: missingValueResult([{ column: "notes", kind: "no-change", reason: "already clean" }]),
       coercion: coercionResult([{ column: "amount", kind: "dropped", reason: "retry also failed" }]),
+      columns: [],
     });
 
     expect(result.diff.ops).toHaveLength(0);
@@ -236,5 +243,100 @@ describe("buildAssembledPlan", () => {
       { column: "notes", specialist: "missing-value", reason: "already clean" },
       { column: "amount", specialist: "coercion", reason: "retry also failed" },
     ]);
+  });
+
+  it("flags a coercion specialist's to_date(field) marker as ambiguous (needs a human choice) instead of guessing a format, when the profile's DD/MM/YYYY and MM/DD/YYYY candidates both parse the whole sample", () => {
+    const dateSample = ["01/02/2023", "03/04/2023", "05/06/2023"];
+    const dateColumnStats = computeColumnStats("d", "varchar", dateSample);
+
+    const dateMarkerProposal: ColumnStepProposal = {
+      column: "d",
+      kind: "step",
+      rationale: "coerce d to a date",
+      step: {
+        kind: "computed_field",
+        name: "d",
+        expression: { kind: "call", fn: "to_date", args: [{ kind: "field", name: "d" }] },
+        onFailure: "quarantine",
+      },
+    };
+
+    const result = buildAssembledPlan({
+      nodeId: "node-1",
+      planId: "plan-1",
+      baseGraphVersion: 0,
+      existingStepCount: 0,
+      sampleColumns: ["d"],
+      sampleRows: dateSample.map((v) => [v]),
+      missingValue: missingValueResult([]),
+      coercion: coercionResult([dateMarkerProposal]),
+      columns: [dateColumnStats],
+    });
+
+    expect(result.diff.ops).toHaveLength(0);
+    expect(result.stepReports).toHaveLength(0);
+    expect(result.ambiguousDateColumns).toEqual([
+      {
+        column: "d",
+        reason: expect.stringContaining("ambiguous date format"),
+        candidates: [
+          { key: "parse_date_dmy", token: "DD/MM/YYYY", passRate: 1 },
+          { key: "parse_date_mdy", token: "MM/DD/YYYY", passRate: 1 },
+        ],
+      },
+    ]);
+    expect(result.skippedProposals).toContainEqual(
+      expect.objectContaining({ column: "d", specialist: "coercion", reason: expect.stringContaining("ambiguous date format") }),
+    );
+  });
+
+  it("flags a date column mixing ISO dates with ambiguous slash dates as needs-human-choice, even though neither DD/MM/YYYY nor MM/DD/YYYY parses 100% of the sample (Phase 13 follow-up, item 2)", () => {
+    // 2 ISO rows (parse under neither dmy nor mdy) + 2 slash rows where day
+    // and month are both <=12, so each slash row parses under BOTH dmy and
+    // mdy — no row in the whole sample ever rules one out over the other,
+    // so this must be ambiguous even though dmy/mdy's aggregate pass rate
+    // is 50%, not 100%.
+    const dateSample = ["2023-01-15", "2023-02-20", "01/02/2023", "03/04/2023"];
+    const dateColumnStats = computeColumnStats("d", "varchar", dateSample);
+
+    const dateMarkerProposal: ColumnStepProposal = {
+      column: "d",
+      kind: "step",
+      rationale: "coerce d to a date",
+      step: {
+        kind: "computed_field",
+        name: "d",
+        expression: { kind: "call", fn: "to_date", args: [{ kind: "field", name: "d" }] },
+        onFailure: "quarantine",
+      },
+    };
+
+    const result = buildAssembledPlan({
+      nodeId: "node-1",
+      planId: "plan-1",
+      baseGraphVersion: 0,
+      existingStepCount: 0,
+      sampleColumns: ["d"],
+      sampleRows: dateSample.map((v) => [v]),
+      missingValue: missingValueResult([]),
+      coercion: coercionResult([dateMarkerProposal]),
+      columns: [dateColumnStats],
+    });
+
+    expect(result.diff.ops).toHaveLength(0);
+    expect(result.stepReports).toHaveLength(0);
+    expect(result.ambiguousDateColumns).toEqual([
+      {
+        column: "d",
+        reason: expect.stringContaining("ambiguous date format"),
+        candidates: [
+          { key: "parse_date_dmy", token: "DD/MM/YYYY", passRate: 0.5 },
+          { key: "parse_date_mdy", token: "MM/DD/YYYY", passRate: 0.5 },
+        ],
+      },
+    ]);
+    expect(result.skippedProposals).toContainEqual(
+      expect.objectContaining({ column: "d", specialist: "coercion", reason: expect.stringContaining("ambiguous date format") }),
+    );
   });
 });

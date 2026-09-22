@@ -85,6 +85,14 @@ export interface ExprCall {
     | "is_number"
     | "is_text"
     | "looks_numeric"
+    // Phase 13 follow-up: is_missing_token(x) — true iff x is a string that
+    // is empty/whitespace-only or matches profile.ts's MISSING_VALUE_TOKENS
+    // (trimmed, case-insensitive); false for any non-string (incl. null).
+    // Total/never-null, so it belongs in BOOLEAN_CALL_FNS alongside the
+    // other batch-0 predicates. Backs the missing-value specialist's
+    // if(is_missing_token(x), null, x) shape instead of the model
+    // enumerating tokens itself.
+    | "is_missing_token"
     // Phase 8b-2, batch 1: DAX-derived Math-core vocabulary. All scalar
     // (numeric)-typed, per typeOfExpr's default below.
     | "divide"
@@ -238,7 +246,15 @@ export type ExprValueType = "scalar" | "boolean";
 // directly as a logical operand would need tri-valued-logic semantics
 // this grammar's `and`/`or`/`not`/`when` don't model (batch 4 keeps
 // `to_boolean` scalar-typed; see ExprCall's doc comment).
-const BOOLEAN_CALL_FNS = new Set<ExprCall["fn"]>(["contains", "is_null", "is_not_null", "is_number", "is_text", "looks_numeric"]);
+const BOOLEAN_CALL_FNS = new Set<ExprCall["fn"]>([
+  "contains",
+  "is_null",
+  "is_not_null",
+  "is_number",
+  "is_text",
+  "looks_numeric",
+  "is_missing_token",
+]);
 
 /**
  * Per-call-fn arg-count bounds (Phase 8b-2, batch 1). Generic `call` nodes
@@ -263,6 +279,7 @@ const CALL_ARITY: Record<ExprCall["fn"], { min: number; max: number }> = {
   is_number: { min: 1, max: 1 },
   is_text: { min: 1, max: 1 },
   looks_numeric: { min: 1, max: 1 },
+  is_missing_token: { min: 1, max: 1 },
   divide: { min: 2, max: 3 },
   round: { min: 1, max: 2 },
   round_up: { min: 1, max: 2 },
@@ -494,6 +511,7 @@ export const ExprSchema: z.ZodType<Expr> = z.lazy(() =>
           "is_number",
           "is_text",
           "looks_numeric",
+          "is_missing_token",
           "divide",
           "round",
           "round_up",
@@ -648,6 +666,7 @@ const CALL_FNS = new Set([
   "is_number",
   "is_text",
   "looks_numeric",
+  "is_missing_token",
   "divide",
   "round",
   "round_up",

@@ -1015,6 +1015,18 @@ function compileExpr(expr: Expr): unknown {
       }
       if (expr.fn === "is_null") return { $eq: [compileExpr(expr.args[0]!), null] };
       if (expr.fn === "is_not_null") return { $ne: [compileExpr(expr.args[0]!), null] };
+      if (expr.fn === "is_missing_token") {
+        // Non-pushable on mongo (FN_PUSHABILITY.is_missing_token.mongo is
+        // false — mongo's $toLower is ASCII-only, same divergence as
+        // `lower` itself) — this call should always have been routed to
+        // residual, never compiled. Defensive throw: unlike sqlShared.ts/
+        // residualEval.ts, this function's dispatch chain has no catch-all
+        // default at the end (an unmatched fn would otherwise silently
+        // fall through to the looks_numeric implementation below).
+        throw new Error(
+          `compileExpr: "is_missing_token" is not pushable on mongo (FN_PUSHABILITY.is_missing_token.mongo is false) — this call should have been routed to residual, not compiled`,
+        );
+      }
       if (MATH_CALL_FNS.has(expr.fn)) return compileMathFnMongo(expr);
       if (TEXT_CALL_FNS.has(expr.fn)) return compileTextFnMongo(expr);
       if (COERCION_CALL_FNS.has(expr.fn)) return compileCoercionFnMongo(expr);

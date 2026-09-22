@@ -61,10 +61,11 @@ import { buildFailureExpr, fallibleFnsIn, resolveOnFailure } from "./ops/onFailu
 export type { SqlDialect, SourceDialect } from "./ops/types.js";
 import type { SourceDialect, SqlDialect } from "./ops/types.js";
 
-/** manifest.ts's 3 shipped connector ids -> the dialect their /execute endpoint speaks. Unknown/future manifests return null (nothing pushable). */
+/** manifest.ts's shipped connector ids -> the dialect their /execute endpoint speaks. Unknown/future manifests return null (nothing pushable). */
 export function manifestDialect(manifestId: string | undefined): SourceDialect | null {
   if (manifestId === "mysql") return "mysql";
   if (manifestId === "supabase") return "postgres";
+  if (manifestId === "postgres") return "postgres";
   if (manifestId === "mongodb") return "mongo";
   return null;
 }

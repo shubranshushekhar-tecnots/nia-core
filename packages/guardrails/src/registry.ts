@@ -15,6 +15,7 @@ export const GUARDRAIL_REGISTRY: Record<string, GuardrailValidator> = {
   mysql: validateMysqlQuery,
   mongodb: validateMongoPipeline,
   supabase: validatePostgresQuery,
+  postgres: validatePostgresQuery,
 };
 
 /**

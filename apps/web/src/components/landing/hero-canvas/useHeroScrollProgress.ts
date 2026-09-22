@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, type RefObject } from 'react';
-import { PRIMARY_NODE_CENTER, REST_WINDOW } from './config';
+import { HANDOFF_WINDOW, PRIMARY_NODE_CENTER } from './config';
 import { clamp01, heroEase, lerp, smoothstep } from './bezier';
 
 export type HeroPinRefs = {
@@ -9,33 +9,27 @@ export type HeroPinRefs = {
   pinWrapperEl: RefObject<HTMLDivElement>; // this block's own tall spacer (~300vh)
   windowEl: RefObject<HTMLDivElement>; // the clipping window — already centered, only grows
   canvasEl: RefObject<HTMLDivElement>; // fixed-size, never transformed except translate
-  ghostEl: RefObject<HTMLSpanElement>; // approach block's ghost span — only used to read restScale
   chromeEl: RefObject<HTMLDivElement>; // full-bleed overlay chrome (reel/checks/rows/rail)
   railFillEl: RefObject<HTMLDivElement>; // progress rail fill
 };
 
 // Drives the pin block: this is the scroll-jacked part — the window starts
-// already centered (approach block handed it off there) and only grows,
-// from its small rest-display size up to fullscreen, while chrome fades in.
-// No text/position easing here anymore (that's the approach block's job).
+// already centered at HANDOFF_WINDOW's size (the approach block grew it to
+// exactly that size and handed it off there) and only grows further, up to
+// fullscreen, while chrome fades in. No text/position easing here anymore
+// (that's the approach block's job).
 export function useHeroScrollProgress(refs: HeroPinRefs) {
   useEffect(() => {
     const heroEl = refs.heroEl.current;
     const pinWrapperEl = refs.pinWrapperEl.current;
     const windowEl = refs.windowEl.current;
     const canvasEl = refs.canvasEl.current;
-    const ghostEl = refs.ghostEl.current;
     const chromeEl = refs.chromeEl.current;
     const railFillEl = refs.railFillEl.current;
     if (!heroEl || !pinWrapperEl || !windowEl || !canvasEl) return undefined;
 
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const MOBILE_BREAKPOINT = 768;
-
-    // Displayed (post-scale) rest size, read from the approach block's
-    // ghost span — falls back to REST_WINDOW's native size (scale 1) if it
-    // can't be measured yet. Re-measured on resize alongside `range`.
-    let restScale = 1;
 
     const applyFrame = (raw: number, stuck: boolean) => {
       const vw = window.innerWidth;
@@ -73,21 +67,20 @@ export function useHeroScrollProgress(refs: HeroPinRefs) {
         h = rect.height;
       } else {
         const sizeEased = heroEase(raw);
-        // w/h grow from the window's native crop size (REST_WINDOW), not
-        // the (smaller, scaled-down) displayed rest size — the crop itself
-        // doesn't change, only how large it renders. A `scale()` transform
-        // bridges native → displayed size, eased on the same curve so it
-        // lands exactly at 1 (no crop-vs-render size mismatch) by the time
-        // w/h finish growing to vw/vh. Position is constant — already
-        // centered by the time the approach block handed off here.
-        w = lerp(REST_WINDOW.w, vw, sizeEased);
-        h = lerp(REST_WINDOW.h, vh, sizeEased);
-        const scale = lerp(restScale, 1, sizeEased);
+        // w/h grow from the size the approach block already grew the
+        // window to (HANDOFF_WINDOW) up to fullscreen. No extra `scale()`
+        // bridging needed here (unlike the approach block) — by the time
+        // this block takes over, the window is already at its true native
+        // size, no display-vs-crop mismatch to correct for. Position is
+        // constant — already centered by the time the approach block
+        // handed off here.
+        w = lerp(HANDOFF_WINDOW.w, vw, sizeEased);
+        h = lerp(HANDOFF_WINDOW.h, vh, sizeEased);
         windowEl.style.width = `${w}px`;
         windowEl.style.height = `${h}px`;
         windowEl.style.left = `${vw / 2 - w / 2}px`;
         windowEl.style.top = `${vh / 2 - h / 2}px`;
-        windowEl.style.transform = `scale(${scale.toFixed(4)})`;
+        windowEl.style.transform = '';
       }
 
       const canvasTx = w / 2 - PRIMARY_NODE_CENTER.x;
@@ -120,12 +113,6 @@ export function useHeroScrollProgress(refs: HeroPinRefs) {
     const measure = () => {
       const rect = pinWrapperEl.getBoundingClientRect();
       range = Math.max(1, rect.height - window.innerHeight);
-      if (ghostEl) {
-        const g = ghostEl.getBoundingClientRect();
-        if (g.width > 0 && g.height > 0) {
-          restScale = g.width / REST_WINDOW.w;
-        }
-      }
     };
 
     const onScroll = () => {

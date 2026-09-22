@@ -48,9 +48,32 @@ function qualifiedStagingTable(entity: WriteEntityRef): string {
  * grants it. Idempotent (REVOKE on a role with no matching grant is a
  * no-op, not an error), so safe to run on every create call alongside
  * `CREATE SCHEMA IF NOT EXISTS`.
+ *
+ * `anon`/`authenticated` only exist on a real Supabase/PostgREST-fronted
+ * project (see index.ts's own "postgres" manifest — same connector-
+ * supabase service, dispatched against a plain sandbox/self-hosted
+ * Postgres with neither role). Unlike a REVOKE against an existing role
+ * with no matching grant, REVOKE against a role name that doesn't exist
+ * at all raises `role "anon" does not exist` and aborts the transaction
+ * — so each optional role's REVOKE is wrapped in its own exception
+ * block, catching `undefined_object` (Postgres's SQLSTATE for "role does
+ * not exist") as a no-op, keeping this kind-agnostic across both a real
+ * Supabase project and a plain Postgres destination.
  */
 function revokeSchemaUsageSql(): string {
-  return `REVOKE ALL ON SCHEMA ${quoteIdent(STAGING_SCHEMA)} FROM PUBLIC, anon, authenticated`;
+  const schema = quoteIdent(STAGING_SCHEMA);
+  return `DO $$
+BEGIN
+  REVOKE ALL ON SCHEMA ${schema} FROM PUBLIC;
+  BEGIN
+    REVOKE ALL ON SCHEMA ${schema} FROM anon;
+  EXCEPTION WHEN undefined_object THEN NULL;
+  END;
+  BEGIN
+    REVOKE ALL ON SCHEMA ${schema} FROM authenticated;
+  EXCEPTION WHEN undefined_object THEN NULL;
+  END;
+END $$`;
 }
 
 export function buildCreateStagingSql(dest: WriteEntityRef, stagingEntity: WriteEntityRef): string[] {

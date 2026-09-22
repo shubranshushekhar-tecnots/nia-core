@@ -1,6 +1,7 @@
 import type { ConnectorManifest } from "../manifest.js";
 import { mongodbManifest } from "./mongodb.js";
 import { mysqlManifest } from "./mysql.js";
+import { postgresManifest } from "./postgres.js";
 import { supabaseManifest } from "./supabase.js";
 
 /**
@@ -14,6 +15,7 @@ export const CONNECTOR_MANIFESTS: Record<string, ConnectorManifest> = {
   [mysqlManifest.id]: mysqlManifest,
   [mongodbManifest.id]: mongodbManifest,
   [supabaseManifest.id]: supabaseManifest,
+  [postgresManifest.id]: postgresManifest,
 };
 
 export function getConnectorManifest(connectorId: string): ConnectorManifest | undefined {

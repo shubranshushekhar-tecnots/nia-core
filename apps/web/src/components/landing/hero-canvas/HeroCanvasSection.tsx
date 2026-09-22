@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, type CSSProperties, type RefObject } from 'react';
-import { COLOR, HERO_APPROACH_VH, HERO_PIN_VH, REST_WINDOW } from './config';
+import { COLOR, HANDOFF_WINDOW, HERO_APPROACH_VH, HERO_PIN_VH, REST_WINDOW } from './config';
 import { geistMono, geistSans } from './heroCanvasFonts';
 import HeroCanvasLayer from './HeroCanvasLayer';
 import { useHeroApproachProgress } from './useHeroApproachProgress';
@@ -58,7 +58,6 @@ export default function HeroCanvasSection({ heroRef }: { heroRef: RefObject<HTML
     pinWrapperEl: pinWrapperRef,
     windowEl: pinWindowRef,
     canvasEl: pinCanvasRef,
-    ghostEl: ghostRef,
     chromeEl: chromeRef,
     railFillEl: railFillRef,
   });
@@ -83,9 +82,9 @@ export default function HeroCanvasSection({ heroRef }: { heroRef: RefObject<HTML
                 <span style={{ color: COLOR.brandVioletOnBlack }}>Load.</span>
               </span>
               <span style={h1LineCenter}>
-                <span style={{ color: COLOR.textPrimary, justifySelf: 'start', gridColumn: 1 }}>All on one</span>
+                <span style={{ color: COLOR.textPrimary }}>All on one</span>
                 <span ref={ghostRef} aria-hidden="true" className="nia-hero-ghost" style={ghostSpanStyle} />
-                <span style={{ color: COLOR.textPrimary, justifySelf: 'start', gridColumn: 3 }}>canvas.</span>
+                <span style={{ color: COLOR.textPrimary }}>canvas.</span>
               </span>
             </h1>
 
@@ -230,12 +229,15 @@ const pinWindowBaseStyle: CSSProperties = {
   opacity: 0,
   willChange: 'width, height, left, top, opacity',
   contain: 'layout paint',
-  width: REST_WINDOW.w,
-  height: REST_WINDOW.h,
+  width: HANDOFF_WINDOW.w,
+  height: HANDOFF_WINDOW.h,
   // CSS-only centered starting position (matches useHeroScrollProgress's
-  // first applied frame) so there's no flash before JS takes over.
-  left: `calc(50% - ${REST_WINDOW.w / 2}px)`,
-  top: `calc(50% - ${REST_WINDOW.h / 2}px)`,
+  // first applied frame) so there's no flash before JS takes over. Sized
+  // to HANDOFF_WINDOW, not REST_WINDOW — that's the size the approach
+  // block has already grown the window to by the time this block takes
+  // over (see config.ts's HANDOFF_WINDOW comment).
+  left: `calc(50% - ${HANDOFF_WINDOW.w / 2}px)`,
+  top: `calc(50% - ${HANDOFF_WINDOW.h / 2}px)`,
 };
 
 const textLayerStyle: CSSProperties = {
@@ -268,25 +270,28 @@ const h1Line: CSSProperties = {
   flexWrap: 'wrap',
 };
 
-// Second headline line: a 3-column grid (`1fr auto 1fr`) rather than flex —
-// `justify-content: space-between` only equalizes the *gaps* around the
-// ghost span, so it drifts toward whichever side text ("All on one" vs
-// "canvas.") is narrower. The grid's two `1fr` columns always claim equal
-// width regardless of their text's length, so the middle (auto-sized) ghost
-// column is guaranteed to sit at the row's true horizontal center; each
-// text span uses `justifySelf` to hug its own edge within its `1fr` column.
-// `alignItems: 'center'` (overriding the shared baseline alignment used by
-// line 1) vertically centers the small inline image on the text row, like
-// an inline chip, rather than bottom-aligning it to the text baseline. The
-// approach window's rest position tracks the ghost span's actual live
-// position (see useHeroApproachProgress), so it always matches wherever
-// this layout puts it.
+// Second headline line: inline-flex, same natural-flow approach as line 1
+// (h1Line) — NOT a `1fr auto 1fr` grid. That grid was the bug: two equal-
+// width `1fr` tracks size themselves off the row's available width, not
+// off "All on one"'s actual text length, so the text (hugging its own
+// column's left edge via justifySelf) left a large dead gap before the
+// ghost/image column started, regardless of how short the text was. Flex
+// packs "All on one" → ghost/image → "canvas." tightly against each other
+// (just `gap` between them) and pushes any leftover space to the end of
+// the row, exactly like normal inline text flow — so the image sits where
+// it visually belongs regardless of viewport width. `alignItems: 'center'`
+// (overriding the shared baseline alignment used by line 1) vertically
+// centers the small inline image on the text row, like an inline chip,
+// rather than bottom-aligning it to the text baseline. The approach
+// window's rest position tracks the ghost span's actual live position
+// (see useHeroApproachProgress), so it always matches wherever this
+// layout puts it.
 const h1LineCenter: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr auto 1fr',
+  display: 'inline-flex',
   alignItems: 'center',
-  width: '100%',
-  columnGap: 6,
+  flexWrap: 'wrap',
+  columnGap: 14,
+  rowGap: 6,
 };
 
 // Reserves the *displayed* (post-scale) footprint of the crop, which is
@@ -297,6 +302,8 @@ const h1LineCenter: CSSProperties = {
 // useHeroApproachProgress/useHeroScrollProgress is uniform.
 const ghostSpanStyle: CSSProperties = {
   display: 'inline-block',
+  position: 'relative',
+  top: 10,
   width: '9vw',
   maxWidth: 150,
   minWidth: 72,

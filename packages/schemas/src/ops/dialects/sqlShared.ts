@@ -1,5 +1,6 @@
 import { type Expr, typeOfExpr } from "../../expression.js";
 import type { AggregationSpec, FilterCondition } from "../../nodeConfig.js";
+import { MISSING_VALUE_TOKENS } from "../../profile.js";
 import type { SqlDialect, SqlDialectAdapter } from "../types.js";
 import { PARAM_TOKEN_CHAR, type ParamSink } from "../paramSink.js";
 
@@ -1413,6 +1414,20 @@ export function makeSqlDialectAdapter(
         }
         if (expr.fn === "is_null") return `${compileExpr(expr.args[0]!, params)} IS NULL`;
         if (expr.fn === "is_not_null") return `${compileExpr(expr.args[0]!, params)} IS NOT NULL`;
+        if (expr.fn === "is_missing_token") {
+          // `target()` is re-invoked (not compiled once and string-reused)
+          // deliberately — same defensive pattern as parse_date's textSql()
+          // below: reusing one compiled string 3x would triple any
+          // ParamSink token it embeds (e.g. if args[0] were itself a
+          // param-pushing call), tripping resolveParamSink's exactly-once
+          // duplicate-token check. Each fresh compileExpr(args[0]) call is
+          // either token-free (the common case — a plain field ref) or
+          // pushes its own fresh, distinct token every time, so re-invoking
+          // is always safe.
+          const target = () => compileExpr(expr.args[0]!, params);
+          const tokenList = [...MISSING_VALUE_TOKENS].map((t) => params.push(t)).join(", ");
+          return `(${target()} IS NOT NULL AND (LOWER(TRIM(${target()})) IN (${tokenList}) OR TRIM(${target()}) = ''))`;
+        }
         if (MATH_CALL_FNS.has(expr.fn)) return compileMathFnSql(expr, params);
         if (TEXT_CALL_FNS.has(expr.fn)) return compileTextFnSql(expr, params);
         if (COERCION_CALL_FNS.has(expr.fn)) return compileCoercionFnSql(expr, params);

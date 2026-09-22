@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, type RefObject } from 'react';
-import { PRIMARY_NODE_CENTER, REST_WINDOW } from './config';
+import { HANDOFF_WINDOW, PRIMARY_NODE_CENTER, REST_WINDOW } from './config';
 import { clamp01, heroEase, lerp } from './bezier';
 
 export type HeroApproachRefs = {
@@ -12,14 +12,20 @@ export type HeroApproachRefs = {
 };
 
 // Drives the approach block: real (non-pinned) scroll, so the headline just
-// scrolls away with the page while this hook only moves the small preview
+// scrolls away with the page while this hook moves the small preview
 // window — via `position: fixed`, independent of the normally-scrolling
 // text underneath it — from its rest position (next to the ghost span) to
-// dead-center of the viewport. Size never changes here (that only happens
-// once the pin block takes over). Progress is purely local to this block's
-// own bounding rect, so it naturally reaches 1 exactly when the block
-// scrolls fully past the top of the viewport — i.e. exactly when the pin
-// block (immediately following in the DOM) starts sticking.
+// dead-center of the viewport, growing its native crop size from
+// REST_WINDOW up to HANDOFF_WINDOW along the way (the pin block then
+// continues that same growth from HANDOFF_WINDOW to fullscreen — see
+// useHeroScrollProgress). Growing here too, instead of only once the pin
+// block takes over, means nodes/connectors are already filling the frame
+// well before the headline has fully scrolled away, instead of leaving a
+// long stretch of near-empty black ground with just a small floating chip
+// in it. Progress is purely local to this block's own bounding rect, so it
+// naturally reaches 1 exactly when the block scrolls fully past the top of
+// the viewport — i.e. exactly when the pin block (immediately following in
+// the DOM) starts sticking.
 export function useHeroApproachProgress(refs: HeroApproachRefs) {
   useEffect(() => {
     const blockEl = refs.blockEl.current;
@@ -42,10 +48,6 @@ export function useHeroApproachProgress(refs: HeroApproachRefs) {
       }
     };
 
-    const canvasTx = REST_WINDOW.w / 2 - PRIMARY_NODE_CENTER.x;
-    const canvasTy = REST_WINDOW.h / 2 - PRIMARY_NODE_CENTER.y;
-    canvasEl.style.transform = `translate3d(${canvasTx}px, ${canvasTy}px, 0)`;
-
     const applyFrame = () => {
       if (window.innerWidth < MOBILE_BREAKPOINT) return;
       const vw = window.innerWidth;
@@ -54,23 +56,36 @@ export function useHeroApproachProgress(refs: HeroApproachRefs) {
       const raw = clamp01(-rect.top / rect.height);
       const eased = heroEase(raw);
 
+      // restScale bridges REST_WINDOW's native (crop) size down to its
+      // small displayed rest footprint (the ghost span's measured size) —
+      // still only relevant at raw=0; by raw=1 the window is at
+      // HANDOFF_WINDOW's native size with no extra scale-down, exactly
+      // matching the pin block's starting frame.
       const restScale = restBox.width / REST_WINDOW.w;
       const restCx = restBox.left + restBox.width / 2;
       const restCy = restBox.top + restBox.height / 2;
       const cx = lerp(restCx, vw / 2, eased);
       const cy = lerp(restCy, vh / 2, eased);
 
-      windowEl.style.width = `${REST_WINDOW.w}px`;
-      windowEl.style.height = `${REST_WINDOW.h}px`;
-      windowEl.style.left = `${cx - REST_WINDOW.w / 2}px`;
-      windowEl.style.top = `${cy - REST_WINDOW.h / 2}px`;
-      windowEl.style.transform = `scale(${restScale.toFixed(4)})`;
+      const w = lerp(REST_WINDOW.w, HANDOFF_WINDOW.w, eased);
+      const h = lerp(REST_WINDOW.h, HANDOFF_WINDOW.h, eased);
+      const scale = lerp(restScale, 1, eased);
+
+      windowEl.style.width = `${w}px`;
+      windowEl.style.height = `${h}px`;
+      windowEl.style.left = `${cx - w / 2}px`;
+      windowEl.style.top = `${cy - h / 2}px`;
+      windowEl.style.transform = `scale(${scale.toFixed(4)})`;
       // Hide the window until it's actually reached (or is about to reach)
       // the block, and fully hide it once the pin block has taken over —
       // avoids a stray floating card if this block is scrolled past very
       // fast or the ghost hasn't been measured yet.
       windowEl.style.opacity = raw >= 1 ? '0' : '1';
       windowEl.style.pointerEvents = 'none';
+
+      const canvasTx = w / 2 - PRIMARY_NODE_CENTER.x;
+      const canvasTy = h / 2 - PRIMARY_NODE_CENTER.y;
+      canvasEl.style.transform = `translate3d(${canvasTx}px, ${canvasTy}px, 0)`;
     };
 
     let raf = 0;

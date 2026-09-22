@@ -8,12 +8,12 @@
  * them (no connector today has an admin-level operation, only read/write
  * verbs scoped to a role that already exists).
  *
- * Only `supabase` (Postgres) is an actual etl_sink today (see
- * connectors/supabase.ts's header comment) — mysql/mongodb stay
+ * Only `supabase`/`postgres` (both Postgres, see connectors/supabase.ts's
+ * header comment) are actual etl_sinks today — mysql/mongodb stay
  * etl_source-only, read-only connectors. Statement text is still generated
- * for all three dialects here so the UI's copy is correct the day a
- * connector's `operations` grows write verbs, without this file needing a
- * second pass — see docs/decisions.md's Block 4->5 correction entry.
+ * for all dialects here so the UI's copy is correct the day a connector's
+ * `operations` grows write verbs, without this file needing a second pass
+ * — see docs/decisions.md's Block 4->5 correction entry.
  *
  * Phase 8a: identifier quoting for postgres/mysql now delegates to
  * mysqlAdapter/postgresAdapter's quoteIdent (packages/schemas/src/ops/
@@ -34,6 +34,7 @@ export type WriteGrantStatementDialect = "postgres" | "mysql" | "mongodb";
 
 function dialectForConnector(connectorId: string): WriteGrantStatementDialect | undefined {
   if (connectorId === "supabase") return "postgres";
+  if (connectorId === "postgres") return "postgres";
   if (connectorId === "mysql") return "mysql";
   if (connectorId === "mongodb") return "mongodb";
   return undefined;

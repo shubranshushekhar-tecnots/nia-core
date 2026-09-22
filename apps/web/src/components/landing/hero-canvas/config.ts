@@ -188,6 +188,18 @@ export const PRIMARY_NODE_CENTER = { x: CARD_W / 2, y: 46 };
 // ratio and what's visible, not how large it renders.
 export const REST_WINDOW = { w: 220, h: 84 };
 
+// Size the window has grown to by the end of the approach block / start of
+// the pin block (the handoff instant). Previously the window stayed at
+// REST_WINDOW's tiny native size for the entire approach block while only
+// its position moved to center — since the headline scrolls away much
+// faster than that, this left a long stretch of near-empty black ground
+// with just a small floating chip in it. Growing the window from
+// REST_WINDOW to this larger size *during* the approach block (see
+// useHeroApproachProgress) means neighboring nodes/connectors are already
+// filling the frame well before the pin block's fullscreen-growth phase
+// takes over from here.
+export const HANDOFF_WINDOW = { w: 640, h: 360 };
+
 // Height of the "approach" block — normal (non-sticky) document flow where
 // the headline scrolls away naturally while the small Supabase window
 // drifts from its rest position to dead-center of the viewport. All of this

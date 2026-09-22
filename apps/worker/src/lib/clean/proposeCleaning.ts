@@ -142,6 +142,7 @@ export async function proposeCleaning(workflowId: string, nodeId: string, scope:
     sampleRows,
     missingValue,
     coercion,
+    columns,
   });
 
   const routeByColumn = new Map(routes.map((r) => [r.column, r]));

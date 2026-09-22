@@ -123,13 +123,19 @@ quarantine sink..." entry.
   the container rebuild); `@nia/connector-supabase` 44/44 (6 files,
   incl. `index.test.ts`'s 20 `/stage`-route cases covering
   signed-context tampering).
-- `pnpm run smoke:staged` (new this phase) — postgres + mysql,
-  production-equivalent write role, all 3 required scenarios: happy
-  path (staging dropped, registry closed, atomic apply correct),
-  assertion failure (NULL upsert key — run fails, destination
-  untouched, staging dropped, no quarantine committed), kill-after-
+- `pnpm run smoke:staged` (new this phase) — mysql source, **postgres
+  destination only** (production-equivalent write role), all 3
+  required scenarios: happy path (staging dropped, registry closed,
+  atomic apply correct), assertion failure (NULL upsert key — a
+  whole-transaction `noNullKeys` assertion rolls back before any row is
+  written, destination untouched, staging dropped), kill-after-
   chunk-1-resume (2,500 rows / chunk size 1,000 — destination ends
   correct, same staging table reused across redelivery). 20/20
-  assertions, all passed.
+  assertions, all passed. Correction (Phase 13 follow-up): this script
+  never exercises a mysql *destination*, staged or otherwise, and its
+  one failure scenario is a transaction-level assertion failure, not a
+  per-row quarantine write on any destination — the mysql-destination
+  staged-write and quarantine paths were only actually proven live by
+  Phase 13's end-to-end smoke (`clean-propose-smoke.ts`).
 - `smoke:write` and `smoke:write:mysql-mongo` re-run clean per Step 3
   (the write path changed for every run, staged or not).

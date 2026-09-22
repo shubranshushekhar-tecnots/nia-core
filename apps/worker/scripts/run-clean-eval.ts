@@ -132,6 +132,7 @@ async function runDataset(name: string, dir: string): Promise<DatasetReport> {
     sampleRows,
     missingValue,
     coercion,
+    columns,
   });
 
   const steps: TransformStep[] = assembled.diff.ops
