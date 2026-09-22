@@ -1537,6 +1537,53 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 43 — 0020_source_profiles.sql (Phase 10 profiler cache): cross-org
+-- isolation. source_profiles has no own org_id/owner_id — scope is derived
+-- entirely via connection_id's parent connection (same shape as
+-- write_grants, probe 16). This is the deferred Phase 13 gate check named
+-- in TODO.md ("cross-org check that a user from another org sees 0
+-- source_profiles rows").
+-- =========================================================================
+
+-- Probe 43 — org B's owner (no access to org A's connection) sees 0 rows
+-- for a source_profiles row scoped to org A's connection; org A's own
+-- member sees it.
+do $$
+declare
+  v_conn uuid := (select id from test_ids where key = 'connection_org');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org_b_owner uuid := (select id from test_ids where key = 'org_b_owner');
+  v_profile uuid;
+  n_member_sees int;
+  n_org_b_sees int;
+begin
+  -- Fixture inserted as postgres (bypasses RLS) — only the SELECT-side
+  -- isolation is under test here, mirroring probe 11's pattern.
+  insert into public.source_profiles
+    (connection_id, entity_namespace, entity_name, schema_hash, sample_method, sample_size, stats, signature, profile_hash, profiled_at, profiled_by_user_id)
+  values
+    (v_conn, 'public', 'probe_entity', 'schemahash-probe', 'full-table', 10, '[]'::jsonb, '[]'::jsonb, 'profilehash-probe', now(), v_member)
+  returning id into v_profile;
+
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_member_sees from public.source_profiles where id = v_profile;
+  reset role;
+
+  perform pg_temp.act_as(v_org_b_owner);
+  select count(*) into n_org_b_sees from public.source_profiles where id = v_profile;
+  reset role;
+
+  if n_member_sees = 1 and n_org_b_sees = 0 then
+    insert into probe_results values (43, 'cross-org: org B owner sees 0 rows of org A''s source_profiles; org A member sees it', true);
+  else
+    insert into probe_results values (43, 'cross-org: org B owner sees 0 rows of org A''s source_profiles; org A member sees it', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (43, 'source_profiles cross-org isolation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

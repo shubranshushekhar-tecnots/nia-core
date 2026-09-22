@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import Nav from './Nav';
+import Nav, { NAV_HEIGHT } from './Nav';
 import HeroCanvasSection from './hero-canvas/HeroCanvasSection';
 import TrustedBy from './TrustedBy';
 import Features from './Features';
@@ -38,9 +38,18 @@ export default function LandingPage() {
       // drives Nav's theme sweep now, it no longer touches hero styles.
       const heroEl = heroRef.current;
       const heroRect = heroEl?.getBoundingClientRect();
-      const pastHero = (heroRect?.bottom ?? -Infinity) <= 74;
+      const pastHero = (heroRect?.bottom ?? -Infinity) <= NAV_HEIGHT;
       const pinned = !pastHero && heroEl?.dataset.heroPinned === 'true';
       const darkIsland = !pastHero;
+
+      // html/body still carry the site-wide light theme background
+      // (theme.css `html, body { background: var(--bg) }`) from before this
+      // hero existed. That's correct for every other page, but it means the
+      // native overscroll/rubber-band bounce at the top of THIS page reveals
+      // that light canvas through the black hero. Track the canvas color to
+      // whichever section is actually on screen (mirrors the Nav theme sweep
+      // below) so a bounce always reveals the right color; reset on unmount.
+      document.documentElement.style.backgroundColor = darkIsland ? '#000000' : '';
 
       nav.style.setProperty('--nav-bg', pastHero ? 'rgba(248,250,252,.82)' : pinned ? '#000000' : 'transparent');
       nav.style.setProperty('--nav-blur', pastHero ? 'blur(12px)' : 'none');
@@ -70,7 +79,10 @@ export default function LandingPage() {
 
     window.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
-    return () => window.removeEventListener('scroll', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      document.documentElement.style.backgroundColor = '';
+    };
   }, []);
 
   return (

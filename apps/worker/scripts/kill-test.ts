@@ -61,6 +61,7 @@ import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { createClient } from "@supabase/supabase-js";
 import { QUEUE_HEAVY, EtlRunJob, type GraphDoc } from "@nia/schemas";
+import { grantStagedPostgresWriteRole } from "./lib/stagedWriteRole.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKER_DIR = path.resolve(__dirname, "..");
@@ -180,6 +181,9 @@ async function provisionScratchTableAndRole(): Promise<void> {
     await client.query(`grant connect on database sandbox to ${WRITE_ROLE_USER}`);
     await client.query(`grant usage on schema public to ${WRITE_ROLE_USER}`);
     await client.query(`grant select, insert, update on ${SCRATCH_TABLE} to ${WRITE_ROLE_USER}`);
+    // Runner defaults to staged writes (Phase 11) — grant what the staged
+    // preflight requires beyond the destination table itself.
+    await grantStagedPostgresWriteRole(client, "sandbox", WRITE_ROLE_USER);
   } finally {
     await client.end();
   }
@@ -397,7 +401,10 @@ async function createAndConfirmWriteGrant(destConnectionId: string): Promise<str
 
   const { data: grantRow, error: grantError } = await supabaseUser.rpc("create_write_grant", {
     p_connection_id: destConnectionId,
-    p_scope: { schemas: ["public"] },
+    // Staged writes (Phase 11 default) also touch the "nia" staging schema
+    // — the grant scope has to cover it too, not just the destination
+    // table's own schema.
+    p_scope: { schemas: ["public", "nia"] },
   });
   if (grantError || !grantRow) throw new Error(`create_write_grant failed: ${grantError?.message}`);
   const grantId = (grantRow as { id: string }).id;

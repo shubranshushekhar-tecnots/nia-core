@@ -42,6 +42,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { Queue } from "bullmq";
 import { compilePushdown, manifestDialect, type EtlRunJob, type GraphDoc, type TransformConfig, type WorkspaceScope } from "@nia/schemas";
 import { runEtl } from "../src/lib/etl/runEtl.js";
+import { grantStagedMysqlWriteRole } from "./lib/stagedWriteRole.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "http://127.0.0.1:54321";
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -127,6 +128,9 @@ async function provisionMysqlDestTableAndRole(): Promise<void> {
     await admin.query(`DROP USER IF EXISTS '${WRITE_ROLE_USER}'@'%'`);
     await admin.query(`CREATE USER '${WRITE_ROLE_USER}'@'%' IDENTIFIED BY '${WRITE_ROLE_PASSWORD}'`);
     await admin.query(`GRANT SELECT, INSERT, UPDATE ON sandbox.${DEST_TABLE} TO '${WRITE_ROLE_USER}'@'%'`);
+    // Runner defaults to staged writes (Phase 11) — grant what the staged
+    // preflight requires beyond the destination table itself.
+    await grantStagedMysqlWriteRole(admin, WRITE_ROLE_USER);
   } finally {
     await admin.end();
   }
@@ -352,7 +356,10 @@ async function main(): Promise<void> {
 
   const { data: grantRow, error: grantError } = await supabaseUser.rpc("create_write_grant", {
     p_connection_id: destConnId,
-    p_scope: { schemas: ["sandbox"] },
+    // Staged writes (Phase 11 default) also touch the "nia" staging
+    // database on the mysql destination — the grant scope has to cover it
+    // too, not just the destination table's own schema.
+    p_scope: { schemas: ["sandbox", "nia"] },
   });
   if (grantError || !grantRow) throw new Error(`create_write_grant failed: ${grantError?.message}`);
   const grantId = (grantRow as { id: string }).id;

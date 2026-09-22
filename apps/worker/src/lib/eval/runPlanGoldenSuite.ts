@@ -21,11 +21,26 @@ import type { PlanProposeJob } from "@nia/schemas";
 import { runPlanPropose } from "../plan/runPlanPropose.js";
 import { PlanGoldenCase } from "./planGoldenCase.js";
 import { seedSandbox, createConversation, DEMO_USER_ID } from "./sandbox.js";
-import { seedPlanWorkflow, seedHighCardinalityTable, seedHeadroomTable } from "./planSandbox.js";
+import { seedPlanWorkflow, seedHighCardinalityTable, seedHeadroomTable, seedResidualCapTable } from "./planSandbox.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(__dirname, "../../../fixtures/golden/plan-v1.jsonl");
 const REPORT_DIR = path.resolve(__dirname, "../../../eval-reports");
+
+/**
+ * Test-only override of plan.ts's RESIDUAL_PLAN_AGGREGATE_GROUP_CAP (real
+ * value: 100,000) — read by apps/worker/src/lib/plan/nodes/
+ * validateFeasibility.ts, same "process.env override, never in a .env /
+ * env.ts's validated schema" convention as runEtl.ts's RESIDUAL_GROUP_CAP.
+ * Set here, only for this harness's process, so the
+ * "aggregate-residual-cap-breach" golden case (planSandbox.ts's
+ * seedResidualCapTable, 60 rows) can genuinely breach the cap without
+ * seeding six figures of real rows. Safe to set process-wide for this
+ * entire suite run: every other case's aggregate is either not residual
+ * (always pushed, never capped) or has too few groups to hit 50 either
+ * way, so only this one case's outcome is actually affected.
+ */
+process.env.PLAN_RESIDUAL_GROUP_CAP = "50";
 
 function loadGoldenCases(): PlanGoldenCase[] {
   const raw = readFileSync(FIXTURE_PATH, "utf-8");
@@ -60,6 +75,7 @@ export async function runPlanGoldenSuite(): Promise<PlanEvalReport> {
   const { orgId } = await seedSandbox();
   seedHighCardinalityTable();
   seedHeadroomTable();
+  seedResidualCapTable();
 
   const results: PlanEvalCaseResult[] = [];
 
@@ -122,6 +138,26 @@ export async function runPlanGoldenSuite(): Promise<PlanEvalReport> {
         if (result.status !== "no-connection") {
           pass = false;
           notes.push(`expected status=no-connection, got status=${result.status}`);
+        }
+        break;
+      }
+      case "capacity-safety": {
+        // Scores the safety PROPERTY ("no over-cap plan ever reaches
+        // apply"), not one exact path — see planGoldenCase.ts's doc
+        // comment and docs/decisions.md's safety-property-scoring entry.
+        // Passes on either a capacity-limit refusal or a clarify; fails on
+        // an applyable `ok` plan (the property is actually violated) or
+        // any other status (doesn't exercise the property).
+        if (result.status === "refused") {
+          if (result.kind !== "capacity-limit") {
+            pass = false;
+            notes.push(`expected a capacity-limit refusal (safety property), got refusalKind=${result.kind}`);
+          }
+        } else if (result.status !== "clarify") {
+          pass = false;
+          notes.push(
+            `safety property violated: expected a capacity-limit refusal or a clarify (never an applyable plan for a plan that breaches the residual group cap), got status=${result.status}`,
+          );
         }
         break;
       }

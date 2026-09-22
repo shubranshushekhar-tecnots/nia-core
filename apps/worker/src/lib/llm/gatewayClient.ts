@@ -26,8 +26,13 @@ export type ChatMessage = { role: "system" | "user" | "assistant"; content: stri
  * name. `model` is an optional per-call-site override (e.g.
  * env.QUERYGEN_MODEL) — omit it to use env.NIA_GATEWAY_MODEL, the same
  * single-model behavior this had before per-call-site overrides existed.
+ * `temperature` is an optional per-call-site override, omitted by default
+ * (gateway/model default applies) — set explicitly by call sites that need
+ * deterministic output (e.g. generatePlanNode, Phase 13 gate: sampling
+ * variance was the source of eval:golden:plan flakiness, not model drift —
+ * see docs/decisions.md's Phase 13 gate entry).
  */
-export type LlmCallContext = { node: string; model?: string; reasoning?: { enabled: false } };
+export type LlmCallContext = { node: string; model?: string; temperature?: number; reasoning?: { enabled: false } };
 
 /** Non-streaming call — used for query generation and the faithfulness check. */
 export async function complete(messages: ChatMessage[], context?: LlmCallContext): Promise<string> {
@@ -37,6 +42,7 @@ export async function complete(messages: ChatMessage[], context?: LlmCallContext
     model,
     messages,
     stream: false,
+    ...(context?.temperature !== undefined ? { temperature: context.temperature } : {}),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- gateway-only passthrough field, not in the OpenAI SDK's type
     ...(context?.reasoning ? ({ reasoning: context.reasoning } as any) : {}),
   });

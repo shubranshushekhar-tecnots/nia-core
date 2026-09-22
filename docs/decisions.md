@@ -4457,3 +4457,192 @@ setup + both propose->ghost->apply flows) green against the unchanged
 legacy `Plan` apply path — confirms this phase's `putWorkflowGraph`/
 `ensureGraphStepIds` additions didn't regress it. No RLS probes added
 (see deviations). Not committed, per the plan's explicit instruction.
+
+## Phase 13 gate: planner's aggregate cap was stale post-Phase-9 pagination — fixed
+
+**Finding.** `validatePlanFeasibility` (`packages/schemas/src/plan.ts`)
+still refused any grouped aggregate whose probed cardinality exceeded
+`MAX_PLAN_AGGREGATE_ROWS = 1000` (minus a 50-row
+`PLAN_AGGREGATE_HEADROOM` margin), for every aggregate step
+unconditionally — pushed or residual. Those numbers trace back to
+Phase 7 authorship, mirroring the runtime's OLD single-chunk row caps
+(`packages/guardrails/src/sql/validator.ts`'s `maxRows`, `apps/worker/
+src/lib/etl/queryBuilder.ts`'s `MAX_CHUNK_ROWS`) from when a pushed
+aggregate ran as one unpaginated query capped at 1000 total rows.
+**Phase 9 Part 1/3** (`PHASE9_EXIT.md`; this file's Phase 9 entry)
+replaced that with group-key keyset pagination for every pushed
+aggregate and explicitly removed the old runtime fail-at-cap guard —
+"pagination supersedes it." The planner's design-time check was never
+updated to match: it kept refusing plans the runtime could now execute
+correctly, and did so even for pushed aggregates, which the runtime
+never caps at all.
+
+**Fix.** `validatePlanFeasibility` now calls the existing pure
+`compilePushdown` (`packages/schemas/src/pushdown.ts`) once per
+transform node (using a new `ctx.resolveDialect(connectionId)`
+callback, mirroring the same `dialectByConnectionId` lookup
+`validateFeasibility.ts`'s `probeCardinalityFn` closure already built)
+and only runs the cardinality probe/cap check against steps
+`compilePushdown` classifies as **residual** (i.e.
+`residualTransforms.includes(step)`). A pushed aggregate is never
+probed and never capped, matching the runtime exactly. The three old
+constants are replaced by a single `RESIDUAL_PLAN_AGGREGATE_GROUP_CAP =
+100_000`, mirroring `runEtl.ts`'s `DEFAULT_RESIDUAL_GROUP_CAP` — the
+actual in-memory accumulator guard for a residual (un-pushable)
+aggregate — so the design-time refusal boundary can never drift from
+what execution enforces. No headroom margin: the runtime check itself
+is a single hard `> cap` threshold with no margin, so a stricter
+design-time margin would just invent a rule the runtime doesn't have.
+
+**Golden fixture update.** Both `aggregate-breaching-cap` and
+`aggregate-within-headroom-margin` (`apps/worker/fixtures/golden/
+plan-v1.jsonl`) describe a plain `COUNT ... GROUP BY id` aggregate step
+(no `having`) directly after a mysql source — per `ops/aggregate.ts`'s
+`isPushable`, a no-`having` aggregate is unconditionally pushable on
+every dialect, so under the corrected logic neither case's aggregate
+is ever probed or capped regardless of its seed table's row count.
+Their `expect` changed from `{"type": "refused", "refusalKind":
+"capacity-limit"}` to `{"type": "plan", "minNodes": 2}`, matching
+`aggregate-within-cap`'s shape. This is a direct consequence of the
+Phase 9 pagination decision above, not a new judgment call — citing it
+per that decision rather than re-deriving it. `apps/worker/src/lib/
+eval/planSandbox.ts`'s seed-table doc comments were updated to note
+their row counts (1500 / 975) no longer carry cap-boundary
+significance; the seed functions themselves are unchanged; they still
+give the LLM a real wide table to aggregate over.
+
+**New test coverage** (`packages/schemas/src/plan.test.ts`, rewritten;
+`apps/worker/src/lib/plan/nodes/validateFeasibility.test.ts`, updated)
+now exercises both branches explicitly: a pushed (no-`having`)
+aggregate is proven to never call `probeCardinality` regardless of
+count; an unresolvable dialect (`resolveDialect` returns `null`) falls
+back to residual per `compilePushdown`'s null-dialect contract, so it
+*is* probed; and the residual within-cap/breach/unmeasured-sentinel
+paths are exercised via a deliberately mysql-unpushable `having`
+clause (`regex_extract`, `FN_PUSHABILITY` in `ops/types.ts`) to force
+residual classification without faking dialect resolution.
+
+Tests: `packages/schemas` — 534/534 unit tests green (build clean).
+`apps/worker`'s `validateFeasibility.test.ts` — 3/3 green.
+
+## Phase 13 gate: eval:golden:plan flakiness — sampling, not model drift; pinned to temperature 0
+
+**Investigated whether the model itself was drifting underneath a fixed
+alias.** `env.NIA_GATEWAY_MODEL` resolves `anthropic/claude-sonnet-4-6`
+through Nia Gateway; its response carries `canonicalSlug:
+"anthropic/claude-sonnet-4.6"` with a fixed knowledge-cutoff
+(2025-08-31) — a single pinned catalog model, not a rolling/dated
+alias that could silently move underneath the same string. No dated
+snapshot pin is offered (or needed) beyond this — the "model drift"
+hypothesis for the eval's flakiness doesn't hold; nothing here can
+drift.
+
+**Fix: pin sampling instead.** `gatewayClient.ts`'s `complete`/
+`streamComplete` never set `temperature` (the SDK/gateway default
+applies, non-zero). Added an optional `temperature?: number` to
+`LlmCallContext`, passed through to `client.chat.completions.create`
+only when explicitly set. Set `temperature: 0` at exactly one call
+site — `generatePlanNode`'s `completeJson` call
+(`apps/worker/src/lib/plan/nodes/generatePlan.ts`) — since plan
+generation should be deterministic given identical input and this is
+the node `eval:golden:plan` exercises. Deliberately scoped to that one
+call site, not gateway-wide: chat query/answer generation aren't part
+of this eval and don't need the behavior change forced on them by this
+fix.
+
+## Phase 13 gate: safety-property scoring for capacity-cap golden cases
+
+**Problem.** After the stale-cap fix above, `aggregate-breaching-cap`
+and `aggregate-within-headroom-margin` both describe a plain
+no-`having` aggregate, which `ops/aggregate.ts`'s `isPushable` always
+classifies as pushed — so post-fix, neither case's aggregate is ever
+probed or capped at all, and no case in `plan-v1.jsonl` exercises a
+real capacity-refusal outcome anymore. `eval:golden:plan` would go on
+passing even if `validatePlanFeasibility`'s residual-cap check were
+silently deleted, which defeats the point of a golden case that's
+supposed to guard a safety property ("a plan that would breach the
+residual aggregate group cap must never reach an applyable `ok`
+status").
+
+**Decision: score the property, not one exact path, for cases that
+test a safety property — and only those cases.** Added a new
+`expect.type: "capacity-safety"` to `PlanGoldenCase`
+(`apps/worker/src/lib/eval/planGoldenCase.ts`), scored in
+`runPlanGoldenSuite.ts`: passes on EITHER `status: "refused"` with
+`kind: "capacity-limit"` OR `status: "clarify"` (the model asking
+rather than guessing past the cap is an acceptable way to satisfy the
+property); fails on `status: "ok"` (an over-cap plan reached apply —
+the property is actually violated) or any other status (doesn't
+exercise the property at all). This is deliberately a separate
+`expect.type`, not an "accept alternate status" flag folded into the
+existing `"refused"` case — every other case here asserts one exact
+outcome, and conflating the two assertion shapes would make ordinary
+non-safety cases quietly accept wrong-but-plausible outcomes too. Per
+this decision, `capacity-safety` scoring is reserved for cases that
+genuinely test a safety property; it is not a general substitute for
+exact-outcome assertions elsewhere in the suite.
+
+**New golden case: `aggregate-residual-cap-breach`.** To exercise this
+property for real without seeding six figures of rows, two additions:
+
+1. A test-only override of `RESIDUAL_PLAN_AGGREGATE_GROUP_CAP` (real
+   value: 100,000) — `PlanFeasibilityContext.residualGroupCap` in
+   `packages/schemas/src/plan.ts`, read from
+   `process.env.PLAN_RESIDUAL_GROUP_CAP` in
+   `apps/worker/src/lib/plan/nodes/validateFeasibility.ts`, same
+   "env-var override, never part of `env.ts`'s validated production
+   schema" convention as `runEtl.ts`'s `RESIDUAL_GROUP_CAP`
+   (`apps/worker/src/lib/etl/runEtl.ts`). `runPlanGoldenSuite.ts` sets
+   `PLAN_RESIDUAL_GROUP_CAP=50` process-wide for its own run only —
+   safe, since every other case's aggregate is either always-pushed
+   (never capped) or has too few groups to hit 50 either way.
+2. `planSandbox.ts`'s `seedResidualCapTable()` seeds a new
+   `plan_eval_residual` table with 60 rows (60 distinct `id` groups) —
+   enough to breach a 50-group test cap without approaching the real
+   100,000-group cap.
+
+The new case's `message` gives the model a real mysql-unpushable
+`having` clause to attach to the aggregate step, using `regex_extract`
+(unsupported on mysql per `FN_PUSHABILITY`, `packages/schemas/src/ops/
+types.ts`) so the step is forced residual regardless of dialect. The
+prompt driving plan generation (`apps/worker/src/lib/llm/prompts/
+planGen.ts`) doesn't document the `having` field in its transform
+example, so rather than relying on the model to construct a
+well-formed `Expr` from a natural-language description, the message
+gives it the exact `having` JSON literally and instructs it to copy it
+verbatim — same "give the model an explicit value to use as-is" shape
+as the existing `connection-invisible-to-user` case's hardcoded UUID.
+The aggregation alias is pinned to `"c"` in both the instructions and
+the literal `having` JSON, since `ops/aggregate.ts`'s Ruling 2 only
+allows a `having` clause to reference an aggregation alias or a
+groupBy field, never a raw source column.
+`probeCardinality.ts` measures raw group cardinality
+(`COUNT(DISTINCT groupBy cols)`) independent of `having`, so the
+having clause's only functional role here is forcing residual
+classification — the 60-row seed table is what actually breaches the
+50-group test cap.
+
+## Phase 13 gate: registered `smoke:extract:postgres`, same staged-write-role gap as the other smoke scripts
+
+`plain-postgres-extract-smoke.ts` (written for the Phase 10 exit
+report's open risk — no script had ever driven a plain, non-aggregate
+postgres-source extraction through `runEtl()`'s real chunked keyset
+path) existed but was never registered as a package script or run as
+part of the gate. Registered as `smoke:extract:postgres` in
+`apps/worker/package.json` (mirroring
+`presmoke:aggregate:postgres-source`'s `build:deps`-only preinstall
+hook) and added to the gate list in `TODO.md`.
+
+Running it surfaced the same gap `scripts/lib/stagedWriteRole.ts` was
+built to close for `aggregate-smoke.ts`/`aggregate-smoke-postgres-
+source.ts`/`kill-test.ts`: this script's self-provisioned mysql
+destination role only grants `SELECT, INSERT, UPDATE` on the
+destination table itself, but Phase 11's staged-write default also
+needs `CREATE`/`DROP` on the `nia` staging schema, and the write
+grant's `p_scope.schemas` needs `"nia"` in addition to the
+destination's own `"sandbox"` schema. Fixed both: wired in
+`grantStagedMysqlWriteRole` (same helper, same call site shape as
+`aggregate-smoke-postgres-source.ts`) and added `"nia"` to the
+`create_write_grant` call's `p_scope.schemas`. `smoke:extract:postgres`
+now passes end-to-end (3 chunks of 1000/1000/500, exactly 2,500
+destination rows, 0 duplicates, `workflow_runs.status: succeeded`).

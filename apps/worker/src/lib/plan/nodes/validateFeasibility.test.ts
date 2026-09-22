@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Plan } from "@nia/schemas";
+import { parseExpression } from "@nia/schemas";
 import type { VisibleConnection } from "../listConnections.js";
 import type { PlanStateType } from "../state.js";
+
+function expr(src: string) {
+  const parsed = parseExpression(src);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return parsed.expr;
+}
 
 /**
  * Worker-layer wiring test for validateFeasibilityNode — complements
@@ -58,7 +65,22 @@ function planWithAggregate(): Plan {
       {
         id: "xform-1",
         type: "transform",
-        config: { steps: [{ kind: "aggregate", groupBy: ["id"], aggregations: [{ fn: "count", field: null, alias: "c" }] }] },
+        config: {
+          steps: [
+            {
+              kind: "aggregate",
+              groupBy: ["id"],
+              aggregations: [{ fn: "count", field: null, alias: "c" }],
+              // regex_extract is unpushable on mysql (FN_PUSHABILITY,
+              // ops/types.ts) — forces this step residual regardless of the
+              // connection's resolvable dialect, so this test still
+              // exercises the real probeCardinalityFn closure post-Phase-13
+              // (a no-having aggregate is always pushed, and pushed
+              // aggregates are never probed/capped — see plan.ts).
+              having: expr('regex_extract(c, "[0-9]+") != ""'),
+            },
+          ],
+        },
         position: { x: 240, y: 0 },
       },
     ],

@@ -15,6 +15,17 @@ import { plexSans } from './heroFonts';
 // scroll-driven styles; the negative marginBottom here pulls the hero up
 // underneath this nav's box instead, relying on Nav's z-index (50) for
 // correct paint order.
+//
+// NAV_HEIGHT must equal this nav's real rendered height (22px padding top
+// + 22px padding bottom + the 35px content row, from the "Start free"
+// button's height:34 line) — LandingPage.tsx's `pastHero` scroll threshold
+// also imports this constant so the hero/next-section hard content
+// boundary always lands fully behind Nav's opaque/pinned phase instead of
+// inside its translucent frosted phase (a mismatch here previously left a
+// thin gap where hero's black and the next section's light background
+// showed a visible seam through Nav's blur).
+export const NAV_HEIGHT = 79;
+
 export default function Nav({ navRef }: { navRef: RefObject<HTMLElement> }) {
   return (
     <nav
@@ -25,7 +36,7 @@ export default function Nav({ navRef }: { navRef: RefObject<HTMLElement> }) {
         top: 0,
         zIndex: 50,
         boxSizing: 'border-box',
-        marginBottom: -74,
+        marginBottom: -NAV_HEIGHT,
         padding: '22px clamp(20px,4vw,56px)',
         background: 'var(--nav-bg, transparent)',
         backdropFilter: 'var(--nav-blur, none)',

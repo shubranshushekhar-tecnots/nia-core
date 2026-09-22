@@ -92,7 +92,12 @@ export async function generatePlanNode(state: PlanStateType): Promise<Partial<Pl
 
   let parsed: unknown;
   try {
-    parsed = await completeJson(messages, { node: "generatePlan" });
+    // temperature: 0 — Phase 13 gate: eval:golden:plan flakiness was traced
+    // to LLM sampling variance, not model drift (the resolved gateway model
+    // is a fixed snapshot, not a rolling alias — see docs/decisions.md's
+    // Phase 13 gate entry). Plan generation should be deterministic given
+    // identical input; pinned here only, not gateway-wide.
+    parsed = await completeJson(messages, { node: "generatePlan", temperature: 0 });
   } catch (err) {
     if (!(err instanceof JsonExtractionError)) throw err;
     return { error: `Plan generation returned unparseable JSON: ${err.message}` };

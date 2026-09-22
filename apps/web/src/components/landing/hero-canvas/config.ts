@@ -171,16 +171,24 @@ export const CANVAS_BOUNDS = {
   bottom: 360 + 175,
 };
 
-export const PRIMARY_NODE_CENTER = { x: CARD_W / 2, y: PORT_ROW_Y };
+// Anchor point (canvas coords, Supabase card top-left = 0,0) kept centered
+// under the window at every scroll frame. Y is the card's real vertical
+// content center (icon/title through the Input↔Output port row), not the
+// port row alone (72) — centering on the port row left ~55px of blank
+// canvas visible below the card in the tightened REST_WINDOW below.
+export const PRIMARY_NODE_CENTER = { x: CARD_W / 2, y: 46 };
 
-// Rest-state window metrics. Sized as a small inline thumbnail that sits on
-// the headline's own text line (roughly matching its line-height) rather
-// than a large window spanning past it — see the reference: the image
-// should read as a small inline chip, not a floating panel. Used only as an
-// SSR-safe default before hydration / as a fallback if the ghost span can't
-// be measured — the real rest box + center used for the scroll rig's Phase
-// A lerp is measured live from the ghost span itself (see
-// useHeroScrollProgress) so the window always lands exactly where the
-// headline's ghost reserved room for it, at any viewport width.
-export const REST_WINDOW = { w: 240, h: 150 };
-export const PIN_THRESHOLD = 0.12; // fraction of scrollable range where Phase A ends
+// Rest-state window metrics — the window's *native* (pre-CSS-scale) crop
+// size in canvas px, snug around the card's real content (logo → divider →
+// Input/Output row) with a small margin on every edge, ending just past
+// the purple Output dot rather than showing the full card + blank canvas
+// below it. The on-page *displayed* size is smaller still — see the ghost
+// span in HeroCanvasSection and the `restScale` transform derived from it
+// in useHeroScrollProgress — this constant only fixes the crop's aspect
+// ratio and what's visible, not how large it renders.
+export const REST_WINDOW = { w: 220, h: 84 };
+// Fraction of scrollable range where Phase A (pure centering, no zoom) ends
+// and Phase B (pure zoom, already centered) begins. Kept fairly high so the
+// window spends a real chunk of normal scrolling sliding to dead-center
+// before any growth starts, instead of the two phases blurring together.
+export const PIN_THRESHOLD = 0.35;

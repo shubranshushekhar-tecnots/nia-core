@@ -40,6 +40,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { Queue } from "bullmq";
 import { compilePushdown, manifestDialect, type EtlRunJob, type GraphDoc, type TransformConfig, type WorkspaceScope } from "@nia/schemas";
 import { runEtl } from "../src/lib/etl/runEtl.js";
+import { grantStagedPostgresWriteRole } from "./lib/stagedWriteRole.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "http://127.0.0.1:54321";
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -121,6 +122,9 @@ async function provisionScratchDestTableAndRole(): Promise<void> {
     await client.query(`grant connect on database sandbox to ${WRITE_ROLE_USER}`);
     await client.query(`grant usage on schema public to ${WRITE_ROLE_USER}`);
     await client.query(`grant select, insert, update on ${DEST_TABLE} to ${WRITE_ROLE_USER}`);
+    // Runner defaults to staged writes (Phase 11) — grant what the staged
+    // preflight requires beyond the destination table itself.
+    await grantStagedPostgresWriteRole(client, "sandbox", WRITE_ROLE_USER);
   } finally {
     await client.end();
   }
@@ -340,7 +344,11 @@ async function main(): Promise<void> {
 
   const { data: grantRow, error: grantError } = await supabaseUser.rpc("create_write_grant", {
     p_connection_id: destConnId,
-    p_scope: { schemas: ["public"] },
+    // Staged writes (Phase 11 default) also touch the "nia" staging schema
+    // — the grant scope has to cover it too, not just the destination
+    // table's own schema (write-smoke-staged.ts's minting call is the
+    // reference for this shape).
+    p_scope: { schemas: ["public", "nia"] },
   });
   if (grantError || !grantRow) throw new Error(`create_write_grant failed: ${grantError?.message}`);
   const grantId = (grantRow as { id: string }).id;

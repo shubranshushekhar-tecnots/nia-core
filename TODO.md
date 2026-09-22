@@ -344,8 +344,8 @@
   Phase 13 starts, not before:**
   - Full `conformance:agreement` suite (all cases, not a subset).
   - All smoke scripts: `smoke`, `smoke:aggregate`,
-    `smoke:aggregate:postgres-source`, `smoke:write`,
-    `smoke:write:mysql-mongo`, `smoke:staged`, `smoke:chat`,
+    `smoke:aggregate:postgres-source`, `smoke:extract:postgres`,
+    `smoke:write`, `smoke:write:mysql-mongo`, `smoke:staged`, `smoke:chat`,
     `smoke:mapping`, `smoke:profile`.
   - `kill-test` (etl-kill-resume-smoke's kill/redelivery path, direct
     mode — separate from `smoke:staged`'s own kill-after-chunk-1-resume

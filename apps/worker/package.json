@@ -16,6 +16,8 @@
     "smoke:aggregate": "tsx scripts/aggregate-smoke.ts",
     "presmoke:aggregate:postgres-source": "pnpm run build:deps",
     "smoke:aggregate:postgres-source": "tsx scripts/aggregate-smoke-postgres-source.ts",
+    "presmoke:extract:postgres": "pnpm run build:deps",
+    "smoke:extract:postgres": "tsx scripts/plain-postgres-extract-smoke.ts",
     "presmoke:write": "docker compose -f ../../docker-compose.yml up -d --build redis dev-postgres connector-supabase",
     "smoke:write": "tsx scripts/write-smoke.ts",
     "presmoke:write:mysql-mongo": "docker compose -f ../../docker-compose.yml up -d --build redis dev-mysql dev-mongo connector-mysql connector-mongodb",

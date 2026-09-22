@@ -35,12 +35,15 @@ export function useHeroScrollProgress(refs: HeroRefs) {
 
     // Rest box, measured live from the ghost span (falls back to the
     // REST_WINDOW constants only if the ghost can't be measured yet).
-    // Re-measured on resize alongside `range`. Width/height come from the
-    // real DOM box so the window's rest *size* matches the gap the headline
-    // reserved for it. Both horizontal and vertical position ease from the
+    // Re-measured on resize alongside `range`. This is the *displayed*
+    // (post-scale) box — the ghost is now sized smaller than the window's
+    // native crop (REST_WINDOW), so `restScale` (displayed / native width)
+    // drives a CSS transform that shrinks the window for display without
+    // changing what's cropped. Position (top/left) still eases from the
     // ghost's natural (left-aligned) line position to viewport-center as
     // the hero opens — it doesn't need to be centered at rest.
     let restBox = { top: 0, left: 0, width: REST_WINDOW.w, height: REST_WINDOW.h };
+    let restScale = 1;
 
     const applyFrame = (raw: number) => {
       const vw = window.innerWidth;
@@ -60,28 +63,40 @@ export function useHeroScrollProgress(refs: HeroRefs) {
         windowEl.style.height = '';
         windowEl.style.left = '';
         windowEl.style.top = '';
+        windowEl.style.transform = '';
         const rect = windowEl.getBoundingClientRect();
         w = rect.width;
         h = rect.height;
       } else {
-        const eased = heroEase(raw);
+        // Phase A (raw 0 -> PIN_THRESHOLD): the window only moves — it
+        // slides from its rest position to dead-center of the viewport on
+        // both axes while staying at rest size. Phase B (PIN_THRESHOLD ->
+        // 1): the window only grows — cx/cy are already pinned at vw/2,
+        // vh/2 by the end of Phase A, so it expands evenly in all four
+        // directions instead of growing and repositioning at once (which
+        // read as a diagonal drift/zoom happening too early).
         const posT = clamp01(raw / PIN_THRESHOLD);
         const posEased = heroEase(posT);
-        w = lerp(restBox.width, vw, eased);
-        h = lerp(restBox.height, vh, eased);
-        // cx is pinned to the ghost's rest center for the entire scroll —
-        // it does NOT lerp toward vw/2 like cy does, because the headline
-        // container isn't viewport-centered (maxWidth 1480, left-aligned),
-        // so lerping toward vw/2 made the window visibly drift sideways
-        // across scroll frames instead of holding its horizontal position.
+        const sizeT = clamp01((raw - PIN_THRESHOLD) / (1 - PIN_THRESHOLD));
+        const sizeEased = heroEase(sizeT);
+        // w/h grow from the window's native crop size (REST_WINDOW), not
+        // the (now smaller, scaled-down) displayed ghost box — the crop
+        // itself doesn't change, only how large it renders at rest. A
+        // `scale()` transform bridges native → displayed size, eased on
+        // the same curve so it lands exactly at 1 (no crop-vs-render size
+        // mismatch) by the time w/h finish growing to vw/vh.
+        w = lerp(REST_WINDOW.w, vw, sizeEased);
+        h = lerp(REST_WINDOW.h, vh, sizeEased);
+        const scale = lerp(restScale, 1, sizeEased);
         const restCx = restBox.left + restBox.width / 2;
         const restCy = restBox.top + restBox.height / 2;
-        const cx = restCx;
+        const cx = lerp(restCx, vw / 2, posEased);
         const cy = lerp(restCy, vh / 2, posEased);
         windowEl.style.width = `${w}px`;
         windowEl.style.height = `${h}px`;
         windowEl.style.left = `${cx - w / 2}px`;
         windowEl.style.top = `${cy - h / 2}px`;
+        windowEl.style.transform = `scale(${scale.toFixed(4)})`;
       }
 
       const canvasTx = w / 2 - PRIMARY_NODE_CENTER.x;
@@ -134,6 +149,7 @@ export function useHeroScrollProgress(refs: HeroRefs) {
         const g = ghostEl.getBoundingClientRect();
         if (g.width > 0 && g.height > 0) {
           restBox = { top: g.top, left: g.left, width: g.width, height: g.height };
+          restScale = g.width / REST_WINDOW.w;
         }
       }
     };

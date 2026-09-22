@@ -27,9 +27,20 @@ export async function validateFeasibilityNode(state: PlanStateType): Promise<Par
     return probeCardinality(connectionId, entity, groupBy, dialect, state.scope, state.userId);
   };
 
+  const resolveDialect = (connectionId: string) => dialectByConnectionId.get(connectionId) ?? null;
+
+  // Test-only override, read directly from process.env rather than env.ts's
+  // validated schema — same "not part of production config, only ever set
+  // by an eval/test harness" convention as runEtl.ts's RESIDUAL_GROUP_CAP.
+  // See plan.ts's PlanFeasibilityContext.residualGroupCap doc comment.
+  const rawCapOverride = Number(process.env.PLAN_RESIDUAL_GROUP_CAP ?? "");
+  const residualGroupCap = Number.isFinite(rawCapOverride) && rawCapOverride > 0 ? rawCapOverride : undefined;
+
   const { results, probeResults } = await validatePlanFeasibility(state.plan!, {
     entityExists,
     probeCardinality: probeCardinalityFn,
+    resolveDialect,
+    residualGroupCap,
   });
   const failures = results.filter((r) => r.status === "fail");
   if (failures.length === 0) {
@@ -38,10 +49,10 @@ export async function validateFeasibilityNode(state: PlanStateType): Promise<Par
 
   const message = failures.map((f) => f.message).join(" ");
   // plan.ts's validatePlanFeasibility phrases every cap-related failure
-  // (hard breach, headroom-margin refusal, and unmeasured-probe refusal
-  // alike) with the exact substring "row cap" — used here to distinguish
+  // (breach and unmeasured-probe refusal alike, for a residual aggregate)
+  // with the exact substring "group cap" — used here to distinguish
   // "capacity-limit" from other feasibility failures ("partial-failure":
   // e.g. a referenced entity doesn't exist).
-  const breachesCap = failures.some((f) => f.message.includes("row cap"));
+  const breachesCap = failures.some((f) => f.message.includes("group cap"));
   return decideRetryOrRefuse(state, message, breachesCap ? "capacity-limit" : "partial-failure");
 }

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { GraphDoc } from "./graph.js";
 import { GraphNodeType, GraphPosition } from "./graph.js";
 import { parseNodeConfig, type EntityRef } from "./nodeConfig.js";
+import { compilePushdown, type SourceDialect } from "./pushdown.js";
 
 /**
  * Phase 7 Session 1 — Copilot's proposed-graph-mutation contract.
@@ -308,32 +309,34 @@ export function validatePlanStructure(plan: Plan, existingGraph: GraphDoc): Plan
 // ---- b. feasibility (injected I/O) ----------------------------------------
 
 /**
- * Guardrails/ETL cap every query's effective row count at 1000
- * (packages/guardrails/src/sql/validator.ts's DEFAULT_OPTIONS.maxRows,
- * mongodb.ts's DEFAULT_MAX_ROWS, apps/worker/src/lib/etl/queryBuilder.ts's
- * MAX_CHUNK_ROWS) — each an independent copy of the same documented value,
- * same precedent this follows rather than introducing a cross-package
- * import (packages/schemas must stay upward-import-free of apps/worker).
+ * Phase 13 gate correction: this used to be MAX_PLAN_AGGREGATE_ROWS = 1000
+ * (plus a 50-row PLAN_AGGREGATE_HEADROOM margin), documented from Phase 7
+ * authorship as mirroring packages/guardrails/src/sql/validator.ts's
+ * DEFAULT_OPTIONS.maxRows / mongodb.ts's DEFAULT_MAX_ROWS /
+ * apps/worker/src/lib/etl/queryBuilder.ts's MAX_CHUNK_ROWS — i.e. the OLD
+ * single-chunk total-row runtime limit, back when a pushed aggregate ran as
+ * one unpaginated query capped at 1000 total rows. Phase 9 Part 3
+ * (PHASE9_EXIT.md; docs/decisions.md) replaced that with group-key keyset
+ * pagination for every pushed aggregate and explicitly removed the old
+ * fail-at-cap guard ("pagination supersedes it") — MAX_CHUNK_ROWS/maxRows
+ * still exist, but now only as a per-page size, not a total cap. A pushed
+ * aggregate has no group-count limit today; only a RESIDUAL (in-process,
+ * un-pushable) aggregate is still capped, by runEtl.ts's
+ * DEFAULT_RESIDUAL_GROUP_CAP = 100_000 in-memory accumulator guard. This
+ * constant mirrors that same number so the planner's design-time refusal
+ * boundary can never drift from the value the runtime actually enforces.
+ * No headroom-margin analog here (unlike the old constant) — the runtime
+ * check itself is a single hard `> cap` threshold with no margin
+ * (runEtl.ts), so a design-time margin below it would just be inventing a
+ * stricter rule than what execution actually enforces.
  */
-export const MAX_PLAN_AGGREGATE_ROWS = 1000;
-
-/**
- * Safety margin below MAX_PLAN_AGGREGATE_ROWS: a probe measures cardinality
- * at plan time, but the aggregate actually runs later at Apply/execution
- * time, and the underlying table can grow in between. A plan that probes at
- * exactly 998 groups is a hard-cap failure waiting to happen the moment one
- * more group appears before the run executes — so the refusal threshold is
- * a margin below the cap, not the cap itself. Single named constant so
- * validatePlanFeasibility's refusal boundary can never drift from the value
- * documented here.
- */
-export const PLAN_AGGREGATE_HEADROOM = 50;
-
-/** The actual refusal boundary validatePlanFeasibility checks against — MAX_PLAN_AGGREGATE_ROWS minus PLAN_AGGREGATE_HEADROOM, derived rather than a second hand-copied number. */
-export const PLAN_AGGREGATE_REFUSAL_THRESHOLD = MAX_PLAN_AGGREGATE_ROWS - PLAN_AGGREGATE_HEADROOM;
+export const RESIDUAL_PLAN_AGGREGATE_GROUP_CAP = 100_000;
 
 /** Caller (plan engine) owns the actual schema-introspection lookup — resolves whether `entity` exists in `connectionId`'s introspected schema. */
 export type EntityExistsLookup = (connectionId: string, entity: EntityRef) => Promise<boolean>;
+
+/** Caller (plan engine) owns the connection -> dialect lookup (a pure in-memory map over the same visible-connections list checkConnections already resolved) — used to decide whether a proposed aggregate step would push down (no cap) or run residually (RESIDUAL_PLAN_AGGREGATE_GROUP_CAP applies). Returns null when the connection's dialect can't be resolved — treated as "not pushable", same as compilePushdown's own null-dialect contract. */
+export type DialectResolver = (connectionId: string) => SourceDialect | null;
 
 /**
  * Caller owns the actual cardinality probe dispatch (a COUNT(DISTINCT
@@ -356,6 +359,17 @@ export type CardinalityProbeFn = (
 export type PlanFeasibilityContext = {
   entityExists: EntityExistsLookup;
   probeCardinality: CardinalityProbeFn;
+  resolveDialect: DialectResolver;
+  /**
+   * Test-only override for RESIDUAL_PLAN_AGGREGATE_GROUP_CAP — omit in
+   * production (defaults to the real cap). Exists so the golden eval suite
+   * can exercise a genuine cap breach without seeding 100,000+ real rows,
+   * same "configurable override, real constant by default" convention as
+   * runEtl.ts's RESIDUAL_GROUP_CAP env var (apps/worker/src/lib/etl/
+   * runEtl.ts's residualGroupCap()) — see runPlanGoldenSuite.ts for where
+   * this gets set, and only there.
+   */
+  residualGroupCap?: number;
 };
 
 /**
@@ -363,10 +377,16 @@ export type PlanFeasibilityContext = {
  * checkGrants. For every plan node with a persisted `entity` (SourceDestConfig),
  * confirms it actually exists in the target connection's introspected schema.
  * For every TransformConfig step with `kind: "aggregate"` and a non-empty
- * groupBy, probes cardinality and fails if it would breach
- * MAX_PLAN_AGGREGATE_ROWS. `groupBy: []` (whole-table aggregate) is always
- * exactly 1 output row — never probed, matching Block 6's own vocabulary
- * (nodeConfig.ts's AggregateStep doc).
+ * groupBy, first determines (via compilePushdown, same pure classifier the
+ * canvas transform-drawer preview and the real executor both use) whether
+ * the step would PUSH DOWN to the source dialect or run RESIDUALLY
+ * in-process. A pushed aggregate is never probed/capped — Phase 9 Part 3
+ * gave every pushed aggregate group-key keyset pagination, so there is no
+ * group-count limit left to enforce at plan time. A residual aggregate is
+ * probed and fails if it would breach RESIDUAL_PLAN_AGGREGATE_GROUP_CAP,
+ * mirroring runEtl.ts's own in-memory accumulator guard. `groupBy: []`
+ * (whole-table aggregate) is always exactly 1 output row — never probed,
+ * matching Block 6's own vocabulary (nodeConfig.ts's AggregateStep doc).
  *
  * A node whose config is unrecognized (already flagged by
  * validatePlanStructure) is skipped here rather than re-flagged — structure
@@ -374,19 +394,17 @@ export type PlanFeasibilityContext = {
  * tell "this plan is malformed" from "this plan is well-formed but
  * infeasible" apart.
  *
- * Three-way outcome per probed aggregate step, worst to best:
+ * Two-way outcome per probed RESIDUAL aggregate step (a pushed step is
+ * never probed at all — see above):
  *  1. Probe couldn't be measured (negative count) — hard fail, never fail
  *     open. Message says "could not be measured" and still includes the
- *     substring "row cap" so callers keying off that (e.g. apps/worker's
+ *     substring "group cap" so callers keying off that (e.g. apps/worker's
  *     validateFeasibility.ts) still classify it as a capacity-limit
  *     refusal, same as an actual breach.
- *  2. count > MAX_PLAN_AGGREGATE_ROWS — hard breach.
- *  3. count > PLAN_AGGREGATE_REFUSAL_THRESHOLD (but <= the hard cap) — inside
- *     the safety margin, refused pre-emptively; message is worded
- *     differently from #2 so the two are distinguishable to a caller/test.
- *  4. Otherwise: within cap with margin to spare — recorded as evidence on
- *     the returned probeResults array (see PlanAggregateProbeResult), not
- *     re-validated by anything downstream.
+ *  2. count > RESIDUAL_PLAN_AGGREGATE_GROUP_CAP — breach, hard fail.
+ *  3. Otherwise: within cap — recorded as evidence on the returned
+ *     probeResults array (see PlanAggregateProbeResult), not re-validated
+ *     by anything downstream.
  */
 export async function validatePlanFeasibility(
   plan: Plan,
@@ -414,34 +432,38 @@ export async function validatePlanFeasibility(
       }
     } else if (parsed.type === "transform") {
       const sourceEntity = resolveUpstreamEntity(node, plan);
+      // Same pure classifier the canvas transform-drawer preview and the
+      // real executor use to decide pushed vs. residual — computed once per
+      // node (not per step) since it depends on the whole ordered step
+      // list, not any single step in isolation (splitPushable's "first
+      // non-pushable step and everything after it becomes residual" rule).
+      const dialect = sourceEntity?.connectionId ? ctx.resolveDialect(sourceEntity.connectionId) : null;
+      const { residualTransforms } = compilePushdown(dialect, parsed.value);
+      const cap = ctx.residualGroupCap ?? RESIDUAL_PLAN_AGGREGATE_GROUP_CAP;
+
       for (const [i, step] of parsed.value.steps.entries()) {
         if (step.kind !== "aggregate" || step.groupBy.length === 0) continue;
         if (!sourceEntity || !sourceEntity.connectionId) continue; // can't probe without a resolvable upstream connection+entity — not a hard failure here.
+        // Pushed aggregates get group-key keyset pagination at execution
+        // time (Phase 9 Part 3) — no group-count limit left to enforce here.
+        if (!residualTransforms.includes(step)) continue;
+
         const count = await ctx.probeCardinality(sourceEntity.connectionId, sourceEntity.entity, step.groupBy);
 
         if (count < 0) {
           results.push({
             id: "feasibility",
             status: "fail",
-            message: `Proposed node ${planNodeLabel(node)}: aggregate step ${i + 1} (GROUP BY ${step.groupBy.join(", ")}) could not be measured against the ${MAX_PLAN_AGGREGATE_ROWS}-row cap — refusing rather than assuming it fits.`,
+            message: `Proposed node ${planNodeLabel(node)}: aggregate step ${i + 1} (GROUP BY ${step.groupBy.join(", ")}) runs residually and could not be measured against the ${cap}-group cap — refusing rather than assuming it fits.`,
             planNodeId: node.id,
           });
           continue;
         }
-        if (count > MAX_PLAN_AGGREGATE_ROWS) {
+        if (count > cap) {
           results.push({
             id: "feasibility",
             status: "fail",
-            message: `Proposed node ${planNodeLabel(node)}: aggregate step ${i + 1} (GROUP BY ${step.groupBy.join(", ")}) would produce ${count} groups, exceeding the ${MAX_PLAN_AGGREGATE_ROWS}-row cap.`,
-            planNodeId: node.id,
-          });
-          continue;
-        }
-        if (count > PLAN_AGGREGATE_REFUSAL_THRESHOLD) {
-          results.push({
-            id: "feasibility",
-            status: "fail",
-            message: `Proposed node ${planNodeLabel(node)}: aggregate step ${i + 1} (GROUP BY ${step.groupBy.join(", ")}) would produce ${count} groups, within the ${PLAN_AGGREGATE_HEADROOM}-row safety margin of the ${MAX_PLAN_AGGREGATE_ROWS}-row cap — refusing to avoid a hard-cap failure from data drift between planning and execution.`,
+            message: `Proposed node ${planNodeLabel(node)}: aggregate step ${i + 1} (GROUP BY ${step.groupBy.join(", ")}) runs residually and would produce ${count} groups, exceeding the ${cap}-group cap.`,
             planNodeId: node.id,
           });
           continue;
@@ -459,7 +481,7 @@ export async function validatePlanFeasibility(
   }
 
   if (results.length === 0) {
-    results.push({ id: "feasibility", status: "pass", message: "Every referenced entity exists and every proposed aggregate stays within the row cap." });
+    results.push({ id: "feasibility", status: "pass", message: "Every referenced entity exists and every residual (non-pushed) aggregate stays within the group cap." });
   }
   return { results, probeResults };
 }

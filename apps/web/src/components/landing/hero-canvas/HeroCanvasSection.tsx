@@ -104,7 +104,7 @@ export default function HeroCanvasSection({ heroRef }: { heroRef: RefObject<HTML
               <span style={h1LineCenter}>
                 <span style={{ color: COLOR.textPrimary, justifySelf: 'start' }}>All on one</span>
                 <span ref={ghostRef} aria-hidden="true" className="nia-hero-ghost" style={ghostSpanStyle} />
-                <span style={{ color: COLOR.textPrimary, justifySelf: 'end' }}>canvas.</span>
+                <span style={{ color: COLOR.textPrimary, justifySelf: 'start' }}>canvas.</span>
               </span>
             </h1>
 
@@ -170,7 +170,7 @@ export default function HeroCanvasSection({ heroRef }: { heroRef: RefObject<HTML
           .nia-hero-window {
             position: relative !important;
             left: auto !important; top: auto !important;
-            width: 100% !important; height: min(78vw, 420px) !important;
+            width: 100% !important; height: min(38vw, 200px) !important;
             order: 3;
           }
         }
@@ -269,14 +269,20 @@ const h1LineCenter: CSSProperties = {
   gridTemplateColumns: '1fr auto 1fr',
   alignItems: 'center',
   width: '100%',
-  columnGap: 12,
+  columnGap: 6,
 };
 
+// Reserves the *displayed* (post-scale) footprint of the crop, which is
+// deliberately smaller than REST_WINDOW (the crop's native size in canvas
+// px — see config.ts) so the visual reads as a small inline chip sitting
+// close to the text, Material-reference style, rather than a large window.
+// aspectRatio still follows REST_WINDOW's ratio since the scale applied in
+// useHeroScrollProgress is uniform.
 const ghostSpanStyle: CSSProperties = {
   display: 'inline-block',
-  width: '15vw',
-  maxWidth: REST_WINDOW.w,
-  minWidth: 64,
+  width: '9vw',
+  maxWidth: 150,
+  minWidth: 72,
   aspectRatio: `${REST_WINDOW.w} / ${REST_WINDOW.h}`,
   visibility: 'hidden',
 };
