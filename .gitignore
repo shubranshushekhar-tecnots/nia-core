@@ -1,0 +1,49 @@
+# nia-ide: managed by Nia IDE
+.nia/
+.claude/
+
+# os
+.DS_Store
+
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# generated eval run artifacts
+apps/worker/eval-reports/
+
+# env
+.env
+.env.local
+.env.production
+.env.*.local
+**/.env.production
+
+# logs
+*.log
+
+# test coverage
+coverage/
+
+# Figma design exports — reference mockups only, not needed to build/run,
+# redistribution terms unclear; kept locally, not pushed
+designs/
+
+# supabase CLI local state
+supabase/.temp
+supabase/.branches
+
+# playwright saved auth sessions (real cookies, not fixtures)
+apps/web/playwright/.auth/
+
+# playwright run artifacts (screenshots/traces/last-run state) — generated
+# fresh every invocation, not a fixture; only e2e/*.spec.ts-snapshots/
+# baselines are committed
+apps/web/test-results/
+
+.nia/NIA.local.md

@@ -1,0 +1,5 @@
+{
+  "description": "Percentage strings with a trailing % sign. rate coerces to the bare numeric magnitude with % stripped (15% -> 15, not 0.15) since no fraction-normalization convention is assumed anywhere else in the op vocabulary; N/A and empty string normalize to NULL. Flagged for review: confirm the magnitude-not-fraction convention is the intended semantics before treating this as ground truth.",
+  "mustNotChange": ["id"],
+  "reviewed": false
+}

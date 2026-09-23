@@ -1,0 +1,221 @@
+Category,Function / Pattern,Type,Use Case,Example Formula
+Aggregation,SUM,Measure,Add up all values in a numeric column,Total Sales = SUM(Sales[SalesAmount])
+Aggregation,SUMX,Measure,Row-by-row calculation then sum (e.g. Qty x Price when no total column exists),"Total Revenue = SUMX(Sales, Sales[Qty] * Sales[UnitPrice])"
+Aggregation,AVERAGE,Measure,Arithmetic mean of a column,Avg Price = AVERAGE(Sales[UnitPrice])
+Aggregation,AVERAGEX,Measure,Row-level expression averaged across a table,"Avg Order Value = AVERAGEX(Orders, Orders[Qty]*Orders[UnitPrice])"
+Aggregation,MIN / MAX,Measure,Smallest/largest value in a column,Max Price = MAX(Sales[UnitPrice])
+Aggregation,MINX / MAXX,Measure,Smallest/largest value of a row expression,"Max Line Total = MAXX(Sales, Sales[Qty]*Sales[UnitPrice])"
+Aggregation,COUNT,Measure,Count numeric/date cells in a column (ignores blanks),Order Count = COUNT(Sales[OrderID])
+Aggregation,COUNTA,Measure,Count non-blank cells of any type,Filled Cells = COUNTA(Sales[Comments])
+Aggregation,COUNTROWS,Measure,Count rows in a table or filtered table expression,Product Count = COUNTROWS(Products)
+Aggregation,COUNTBLANK,Measure,Count blank/empty cells in a column,Missing Emails = COUNTBLANK(Customers[Email])
+Aggregation,DISTINCTCOUNT,Measure,Count unique values in a column,Unique Customers = DISTINCTCOUNT(Sales[CustomerID])
+Aggregation,DISTINCTCOUNTNOBLANK,Measure,Unique values excluding blanks,Unique Emails = DISTINCTCOUNTNOBLANK(Customers[Email])
+Aggregation,PRODUCT / PRODUCTX,Measure,Multiply all values in a column / row expression,"Growth Factor = PRODUCTX(Rates, 1+Rates[Rate])"
+Aggregation,GEOMEAN,Measure,"Geometric mean, useful for growth-rate averaging",Avg Growth = GEOMEAN(Returns[GrowthRate])
+Aggregation,MEDIAN / MEDIANX,Measure,Middle value of a distribution,Median Salary = MEDIAN(Employees[Salary])
+Aggregation,VAR.S / VAR.P,Measure,Sample/population variance,Sales Variance = VAR.S(Sales[SalesAmount])
+Aggregation,STDEV.S / STDEV.P,Measure,Sample/population standard deviation,Sales StdDev = STDEV.S(Sales[SalesAmount])
+Filter,CALCULATE,Measure,Evaluate an expression in a modified filter context — the most important DAX function,"Sales 2024 = CALCULATE(SUM(Sales[SalesAmount]), Sales[Year]=2024)"
+Filter,CALCULATETABLE,Calculated Column/Measure,Same as CALCULATE but returns a table,"HighValueOrders = CALCULATETABLE(Sales, Sales[SalesAmount]>1000)"
+Filter,FILTER,Measure/Column,Return a filtered table for use inside CALCULATE or as a table expression,"Big Orders Total = CALCULATE(SUM(Sales[SalesAmount]), FILTER(Sales, Sales[SalesAmount]>500))"
+Filter,ALL,Measure,Remove all filters from a table/column to compute grand totals or % of total,"% of Total = DIVIDE(SUM(Sales[SalesAmount]), CALCULATE(SUM(Sales[SalesAmount]), ALL(Sales)))"
+Filter,ALLEXCEPT,Measure,Remove all filters except those specified — keep one grouping while clearing others,"Sales by Category Only = CALCULATE(SUM(Sales[SalesAmount]), ALLEXCEPT(Sales, Sales[Category]))"
+Filter,ALLSELECTED,Measure,Remove filters but retain filters explicitly applied by the user via slicers,"% of Visible Total = DIVIDE(SUM(Sales[SalesAmount]), CALCULATE(SUM(Sales[SalesAmount]), ALLSELECTED()))"
+Filter,ALLNOBLANKROW,Measure,Like ALL but excludes the blank row added for invalid relationships,"Clean Total = CALCULATE(SUM(Sales[SalesAmount]), ALLNOBLANKROW(Sales))"
+Filter,REMOVEFILTERS,Measure,"Explicitly clear filters (modern, clearer alternative to ALL inside CALCULATE)","Grand Total = CALCULATE(SUM(Sales[SalesAmount]), REMOVEFILTERS(Sales))"
+Filter,KEEPFILTERS,Measure,Add a filter while keeping existing filters instead of overwriting them,"KeepCtx = CALCULATE(SUM(Sales[SalesAmount]), KEEPFILTERS(Sales[Category]=""Bikes""))"
+Filter,VALUES,Measure/Column,Return distinct visible values of a column in current context; often used for single-value checks,"Selected Product = IF(HASONEVALUE(Products[Name]), VALUES(Products[Name]), ""Multiple"")"
+Filter,DISTINCT,Calculated Column/Table,Return distinct values of a column as a table (no blank-row handling like VALUES),DistinctColors = DISTINCT(Products[Color])
+Filter,HASONEVALUE,Measure,Test whether current filter context has exactly one value for a column,"Title = IF(HASONEVALUE(Products[Name]), VALUES(Products[Name]), ""Multiple Products"")"
+Filter,ISFILTERED / ISCROSSFILTERED,Measure,Check if a column/table is being filtered directly or via relationship,IsFiltered = ISFILTERED(Products[Category])
+Filter,EARLIER,Calculated Column,"Reference an outer row context value from within a nested row context (legacy, mostly replaced by variables)","Rank in Category = COUNTROWS(FILTER(Products, Products[Category]=EARLIER(Products[Category]) && Products[Price]>EARLIER(Products[Price])))+1"
+Filter,EARLIEST,Calculated Column,"Access the outermost row context (rarely used, pairs with EARLIER)",N/A (advanced nested row-context scenarios)
+Filter,RANKX,Measure,Rank a value within a table according to an expression,"Sales Rank = RANKX(ALL(Products), [Total Sales])"
+Filter,TOPN,Measure/Table,Return the top N rows of a table by an expression,"Top 5 Sales = SUMX(TOPN(5, Products, [Total Sales]), [Total Sales])"
+Time Intelligence,TOTALYTD,Measure,Year-to-date total up to the last date in current filter context,"Sales YTD = TOTALYTD(SUM(Sales[SalesAmount]), 'Date'[Date])"
+Time Intelligence,TOTALQTD / TOTALMTD,Measure,Quarter/Month-to-date totals,"Sales MTD = TOTALMTD(SUM(Sales[SalesAmount]), 'Date'[Date])"
+Time Intelligence,DATESYTD / DATESQTD / DATESMTD,Measure,"Return a table of dates from period start to last visible date, for use inside CALCULATE","Sales YTD = CALCULATE(SUM(Sales[SalesAmount]), DATESYTD('Date'[Date]))"
+Time Intelligence,SAMEPERIODLASTYEAR,Measure,Shift the date context back exactly one year,"Sales PY = CALCULATE(SUM(Sales[SalesAmount]), SAMEPERIODLASTYEAR('Date'[Date]))"
+Time Intelligence,DATEADD,Measure,Shift dates forward/backward by a number of intervals (day/month/quarter/year),"Sales Prior Month = CALCULATE(SUM(Sales[SalesAmount]), DATEADD('Date'[Date], -1, MONTH))"
+Time Intelligence,PARALLELPERIOD,Measure,Return a full parallel period (e.g. entire previous month) shifted from current context,"Sales Prior Qtr = CALCULATE(SUM(Sales[SalesAmount]), PARALLELPERIOD('Date'[Date], -1, QUARTER))"
+Time Intelligence,PREVIOUSDAY / PREVIOUSMONTH / PREVIOUSQUARTER / PREVIOUSYEAR,Measure,Return the previous day/month/quarter/year as a date table,"Sales Prev Year = CALCULATE(SUM(Sales[SalesAmount]), PREVIOUSYEAR('Date'[Date]))"
+Time Intelligence,NEXTDAY / NEXTMONTH / NEXTQUARTER / NEXTYEAR,Measure,Return the next day/month/quarter/year as a date table,"Sales Next Month = CALCULATE(SUM(Sales[SalesAmount]), NEXTMONTH('Date'[Date]))"
+Time Intelligence,FIRSTDATE / LASTDATE,Measure,First/last date visible in current filter context,"Closing Balance = CALCULATE(SUM(Sales[SalesAmount]), LASTDATE('Date'[Date]))"
+Time Intelligence,FIRSTNONBLANK / LASTNONBLANK,Measure,First/last date where an expression is not blank (great for inventory/balance snapshots),"Latest Stock Date = LASTNONBLANK('Date'[Date], CALCULATE(SUM(Inventory[Qty])))"
+Time Intelligence,DATESBETWEEN,Measure,Table of dates between two boundaries for custom period calculations,"Custom Range Sales = CALCULATE(SUM(Sales[SalesAmount]), DATESBETWEEN('Date'[Date], DATE(2024,1,1), DATE(2024,6,30)))"
+Time Intelligence,DATESINPERIOD,Measure,Table of dates within N intervals of a start date (rolling windows),"Rolling 30 Day Sales = CALCULATE(SUM(Sales[SalesAmount]), DATESINPERIOD('Date'[Date], MAX('Date'[Date]), -30, DAY))"
+Time Intelligence,OPENINGBALANCEMONTH / CLOSINGBALANCEMONTH,Measure,Balance at the start/end of a month (also YEAR/QUARTER variants),"Opening Bal = OPENINGBALANCEMONTH([Balance], 'Date'[Date])"
+Time Intelligence,STARTOFMONTH / ENDOFMONTH,Measure,First/last date of the month in current context (also YEAR/QUARTER variants),Month End = ENDOFMONTH('Date'[Date])
+Date & Time,TODAY / NOW,Measure/Column,Current date / current date-time,"Days Since Order = DATEDIFF(Sales[OrderDate], TODAY(), DAY)"
+Date & Time,YEAR / MONTH / DAY,Calculated Column,"Extract year, month, or day number from a date",OrderYear = YEAR(Sales[OrderDate])
+Date & Time,DATE,Calculated Column/Measure,"Construct a date from year, month, day parts","StartDate = DATE(2024,1,1)"
+Date & Time,DATEDIFF,Measure/Column,Difference between two dates in a specified interval,"Days to Ship = DATEDIFF(Sales[OrderDate], Sales[ShipDate], DAY)"
+Date & Time,EOMONTH,Calculated Column,"Last day of the month, offset by N months","MonthEnd = EOMONTH(Sales[OrderDate], 0)"
+Date & Time,WEEKDAY / WEEKNUM,Calculated Column,Day-of-week number / ISO week number,"IsWeekend = IF(WEEKDAY(Sales[OrderDate],2)>5, TRUE, FALSE)"
+Date & Time,CALENDAR / CALENDARAUTO,Table,Generate a contiguous date table (basis for a Date dimension),"DateTable = CALENDAR(DATE(2020,1,1), DATE(2026,12,31))"
+Date & Time,QUARTER,Calculated Column,Extract quarter number (1-4) from a date,OrderQuarter = QUARTER(Sales[OrderDate])
+Date & Time,HOUR / MINUTE / SECOND,Calculated Column,Extract time-of-day components from a datetime,OrderHour = HOUR(Sales[OrderDateTime])
+Logical,IF,Measure/Column,Conditional branching based on a test,"Status = IF(Sales[Qty]>100, ""High"", ""Low"")"
+Logical,IFS / SWITCH,Measure/Column,"Multi-branch conditional, cleaner than nested IFs","Tier = SWITCH(TRUE(), [Sales]>10000,""Gold"", [Sales]>5000,""Silver"", ""Bronze"")"
+Logical,AND / OR / NOT,Measure/Column,Combine or negate boolean conditions,"Eligible = AND(Sales[Qty]>0, Sales[Returned]=FALSE)"
+Logical,IFERROR,Measure/Column,Return a fallback value when an expression errors,"Safe Margin = IFERROR([Profit]/[Revenue], 0)"
+Logical,ISBLANK / ISERROR / ISNUMBER / ISTEXT / ISLOGICAL,Measure/Column,Type/blank/error checks used as guard conditions,HasValue = NOT(ISBLANK(Sales[Discount]))
+Logical,COALESCE,Measure/Column,Return the first non-blank value from a list of expressions,"Best Price = COALESCE(Sales[PromoPrice], Sales[ListPrice], 0)"
+Text,CONCATENATE / &,Calculated Column,Join two or more text strings,"FullName = Customers[FirstName] & "" "" & Customers[LastName]"
+Text,CONCATENATEX,Measure,Concatenate values from a table into one text string (e.g. comma list),"Products List = CONCATENATEX(Products, Products[Name], "", "")"
+Text,FORMAT,Measure/Column,Format a number/date as text using a format string,"Formatted Sales = FORMAT([Total Sales], ""$#,##0.00"")"
+Text,LEFT / RIGHT / MID,Calculated Column,"Extract a substring from the start, end, or middle of text","AreaCode = LEFT(Customers[Phone], 3)"
+Text,LEN,Calculated Column/Measure,Length of a text string,NameLength = LEN(Customers[FirstName])
+Text,UPPER / LOWER / PROPER,Calculated Column,Change text case,NameUpper = UPPER(Customers[FirstName])
+Text,TRIM,Calculated Column,Remove leading/trailing spaces,CleanText = TRIM(Sales[Comments])
+Text,SUBSTITUTE / REPLACE,Calculated Column,Replace text occurrences within a string,"CleanPhone = SUBSTITUTE(Customers[Phone], ""-"", """")"
+Text,FIND / SEARCH,Calculated Column,Locate the position of a substring (case-sensitive/insensitive),"AtPosition = FIND(""@"", Customers[Email])"
+Text,VALUE / TEXT-to-number,Calculated Column,Convert a text string to a number,QtyNumber = VALUE(Sales[QtyText])
+Text,REPT,Calculated Column,Repeat a text string N times (e.g. star ratings),"StarRating = REPT(""★"", Reviews[Score])"
+Math,DIVIDE,Measure,Safe division that returns a default (blank/0) instead of an error on divide-by-zero,"Margin % = DIVIDE([Profit], [Revenue], 0)"
+Math,ROUND / ROUNDUP / ROUNDDOWN,Measure/Column,Round a number to N digits,"Rounded Price = ROUND(Sales[UnitPrice], 2)"
+Math,ABS,Measure/Column,Absolute value,Variance Abs = ABS([Actual]-[Budget])
+Math,CEILING / FLOOR,Measure/Column,Round up/down to nearest multiple,"Rounded Up = CEILING(Sales[UnitPrice], 0.05)"
+Math,MOD,Measure/Column,Remainder after division,"IsEven = MOD(Sales[Qty],2)=0"
+Math,POWER / SQRT,Measure/Column,Exponentiation / square root,"Squared = POWER(Sales[Value],2)"
+Math,EXP / LN / LOG / LOG10,Measure/Column,Exponential and logarithmic functions,LogGrowth = LN([GrowthFactor])
+Math,INT / TRUNC,Measure/Column,Convert to integer / truncate decimals,WholeQty = INT(Sales[Qty])
+Math,SIGN,Measure/Column,"Return -1, 0, or 1 based on the sign of a number",VarianceDirection = SIGN([Actual]-[Budget])
+Statistical,PERCENTILE.INC / PERCENTILE.EXC,Measure,Compute a percentile value across a column,"P90 Price = PERCENTILE.INC(Sales[UnitPrice], 0.9)"
+Statistical,RANK.EQ,Column (Excel-style),Rank a value against a range (used in some legacy models),N/A (typically use RANKX in Power BI)
+Relationship,RELATED,Calculated Column,Pull a column value from a related table on the 'one' side of a relationship,Category = RELATED(Products[Category])
+Relationship,RELATEDTABLE,Calculated Column/Measure,Return related rows from the 'many' side as a table,Order Count = COUNTROWS(RELATEDTABLE(Sales))
+Relationship,USERELATIONSHIP,Measure,Activate an inactive relationship for a specific calculation,"Sales by Ship Date = CALCULATE(SUM(Sales[SalesAmount]), USERELATIONSHIP(Sales[ShipDate], 'Date'[Date]))"
+Relationship,CROSSFILTER,Measure,Temporarily change filter direction or disable a relationship,"One-Way = CALCULATE([Total Sales], CROSSFILTER(Sales[ProductID], Products[ProductID], OneDirection))"
+Relationship,LOOKUPVALUE,Calculated Column/Measure,"Look up a value in another table based on matching criteria, like Excel VLOOKUP","Region = LOOKUPVALUE(Stores[Region], Stores[StoreID], Sales[StoreID])"
+Table,SUMMARIZE,Table/Measure,Group a table by columns and add aggregated expressions,"SalesByCat = SUMMARIZE(Sales, Products[Category], ""Total"", SUM(Sales[SalesAmount]))"
+Table,SUMMARIZECOLUMNS,Table,"Modern, efficient grouping with filters, preferred in query-level table expressions","SUMMARIZECOLUMNS(Products[Category], ""Total Sales"", SUM(Sales[SalesAmount]))"
+Table,ADDCOLUMNS,Table,Add calculated columns to a table expression on the fly,"ADDCOLUMNS(Products, ""Margin"", Products[Price]-Products[Cost])"
+Table,SELECTCOLUMNS,Table,"Project/select specific columns from a table, optionally renaming them","SELECTCOLUMNS(Products, ""Name"", Products[Name], ""Price"", Products[Price])"
+Table,GENERATE / GENERATEALL,Table,Row-by-row cross join of a table with a second table expression evaluated per row,"GENERATE(Products, TOPN(1, Sales, Sales[OrderDate], DESC))"
+Table,UNION,Table,Stack rows from two or more tables with the same column count,"UNION(Table1, Table2)"
+Table,INTERSECT,Table,Return rows common to two tables,"INTERSECT(TableA, TableB)"
+Table,EXCEPT,Table,Return rows in the first table not present in the second,"EXCEPT(TableA, TableB)"
+Table,NATURALINNERJOIN / NATURALLEFTOUTERJOIN,Table,Join two tables that share a common key column,"NATURALINNERJOIN(Sales, Products)"
+Table,CROSSJOIN,Table,Cartesian product of two or more tables,"CROSSJOIN(Colors, Sizes)"
+Table,TOPN,Table/Measure,Return top N rows of a table ordered by an expression,"TOPN(10, Sales, Sales[SalesAmount], DESC)"
+Table,GROUPBY,Table,"Group rows and compute aggregations, similar to SUMMARIZE but with extension columns","GROUPBY(Sales, Sales[CustomerID], ""Total"", SUMX(CURRENTGROUP(), Sales[Amount]))"
+Table,ROW,Table,"Create a single-row table with named columns, often for what-if scenarios","ROW(""Metric"", ""Total"", ""Value"", [Total Sales])"
+Table,VALUES / DISTINCT (as table),Table,Return a one-column table of distinct/visible values for iteration,"SUMX(VALUES(Products[Category]), [Total Sales])"
+Parent-Child,PATH,Calculated Column,"Build a delimited path string of ancestor IDs for hierarchies (org charts, BOM)","OrgPath = PATH(Employees[EmployeeID], Employees[ManagerID])"
+Parent-Child,PATHITEM,Calculated Column,Return the ID at a specific level of a PATH string,"Level2 = PATHITEM([OrgPath], 2, INTEGER)"
+Parent-Child,PATHLENGTH,Calculated Column,Number of levels in a PATH string,Depth = PATHLENGTH([OrgPath])
+Parent-Child,PATHCONTAINS,Calculated Column/Measure,Check whether a PATH string contains a given ID,"IsUnderManager = PATHCONTAINS([OrgPath], EmployeeID)"
+Information,ISEMPTY,Measure,Check if a table expression returns no rows,HasSales = NOT(ISEMPTY(Sales))
+Information,USERNAME / USERPRINCIPALNAME,Measure,"Return the logged-in user, useful for Row-Level Security (RLS)",CurrentUser = USERNAME()
+Information,CUSTOMDATA,Measure,"Return custom data string passed via connection string, used in RLS scenarios",N/A (RLS with external connection)
+Information,ISONORAFTER,Measure,Efficient boundary comparison used internally by time-intelligence patterns,N/A (typically auto-generated by DAX time-intelligence functions)
+Variables/Pattern,VAR ... RETURN,Measure,Store intermediate calculation results for readability and performance,"YoY % = VAR CurYear = [Total Sales] VAR PriorYear = CALCULATE([Total Sales], SAMEPERIODLASTYEAR('Date'[Date])) RETURN DIVIDE(CurYear-PriorYear, PriorYear)"
+Variables/Pattern,Running Total Pattern,Measure,Cumulative total up to current row/date using CALCULATE + FILTER(ALL()),"Running Total = CALCULATE(SUM(Sales[SalesAmount]), FILTER(ALL('Date'[Date]), 'Date'[Date]<=MAX('Date'[Date])))"
+Variables/Pattern,% of Parent Total,Measure,Ratio of a row's value to a higher grouping's total,"% of Category = DIVIDE(SUM(Sales[SalesAmount]), CALCULATE(SUM(Sales[SalesAmount]), ALLEXCEPT(Products, Products[Category])))"
+Aggregation,COUNTX,Measure,Count rows where a row expression is non-blank — iterator version of COUNT,"Valid Orders = COUNTX(Sales, Sales[OrderID])"
+Aggregation,COUNTAX,Measure,Count non-blank row-expression results of any type — iterator version of COUNTA,"Filled Notes = COUNTAX(Sales, Sales[Comments])"
+Aggregation,VARX.S / VARX.P,Measure,Sample/population variance of a row expression across a table (iterator version of VAR.S/VAR.P),"Line Variance = VARX.S(Sales, Sales[Qty]*Sales[UnitPrice])"
+Aggregation,STDEVX.S / STDEVX.P,Measure,Sample/population standard deviation of a row expression (iterator version of STDEV.S/STDEV.P),"Line StdDev = STDEVX.S(Sales, Sales[Qty]*Sales[UnitPrice])"
+Aggregation,GEOMEANX,Measure,Geometric mean of a row expression across a table,"Avg Growth = GEOMEANX(Returns, 1+Returns[Rate])"
+Aggregation,APPROXIMATEDISTINCTCOUNT,Measure,"Fast approximate distinct count for very large DirectQuery tables (small margin of error, big speed gain)",Approx Customers = APPROXIMATEDISTINCTCOUNT(Sales[CustomerID])
+Filter,SELECTEDVALUE,Measure,"Return the single selected value in current context, or a default if zero/multiple values are selected — cleaner shorthand for the HASONEVALUE+VALUES pattern","Selected Category = SELECTEDVALUE(Products[Category], ""All Categories"")"
+Filter,ISINSCOPE,Measure,"Check which level of a hierarchy is currently being displayed, for level-specific formatting or logic","Label = IF(ISINSCOPE(Products[Category]), ""Category Total"", ""Detail"")"
+Filter,CONTAINS,Measure,Row-by-row test for whether a table contains a row matching given column/value pairs,"Has Match = CONTAINS(Products, Products[SKU], ""ABC123"")"
+Filter,CONTAINSROW,Measure,Test whether a table expression contains a specific row of values (used internally by the IN operator),"In List = CONTAINSROW({""East"",""West""}, Sales[Region])"
+Filter,HASONEFILTER,Measure,"Check if exactly one value is being filtered directly on a column (stricter than HASONEVALUE, ignores values from relationships)",Direct Filter = HASONEFILTER(Products[Category])
+Filter,ALLCROSSFILTERED,Measure,Remove all filters coming from cross-filtering through relationships on a table,"Clear Cross Filters = CALCULATE([Total Sales], ALLCROSSFILTERED(Products))"
+Filter,FILTERS,Measure,"Return the values currently filtering a column as a table (fails if more than one filter condition applies, unlike VALUES)",Active Filters = FILTERS(Products[Category])
+Time Intelligence,STARTOFQUARTER / ENDOFQUARTER,Measure,First/last date of the quarter in current context,Quarter Start = STARTOFQUARTER('Date'[Date])
+Time Intelligence,STARTOFYEAR / ENDOFYEAR,Measure,First/last date of the year in current context,Year End = ENDOFYEAR('Date'[Date])
+Time Intelligence,OPENINGBALANCEQUARTER / OPENINGBALANCEYEAR,Measure,Balance at the start of a quarter/year (sibling of OPENINGBALANCEMONTH),"Opening Bal Q = OPENINGBALANCEQUARTER([Balance], 'Date'[Date])"
+Time Intelligence,CLOSINGBALANCEQUARTER / CLOSINGBALANCEYEAR,Measure,Balance at the end of a quarter/year (sibling of CLOSINGBALANCEMONTH),"Closing Bal Y = CLOSINGBALANCEYEAR([Balance], 'Date'[Date])"
+Time Intelligence,UTCTODAY / UTCNOW,Measure,"Current UTC date / UTC date-time, unaffected by server local time zone",UTC Now = UTCNOW()
+Date & Time,DATEVALUE,Calculated Column/Measure,Convert a text string into a proper date value,ParsedDate = DATEVALUE(Sales[OrderDateText])
+Date & Time,TIMEVALUE,Calculated Column/Measure,Convert a text string into a proper time value,ParsedTime = TIMEVALUE(Sales[OrderTimeText])
+Date & Time,TIME,Calculated Column/Measure,"Construct a time value from hour, minute, second parts","OrderTime = TIME(14,30,0)"
+Date & Time,YEARFRAC,Calculated Column/Measure,"Fraction of a year between two dates, useful for prorating annual amounts","Tenure Years = YEARFRAC(Employees[HireDate], TODAY())"
+Text,EXACT,Calculated Column/Measure,Case-sensitive comparison of two text strings,"IsExactMatch = EXACT(Sales[Code], ""ABC-100"")"
+Text,FIXED,Calculated Column/Measure,Round a number and return it formatted as text with fixed decimals and optional thousands separator,"Formatted Amt = FIXED(Sales[SalesAmount], 2, FALSE)"
+Text,CHAR / CODE,Calculated Column/Measure,Convert between a character and its numeric character code,NewlineChar = CHAR(10)
+Text,UNICHAR / UNICODE,Calculated Column/Measure,Convert between a Unicode character and its Unicode code point (supports emoji/international text),StarChar = UNICHAR(9733)
+Text,COMBINEVALUES,Calculated Column,"Efficiently concatenate values with a delimiter, optimized for composite-key calculated columns","CompositeKey = COMBINEVALUES(""-"", Sales[OrderID], Sales[LineNum])"
+Math,QUOTIENT,Measure/Column,Integer portion of a division (discards the remainder),"Full Cases = QUOTIENT(Sales[Qty], 12)"
+Math,PI,Measure/Column,Return the value of pi for trigonometric/geometric calculations,Circumference = 2*PI()*Radius[Value]
+Math,DEGREES / RADIANS,Measure/Column,Convert between radians and degrees,AngleDeg = DEGREES(AngleRad[Value])
+Math,SIN / COS / TAN / ASIN / ACOS / ATAN,Measure/Column,"Standard trigonometric functions, used in geometric/engineering calculations",SineValue = SIN(Angles[Radians])
+Math,RAND / RANDBETWEEN,Measure/Column,Generate a random decimal (0-1) or random integer within a range — useful for sampling/simulation,"DiceRoll = RANDBETWEEN(1,6)"
+Math,FACT,Measure/Column,Factorial of a number,Permutations Base = FACT(5)
+Math,COMBIN / COMBINA,Measure/Column,"Number of combinations of items taken n at a time, with/without repetition","Combos = COMBIN(10,3)"
+Math,PERMUT,Measure/Column,Number of ordered permutations of items taken n at a time,"Permutations = PERMUT(10,3)"
+Math,MROUND,Measure/Column,Round a number to the nearest multiple of a given value,"Nearest Nickel = MROUND(Sales[UnitPrice], 0.05)"
+Math,GCD / LCM,Measure/Column,Greatest common divisor / least common multiple of two or more integers,"BatchSize = LCM(Products[CaseSize], Products[PalletSize])"
+Statistical,PERCENTILEX.INC / PERCENTILEX.EXC,Measure,Percentile of a row expression evaluated across a table (iterator version of PERCENTILE.INC/EXC),"P90 Order Value = PERCENTILEX.INC(Sales, Sales[Qty]*Sales[UnitPrice], 0.9)"
+Relationship,TREATAS,Measure,"Apply the values from one table as filters onto columns in another, unrelated table — builds a 'virtual relationship' without a physical one in the model","Budget Aligned = CALCULATE(SUM(Budget[Amount]), TREATAS(VALUES(Sales[Category]), Budget[Category]))"
+Table,GENERATESERIES,Table,Generate a table of sequential numbers — the standard technique for building What-If parameter tables and numeric axes,"TopN Parameter = GENERATESERIES(1, 50, 1)"
+Table,DETAILROWS,Table,"Return the underlying detail rows behind a measure, respecting any Detail Rows Expression defined on it",Drill Detail = DETAILROWS([Total Sales])
+Table,ADDMISSINGITEMS,Table,"Add rows for dimension values with no matching fact rows, so they still appear (e.g. as zero) in a visual","Full Product List = ADDMISSINGITEMS(VALUES(Products[Name]), Sales, Products[Name])"
+Parent-Child,PATHITEMREVERSE,Calculated Column,"Return the ID at a specific level of a PATH string, counting from the end instead of the start","Immediate Parent = PATHITEMREVERSE([OrgPath], 1, INTEGER)"
+Information,ISSUBTOTAL,Measure,Check whether the current row in a visual is a subtotal/total row rather than a detail row,Is Total Row = ISSUBTOTAL(Products[Category])
+Information,NAMEOF,Measure/Table,Return the fully-qualified name of a column or measure as text — required syntax for building Field Parameter tables,"Field Parameter = {(""Total Sales"", NAMEOF([Total Sales]), 0)}"
+Calculation Groups,SELECTEDMEASURE,Calc Item,"Reference whichever base measure is currently on the visual, inside a calculation item","Calc Item 'YTD' = TOTALYTD(SELECTEDMEASURE(), 'Date'[Date])"
+Calculation Groups,SELECTEDMEASURENAME,Calc Item,"Return the name of the measure currently being modified by a calculation item, for conditional logic per measure","Format Label = SELECTEDMEASURENAME() & "" (YTD)"""
+Calculation Groups,SELECTEDMEASUREFORMATSTRING,Calc Item,"Return the format string of the currently selected measure, to preserve its formatting through a calculation item",FormatString = SELECTEDMEASUREFORMATSTRING()
+Calculation Groups,ISSELECTEDMEASURE,Calc Item,"Test whether a specific named measure is the one currently active, to branch calculation-item logic per measure","Custom Logic = IF(ISSELECTEDMEASURE([Total Sales]), [Total Sales]*1.1, SELECTEDMEASURE())"
+Financial,NPV,Measure,Net present value of a series of cash flows at a given discount rate,"Project NPV = NPV(DiscountRate[Value], CashFlows[Amount])"
+Financial,XNPV,Measure,Net present value for cash flows on irregular (non-periodic) dates,"Deal XNPV = XNPV(DiscountRate[Value], CashFlows[Amount], CashFlows[Date])"
+Financial,XIRR,Measure,Internal rate of return for cash flows on irregular (non-periodic) dates,"Deal XIRR = XIRR(CashFlows[Amount], CashFlows[Date])"
+Financial,PV / FV,Measure,"Present value / future value of an investment given rate, periods, and payment","Loan PV = PV(Rate[Value]/12, Term[Months], -Payment[Value])"
+Financial,PMT,Measure,Periodic payment required to amortize a loan over a term at a given rate,"Monthly Payment = PMT(Rate[Value]/12, Term[Months], -Loan[Principal])"
+Aggregation,AVERAGEA,Measure,"Average of a column including text and logical values (TRUE=1, FALSE/text=0) alongside numbers, unlike AVERAGE which ignores them",Avg Mixed = AVERAGEA(Survey[ResponseColumn])
+Aggregation,MAXA,Measure,"Maximum value in a column including logical/text values (TRUE=1, text=0), unlike MAX which ignores them",Max Mixed = MAXA(Sales[MixedColumn])
+Aggregation,MINA,Measure,"Minimum value in a column including logical/text values (TRUE=1, text=0), unlike MIN which ignores them",Min Mixed = MINA(Sales[MixedColumn])
+Logical,BITAND / BITOR / BITXOR / BITLSHIFT / BITRSHIFT,Measure/Column,"Bitwise operations on integers, used for flag/permission bitmask logic","Combined Flags = BITOR(Permissions[FlagA], Permissions[FlagB])"
+Logical,ISNONTEXT,Measure/Column,"Test whether a value is NOT text (opposite of ISTEXT; TRUE for numbers, dates, blanks)",Is Not Text = ISNONTEXT(Sales[Field])
+Math,EVEN / ODD,Measure/Column,Round a number away from zero to the nearest even/odd integer,Even Qty = EVEN(Sales[Qty])
+Math,CURRENCY,Measure/Column,"Cast a value to the Currency (fixed 4-decimal) data type, avoiding floating-point rounding drift in money calculations",Price as Currency = CURRENCY(Sales[UnitPrice])
+Math,SQRTPI,Measure/Column,"Square root of a number multiplied by pi, common in area/geometry formulas",Radius Helper = SQRTPI(Area[Value])
+Math,ISO.CEILING,Measure/Column,"Round a number up to the nearest multiple using ISO-standard rounding (always toward positive infinity, unlike CEILING for negatives)","ISO Rounded = ISO.CEILING(Sales[UnitPrice], 0.05)"
+Math,SINH / COSH / TANH / COT / COTH / ACOSH / ASINH / ATANH / ACOTH,Measure/Column,Hyperbolic and cotangent trigonometric functions for advanced engineering/scientific calculations,Hyperbolic Sine = SINH(Values[X])
+Statistical,NORM.DIST / NORM.INV / NORM.S.DIST / NORM.S.INV,Measure,"Normal distribution probability and inverse functions, used in statistical confidence bands and forecasting models","Probability = NORM.DIST(Value[X], Mean[Value], StdDev[Value], TRUE)"
+Statistical,CONFIDENCE.NORM / CONFIDENCE.T,Measure,"Margin of error for a population mean confidence interval, using the normal or Student's t distribution","Margin of Error = CONFIDENCE.NORM(0.05, StdDev[Value], SampleSize[Value])"
+Statistical,POISSON.DIST,Measure,"Poisson distribution probability, used for modeling rare/random event counts (e.g. call-center arrivals, defect rates)","Probability = POISSON.DIST(Events[Count], Mean[Value], FALSE)"
+Statistical,SKEW / SKEWP,Measure,"Skewness of a sample/population distribution, describing asymmetry of the data around the mean",Sales Skew = SKEW(Sales[SalesAmount])
+Table,DATATABLE,Table,"Legacy inline table constructor with explicit column names and types, mostly superseded by the { } table constructor syntax","MyTable = DATATABLE(""Name"",STRING,""Value"",INTEGER,{{""A"",1},{""B"",2}})"
+Table,ROLLUP / ROLLUPGROUP / ROLLUPADDISSUBTOTAL / ROLLUPISSUBTOTAL,Table,"Used inside SUMMARIZE to add subtotal/grand-total rows for grouping columns, and to flag which result rows are subtotals","SUMMARIZE(Sales, ROLLUP(Products[Category], Products[Subcategory]), ""Total"", SUM(Sales[SalesAmount]))"
+Table,SAMPLE,Table,"Return a sample of N rows from a table (evenly spaced or random), useful for previewing large datasets without scanning everything","Sample Rows = SAMPLE(100, Sales, Sales[OrderDate])"
+Information,ERROR,Measure,"Raise a custom error with a specified message, used for explicit validation failures inside a measure","Validated Sales = IF([Total Sales]<0, ERROR(""Sales cannot be negative""), [Total Sales])"
+Financial,RATE / NPER,Measure,"Interest rate per period / number of payment periods for a loan or investment, solved from the other loan variables","Loan Rate = RATE(Term[Months], -Payment[Value], Loan[Principal])"
+Financial,IPMT / PPMT,Measure,Interest portion / principal portion of a specific loan payment within an amortization schedule,"Interest Portion = IPMT(Rate[Value]/12, Period[Number], Term[Months], -Loan[Principal])"
+Financial,SLN / DDB,Measure,Straight-line / double-declining-balance depreciation of an asset for a given period,"Annual Depreciation = SLN(Asset[Cost], Asset[Salvage], Asset[LifeYears])"
+Financial,ACCRINT / ACCRINTM,Measure,"Accrued interest for a security that pays periodic interest, or one that pays interest only at maturity","Accrued Interest = ACCRINT(Bond[Issue], Bond[FirstInterest], Bond[Settlement], Bond[Rate], Bond[Par], 2)"
+Financial,AMORDEGRC / AMORLINC,Measure,Depreciation for each accounting period using the French accounting system (degressive/linear),"Period Depreciation = AMORLINC(Asset[Cost], Asset[PurchaseDate], Asset[FirstPeriodEnd], Asset[Salvage], Period[Number], Asset[Rate])"
+Financial,COUPDAYBS / COUPDAYS / COUPDAYSNC,Measure,Days from the start of a coupon period to settlement / days in the coupon period / days from settlement to next coupon,"Days in Period = COUPDAYS(Bond[Settlement], Bond[Maturity], 2)"
+Financial,COUPNCD / COUPPCD,Measure,Next / previous coupon date relative to the settlement date of a security,"Next Coupon = COUPNCD(Bond[Settlement], Bond[Maturity], 2)"
+Financial,COUPNUM,Measure,Number of coupons payable between the settlement date and maturity date of a security,"Coupon Count = COUPNUM(Bond[Settlement], Bond[Maturity], 2)"
+Financial,CUMIPMT / CUMPRINC,Measure,Cumulative interest / cumulative principal paid on a loan between a start and end period,"Total Interest Paid = CUMIPMT(Rate[Value]/12, Term[Months], Loan[Principal], 1, 12, 0)"
+Financial,DB / VDB,Measure,Fixed-declining-balance / variable-declining-balance depreciation of an asset for a period,"Depreciation Y1 = DB(Asset[Cost], Asset[Salvage], Asset[LifeYears], 1)"
+Financial,DISC,Measure,"Discount rate for a security, given price and redemption value","Bond Discount Rate = DISC(Bond[Settlement], Bond[Maturity], Bond[Price], Bond[Redemption])"
+Financial,DOLLARDE / DOLLARFR,Measure,"Convert a dollar price expressed as a fraction into decimal form, and back","Decimal Price = DOLLARDE(Bond[FractionalPrice], 32)"
+Financial,DURATION / MDURATION,Measure,"Macaulay / modified duration of a security with periodic interest payments, used to measure interest-rate sensitivity","Bond Duration = DURATION(Bond[Settlement], Bond[Maturity], Bond[Coupon], Bond[Yield], 2)"
+Financial,EFFECT / NOMINAL,Measure,Convert between nominal annual interest rate and effective annual interest rate given compounding periods,"Effective Rate = EFFECT(Loan[NominalRate], 12)"
+Financial,FVSCHEDULE,Measure,Future value of an initial principal after applying a schedule of varying compound interest rates,"Future Value = FVSCHEDULE(Investment[Principal], RateSchedule[Rate])"
+Financial,INTRATE,Measure,Interest rate for a fully invested security (e.g. a bond bought at par),"Security Rate = INTRATE(Bond[Settlement], Bond[Maturity], Bond[Investment], Bond[Redemption])"
+Financial,ISPMT,Measure,"Interest paid for a specific period of a loan, using simple (straight-line) interest allocation","Period Interest = ISPMT(Rate[Value]/12, Period[Number], Term[Months], -Loan[Principal])"
+Financial,ODDFPRICE / ODDFYIELD,Measure,Price / yield of a security that has an odd (short or long) first coupon period,"Odd First Price = ODDFPRICE(Bond[Settlement], Bond[Maturity], Bond[Issue], Bond[FirstCoupon], Bond[Rate], Bond[Yield], Bond[Redemption], 2)"
+Financial,ODDLPRICE / ODDLYIELD,Measure,Price / yield of a security that has an odd (short or long) last coupon period,"Odd Last Price = ODDLPRICE(Bond[Settlement], Bond[Maturity], Bond[LastInterest], Bond[Rate], Bond[Yield], Bond[Redemption], 2)"
+Financial,PDURATION,Measure,Number of periods required for an investment to reach a specified future value at a given rate,"Periods to Double = PDURATION(Rate[Value], FutureValue[Target], Investment[Principal])"
+Financial,PRICE / PRICEDISC / PRICEMAT,Measure,Price per $100 face value of a security that pays periodic interest / is discounted / pays interest at maturity,"Bond Price = PRICE(Bond[Settlement], Bond[Maturity], Bond[Rate], Bond[Yield], Bond[Redemption], 2)"
+Financial,RECEIVED,Measure,Amount received at maturity for a fully invested (discounted) security,"Maturity Proceeds = RECEIVED(Bond[Settlement], Bond[Maturity], Bond[Investment], Bond[Discount])"
+Financial,RRI,Measure,Equivalent interest rate for the growth of an investment over a given number of periods,"Implied Growth Rate = RRI(Term[Years], Investment[Principal], Investment[FutureValue])"
+Financial,SYD,Measure,Sum-of-years-digits depreciation of an asset for a specified period,"SYD Depreciation = SYD(Asset[Cost], Asset[Salvage], Asset[LifeYears], Period[Number])"
+Financial,TBILLEQ / TBILLPRICE / TBILLYIELD,Measure,"Bond-equivalent yield, price, and yield calculations specifically for U.S. Treasury bills","T-Bill Price = TBILLPRICE(TBill[Settlement], TBill[Maturity], TBill[Discount])"
+Financial,YIELD / YIELDDISC / YIELDMAT,Measure,Annual yield of a security that pays periodic interest / is discounted / pays interest at maturity,"Bond Yield = YIELD(Bond[Settlement], Bond[Maturity], Bond[Rate], Bond[Price], Bond[Redemption], 2)"
+Statistical,BETA.DIST / BETA.INV,Measure,"Beta distribution probability / inverse, used for modeling bounded random variables (e.g. proportions, pass rates)","Probability = BETA.DIST(Value[X], Alpha[Value], Beta[Value], TRUE)"
+Statistical,CHISQ.DIST / CHISQ.DIST.RT / CHISQ.INV / CHISQ.INV.RT,Measure,"Chi-squared distribution probability and inverse functions, used in goodness-of-fit and independence testing","P-Value = CHISQ.DIST.RT(ChiSquareStat[Value], DegreesFreedom[Value])"
+Statistical,EXPON.DIST,Measure,"Exponential distribution probability, used for modeling time between independent events (e.g. time between arrivals)","Probability = EXPON.DIST(Value[X], Lambda[Value], TRUE)"
+Statistical,T.DIST / T.DIST.2T / T.DIST.RT / T.INV / T.INV.2T,Measure,"Student's t-distribution probability and inverse functions, used in hypothesis testing with small sample sizes","P-Value = T.DIST.2T(TStat[Value], DegreesFreedom[Value])"
+Information,COLUMNSTATISTICS,Table,"Return metadata statistics (min, max, distinct count, etc.) about each column in the model, primarily for diagnostics",#NAME?
+Other,EVALUATEANDLOG,Measure/Table,"Debug helper that evaluates an expression and logs the intermediate table/scalar result to the DAX query trace, without changing the returned value",Debug Sales = EVALUATEANDLOG([Total Sales])
+Table,SUBSTITUTEWITHINDEX,Table,"Advanced table function that substitutes a table reference by its index, used internally by some calculation-group and what-if patterns",(Rarely written directly — mostly generated by advanced tooling)

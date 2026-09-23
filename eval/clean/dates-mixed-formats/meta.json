@@ -1,0 +1,5 @@
+{
+  "description": "Each row uses a different but individually unambiguous date format (ISO YYYY-MM-DD, DD/MM/YYYY with day>12, MM/DD/YYYY with day>12, YYYY/MM/DD) plus one missing-token row. event_date coerces to a single normalized date value regardless of source format.",
+  "mustNotChange": ["id"],
+  "reviewed": false
+}

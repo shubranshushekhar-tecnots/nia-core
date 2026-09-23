@@ -1,0 +1,121 @@
+# Deployment
+
+App-side production packaging for the infra team. This repo builds and
+publishes images; infra owns hosting, orchestration, TLS, DNS, and scaling.
+
+## Services
+
+| Service | Image / Dockerfile | Build context | Start command | Port | Health check | Internal-only |
+|---|---|---|---|---|---|---|
+| `api` | `apps/api/Dockerfile` → `${REGISTRY}/nia-api:${TAG}` | repo root | `node dist/index.js` | 4001 | `GET /health` | No — the only service that should be publicly reachable |
+| `worker` | `apps/worker/Dockerfile` → `${REGISTRY}/nia-worker:${TAG}` | repo root | `node dist/index.js` | — (no HTTP server; pure BullMQ consumer) | none (no HTTP surface) | Yes |
+| `connector-mysql` | `services/connector-mysql/Dockerfile` → `${REGISTRY}/nia-connector-mysql:${TAG}` | repo root | `node services/connector-mysql/dist/index.js` | 4010 | `GET /health` | Yes |
+| `connector-mongodb` | `services/connector-mongodb/Dockerfile` → `${REGISTRY}/nia-connector-mongodb:${TAG}` | repo root | `node services/connector-mongodb/dist/index.js` | 4020 | `GET /health` | Yes |
+| `connector-supabase` | `services/connector-supabase/Dockerfile` → `${REGISTRY}/nia-connector-supabase:${TAG}` | repo root | `node services/connector-supabase/dist/index.js` | 4030 | `GET /health` | Yes |
+| `redis` | `redis:7-alpine` (upstream, not built) | — | — | 6379 | `redis-cli ping` | Yes |
+
+"Internal-only" means: no `ports:` published in `docker-compose.prod.yml`,
+so the service is unreachable from outside the Docker host. It does
+**not** mean no internet egress — see "Network requirements" below.
+
+Build each app/worker image from the repo root, e.g.:
+```
+docker build -f apps/api/Dockerfile    -t $REGISTRY/nia-api:$TAG    .
+docker build -f apps/worker/Dockerfile -t $REGISTRY/nia-worker:$TAG .
+docker build -f services/connector-mysql/Dockerfile     -t $REGISTRY/nia-connector-mysql:$TAG     .
+docker build -f services/connector-mongodb/Dockerfile   -t $REGISTRY/nia-connector-mongodb:$TAG   .
+docker build -f services/connector-supabase/Dockerfile  -t $REGISTRY/nia-connector-supabase:$TAG  .
+```
+Push, then run the stack:
+```
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+```
+
+`apps/api` and `apps/worker` images are built via `pnpm --filter=<pkg>
+--prod deploy` — a self-contained directory with only production
+dependencies (including the resolved workspace deps, e.g. `@nia/schemas`),
+running as a non-root user. The three connector images build the same way
+they always have (whole-monorepo multi-stage build); this packaging pass
+didn't change them.
+
+## Environment variables
+
+Full reference, one file per container, in this repo:
+- `apps/api/.env.production.example`
+- `apps/worker/.env.production.example`
+- `services/connector-mysql/.env.production.example`
+- `services/connector-mongodb/.env.production.example`
+- `services/connector-supabase/.env.production.example`
+
+Root `.env.production.example` is a *different* file: it's only the vars
+`docker-compose.prod.yml` itself interpolates (image registry/tag, the
+handful of required secrets shared across services). Copy it to
+`.env.production` (gitignored) and fill it in — that's what you pass to
+`docker compose --env-file`.
+
+**Rule the compose file follows:** every var with no default in the app's
+own env schema is required (`${VAR:?VAR is required}` — compose refuses to
+start if it's unset) and is never hardcoded. Vars that already have a
+sensible built-in default (timeouts, cron schedules, optional Langfuse
+keys, etc.) are simply not passed through by the compose file at all —
+they're documented in each per-service `.env.production.example` for
+reference if you ever need to override one, but the shipped compose file
+relies on the app's own default.
+
+## Migrations
+
+A one-off release step — **never** runs on service startup (no service
+`CMD`/entrypoint touches it).
+
+```
+DATABASE_URL="postgresql://...(percent-encoded)..." pnpm run migrate:status  # applied vs pending
+DATABASE_URL="postgresql://...(percent-encoded)..." pnpm run migrate:push    # apply pending migrations
+```
+Equivalent containerized form (no local Node/pnpm/Supabase CLI needed —
+useful for a release pipeline that only has `docker`):
+```
+docker build -f supabase/migrate.Dockerfile -t $REGISTRY/nia-migrate:$TAG .
+docker run --rm -e DATABASE_URL="$DATABASE_URL" $REGISTRY/nia-migrate:$TAG status
+docker run --rm -e DATABASE_URL="$DATABASE_URL" $REGISTRY/nia-migrate:$TAG push
+```
+CI dry-run check — fails if a migration file that's already applied to
+`$DATABASE_URL` was modified in the current change (forward-only/additive
+is a hard rule here, see below; this makes it a checked gate). Needs `jq`
+and a real git checkout, so run it directly on the CI runner, not via the
+`migrate` image:
+```
+DATABASE_URL="..." pnpm run migrate:verify
+```
+
+**Migration compatibility rule:** migrations must be compatible with both
+the old and new app code, since both run against the database during a
+deploy (migration is applied, then the new image rolls out — the old one
+is still serving traffic in between). Add a new column as nullable,
+deploy, backfill, tighten (`NOT NULL`, drop a default, etc.) in a later
+migration. Never drop or rename a column the currently-deployed code still
+reads or writes. See `supabase/migrations/*.sql` for the existing pattern
+and `supabase/tests/rls_probes.sql` for the RLS regression suite this
+should stay paired with.
+
+## Managed services needed
+
+- **Supabase** (hosted): Postgres + Auth + Vault. `SUPABASE_URL` /
+  `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` all come from the
+  hosted project's dashboard. `DATABASE_URL` (direct Postgres connection,
+  for migrations only) likewise.
+- **Redis**: the `redis:7-alpine` container in `docker-compose.prod.yml`
+  is sufficient as-is, or point `REDIS_URL` at a managed Redis instead and
+  drop the `redis` service from the compose file.
+
+## Network requirement: static outbound IP for connectors
+
+`connector-mysql`, `connector-mongodb`, and `connector-supabase` make
+outbound connections to **customer-owned** source/destination databases
+(the whole point of the product), which are frequently IP-allowlisted on
+the customer's side. Infra needs to put these containers behind a static,
+known outbound IP (e.g. a NAT gateway with an Elastic IP, or equivalent)
+so customers have one stable IP to allowlist — a dynamic/ephemeral egress
+IP (default on most container platforms) will break as soon as it
+rotates. This is unrelated to — and not satisfied by — the "internal-only,
+no published port" property in the services table above; that's about
+inbound reachability, this is about outbound identity.

@@ -1,0 +1,5 @@
+{
+  "description": "Dedicated missing-token normalization test, exercising every literal token in MISSING_VALUE_TOKENS case-insensitively (n/a, na, null, none, nil, -, ?, #n/a), plus whitespace-only and empty string. Two non-numeric text values are included so the column stays purely text (no coercion signal), isolating the missing-value rule from the coercion rule.",
+  "mustNotChange": ["id"],
+  "reviewed": false
+}

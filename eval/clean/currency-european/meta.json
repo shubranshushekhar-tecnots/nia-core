@@ -1,0 +1,5 @@
+{
+  "description": "European-style decimal formatting (. as thousands separator, , as decimal separator). price should coerce to a plain number using the comma-decimal parse path (parse_number with decimalSeparator \",\"), with N/A and empty string normalized to NULL.",
+  "mustNotChange": ["id"],
+  "reviewed": false
+}

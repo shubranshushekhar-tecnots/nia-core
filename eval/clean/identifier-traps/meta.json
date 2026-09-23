@@ -1,0 +1,5 @@
+{
+  "description": "Dedicated trap dataset for the identifier-like skip rule. zip_code and account_number contain leading-zero digit strings that would silently pass to_number (losing the leading zero) without the hasLeadingZeroStrings profiler signal. product_code mixes scientific-notation-shaped codes (1E10, 1E05, 1E12), which also pass to_number, with normal alnum codes -- protected primarily by name-based skip since the profiler's leading-zero signal doesn't cover this shape. phone is deliberately digit-only (not hyphenated) so it would pass to_number without the name-based skip, meaningfully exercising that rule rather than being redundant with value-based protections. quantity is a normal numeric column included to prove the router still routes non-identifier columns in the same row normally.",
+  "mustNotChange": ["zip_code", "account_number", "product_code", "phone", "id"],
+  "reviewed": false
+}

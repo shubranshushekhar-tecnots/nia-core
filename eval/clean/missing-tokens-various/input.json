@@ -1,0 +1,14 @@
+[
+  {"id": 1, "value": "n/a"},
+  {"id": 2, "value": "NA"},
+  {"id": 3, "value": "Null"},
+  {"id": 4, "value": "None"},
+  {"id": 5, "value": "NIL"},
+  {"id": 6, "value": "-"},
+  {"id": 7, "value": "?"},
+  {"id": 8, "value": "#N/A"},
+  {"id": 9, "value": "  "},
+  {"id": 10, "value": ""},
+  {"id": 11, "value": "widget-alpha"},
+  {"id": 12, "value": "widget-beta"}
+]

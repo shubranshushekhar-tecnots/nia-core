@@ -1,0 +1,131 @@
+import "dotenv/config";
+import { z } from "zod";
+
+/**
+ * Fail fast on boot rather than surfacing a confusing runtime error the
+ * first time a route touches Supabase. Deliberately has NO
+ * SUPABASE_SERVICE_ROLE_KEY entry — see CONVENTIONS.md: this service only ever
+ * builds per-request clients from the caller's own access token.
+ */
+const EnvSchema = z.object({
+  SUPABASE_URL: z.string().url(),
+  SUPABASE_ANON_KEY: z.string().min(1),
+  WEB_ORIGIN: z.string().url(),
+  PORT: z.coerce.number().int().positive().default(4001),
+  /**
+   * Dev-only override for connectorDispatch.ts: manifest.service.host is the
+   * Docker-internal address (e.g. "connector-mysql"), unreachable when
+   * apps/api runs on the host via `pnpm dev`. Unset in prod, where apps/api
+   * runs inside the compose network and the manifest host resolves directly.
+   */
+  CONNECTOR_DEV_HOST: z.string().optional(),
+  /** BullMQ producer + chat-event pub/sub subscriber, same as apps/worker. */
+  REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
+  /**
+   * Upper bound on a single /chat/stream connection. Past this, the SSE
+   * lifecycle force-emits a terminal `error` event and closes rather than
+   * holding the connection (and its Redis subscriber) open forever — the
+   * client-side guarantee that pairs with the worker-side try/finally in
+   * apps/worker/src/index.ts's chat_query handler.
+   */
+  CHAT_SSE_MAX_DURATION_MS: z.coerce.number().int().positive().default(120_000),
+  /** Comment-only keep-alive so intermediary proxies don't time out an idle SSE connection. */
+  CHAT_SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(15_000),
+  /**
+   * Upper bound on checksQueue.ts's synchronous await of the worker's
+   * check_run job (see that file's header comment for why this is a
+   * blocking request/response, not SSE). Past this, the route fails clean
+   * with a 503 naming the worker unavailable rather than hanging the HTTP
+   * request indefinitely.
+   */
+  CHECK_RUN_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  /**
+   * Upper bound on mappingsQueue.ts's synchronous await of the worker's
+   * mappings_propose job (an LLM call, so a longer budget than
+   * CHECK_RUN_TIMEOUT_MS's pure-graph-inspection default). Past this, the
+   * route fails clean with a 503 naming the worker unavailable rather than
+   * hanging the HTTP request indefinitely.
+   */
+  MAPPING_PROPOSE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  /**
+   * Upper bound on planQueue.ts's synchronous await of the worker's
+   * plan_propose job (Phase 7). Same "single request/response outcome,
+   * not SSE" reasoning as MAPPING_PROPOSE_TIMEOUT_MS (runPlanPropose.ts's
+   * header comment: one graph.invoke() call, no incremental events) — but
+   * budgeted longer than a plain mappings_propose call, since generatePlan
+   * does its own LLM call AND validateFeasibility can issue one real
+   * cardinality-probe connector dispatch per proposed aggregate step on
+   * top of that. Past this, the route fails clean with a 503 naming the
+   * worker unavailable rather than hanging the HTTP request indefinitely.
+   */
+  PLAN_PROPOSE_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
+  /**
+   * Upper bound on previewQueue.ts's synchronous await of the worker's
+   * preview_run job. No LLM call on this path (pure pushdown compile +
+   * one connector dispatch), so this sits between CHECK_RUN_TIMEOUT_MS's
+   * pure-graph-inspection budget and MAPPING_PROPOSE_TIMEOUT_MS's LLM
+   * budget. Past this, the route fails clean with a 503 naming the worker
+   * unavailable rather than hanging the HTTP request indefinitely.
+   */
+  PREVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
+  /**
+   * Upper bound on schemaRefreshQueue.ts's synchronous await of the
+   * worker's schema_refresh job (a single connector /introspect call, no
+   * LLM) — same budget class as CHECK_RUN_TIMEOUT_MS. Past this, the
+   * route fails clean with a 503 naming the worker unavailable rather
+   * than hanging the HTTP request indefinitely.
+   */
+  SCHEMA_REFRESH_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  /**
+   * Upper bound on a single GET /:id/run/stream connection (Phase 6 Block
+   * 3). Deliberately its own var, not a reuse of CHAT_SSE_MAX_DURATION_MS:
+   * a chat turn is one worker job, but one ETL run is many self-requeued
+   * chunk jobs (runEtl.ts) that can span far longer wall-clock time than a
+   * single chat turn — 2 minutes would routinely cut a real run's stream
+   * off mid-flight. Past this, the SSE lifecycle force-emits a terminal
+   * `error` event and closes, same client-side guarantee chat's stream
+   * makes; the run itself keeps going server-side regardless (the worker
+   * has no idea a client stopped watching), so this only bounds how long
+   * one HTTP connection stays open, never the run's own duration.
+   */
+  RUN_SSE_MAX_DURATION_MS: z.coerce.number().int().positive().default(1_800_000),
+  /** Comment-only keep-alive so intermediary proxies don't time out an idle SSE connection — same rationale as CHAT_SSE_HEARTBEAT_MS, its own var since the two features' cadence has no reason to stay coupled. */
+  RUN_SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(15_000),
+  /**
+   * Upper bound on profileQueue.ts's synchronous await of the worker's
+   * profile_run job (Phase 10). No LLM call, but up to ~10 paginated
+   * connector dispatches (sampleEntity.ts's head+tail keyset pages), so
+   * budgeted above SCHEMA_REFRESH_TIMEOUT_MS's single-introspect-call
+   * budget. Past this, the route fails clean with a 503 naming the worker
+   * unavailable rather than hanging the HTTP request indefinitely.
+   */
+  PROFILE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  /**
+   * Upper bound on cleanQueue.ts's synchronous await of the worker's
+   * clean_propose job (Phase 13, Step 7). Two LLM calls in parallel
+   * (missing-value + coercion specialists, each with one possible retry)
+   * plus up to ~10 paginated connector dispatches for the sample (same
+   * sampleEntity.ts budget PROFILE_TIMEOUT_MS covers) — budgeted at
+   * PLAN_PROPOSE_TIMEOUT_MS's class rather than MAPPING_PROPOSE_TIMEOUT_MS's,
+   * since it's strictly more work than a single mappings_propose call. Past
+   * this, the route fails clean with a 503 naming the worker unavailable
+   * rather than hanging the HTTP request indefinitely.
+   */
+  CLEAN_PROPOSE_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
+  /**
+   * Copilot agent (docs/plans/copilot-agent.md, Part 1/4) — apps/api's own
+   * LLM gateway client (copilot/gatewayClient.ts), a thin duplicate of
+   * apps/worker's lib/llm/gatewayClient.ts. A separate client (not a
+   * shared package, not a reuse of the worker's) specifically so every
+   * Copilot tool call stays on this service's own per-request req.supabase
+   * client — apps/worker only ever has a service-role client, which the
+   * plan requires Copilot never uses. Same three vars as the worker's,
+   * deliberately not defaulted (fail fast on boot if unset, same
+   * SUPABASE_URL/ANON_KEY precedent above).
+   */
+  NIA_GATEWAY_API_KEY: z.string().min(1),
+  NIA_GATEWAY_BASE_URL: z.string().url(),
+  NIA_GATEWAY_MODEL: z.string().min(1),
+});
+
+export const env = EnvSchema.parse(process.env);

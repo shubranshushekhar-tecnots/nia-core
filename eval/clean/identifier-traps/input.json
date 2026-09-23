@@ -1,0 +1,8 @@
+[
+  {"id": 1, "zip_code": "00501", "account_number": "00123456", "product_code": "1E10", "phone": "5550142", "quantity": "5"},
+  {"id": 2, "zip_code": "10001", "account_number": "98765432", "product_code": "AB1234", "phone": "4085551234", "quantity": "12"},
+  {"id": 3, "zip_code": "90210", "account_number": "00000123", "product_code": "1E05", "phone": "2125551000", "quantity": "0"},
+  {"id": 4, "zip_code": "00210", "account_number": "45612378", "product_code": "XY9988", "phone": "7185559999", "quantity": "N/A"},
+  {"id": 5, "zip_code": "02139", "account_number": "00998877", "product_code": "1E12", "phone": "6465550123", "quantity": "100"},
+  {"id": 6, "zip_code": "00601", "account_number": "11223344", "product_code": "CD4567", "phone": "9175551234", "quantity": "7"}
+]

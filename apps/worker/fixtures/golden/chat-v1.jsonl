@@ -1,0 +1,20 @@
+{"id": "single-mysql-max", "connectors": ["mysql"], "message": "Who has the highest salary?", "expect": {"type": "answer", "mustContain": ["Grace Hopper"]}}
+{"id": "single-mysql-min", "connectors": ["mysql"], "message": "Who has the lowest salary?", "expect": {"type": "answer", "mustContain": ["Ada Lovelace"]}}
+{"id": "single-mysql-count", "connectors": ["mysql"], "message": "How many employees are there?", "expect": {"type": "answer", "mustContain": ["3"]}}
+{"id": "single-supabase-lookup", "connectors": ["supabase"], "message": "What is Alan Turing's salary?", "expect": {"type": "answer", "mustContain": ["158"]}}
+{"id": "single-supabase-filter", "connectors": ["supabase"], "message": "List the names of employees with a salary above 150000.", "expect": {"type": "answer", "mustContain": ["Grace Hopper", "Alan Turing"], "mustNotContain": ["Ada Lovelace"]}}
+{"id": "single-supabase-sum", "connectors": ["supabase"], "message": "What is the total combined salary of all employees?", "expect": {"type": "answer", "mustContain": ["465"]}}
+{"id": "single-mongodb-max", "connectors": ["mongodb"], "message": "Who has the highest salary?", "expect": {"type": "answer", "mustContain": ["Grace Hopper"]}}
+{"id": "single-mongodb-filter-count", "connectors": ["mongodb"], "message": "How many employees earn more than 150000?", "expect": {"type": "answer", "mustContain": ["2"]}}
+{"id": "multi-count-mysql-mongo", "connectors": ["mysql", "mongodb"], "message": "How many employees are there in total, across these sources?", "expect": {"type": "answer", "mustContain": ["6"]}}
+{"id": "multi-count-mysql-supabase", "connectors": ["mysql", "supabase"], "message": "How many employees are there in total, across these sources?", "expect": {"type": "answer", "mustContain": ["6"]}}
+{"id": "multi-count-all-three", "connectors": ["mysql", "mongodb", "supabase"], "message": "How many employees are there in total, across these sources?", "expect": {"type": "answer", "mustContain": ["9"]}}
+{"id": "multi-sum-mysql-mongo", "connectors": ["mysql", "mongodb"], "message": "What is the combined total salary across these sources?", "expect": {"type": "answer", "mustContain": ["930"]}}
+{"id": "multi-sum-mysql-supabase", "connectors": ["mysql", "supabase"], "message": "What is the combined total salary across these sources?", "expect": {"type": "answer", "mustContain": ["930"]}}
+{"id": "multi-sum-all-three", "connectors": ["mysql", "mongodb", "supabase"], "message": "What is the combined total salary across these sources?", "expect": {"type": "answer", "mustContain": ["1395"]}}
+{"id": "multi-refusal-unsupported", "connectors": ["mysql", "mongodb"], "message": "List every employee across these sources.", "expect": {"type": "refused", "refusalKind": "unsupported-operation"}}
+{"id": "multi-refusal-partial-failure", "connectors": ["mysql", "invalid"], "message": "How many employees are there in total, across these sources?", "expect": {"type": "refused", "refusalKind": "partial-failure"}}
+{"id": "multi-conflict-max-two", "connectors": ["mysql", "mongodb"], "message": "Who has the highest salary, across these sources?", "expect": {"type": "conflict"}}
+{"id": "multi-conflict-min-three", "connectors": ["mysql", "mongodb", "supabase"], "message": "Who has the lowest salary, across these sources?", "expect": {"type": "conflict"}}
+{"id": "needs-scope-1", "connectors": [], "message": "What is the average salary?", "expect": {"type": "no-connection", "mustContain": ["No connection selected"]}}
+{"id": "needs-scope-2", "connectors": [], "message": "Show me the data.", "expect": {"type": "no-connection", "mustContain": ["No connection selected"]}}

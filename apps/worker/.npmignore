@@ -1,0 +1,7 @@
+# Intentionally empty. `pnpm deploy` (see ./Dockerfile) selects which files
+# to copy into the deployed package by checking, in order: package.json's
+# "files" field, then a local .npmignore, then falling back to the root
+# .gitignore. The root .gitignore has a blanket `dist/` rule (correct for
+# git, since dist is a build artifact) — without this file present, `pnpm
+# deploy` would inherit that rule and silently ship without the build
+# output. Its mere presence (even empty) short-circuits that fallback.

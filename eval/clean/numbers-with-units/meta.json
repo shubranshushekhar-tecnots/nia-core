@@ -1,0 +1,5 @@
+{
+  "description": "Numeric values with a trailing unit suffix, deliberately mixing units (kg/lbs/m/ml) per row to exercise the numbers-with-units coercion signal in isolation, not to model a real single-unit column. weight coerces to the bare numeric magnitude with the unit suffix stripped; unit information is intentionally not preserved anywhere else in the row, so this is a lossy coercion. Flagged for review: confirm dropping the unit (rather than e.g. quarantining these rows, or refusing to coerce a column with inconsistent units) is the intended behavior before treating it as ground truth.",
+  "mustNotChange": ["id"],
+  "reviewed": false
+}
