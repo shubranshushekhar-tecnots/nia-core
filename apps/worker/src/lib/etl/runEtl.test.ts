@@ -77,6 +77,53 @@ vi.mock("./cleanPlanDrift.js", () => ({
   checkCleanPlanDrift: (...args: unknown[]) => checkCleanPlanDriftMock(...args),
 }));
 
+// Orphaned-destination-table lifecycle fix — ensureDestination() is the
+// only I/O-touching export mocked here; buildRuntimeContract stays real
+// (pure, no I/O — every test in this file, staged or direct, already
+// exercises it unconditionally). `findActiveDestinationObject` MUST
+// default to null in every test (see beforeEach below): unmocked, it
+// would hit the real (fake, nothing-listening) supabase client on every
+// single failStaged() call in this suite — the exact ~7s-per-call hang
+// this file's header comment already warns about for cleanPlanDrift.
+const ensureDestinationMock = vi.fn();
+vi.mock("./ensureDestination.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./ensureDestination.js")>();
+  return { ...actual, ensureDestination: (...args: unknown[]) => ensureDestinationMock(...args) };
+});
+
+const registerDestinationObjectMock = vi.fn();
+const findActiveDestinationObjectMock = vi.fn();
+const markDestinationDroppedMock = vi.fn();
+const registerStagingObjectMock = vi.fn();
+const registerQuarantineObjectMock = vi.fn();
+const markStagingDroppedMock = vi.fn();
+const persistStagingTableMock = vi.fn();
+vi.mock("./stagingRegistry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./stagingRegistry.js")>();
+  return {
+    deriveStagingEntity: actual.deriveStagingEntity,
+    deriveQuarantineEntity: actual.deriveQuarantineEntity,
+    registerStagingObject: (...args: unknown[]) => registerStagingObjectMock(...args),
+    registerQuarantineObject: (...args: unknown[]) => registerQuarantineObjectMock(...args),
+    markStagingDropped: (...args: unknown[]) => markStagingDroppedMock(...args),
+    registerDestinationObject: (...args: unknown[]) => registerDestinationObjectMock(...args),
+    findActiveDestinationObject: (...args: unknown[]) => findActiveDestinationObjectMock(...args),
+    markDestinationDropped: (...args: unknown[]) => markDestinationDroppedMock(...args),
+    persistStagingTable: (...args: unknown[]) => persistStagingTableMock(...args),
+  };
+});
+
+const dispatchCreateEntityMock = vi.fn();
+const dispatchDropEntityMock = vi.fn();
+const dispatchPreflightMock = vi.fn();
+const dispatchStageMock = vi.fn();
+vi.mock("../stagedWriteDispatch.js", () => ({
+  dispatchCreateEntity: (...args: unknown[]) => dispatchCreateEntityMock(...args),
+  dispatchDropEntity: (...args: unknown[]) => dispatchDropEntityMock(...args),
+  dispatchPreflight: (...args: unknown[]) => dispatchPreflightMock(...args),
+  dispatchStage: (...args: unknown[]) => dispatchStageMock(...args),
+}));
+
 const { runEtl } = await import("./runEtl.js");
 type EtlRunJob = Parameters<typeof runEtl>[0];
 
@@ -192,9 +239,36 @@ beforeEach(() => {
   getRunCheckpointMock.mockReset();
   publishRunEventMock.mockReset();
   checkCleanPlanDriftMock.mockReset();
+  ensureDestinationMock.mockReset();
+  registerDestinationObjectMock.mockReset();
+  findActiveDestinationObjectMock.mockReset();
+  markDestinationDroppedMock.mockReset();
+  registerStagingObjectMock.mockReset();
+  registerQuarantineObjectMock.mockReset();
+  markStagingDroppedMock.mockReset();
+  persistStagingTableMock.mockReset();
+  dispatchCreateEntityMock.mockReset();
+  dispatchDropEntityMock.mockReset();
+  dispatchPreflightMock.mockReset();
+  dispatchStageMock.mockReset();
 
   resolveGraphMock.mockResolvedValue(graph());
   checkCleanPlanDriftMock.mockResolvedValue({ ok: true });
+  // Staged-mode defaults — a no-op destination lifecycle unless a test
+  // below overrides it. findActiveDestinationObject MUST resolve null by
+  // default (see this file's vi.mock comment above).
+  ensureDestinationMock.mockResolvedValue({ ok: true, created: false });
+  registerDestinationObjectMock.mockResolvedValue(undefined);
+  findActiveDestinationObjectMock.mockResolvedValue(null);
+  markDestinationDroppedMock.mockResolvedValue(undefined);
+  registerStagingObjectMock.mockResolvedValue(undefined);
+  registerQuarantineObjectMock.mockResolvedValue(undefined);
+  markStagingDroppedMock.mockResolvedValue(undefined);
+  persistStagingTableMock.mockResolvedValue(undefined);
+  dispatchPreflightMock.mockResolvedValue({ ok: true, value: { ok: true, checks: [] } });
+  dispatchStageMock.mockResolvedValue({ ok: true, value: { op: "create", ok: true, assertionResults: [], durationMs: 1 } });
+  dispatchCreateEntityMock.mockResolvedValue({ ok: true, value: { created: false, durationMs: 1 } });
+  dispatchDropEntityMock.mockResolvedValue({ ok: true, value: { dropped: true, durationMs: 1 } });
   resolveConnectionMock.mockImplementation(async (connectionId: string) => ({
     ok: true,
     value: { id: connectionId, manifest: {}, credential: {}, config: {} },
@@ -271,6 +345,64 @@ describe("runEtl — failed write", () => {
     expect(queue.add).not.toHaveBeenCalled();
     expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
     expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "error" }));
+  });
+});
+
+function stagedGraph(): GraphDoc {
+  const g = graph();
+  const dest = g.nodes.find((n) => n.id === "dest")!;
+  (dest.config as Record<string, unknown>).writeMode = "staged";
+  return g;
+}
+
+describe("runEtl — orphaned destination lifecycle (item 2)", () => {
+  it("registers the destination it created, and drops it via the signed context when a later write fails before any apply", async () => {
+    resolveGraphMock.mockResolvedValue(stagedGraph());
+    ensureDestinationMock.mockResolvedValueOnce({ ok: true, created: true });
+    // Simulates persistence across the mocked stagingRegistry boundary: what
+    // registerDestinationObject was called with is what findActiveDestinationObject
+    // later resolves, so dropOwnDestinationIfAny has something to find.
+    findActiveDestinationObjectMock.mockResolvedValueOnce({
+      entity: { namespace: "public", name: "users_dest" },
+      columns: ["email_address"],
+    });
+    dispatchWriteMock.mockResolvedValueOnce({ ok: false, error: { kind: "write-rejected", message: "boom" } });
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result.status).toBe("failed");
+    expect(registerDestinationObjectMock).toHaveBeenCalledWith(
+      RUN_ID,
+      DEST_CONN,
+      { namespace: "public", name: "users_dest" },
+      ["email_address"],
+    );
+    expect(dispatchDropEntityMock).toHaveBeenCalledTimes(1);
+    const [connId, input] = dispatchDropEntityMock.mock.calls[0]!;
+    expect(connId).toBe(DEST_CONN);
+    expect(input.entity).toEqual({ namespace: "public", name: "users_dest" });
+    expect(input.columns).toEqual(["email_address"]);
+    expect(input.runId).toBe(RUN_ID);
+    expect(markDestinationDroppedMock).toHaveBeenCalledWith(RUN_ID);
+  });
+
+  it("never registers or drops a pre-existing destination the run did not create", async () => {
+    resolveGraphMock.mockResolvedValue(stagedGraph());
+    ensureDestinationMock.mockResolvedValueOnce({ ok: true, created: false });
+    dispatchWriteMock.mockResolvedValueOnce({ ok: false, error: { kind: "write-rejected", message: "boom" } });
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result.status).toBe("failed");
+    expect(registerDestinationObjectMock).not.toHaveBeenCalled();
+    // findActiveDestinationObjectMock stays at its beforeEach default (null),
+    // so dropOwnDestinationIfAny finds nothing and must not dispatch a drop.
+    expect(dispatchDropEntityMock).not.toHaveBeenCalled();
+    expect(markDestinationDroppedMock).not.toHaveBeenCalled();
   });
 });
 

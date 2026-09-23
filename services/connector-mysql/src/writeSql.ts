@@ -70,3 +70,13 @@ export function buildCreateTableSql(
     `CREATE TABLE IF NOT EXISTS ${table} (${colDefs.join(", ")})`,
   ];
 }
+
+/**
+ * Orphaned-destination-table lifecycle fix — /drop-entity's fixed DROP
+ * TABLE template, the undo of buildCreateTableSql above. `IF EXISTS`:
+ * idempotent against a redelivered failStaged call finding the table
+ * already gone.
+ */
+export function buildDropTableSql(entity: { namespace: string; name: string }): string {
+  return `DROP TABLE IF EXISTS ${quoteIdent(entity.namespace)}.${quoteIdent(entity.name)}`;
+}

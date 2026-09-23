@@ -24,6 +24,18 @@ function baseUrl(manifest: ConnectorManifest): string {
 }
 
 /**
+ * A vault-resolution failure whose underlying cause is a network error
+ * (the connector's `resolveVaultSecret` — see pool-manager.ts in each
+ * connector service — wraps ANY `resolve_connector_secret` RPC failure as
+ * "vault resolution failed for ref X: <reason>", so this only matches when
+ * <reason> itself looks like connectivity, not e.g. "ref not found" or an
+ * RLS denial, which are real Vault-side errors worth showing as-is).
+ */
+const VAULT_UNREACHABLE_PATTERN = /vault resolution failed.*(fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|network)/i;
+
+type ConnectorErrorInfo = { message: string; details: string };
+
+/**
  * Bug fix: a non-2xx connector response used to collapse to
  * `"connector service responded 500"`, discarding whatever the connector
  * actually said (e.g. Fastify's default error handler already returns
@@ -34,20 +46,34 @@ function baseUrl(manifest: ConnectorManifest): string {
  * to put in that one field can reach the UI; connector services never put
  * credentials in it (secrets are resolved and used entirely inside the
  * service, never echoed back).
+ *
+ * `details` always carries the connector's raw message (or the bare status
+ * if the body had none) so callers that want the unfiltered text — e.g. for
+ * an AppError's `details` field, surfaced to the UI separately from the
+ * headline message — have it, even when `message` itself gets rewritten to
+ * something friendlier (see VAULT_UNREACHABLE_PATTERN below: a raw
+ * `TypeError: fetch failed` means literally nothing to a user, so that case
+ * gets a plain-language headline instead of the connector's raw text).
  */
-async function connectorErrorMessage(res: Response): Promise<string> {
+async function connectorErrorMessage(res: Response): Promise<ConnectorErrorInfo> {
   const body = await res.json().catch(() => null);
-  const message = body && typeof body === "object" ? (body as Record<string, unknown>).message : undefined;
-  return typeof message === "string" && message.length > 0
-    ? `connector service responded ${res.status}: ${message}`
-    : `connector service responded ${res.status}`;
+  const rawMessage = body && typeof body === "object" ? (body as Record<string, unknown>).message : undefined;
+  const details =
+    typeof rawMessage === "string" && rawMessage.length > 0
+      ? `connector service responded ${res.status}: ${rawMessage}`
+      : `connector service responded ${res.status}`;
+
+  if (typeof rawMessage === "string" && VAULT_UNREACHABLE_PATTERN.test(rawMessage)) {
+    return { message: "Can't reach the credential store.", details };
+  }
+  return { message: details, details };
 }
 
 export async function dispatchTest(
   manifest: ConnectorManifest,
   credential: CredentialRef,
   config: ConnectorConfig,
-): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
+): Promise<{ ok: boolean; latencyMs?: number; error?: ConnectorErrorInfo }> {
   const res = await fetch(`${baseUrl(manifest)}/test`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -56,14 +82,21 @@ export async function dispatchTest(
   if (!res.ok) {
     return { ok: false, error: await connectorErrorMessage(res) };
   }
-  return TestResponse.parse(await res.json());
+  // Connector's own self-reported test failure (e.g. the query ran but
+  // failed) — a plain string per TestResponse's contract schema. Wrapped
+  // into the same {message, details} shape as the !res.ok branch above so
+  // every caller only ever handles one error shape.
+  const parsed = TestResponse.parse(await res.json());
+  return parsed.error === undefined
+    ? { ok: parsed.ok, latencyMs: parsed.latencyMs }
+    : { ok: parsed.ok, latencyMs: parsed.latencyMs, error: { message: parsed.error, details: parsed.error } };
 }
 
 export async function dispatchIntrospect(
   manifest: ConnectorManifest,
   credential: CredentialRef,
   config: ConnectorConfig,
-): Promise<{ ok: true; value: IntrospectResponse } | { ok: false; error: string }> {
+): Promise<{ ok: true; value: IntrospectResponse } | { ok: false; error: ConnectorErrorInfo }> {
   const res = await fetch(`${baseUrl(manifest)}/introspect`, {
     method: "POST",
     headers: { "content-type": "application/json" },

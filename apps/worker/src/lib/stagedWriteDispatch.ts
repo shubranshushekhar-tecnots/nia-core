@@ -4,6 +4,8 @@ import type {
   CreateEntityKind,
   CreateEntityRequest,
   CreateEntityResponse,
+  DropEntityRequest,
+  DropEntityResponse,
   PreflightRequest,
   PreflightResponse,
   StageOp,
@@ -15,7 +17,12 @@ import type {
 } from "@nia/schemas";
 import { resolveConnection, type ResolvedConnection } from "./resolveConnection.js";
 import { resolveWriteGrant } from "./resolveWriteGrant.js";
-import { sendStageRequest, sendPreflightRequest, sendCreateEntityRequest } from "./connectorClient.js";
+import {
+  sendStageRequest,
+  sendPreflightRequest,
+  sendCreateEntityRequest,
+  sendDropEntityRequest,
+} from "./connectorClient.js";
 import { signWriteContext } from "./writeSignature.js";
 import { logExecutionAudit } from "./executionAudit.js";
 import { env } from "../env.js";
@@ -290,6 +297,106 @@ async function auditCreateEntity(
     handle: connection.handle,
     operation: "create-entity",
     query: `CREATE ${input.kind.toUpperCase()} run=${input.runId} ${input.entity.namespace}.${input.entity.name} -> ${outcome}`,
+    actorUserId,
+  });
+}
+
+/**
+ * Orphaned-destination-table lifecycle fix — the drop-side counterpart to
+ * `dispatchCreateEntity`. Only ever called by runEtl.ts's failStaged
+ * against an entity the worker's own stagingRegistry recorded THIS run as
+ * having created (see stagingRegistry.ts's registerDestinationObject) —
+ * never a general "drop any table" capability. Same
+ * resolveConnection -> resolveWriteGrant -> sign -> send -> audit shape as
+ * dispatchCreateEntity.
+ */
+export type DropEntityDispatchInput = {
+  kind: CreateEntityKind;
+  entity: WriteEntityRef;
+  /** The entity's column names at create time (registry-recorded) — WriteContext.columns requires at least one entry; not otherwise consulted by a drop. */
+  columns: string[];
+  runId: string;
+  timeoutMs?: number;
+};
+
+export async function dispatchDropEntity(
+  connectionId: string,
+  input: DropEntityDispatchInput,
+  scope: WorkspaceScope,
+  actorUserId: string,
+): Promise<DispatchResult<DropEntityResponse>> {
+  const resolved = await resolveConnection(connectionId, scope);
+  if (!resolved.ok) return resolved;
+  const connection = resolved.value;
+
+  const grant = await resolveWriteGrant(connection.id, input.entity.namespace);
+  if (!grant.ok) {
+    await auditDropEntity(connection, actorUserId, input, `rejected: ${grant.error.message}`);
+    return grant;
+  }
+
+  const issuedAt = Date.now();
+  const signature = signWriteContext(
+    {
+      connectionId: connection.id,
+      grantId: grant.value.grantId,
+      runId: input.runId,
+      entity: input.entity,
+      grantNamespace: input.entity.namespace,
+      columns: input.columns,
+      mode: "upsert",
+      stagingEntity: null,
+      quarantineEntity: null,
+      issuedAt,
+    },
+    env.WRITE_DISPATCH_SIGNING_SECRET,
+  );
+  const context: WriteContext = {
+    connectionId: connection.id,
+    grantId: grant.value.grantId,
+    runId: input.runId,
+    entity: input.entity,
+    grantNamespace: input.entity.namespace,
+    columns: input.columns,
+    mode: "upsert",
+    stagingEntity: null,
+    quarantineEntity: null,
+    issuedAt,
+    signature,
+  };
+
+  const request: DropEntityRequest = {
+    credential: { connectionId: connection.id, credVersion: grant.value.credVersion, vaultRef: grant.value.vaultRef },
+    config: connection.config,
+    kind: input.kind,
+    entity: input.entity,
+    timeoutMs: input.timeoutMs ?? 30000,
+    context,
+  };
+
+  const result = await sendDropEntityRequest(connection.manifest, request, { timeoutMs: input.timeoutMs });
+  await auditDropEntity(
+    connection,
+    actorUserId,
+    input,
+    result.ok ? `dropped=${result.value.dropped}` : result.error.message,
+  );
+  return result;
+}
+
+async function auditDropEntity(
+  connection: ResolvedConnection,
+  actorUserId: string,
+  input: DropEntityDispatchInput,
+  outcome: string,
+): Promise<void> {
+  await logExecutionAudit({
+    connectionId: connection.id,
+    connectionOwnerUserId: connection.ownerUserId,
+    connectorId: connection.connectorId,
+    handle: connection.handle,
+    operation: "drop-entity",
+    query: `DROP ${input.kind.toUpperCase()} run=${input.runId} ${input.entity.namespace}.${input.entity.name} -> ${outcome}`,
     actorUserId,
   });
 }

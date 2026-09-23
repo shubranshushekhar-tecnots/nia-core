@@ -102,6 +102,74 @@ export async function markStagingDropped(runId: string): Promise<void> {
     .eq("status", "active");
 }
 
+/**
+ * Orphaned-destination-table lifecycle fix — registered ONLY when
+ * ensureDestination() reports `created: true` (this run actually issued
+ * the CREATE, never a pre-existing destination it merely writes into).
+ * Same idempotent-insert shape as registerStagingObject: a resumed run's
+ * first-chunk retry calling this again is a no-op once the active row
+ * exists. `columns` is stored in `dest_columns` purely so a later chunk's
+ * failStaged (a separate job invocation with no memory of this call) can
+ * still build a valid signed WriteContext (`columns` requires at least
+ * one entry) when it drops the entity — not otherwise consulted by a drop.
+ */
+export async function registerDestinationObject(
+  runId: string,
+  connectionId: string,
+  entity: WriteEntityRef,
+  columns: string[],
+): Promise<void> {
+  const { data } = await supabase
+    .from("staging_objects")
+    .select("id")
+    .eq("run_id", runId)
+    .eq("kind", "destination")
+    .eq("status", "active")
+    .maybeSingle();
+  if (data) return;
+  await supabase.from("staging_objects").insert({
+    run_id: runId,
+    connection_id: connectionId,
+    schema_name: entity.namespace,
+    object_name: entity.name,
+    kind: "destination",
+    status: "active",
+    dest_columns: columns,
+  });
+}
+
+export type ActiveDestinationObject = { entity: WriteEntityRef; columns: string[] };
+
+/**
+ * Looked up by failStaged on every terminal pre-apply failure. Returns
+ * null when this run never created its own destination (direct mode, or
+ * the destination already existed) — failStaged treats that as "nothing
+ * to drop", same as dropStaging finding no staging row.
+ */
+export async function findActiveDestinationObject(runId: string): Promise<ActiveDestinationObject | null> {
+  const { data } = await supabase
+    .from("staging_objects")
+    .select("schema_name, object_name, dest_columns")
+    .eq("run_id", runId)
+    .eq("kind", "destination")
+    .eq("status", "active")
+    .maybeSingle();
+  if (!data) return null;
+  return {
+    entity: { namespace: data.schema_name as string, name: data.object_name as string },
+    columns: (data.dest_columns as string[] | null) ?? [],
+  };
+}
+
+export async function markDestinationDropped(runId: string): Promise<void> {
+  await supabase
+    .from("staging_objects")
+    .update({ status: "dropped", dropped_at: new Date().toISOString() })
+    .eq("run_id", runId)
+    .eq("kind", "destination")
+    .eq("status", "active");
+}
+
 export async function persistStagingTable(runId: string, entity: WriteEntityRef): Promise<void> {
   await supabase.from("workflow_runs").update({ staging_table: `${entity.namespace}.${entity.name}` }).eq("id", runId);
 }

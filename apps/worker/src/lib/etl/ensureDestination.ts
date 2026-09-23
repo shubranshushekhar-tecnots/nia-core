@@ -21,9 +21,18 @@ import { dispatchCreateEntity } from "../stagedWriteDispatch.js";
 import { computeContractHash } from "./destinationContractHash.js";
 import type { WorkspaceScope } from "../workspaceScope.js";
 
-type SimpleResult = { ok: true } | { ok: false; message: string };
+/**
+ * `created` (orphaned-destination-table lifecycle fix): true only when this
+ * call actually issued the entity's CREATE (dispatchCreateEntity's own
+ * `created` flag) — never true for a pre-existing entity that merely
+ * compared clean via compareContractToExisting. runEtl.ts uses this to
+ * decide whether to durably record the entity in stagingRegistry as
+ * something THIS run may need to drop on a later terminal failure — a
+ * pre-existing destination must never be touched by that drop path.
+ */
+type SimpleResult = { ok: true; created: boolean } | { ok: false; message: string };
 type ContractResult =
-  | { ok: true; contract: DestinationContract; sourceSchema: NiaSchema }
+  | { ok: true; contract: DestinationContract; sourceSchema: NiaSchema; rawSourceSchema: NiaSchema }
   | { ok: false; message: string };
 
 /**
@@ -55,6 +64,17 @@ type ContractResult =
  * fields the mapping had available to it — e.g. runEtl.ts's unknown-
  * field-policy check — compare against the same schema the contract was
  * actually built from, not the raw pre-transform source entity.
+ *
+ * Also returns `rawSourceSchema` (the PRE-transform introspected/inferred
+ * source schema) — needed by conformance.ts's skip-if-already-conforming
+ * check: a mapped column's `contract.niaType` is always the POST-transform
+ * kind (by construction, since `sourceSchema` above feeds
+ * buildDestinationContract), so it can never itself tell you whether a
+ * transform actually changed that column's type. Comparing
+ * `rawSourceSchema.fields[col.sourcePath]?.type.kind` against
+ * `contract.columns[i].niaType.kind` is the only way to tell a genuine
+ * passthrough column (no cast needed, Part 5's "skip it" clause) apart
+ * from one a transform step actually produced or changed.
  */
 export function buildRuntimeContract(
   destDialect: SourceDialect,
@@ -102,7 +122,7 @@ export function buildRuntimeContract(
     }
   }
 
-  return { ok: true, contract, sourceSchema };
+  return { ok: true, contract, sourceSchema, rawSourceSchema };
 }
 
 /**
@@ -173,7 +193,7 @@ export async function ensureDestination(
         message: `Destination "${destEntity.namespace}.${destEntity.name}" already exists but doesn't match the approved contract: ${detail}`,
       };
     }
-    return { ok: true };
+    return { ok: true, created: false };
   }
 
   const kind: CreateEntityKind = destDialect === "mongo" ? "collection" : "table";
@@ -190,5 +210,5 @@ export async function ensureDestination(
     actorUserId,
   );
   if (!created.ok) return { ok: false, message: `Destination creation failed: ${created.error.message}` };
-  return { ok: true };
+  return { ok: true, created: created.value.created };
 }

@@ -86,6 +86,32 @@ export async function getDb(cred: CredentialRef, config: ConnectorConfig): Promi
 }
 
 /**
+ * Fail-fast startup probe — mirrors connector-supabase/connector-mysql's
+ * pool-manager.ts checkVaultReachable() exactly (same rationale: every
+ * credential resolution here goes through resolveVaultSecret() above, over
+ * SUPABASE_URL; an unreachable URL would otherwise only surface as a
+ * generic `TypeError: fetch failed` on the first real request, often
+ * minutes into a run). Hits Auth's `/auth/v1/health` purely as a network-
+ * reachability probe.
+ */
+export async function checkVaultReachable(): Promise<void> {
+  const base = process.env.SUPABASE_URL ?? "";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    await fetch(`${base}/auth/v1/health`, { signal: controller.signal });
+  } catch (err) {
+    throw new Error(
+      `Cannot reach Supabase Vault at SUPABASE_URL="${base}": ${err instanceof Error ? err.message : String(err)}. ` +
+        `If this service runs in Docker and SUPABASE_URL points at 127.0.0.1/localhost, that address resolves to ` +
+        `the container itself, not the host — use host.docker.internal (or a reachable network address) instead.`,
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
  * Phase 6 Block 5 — write path gets its own client, keyed
  * `connectionId:write:credVersion`, mirroring connector-mysql/
  * connector-supabase's getWritePool exactly: a write credential never

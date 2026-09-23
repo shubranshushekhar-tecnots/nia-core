@@ -15,9 +15,11 @@ import {
   ResidualAbortError,
   resolveSourceEntity,
   rowsToObjects,
+  type CreateEntityKind,
   type DestinationContract,
   type DialectQuery,
   type EtlRunJob,
+  type NiaSchema,
   type SchemaEntity,
   type SourceDestConfig,
   type SourceDialect,
@@ -39,6 +41,8 @@ import { buildEtlReadQuery, buildFailurePreCheckQuery, MAX_CHUNK_ROWS } from "./
 import { startRun, recordChunkProgress, finishRun, getRunCheckpoint } from "./workflowRuns.js";
 import { publishRunEvent } from "./publish.js";
 import type { WorkspaceScope } from "../workspaceScope.js";
+import { dispatchDropEntity } from "../stagedWriteDispatch.js";
+import { registerDestinationObject, findActiveDestinationObject, markDestinationDropped } from "./stagingRegistry.js";
 import {
   resolveStagedWriteTarget,
   runPreflight,
@@ -50,6 +54,35 @@ import {
   lastStepForAssertions,
   type StagedWriteTarget,
 } from "./stagedWrite.js";
+
+/**
+ * Orphaned-destination-table lifecycle fix — best-effort undo of a
+ * destination this run itself created (stagingRegistry's `destination`-kind
+ * row), looked up and dispatched from both failStaged closures below.
+ * Never touches a pre-existing destination (findActiveDestinationObject
+ * returns null unless THIS run's ensureDestination() call reported
+ * `created: true` — see its call site's own comment). Swallows its own
+ * errors exactly like dropStaging's existing `.catch(() => undefined)`
+ * pattern: a failed drop must never mask or block the real underlying
+ * failure message that triggered it.
+ */
+async function dropOwnDestinationIfAny(
+  destConnectionId: string,
+  destKind: CreateEntityKind,
+  runId: string,
+  scope: WorkspaceScope,
+  actorUserId: string,
+): Promise<void> {
+  const active = await findActiveDestinationObject(runId);
+  if (!active) return;
+  await dispatchDropEntity(
+    destConnectionId,
+    { kind: destKind, entity: active.entity, columns: active.columns, runId },
+    scope,
+    actorUserId,
+  );
+  await markDestinationDropped(runId);
+}
 
 /**
  * Block 3.5: keyset cursor — the last key value read so far, or null before
@@ -164,12 +197,16 @@ async function runStatefulResidual(args: {
   mapping: NonNullable<SourceDestConfig["mapping"]>;
   destConfig: SourceDestConfig;
   destConnectionId: string;
+  /** Orphaned-destination-table lifecycle fix — computed once by the caller from destDialect, the same way ensureDestination.ts's own internal one-liner does; used by this function's own failStaged to drop a destination THIS run created. */
+  destKind: CreateEntityKind;
   /** Phase 9 Part 4 — already-computed pushed-step pre-check counts (see the caller's own doc comment on the pre-check block). This function always completes within one invocation (its own doc comment), so these are simply concatenated into the "done" event's failures, unconditionally. */
   pushedPreCheckFailures: StepFailureReport[];
   /** Phase 11 — computed once by the caller (resolveStagedWriteTarget), before either branch is chosen, so a run can never straddle staged/direct mid-flight. */
   stagedTarget: StagedWriteTarget;
   /** Schema layer Part 5 — built once by the caller (buildRuntimeContract), unconditionally, before either branch is chosen, against the pipeline's real post-transform output schema (compileTransformOutputSchema); drives the implicit conformance cast applied to the mapped rows below. Always present — buildRuntimeContract now hard-fails the run outright if a mapped column can't be resolved, rather than leaving this undefined. */
   contract: DestinationContract;
+  /** Bug fix (all-rows-quarantined) — same buildRuntimeContract call as `contract` above, its PRE-transform counterpart; passed through to applyConformance so a passthrough column (same NiaTypeKind before and after transforms) skips its cast entirely, per Part 5's "skip it for columns whose source and contract types already match" clause. */
+  rawSourceSchema: NiaSchema;
   /** Schema layer Part 5 — computed once by the caller (job.cursor === null gate); see runEtl.ts's own doc comment on that block for why these can't cross a separate job invocation. */
   unknownFields?: string[];
   newSourceColumns?: string[];
@@ -188,9 +225,11 @@ async function runStatefulResidual(args: {
     mapping,
     destConfig,
     destConnectionId,
+    destKind,
     pushedPreCheckFailures,
     stagedTarget,
     contract,
+    rawSourceSchema,
     unknownFields,
     newSourceColumns,
   } = args;
@@ -199,6 +238,11 @@ async function runStatefulResidual(args: {
   const failStaged = (message: string): Promise<RunEtlResult> =>
     dropStaging(destConnectionId, stagedTarget, destConfig, mappedDestColumns, scope, job.triggeredByUserId, job.runId)
       .catch(() => undefined)
+      // Orphaned-destination-table lifecycle fix — see the sibling
+      // failStaged closure in the caller for the full rationale.
+      .then(() =>
+        dropOwnDestinationIfAny(destConnectionId, destKind, job.runId, scope, job.triggeredByUserId).catch(() => undefined),
+      )
       .then(() => fail(scope, job.runId, job.nodeId, message));
 
   const acc = opForStep(statefulStep).createAccumulator!(statefulStep);
@@ -328,7 +372,7 @@ async function runStatefulResidual(args: {
   // every other residual step above. Always run — contract is always
   // present (see this function's `contract` doc comment).
   try {
-    const conformed = applyConformance(mappedColumns, mappedRows, contract);
+    const conformed = applyConformance(mappedColumns, mappedRows, contract, "quarantine", rawSourceSchema);
     mappedRows = conformed.rows;
     // Plain concat, not mergeFailureReports: conformance is a distinct
     // new step, not a repeat of preSteps/statefulStep/postSteps across
@@ -388,7 +432,14 @@ async function runStatefulResidual(args: {
   await dropStaging(destConnectionId, stagedTarget, destConfig, mappedDestColumns, scope, job.triggeredByUserId, job.runId).catch(
     () => undefined,
   );
-  if (!applyResult.ok) return fail(scope, job.runId, job.nodeId, applyResult.message);
+  if (!applyResult.ok) {
+    // Orphaned-destination-table lifecycle fix: an apply failure means no
+    // rows were ever committed (applyStaging's swap is atomic — see its
+    // own doc comment), so a destination THIS run created is still safe
+    // to drop, same as any other pre-apply-success terminal failure.
+    await dropOwnDestinationIfAny(destConnectionId, destKind, job.runId, scope, job.triggeredByUserId).catch(() => undefined);
+    return fail(scope, job.runId, job.nodeId, applyResult.message);
+  }
 
   // No meaningful cursor for a completed stateful run — see this
   // function's doc comment (resume always restarts from the beginning).
@@ -484,6 +535,23 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   const failStaged = (message: string): Promise<RunEtlResult> =>
     dropStaging(dest.connectionId!, stagedTarget, destConfig, destColumns, scope, job.triggeredByUserId, job.runId)
       .catch(() => undefined)
+      // Orphaned-destination-table lifecycle fix: undo a destination table
+      // THIS run itself created (never a pre-existing one — see
+      // dropOwnDestinationIfAny's doc comment), before reporting the
+      // original failure. destDialect isn't assigned until later in this
+      // function, but every failStaged() call site is reached after that
+      // assignment executes (the only call before it is the
+      // `!destDialect` check itself, right after destDialect's own
+      // declaration) — safe to reference here.
+      .then(() =>
+        dropOwnDestinationIfAny(
+          dest.connectionId!,
+          destDialect === "mongo" ? "collection" : "table",
+          job.runId,
+          scope,
+          job.triggeredByUserId,
+        ).catch(() => undefined),
+      )
       .then(() => fail(scope, job.runId, job.nodeId, message));
 
   // Schema layer Part 4: source path/connection/schema/entity/dialect are
@@ -568,6 +636,7 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   const runtimeContract = buildRuntimeContract(destDialect, entity, dialect, destConfig, allTransformSteps);
   if (!runtimeContract.ok) return failStaged(runtimeContract.message);
   const contract = runtimeContract.contract;
+  const rawSourceSchema = runtimeContract.rawSourceSchema;
 
   // Schema layer Part 5: unknown-field-policy count and unknown-source-
   // column diff, once per run (job.cursor === null) — same gate/caveat as
@@ -628,8 +697,30 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     );
     if (!ensured.ok) return fail(scope, job.runId, job.nodeId, ensured.message);
 
+    // Orphaned-destination-table lifecycle fix: record ONLY when this call
+    // actually issued the CREATE (ensured.created) — a pre-existing
+    // destination this run merely writes into must never be dropped by a
+    // later failStaged. Registered before preflight/staging so even a
+    // preflight/staging failure on THIS same invocation still drops it.
+    if (ensured.created) {
+      await registerDestinationObject(job.runId, dest.connectionId, destConfig.entity as WriteEntityRef, destColumns);
+    }
+
     const preflight = await runPreflight(dest.connectionId, destConfig, scope);
-    if (!preflight.ok) return fail(scope, job.runId, job.nodeId, preflight.message);
+    if (!preflight.ok) {
+      // Orphaned-destination-table lifecycle fix: the destination was just
+      // registered above (if created) but nothing else here drops it —
+      // preflight/staging failures are otherwise-plain fail() calls, not
+      // failStaged(), since staging doesn't exist yet at this point.
+      await dropOwnDestinationIfAny(
+        dest.connectionId,
+        destDialect === "mongo" ? "collection" : "table",
+        job.runId,
+        scope,
+        job.triggeredByUserId,
+      ).catch(() => undefined);
+      return fail(scope, job.runId, job.nodeId, preflight.message);
+    }
     const staging = await ensureStaging(
       dest.connectionId,
       stagedTarget,
@@ -639,7 +730,18 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       job.triggeredByUserId,
       job.runId,
     );
-    if (!staging.ok) return fail(scope, job.runId, job.nodeId, staging.message);
+    if (!staging.ok) {
+      // Orphaned-destination-table lifecycle fix — same rationale as the
+      // preflight-failure branch above.
+      await dropOwnDestinationIfAny(
+        dest.connectionId,
+        destDialect === "mongo" ? "collection" : "table",
+        job.runId,
+        scope,
+        job.triggeredByUserId,
+      ).catch(() => undefined);
+      return fail(scope, job.runId, job.nodeId, staging.message);
+    }
   }
 
   // Phase 13 Step 6: once per run, before any extraction, refuse if any
@@ -781,9 +883,11 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       mapping,
       destConfig,
       destConnectionId: dest.connectionId!,
+      destKind: destDialect === "mongo" ? "collection" : "table",
       pushedPreCheckFailures,
       stagedTarget,
       contract,
+      rawSourceSchema,
       unknownFields,
       newSourceColumns,
     });
@@ -905,7 +1009,7 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   // handling as the residual steps above. Always run — contract is always
   // present (see runStatefulResidual's `contract` doc comment).
   try {
-    const conformed = applyConformance(finalColumns, finalRows, contract);
+    const conformed = applyConformance(finalColumns, finalRows, contract, "quarantine", rawSourceSchema);
     finalRows = conformed.rows;
     residualFailures = [...residualFailures, ...conformed.failures];
   } catch (err) {
@@ -977,7 +1081,18 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     await dropStaging(dest.connectionId, stagedTarget, destConfig, destColumns, scope, job.triggeredByUserId, job.runId).catch(
       () => undefined,
     );
-    if (!applyResult.ok) return fail(scope, job.runId, job.nodeId, applyResult.message);
+    if (!applyResult.ok) {
+      // Orphaned-destination-table lifecycle fix — see runStatefulResidual's
+      // identical apply-failure branch for the full rationale.
+      await dropOwnDestinationIfAny(
+        dest.connectionId!,
+        destDialect === "mongo" ? "collection" : "table",
+        job.runId,
+        scope,
+        job.triggeredByUserId,
+      ).catch(() => undefined);
+      return fail(scope, job.runId, job.nodeId, applyResult.message);
+    }
 
     const durationMs = await finishRun(job.runId, "succeeded");
     // Phase 9 Part 4: pushedPreCheckFailures is only ever non-empty when

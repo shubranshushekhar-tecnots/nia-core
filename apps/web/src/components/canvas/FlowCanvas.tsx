@@ -276,12 +276,19 @@ function CanvasInner({
           if (error instanceof GraphApiError && error.status === 409) {
             setSaveState('conflict');
           } else {
+            // Any other failure (network error, 5xx, 401, timeout, ...) was
+            // previously silently discarded here — the UI just flipped back
+            // to 'idle' as if the save had never been attempted, with no
+            // indication the edit was lost. Surface it the same way every
+            // other API failure in this file does (connection test/schema
+            // refresh, above) instead of swallowing it.
             setSaveState('idle');
+            pushToast('error', error instanceof GraphApiError ? error.message : 'Save failed. Your latest change may not be saved.');
           }
         }
       }, AUTOSAVE_DELAY_MS);
     },
-    [workflow.id],
+    [workflow.id, pushToast],
   );
 
   const handleNodesChange = useCallback(

@@ -54,7 +54,7 @@ export async function proposePlan(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new CopilotApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new CopilotApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
   return res.json() as Promise<ProposePlanResult>;
 }

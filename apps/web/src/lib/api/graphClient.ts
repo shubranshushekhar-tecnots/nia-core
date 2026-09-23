@@ -16,12 +16,14 @@ import { createClient } from '@/lib/supabase/client';
 export class GraphApiError extends Error {
   status: number;
   code: string;
+  details?: unknown;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
     this.name = 'GraphApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -42,7 +44,7 @@ export async function getWorkflowGraph(workflowId: string): Promise<WorkflowGrap
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new GraphApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new GraphApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
   return res.json() as Promise<WorkflowGraphResult>;
 }
@@ -65,7 +67,7 @@ export async function putWorkflowGraph(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new GraphApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new GraphApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
   return res.json() as Promise<WorkflowGraphResult>;
 }

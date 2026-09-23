@@ -11,12 +11,14 @@ import { ChatStreamEnvelope } from '@nia/schemas';
 export class ChatApiError extends Error {
   status: number;
   code: string;
+  details?: unknown;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
     this.name = 'ChatApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -36,7 +38,7 @@ export async function postChatMessage(params: {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new ChatApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new ChatApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
   return res.json() as Promise<PostChatMessageResult>;
 }

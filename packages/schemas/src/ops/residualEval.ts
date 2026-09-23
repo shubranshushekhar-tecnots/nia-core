@@ -410,7 +410,15 @@ function evalTextFn(expr: Extract<Expr, { kind: "call" }>, row: Record<string, u
   }
 }
 
-const COERCION_CALL_FNS = new Set(["to_number", "to_integer", "to_text", "format_number", "to_boolean", "to_date"]);
+const COERCION_CALL_FNS = new Set([
+  "to_number",
+  "to_integer",
+  "to_text",
+  "format_number",
+  "to_boolean",
+  "to_date",
+  "to_timestamp",
+]);
 
 /**
  * Batch 4 (Phase 8b-2) — Coercion vocabulary, residual arm. Contracts
@@ -439,18 +447,22 @@ const COERCION_CALL_FNS = new Set(["to_number", "to_integer", "to_text", "format
  *    1 -> true, exactly 0 -> false, else null; string: trim +
  *    case-insensitive 'true'/'1' -> true, 'false'/'0' -> false, else
  *    null.
- *  - to_date(x): NULL or non-string -> null. ISO-8601-only fast path
- *    (`YYYY-MM-DD` optionally followed by `T`/space + `HH:MM[:SS]`,
+ *  - to_date(x): NULL -> null. A real `Date` instance (pg/mysql2/mongodb
+ *    all deserialize a typed date/timestamp column into one before this
+ *    fn ever sees it — same as coerceToDate below) normalizes via its UTC
+ *    fields, never rejected. A string goes through the ISO-8601-only fast
+ *    path (`YYYY-MM-DD` optionally followed by `T`/space + `HH:MM[:SS]`,
  *    optionally `Z`-suffixed) with basic calendar-bounds checking
  *    (month 1-12, day 1-31, hour<=23, minute/second<=59 — NOT full
  *    days-in-month/leap-year validation, a disclosed simplification).
- *    Non-ISO input -> null (never throws). Explicit numeric UTC offsets
- *    (e.g. +05:00) are NOT matched by the pattern -> null: applying the
- *    UTC pin via pure offset arithmetic was judged out of scope for a
- *    pure regex+reassembly implementation (no native date-parsing
- *    primitive is used anywhere in this fn, on any of the 4 evaluators,
- *    by design) — a disclosed limitation, not a bug. Output is always
- *    normalized to `YYYY-MM-DDTHH:MM:SSZ`.
+ *    Any other type, or non-ISO string input -> null (never throws).
+ *    Explicit numeric UTC offsets (e.g. +05:00) are NOT matched by the
+ *    string pattern -> null: applying the UTC pin via pure offset
+ *    arithmetic was judged out of scope for a pure regex+reassembly
+ *    implementation (no native date-parsing primitive is used anywhere in
+ *    this fn, on any of the 4 evaluators, by design) — a disclosed
+ *    limitation, not a bug. Output is always normalized to
+ *    `YYYY-MM-DDTHH:MM:SSZ`.
  */
 const COERCE_NUMBER_PATTERN = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d{1,4})?$/;
 
@@ -497,6 +509,32 @@ function normalizeIsoDate(s: string): string | null {
   return `${y}-${mo}-${d}T${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}Z`;
 }
 
+// Bug fix (all-rows-quarantined): dedicated timestamp regex/normalizer for
+// `to_timestamp`, separate from ISO_DATE_RE/normalizeIsoDate above so
+// `to_date`'s existing fixed-width contract (many callers/tests already
+// pin its exact "no fractional seconds" output shape) is never touched.
+// Differs from ISO_DATE_RE only in accepting an optional `.fff` fractional-
+// seconds group (1-6 digits, truncated/padded to milliseconds) — the gap
+// that caused a real Date's/timestamptz's millisecond-precision ISO string
+// (e.g. `2026-09-22T10:09:40.918Z`) to fail to parse and quarantine every
+// row of an otherwise-clean copy.
+const ISO_TIMESTAMP_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?)?Z?$/;
+
+function normalizeIsoTimestamp(s: string): string | null {
+  const m = ISO_TIMESTAMP_RE.exec(s.trim());
+  if (!m) return null;
+  const [, y, mo, d, h, mi, se, frac] = m;
+  const month = Number(mo);
+  const day = Number(d);
+  const hour = h !== undefined ? Number(h) : 0;
+  const min = mi !== undefined ? Number(mi) : 0;
+  const sec = se !== undefined ? Number(se) : 0;
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || min > 59 || sec > 59) return null;
+  const ms = frac !== undefined ? Number(frac.padEnd(3, "0").slice(0, 3)) : 0;
+  const base = `${y}-${mo}-${d}T${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return ms === 0 ? `${base}Z` : `${base}.${String(ms).padStart(3, "0")}Z`;
+}
+
 function evalCoercionFn(expr: Extract<Expr, { kind: "call" }>, row: Record<string, unknown>): unknown {
   const raw = (i: number): unknown => evalExpr(expr.args[i]!, row);
   switch (expr.fn) {
@@ -536,8 +574,43 @@ function evalCoercionFn(expr: Extract<Expr, { kind: "call" }>, row: Record<strin
     }
     case "to_date": {
       const v = raw(0);
-      if (v === null || v === undefined || typeof v !== "string") return null;
+      if (v === null || v === undefined) return null;
+      // Bug fix: pg/mysql2/mongodb all deserialize a real date/timestamp
+      // column into a genuine JS `Date` before residualEval ever sees it
+      // (see coerceToDate's doc comment above, which already handles this
+      // for the date-part fns) — this case used to reject any non-string
+      // input outright, so the schema-layer runtime conformance cast
+      // (conformance.ts, which casts every mapped date/timestamp column on
+      // every write) treated every non-null Date value as a coercion
+      // failure, quarantining every row of any plain copy with a date
+      // column. Normalize a real Date the same way normalizeIsoDate
+      // normalizes a matching string, instead of bailing.
+      if (v instanceof Date) {
+        if (Number.isNaN(v.getTime())) return null;
+        const pad = (n: number) => String(n).padStart(2, "0");
+        return `${v.getUTCFullYear()}-${pad(v.getUTCMonth() + 1)}-${pad(v.getUTCDate())}T${pad(v.getUTCHours())}:${pad(v.getUTCMinutes())}:${pad(v.getUTCSeconds())}Z`;
+      }
+      if (typeof v !== "string") return null;
       return normalizeIsoDate(v);
+    }
+    case "to_timestamp": {
+      const v = raw(0);
+      if (v === null || v === undefined) return null;
+      // Same Date-instance handling as to_date's case above, but preserves
+      // millisecond precision instead of truncating it — this is the
+      // conversion ops/conformance.ts now uses for `timestamp`-kind
+      // columns (see conformance.ts's CONFORMANCE_CAST_FN), since a real
+      // timestamptz/timestamp value's fidelity includes sub-second
+      // precision that to_date's fixed-width output silently drops.
+      if (v instanceof Date) {
+        if (Number.isNaN(v.getTime())) return null;
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const base = `${v.getUTCFullYear()}-${pad(v.getUTCMonth() + 1)}-${pad(v.getUTCDate())}T${pad(v.getUTCHours())}:${pad(v.getUTCMinutes())}:${pad(v.getUTCSeconds())}`;
+        const ms = v.getUTCMilliseconds();
+        return ms === 0 ? `${base}Z` : `${base}.${String(ms).padStart(3, "0")}Z`;
+      }
+      if (typeof v !== "string") return null;
+      return normalizeIsoTimestamp(v);
     }
     default:
       // Unreachable — callers only route here via COERCION_CALL_FNS.has(expr.fn).

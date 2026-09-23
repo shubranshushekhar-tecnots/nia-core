@@ -78,6 +78,7 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
         opacity: isGhost || isDiffRemoved ? 'var(--ghost-opacity)' : 1,
         padding: '10px 12px',
         boxSizing: 'border-box',
+        overflow: 'hidden',
         cursor: isGhost ? 'default' : 'grab',
         userSelect: 'none',
       }}
@@ -179,14 +180,49 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
         )}
       </div>
 
-      <div style={{ fontSize: 13.5, fontWeight: 600, color: data.resolved ? 'var(--ink)' : 'var(--warn)', marginTop: 4 }}>
+      <div
+        title={data.resolved ? (data.manifestName ?? 'Unconfigured') : (data.unknownReason ?? 'Unknown')}
+        style={{
+          fontSize: 13.5,
+          fontWeight: 600,
+          color: data.resolved ? 'var(--ink)' : 'var(--warn)',
+          marginTop: 4,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
         {data.resolved ? (data.manifestName ?? 'Unconfigured') : (data.unknownReason ?? 'Unknown')}
       </div>
       {data.connectionLabel && (
-        <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginTop: 2 }}>{data.connectionLabel}</div>
+        <div
+          title={data.connectionLabel}
+          style={{
+            fontSize: 11.5,
+            color: 'var(--ink4)',
+            marginTop: 2,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {data.connectionLabel}
+        </div>
       )}
       {!isGhost && diffStatus === 'updated' && data.ghostDiffLabel && (
-        <div style={{ fontSize: 10.5, color: 'var(--copilot-accent)', marginTop: 2 }}>{data.ghostDiffLabel}</div>
+        <div
+          title={data.ghostDiffLabel}
+          style={{
+            fontSize: 10.5,
+            color: 'var(--copilot-accent)',
+            marginTop: 2,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {data.ghostDiffLabel}
+        </div>
       )}
 
       {showSourceHandle && (

@@ -12,12 +12,14 @@ import { createClient } from '@/lib/supabase/client';
 export class PreviewApiError extends Error {
   status: number;
   code: string;
+  details?: unknown;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
     this.name = 'PreviewApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -42,7 +44,7 @@ export async function previewDestination(workflowId: string, destNodeId: string)
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new PreviewApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new PreviewApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
   return res.json() as Promise<PreviewValue>;
 }

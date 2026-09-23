@@ -26,3 +26,15 @@ playwright-report
 **/playwright-report
 coverage
 **/coverage
+
+# Local dev secrets. Never let a host .env leak into an image — every
+# runtime var must come from the container's real environment (compose
+# `environment:`/orchestrator secrets), never a baked-in file. The
+# .env.*.example templates are intentionally NOT ignored; they're inert
+# documentation, no real secrets.
+.env
+**/.env
+.env.*
+**/.env.*
+!.env.*.example
+!**/.env.*.example

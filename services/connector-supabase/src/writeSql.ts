@@ -66,11 +66,23 @@ export function buildUpsertSql(
  * "Keys become the primary key or a unique index" bullet) since this
  * codebase's keyset-pagination/upsert paths elsewhere already treat
  * composite keys as "no single orderable PK", not as a schema error.
+ *
+ * `schemaExists`: Postgres's `CREATE SCHEMA IF NOT EXISTS` still runs its
+ * database-level CREATE privilege check even when the schema already
+ * exists (confirmed empirically — the IF NOT EXISTS existence check does
+ * NOT short-circuit the ACL check first). A write-grant role is only ever
+ * granted `CREATE ON SCHEMA <namespace>` (see writeGrantStatement.ts),
+ * never database-level CREATE, so unconditionally emitting this statement
+ * broke every write into an already-existing schema (the common case,
+ * e.g. "public") with "permission denied for database". The caller
+ * (index.ts's /create-entity) checks pg_namespace first and only asks for
+ * the CREATE SCHEMA statement when it's actually needed.
  */
 export function buildCreateTableSql(
   entity: { namespace: string; name: string },
   columns: { name: string; nativeType: string; nullable: boolean }[],
   keyColumns: string[],
+  schemaExists = false,
 ): string[] {
   const table = `${quoteIdent(entity.namespace)}.${quoteIdent(entity.name)}`;
   const colDefs = columns.map((c) => `${quoteIdent(c.name)} ${c.nativeType}${c.nullable ? "" : " NOT NULL"}`);
@@ -78,7 +90,7 @@ export function buildCreateTableSql(
     colDefs.push(`PRIMARY KEY (${quoteIdent(keyColumns[0]!)})`);
   }
   const statements = [
-    `CREATE SCHEMA IF NOT EXISTS ${quoteIdent(entity.namespace)}`,
+    ...(schemaExists ? [] : [`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(entity.namespace)}`]),
     `CREATE TABLE IF NOT EXISTS ${table} (${colDefs.join(", ")})`,
   ];
   if (keyColumns.length > 1) {
@@ -93,4 +105,16 @@ export function buildCreateTableSql(
 /** Part 4's "If anon/authenticated roles exist, enable RLS on created tables" bullet — same bar buildCreateStagingSql/buildCreateQuarantineSql already hold staging/quarantine tables to. */
 export function buildEnableRlsSql(entity: { namespace: string; name: string }): string {
   return `ALTER TABLE ${quoteIdent(entity.namespace)}.${quoteIdent(entity.name)} ENABLE ROW LEVEL SECURITY`;
+}
+
+/**
+ * Orphaned-destination-table lifecycle fix — /drop-entity's fixed DROP
+ * TABLE template, the undo of buildCreateTableSql above. `IF EXISTS`:
+ * idempotent against a redelivered failStaged call finding the table
+ * already gone. Never drops the "nia" schema itself (only ever created
+ * for staging/quarantine, which have their own drop path) — just the one
+ * named table.
+ */
+export function buildDropTableSql(entity: { namespace: string; name: string }): string {
+  return `DROP TABLE IF EXISTS ${quoteIdent(entity.namespace)}.${quoteIdent(entity.name)}`;
 }

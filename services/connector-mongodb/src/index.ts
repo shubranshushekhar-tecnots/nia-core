@@ -9,13 +9,15 @@ import {
   StageRequest,
   PreflightRequest,
   CreateEntityRequest,
+  DropEntityRequest,
   type TabularResult,
   type WriteResponse,
   type StageResponse,
   type PreflightResponse,
   type CreateEntityResponse,
+  type DropEntityResponse,
 } from "@nia/schemas";
-import { getDb, getWriteDb, evict, poolCount, verifyActiveWriteGrant } from "./pool-manager.js";
+import { getDb, getWriteDb, evict, poolCount, verifyActiveWriteGrant, checkVaultReachable } from "./pool-manager.js";
 import { flattenDocuments } from "./flatten.js";
 import { resolveColumnType, serializeCellValue } from "./column-types.js";
 import { verifyWriteContext } from "./writeSignature.js";
@@ -66,7 +68,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-mongodb",
   pools: poolCount(),
-  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight", "create-entity"],
+  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight", "create-entity", "drop-entity"],
 }));
 
 app.post("/test", async (req) => {
@@ -340,6 +342,65 @@ app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
   return { created, durationMs: Date.now() - start };
 });
 
+/**
+ * Orphaned-destination-table lifecycle fix — Mongo-dialect mirror of
+ * connector-supabase's /drop-entity: `dropCollection` through a
+ * `listCollections`-first idempotent check (mirrors /create-entity's own
+ * `listCollections`-first pattern), since the driver throws
+ * NamespaceNotFound on a second drop rather than no-op'ing.
+ */
+app.post("/drop-entity", async (req): Promise<DropEntityResponse> => {
+  const body = DropEntityRequest.parse(req.body);
+  const start = Date.now();
+
+  if (body.kind !== "collection") {
+    throw new Error(`connector-mongodb only drops collections, got kind: ${body.kind}`);
+  }
+  if (body.context.connectionId !== body.credential.connectionId) {
+    throw new Error("signed context connectionId does not match the request credential");
+  }
+  if (body.entity.namespace !== body.context.entity.namespace || body.entity.name !== body.context.entity.name) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const signatureValid = verifyWriteContext(
+    {
+      connectionId: body.context.connectionId,
+      grantId: body.context.grantId,
+      runId: body.context.runId,
+      entity: body.context.entity,
+      grantNamespace: body.context.grantNamespace,
+      columns: body.context.columns,
+      mode: body.context.mode,
+      stagingEntity: body.context.stagingEntity,
+      quarantineEntity: body.context.quarantineEntity,
+      issuedAt: body.context.issuedAt,
+    },
+    body.context.signature,
+    secret,
+  );
+  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+
+  const grantActive = await verifyActiveWriteGrant(
+    body.context.grantId,
+    body.context.connectionId,
+    body.context.grantNamespace,
+  );
+  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+
+  const db = await getWriteDb(body.credential, body.config);
+  const existing = await db.listCollections({ name: body.entity.name }, { nameOnly: true }).toArray();
+  let dropped = false;
+  if (existing.length > 0) {
+    await db.dropCollection(body.entity.name);
+    dropped = true;
+  }
+
+  return { dropped, durationMs: Date.now() - start };
+});
+
 app.post("/invalidate", async (req) => {
   const { connectionId } = InvalidateRequest.parse(req.body);
   return { evicted: await evict(connectionId) };
@@ -349,10 +410,12 @@ app.post("/invalidate", async (req) => {
 // drives routes via app.inject()) doesn't also try to bind a real socket.
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 4020);
-  app.listen({ port, host: "0.0.0.0" }).catch((err) => {
-    app.log.error(err);
-    process.exit(1);
-  });
+  checkVaultReachable()
+    .then(() => app.listen({ port, host: "0.0.0.0" }))
+    .catch((err) => {
+      app.log.error(err);
+      process.exit(1);
+    });
 }
 
 export { app };

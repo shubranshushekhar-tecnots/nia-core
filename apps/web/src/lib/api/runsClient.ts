@@ -14,12 +14,14 @@ import { RunStreamEnvelope } from '@nia/schemas';
 export class RunApiError extends Error {
   status: number;
   code: string;
+  details?: unknown;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
     this.name = 'RunApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -40,7 +42,7 @@ export async function startWorkflowRun(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new RunApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new RunApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
   return res.json() as Promise<{ runs: { destNodeId: string; runId: string }[] }>;
 }
@@ -59,7 +61,7 @@ export async function cancelWorkflowRun(workflowId: string, runId: string): Prom
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new RunApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new RunApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
 }
 

@@ -8,6 +8,7 @@ import {
   StageRequest,
   PreflightRequest,
   CreateEntityRequest,
+  DropEntityRequest,
   rowsNeedJsonCoercion,
   coerceJsonWriteValues,
   type TabularResult,
@@ -17,10 +18,11 @@ import {
   type AssertionResult,
   type WriteEntityRef,
   type CreateEntityResponse,
+  type DropEntityResponse,
 } from "@nia/schemas";
-import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant } from "./pool-manager.js";
+import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant, checkVaultReachable } from "./pool-manager.js";
 import { verifyWriteContext } from "./writeSignature.js";
-import { buildUpsertSql, buildCreateTableSql } from "./writeSql.js";
+import { buildUpsertSql, buildCreateTableSql, buildDropTableSql } from "./writeSql.js";
 import {
   buildCreateStagingSql,
   buildDropStagingSql,
@@ -56,7 +58,7 @@ app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-mysql",
   pools: poolCount(),
-  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight", "create-entity"],
+  routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight", "create-entity", "drop-entity"],
 }));
 
 app.post("/test", async (req) => {
@@ -580,6 +582,64 @@ app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
   return { created: true, durationMs: Date.now() - start };
 });
 
+/**
+ * Orphaned-destination-table lifecycle fix — MySQL-dialect mirror of
+ * connector-supabase's /drop-entity. Only ever dispatched by runEtl.ts's
+ * failStaged against an entity the worker's own stagingRegistry recorded
+ * THIS run as having created.
+ */
+app.post("/drop-entity", async (req): Promise<DropEntityResponse> => {
+  const body = DropEntityRequest.parse(req.body);
+  const start = Date.now();
+
+  if (body.kind !== "table") {
+    throw new Error(`connector-mysql only drops SQL tables, got kind: ${body.kind}`);
+  }
+  if (body.context.connectionId !== body.credential.connectionId) {
+    throw new Error("signed context connectionId does not match the request credential");
+  }
+  if (!entityMatches(body.entity, body.context.entity)) {
+    throw new Error("request entity does not match the signed context's entity");
+  }
+
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const signatureValid = verifyWriteContext(
+    {
+      connectionId: body.context.connectionId,
+      grantId: body.context.grantId,
+      runId: body.context.runId,
+      entity: body.context.entity,
+      grantNamespace: body.context.grantNamespace,
+      columns: body.context.columns,
+      mode: body.context.mode,
+      stagingEntity: body.context.stagingEntity,
+      quarantineEntity: body.context.quarantineEntity,
+      issuedAt: body.context.issuedAt,
+    },
+    body.context.signature,
+    secret,
+  );
+  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+
+  const grantActive = await verifyActiveWriteGrant(
+    body.context.grantId,
+    body.context.connectionId,
+    body.context.grantNamespace,
+  );
+  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+
+  const pool = await getWritePool(body.credential, body.config);
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(buildDropTableSql(body.entity));
+  } finally {
+    conn.release();
+  }
+
+  return { dropped: true, durationMs: Date.now() - start };
+});
+
 app.post("/invalidate", async (req) => {
   const { connectionId } = InvalidateRequest.parse(req.body);
   return { evicted: await evict(connectionId) };
@@ -589,10 +649,12 @@ app.post("/invalidate", async (req) => {
 // drives routes via app.inject()) doesn't also try to bind a real socket.
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 4010);
-  app.listen({ port, host: "0.0.0.0" }).catch((err) => {
-    app.log.error(err);
-    process.exit(1);
-  });
+  checkVaultReachable()
+    .then(() => app.listen({ port, host: "0.0.0.0" }))
+    .catch((err) => {
+      app.log.error(err);
+      process.exit(1);
+    });
 }
 
 export { app };

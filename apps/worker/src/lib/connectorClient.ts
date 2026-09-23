@@ -4,6 +4,8 @@ import type {
   CreateEntityRequest,
   CreateEntityResponse,
   CredentialRef,
+  DropEntityRequest,
+  DropEntityResponse,
   IntrospectResponse,
   PreflightRequest,
   PreflightResponse,
@@ -15,6 +17,7 @@ import type {
 } from "@nia/schemas";
 import {
   CreateEntityResponse as CreateEntityResponseSchema,
+  DropEntityResponse as DropEntityResponseSchema,
   ExecuteResponse,
   IntrospectResponse as IntrospectResponseSchema,
   PreflightResponse as PreflightResponseSchema,
@@ -553,6 +556,74 @@ export async function sendCreateEntityRequest(
       error: {
         kind: "service-error",
         message: `Malformed /create-entity response from connector "${manifest.id}": ${parsed.error.message}`,
+      },
+    };
+  }
+  return { ok: true, value: parsed.data };
+}
+
+/**
+ * Orphaned-destination-table lifecycle fix — calls a connector service's
+ * /drop-entity endpoint. Same signed-request posture and template as
+ * sendCreateEntityRequest.
+ */
+export async function sendDropEntityRequest(
+  manifest: ConnectorManifest,
+  request: DropEntityRequest,
+  opts: { timeoutMs?: number } = {},
+): Promise<DispatchResult<DropEntityResponse>> {
+  warnIfRouteMissing(manifest, "drop-entity");
+  const timeoutMs = opts.timeoutMs ?? request.timeoutMs ?? DEFAULT_CREATE_ENTITY_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(manifest)}/drop-entity`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return {
+        ok: false,
+        error: {
+          kind: "query-timeout",
+          message: `drop-entity against connector "${manifest.id}" timed out after ${timeoutMs}ms.`,
+        },
+      };
+    }
+    return {
+      ok: false,
+      error: {
+        kind: "service-unreachable",
+        message: `Could not reach connector service "${manifest.id}": ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    let message = `connector service "${manifest.id}" responded ${res.status}`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) message = body.message;
+    } catch {
+      // Non-JSON error body — keep the generic message.
+    }
+    return { ok: false, error: { kind: "service-error", message } };
+  }
+
+  const parsed = DropEntityResponseSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: {
+        kind: "service-error",
+        message: `Malformed /drop-entity response from connector "${manifest.id}": ${parsed.error.message}`,
       },
     };
   }

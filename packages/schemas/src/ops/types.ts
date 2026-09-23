@@ -126,6 +126,12 @@ export const FN_PUSHABILITY: Record<CallFn, Record<SourceDialect, boolean>> = {
   format_number: { mysql: true, postgres: true, mongo: true },
   to_boolean: { mysql: true, postgres: true, mongo: true },
   to_date: { mysql: true, postgres: true, mongo: true },
+  // Bug fix (all-rows-quarantined): to_timestamp is internal-only — never
+  // reachable via the parser (not in its function-keyword list) or via a
+  // pushdown decision, since ops/conformance.ts constructs this Expr node
+  // directly and always calls evalExpr on it. No dialect ever needs to
+  // compile it to SQL/pipeline stages, so it's false everywhere.
+  to_timestamp: { mysql: false, postgres: false, mongo: false },
   // Phase 8b-2, batch 5: Date-part vocabulary. All 10 expressible on
   // every dialect — see sqlShared.ts's compileDateCoerceSql (type-driven
   // coercion: a real typed date/timestamp/timestamptz column casts

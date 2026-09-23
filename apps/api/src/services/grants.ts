@@ -160,7 +160,12 @@ export async function confirmWriteGrant(
   await dispatchInvalidate(manifest, connectionId);
   if (!testResult.ok) {
     await supabase.rpc("delete_connector_secret", { p_ref: vaultRef as string });
-    throw new AppError(422, "WRITE_GRANT_TEST_FAILED", testResult.error ?? "The write credential could not connect.");
+    throw new AppError(
+      422,
+      "WRITE_GRANT_TEST_FAILED",
+      testResult.error?.message ?? "The write credential could not connect.",
+      testResult.error?.details,
+    );
   }
 
   const { data, error } = await supabase.rpc("confirm_write_grant", {

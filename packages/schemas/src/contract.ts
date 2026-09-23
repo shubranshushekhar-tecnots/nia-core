@@ -399,6 +399,35 @@ export const CreateEntityResponse = z.object({
 });
 export type CreateEntityResponse = z.infer<typeof CreateEntityResponse>;
 
+/**
+ * Schema layer, Part 4 follow-up (orphaned-destination-table lifecycle) —
+ * the drop-side counterpart to /create-entity. Same signed-request posture
+ * (reuses WriteContext exactly as /create-entity does: `columns` is the
+ * name-set the run believed the entity had, `stagingEntity`/
+ * `quarantineEntity` null, `mode` the schema default), same verification
+ * order connector-side (HMAC, entity/columns match, active grant). Exists
+ * ONLY to undo a destination table THIS run created and only ever gets
+ * dispatched pre-apply (see runEtl.ts's failStaged) — never a general
+ * "drop any table" capability, and never reachable without a fresh signed
+ * WriteContext naming the exact entity.
+ */
+export const DropEntityRequest = z.object({
+  credential: CredentialRef,
+  config: ConnectorConfig,
+  kind: CreateEntityKind,
+  entity: WriteEntityRef,
+  timeoutMs: z.number().int().positive().default(30000),
+  context: WriteContext,
+});
+export type DropEntityRequest = z.infer<typeof DropEntityRequest>;
+
+export const DropEntityResponse = z.object({
+  /** True if a DROP was actually issued. False if the entity didn't exist (idempotent no-op). */
+  dropped: z.boolean(),
+  durationMs: z.number().int().nonnegative(),
+});
+export type DropEntityResponse = z.infer<typeof DropEntityResponse>;
+
 export const HealthResponse = z.object({
   status: z.literal("ok"),
   service: z.string(),

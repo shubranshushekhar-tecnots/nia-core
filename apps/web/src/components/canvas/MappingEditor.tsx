@@ -16,6 +16,7 @@ import {
 } from '@nia/schemas';
 import type { EntityRef, IntrospectResponse } from '@nia/schemas';
 import { defaultDestinationField } from '@/lib/canvas/mappingDefaults';
+import { isAddMappingEntryDisabled } from '@/lib/canvas/mappingEntryGate';
 import { getConnectionSchema } from '@/lib/api/connectionsClient';
 import { proposeMapping, MappingsApiError } from '@/lib/api/mappingsClient';
 import { previewDestination, PreviewApiError } from '@/lib/api/previewClient';
@@ -96,6 +97,7 @@ function FieldSelect({
   fields,
   placeholder,
   invalid,
+  loading,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -103,6 +105,14 @@ function FieldSelect({
   placeholder?: string;
   /** Phase 5 Session 5, Block 2 — schema drift: entry references a field the live schema no longer has (see driftedField() below). Red-border-only, no new copy inline; the row-level message below the entry explains why. */
   invalid?: boolean;
+  /**
+   * Schema-race fix (PHASE5_SESSION_NOTES.md's "Schema-race UX bug") — an
+   * empty `fields` array is ambiguous: it means either "still loading" or
+   * "genuinely has zero fields". While loading, disable the free-text
+   * fallback below instead of letting the user commit an arbitrary string
+   * before the real field list has a chance to load.
+   */
+  loading?: boolean;
 }) {
   const style = invalid ? { ...inputStyle, flex: 1, borderColor: 'var(--bad)' } : { ...inputStyle, flex: 1 };
   if (fields.length === 0) {
@@ -110,7 +120,8 @@ function FieldSelect({
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder ?? 'field name'}
+        placeholder={loading ? 'Loading fields\u2026' : (placeholder ?? 'field name')}
+        disabled={loading}
         style={{ ...style, fontFamily: 'var(--font-data)' }}
       />
     );
@@ -153,23 +164,33 @@ function driftedField(value: string, fields: string[]): boolean {
  * brand-new "+ Create new…" table) falls back to `fieldNamesForEntity`'s
  * own flat-union behavior, unchanged from before this fix.
  */
-function useEntityFields(connectionId?: string, entity?: EntityRef): string[] {
-  const schema = useEntitySchema(connectionId);
-  return useMemo(() => {
+function useEntityFields(connectionId?: string, entity?: EntityRef): { fields: string[]; isLoading: boolean } {
+  const { schema, isLoading } = useEntitySchema(connectionId);
+  const fields = useMemo(() => {
     if (!schema) return [];
     return fieldNamesForEntity(schema, entity).slice().sort();
   }, [schema, entity]);
+  return { fields, isLoading };
 }
 
-/** Shares the `['connection-schema', connectionId]` query (and its react-query cache entry) with useEntityFields above — this just returns the raw IntrospectResponse instead of a flattened field-name union, since the contract preview below needs one specific entity's typed fields, not a cross-entity name union. */
-function useEntitySchema(connectionId?: string): IntrospectResponse | undefined {
-  const { data: schema } = useQuery({
+/**
+ * Shares the `['connection-schema', connectionId]` query (and its
+ * react-query cache entry) with useEntityFields above — this just returns
+ * the raw IntrospectResponse instead of a flattened field-name union, since
+ * the contract preview below needs one specific entity's typed fields, not
+ * a cross-entity name union. Also surfaces `isLoading` (schema-race fix,
+ * see mappingEntryGate.ts) so callers can tell "still fetching" apart from
+ * "genuinely no fields" — `enabled: false` (no connectionId) reports
+ * `isLoading: false`, matching tableFieldState.ts's convention.
+ */
+function useEntitySchema(connectionId?: string): { schema: IntrospectResponse | undefined; isLoading: boolean } {
+  const { data: schema, isLoading } = useQuery({
     queryKey: ['connection-schema', connectionId],
     queryFn: () => getConnectionSchema(connectionId!),
     enabled: !!connectionId,
     staleTime: 5 * 60_000,
   });
-  return schema;
+  return { schema, isLoading };
 }
 
 const emptyMapping: FieldMapping = { version: 1, entries: [], approvedAt: null };
@@ -217,8 +238,11 @@ export default function MappingEditor({
 }) {
   const mapping = config.mapping ?? emptyMapping;
   const rawSourceFields = useEntityFields(sourceConnectionId, sourceEntity);
-  const sourceFields = sourceFieldsOverride ?? rawSourceFields;
-  const destFields = useEntityFields(destConnectionId, config.entity);
+  const sourceFields = sourceFieldsOverride ?? rawSourceFields.fields;
+  // An override (post-aggregate output fields) is already resolved data, so
+  // it's never "loading" regardless of the raw introspection query's state.
+  const sourceFieldsLoading = sourceFieldsOverride ? false : rawSourceFields.isLoading;
+  const { fields: destFields, isLoading: destFieldsLoading } = useEntityFields(destConnectionId, config.entity);
 
   const [proposing, setProposing] = useState(false);
   const [proposeError, setProposeError] = useState<string | undefined>(undefined);
@@ -307,7 +331,7 @@ export default function MappingEditor({
    * always has the full resolved entity at run time); this is a preview-
    * only gap, not a run-time one.
    */
-  const sourceSchemaResponse = useEntitySchema(sourceConnectionId);
+  const { schema: sourceSchemaResponse } = useEntitySchema(sourceConnectionId);
   const sourceDialect = manifestDialect(sourceManifestId);
   const destDialect = manifestDialect(destManifestId);
   const sourceEntityDef =
@@ -360,6 +384,8 @@ export default function MappingEditor({
   // failing" state. Block Approve until every entry has both sides set.
   const hasIncompleteEntry = mapping.entries.some((e) => e.from === '' || e.to === '');
   const approveDisabled = mapping.entries.length === 0 || isApproved || hasIncompleteEntry;
+  // Schema-race fix (PHASE5_SESSION_NOTES.md) — see mappingEntryGate.ts.
+  const addEntryDisabled = isAddMappingEntryDisabled({ sourceFieldsLoading, destFieldsLoading });
 
   return (
     <div>
@@ -410,9 +436,23 @@ export default function MappingEditor({
         return (
           <div key={i}>
             <div style={rowStyle}>
-              <FieldSelect value={entry.from} onChange={(v) => updateEntry(i, { from: v })} fields={sourceFields} placeholder="source field" invalid={fromDrifted} />
+              <FieldSelect
+                value={entry.from}
+                onChange={(v) => updateEntry(i, { from: v })}
+                fields={sourceFields}
+                placeholder="source field"
+                invalid={fromDrifted}
+                loading={sourceFieldsLoading}
+              />
               <span style={{ color: 'var(--ink4)', fontSize: 12 }}>{'\u2192'}</span>
-              <FieldSelect value={entry.to} onChange={(v) => updateEntry(i, { to: v })} fields={destFields} placeholder="dest field" invalid={toDrifted} />
+              <FieldSelect
+                value={entry.to}
+                onChange={(v) => updateEntry(i, { to: v })}
+                fields={destFields}
+                placeholder="dest field"
+                invalid={toDrifted}
+                loading={destFieldsLoading}
+              />
               <button type="button" aria-label="Remove entry" onClick={() => removeEntry(i)} style={removeBtnStyle}>
                 {'\u2715'}
               </button>
@@ -430,9 +470,20 @@ export default function MappingEditor({
       <button
         type="button"
         onClick={addEntry}
-        style={{ fontSize: 12, border: '1px dashed var(--line2)', background: 'none', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: 'var(--ink3)', marginBottom: 12 }}
+        disabled={addEntryDisabled}
+        title={addEntryDisabled ? 'Waiting for the schema to load…' : undefined}
+        style={{
+          fontSize: 12,
+          border: '1px dashed var(--line2)',
+          background: 'none',
+          borderRadius: 6,
+          padding: '4px 8px',
+          cursor: addEntryDisabled ? 'not-allowed' : 'pointer',
+          color: 'var(--ink3)',
+          marginBottom: 12,
+        }}
       >
-        + Entry
+        {addEntryDisabled ? 'Loading fields\u2026' : '+ Entry'}
       </button>
 
       {unmappedDestFields.length > 0 && (

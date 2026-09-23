@@ -112,6 +112,9 @@ const CALL_FN_TYPE: Record<Exclude<CallFn, "coalesce">, NiaType> = {
   to_date: { kind: "date" },
   parse_date: { kind: "date" },
   date_add: { kind: "date" },
+
+  // Timestamp-valued (1) — internal-only, see expression.ts's `to_timestamp` doc comment.
+  to_timestamp: { kind: "timestamp", tz: "utc" },
 };
 
 function typeOfCall(expr: ExprCall, input: NiaSchema): ExprTypeResult {

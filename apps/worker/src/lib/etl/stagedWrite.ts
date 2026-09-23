@@ -268,13 +268,26 @@ export function lastStepForAssertions(
   return pushdownSteps.length > 0 ? pushdownSteps[pushdownSteps.length - 1] : undefined;
 }
 
+// Bug fix (all-rows-quarantined): whole-run circuit breaker, independent
+// of any per-step onFailure/quarantine tolerance. maxFailureRate is fully
+// implemented connector-side (evaluated mid-transaction from the run's
+// real quarantine/staging counts — see contract.ts's AssertionSpec doc
+// comment) but nothing ever constructed one, so a run where every row was
+// quarantined (e.g. by the implicit conformance step) still reported
+// success with an empty destination. Set just under 1.0 (not exactly
+// 1.0) so it only trips the reported 100%-quarantined case and any other
+// near-total failure, without narrowing the failure tolerance of any
+// currently-passing partial-failure run.
+const MAX_ACCEPTABLE_FAILURE_RATE = 0.999;
+
 /**
  * Called once, on the run's last chunk (or once, at the end of the
- * stateful-residual path) — staged mode only. Runs `noNullKeys` (always)
- * plus the last step's declared assertions against staging, and only on
- * success applies staging to the destination and commits this run's
- * pending quarantine rows, all in one connector-side transaction (see
- * contract.ts's StageResponse doc comment).
+ * stateful-residual path) — staged mode only. Runs `noNullKeys` and
+ * `maxFailureRate` (always) plus the last step's declared assertions
+ * against staging, and only on success applies staging to the
+ * destination and commits this run's pending quarantine rows, all in one
+ * connector-side transaction (see contract.ts's StageResponse doc
+ * comment).
  */
 export async function applyStaging(
   connectionId: string,
@@ -288,7 +301,10 @@ export async function applyStaging(
 ): Promise<SimpleResult> {
   if (target.mode !== "staged" || !target.stagingEntity) return { ok: true };
 
-  const assertions: AssertionSpec[] = [{ kind: "noNullKeys", columns: destConfig.upsertKeys! }];
+  const assertions: AssertionSpec[] = [
+    { kind: "noNullKeys", columns: destConfig.upsertKeys! },
+    { kind: "maxFailureRate", maxRate: MAX_ACCEPTABLE_FAILURE_RATE },
+  ];
   if (lastStep) {
     const op = opForStep(lastStep);
     if (op.stagingAssertions) assertions.push(...op.stagingAssertions(lastStep));

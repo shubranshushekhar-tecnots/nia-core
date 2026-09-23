@@ -43,7 +43,12 @@ export function resolveColumnType(isArrayColumn: boolean, values: unknown[]): Co
  * BSON leaf values (ObjectId, Decimal128, ...) aren't JSON-serializable by
  * default in a way that survives Fastify's JSON response — stringify them
  * to their canonical text form so the tabular row's cell matches the
- * "string" ColumnType we assigned above.
+ * "string" ColumnType we assigned above. Real BSON Date values are left
+ * untouched: Fastify's JSON serialization calls `Date.toJSON()` on them,
+ * which already emits full millisecond precision (e.g.
+ * "2026-09-21T00:49:40.918Z") — worker-side `to_timestamp` (not `to_date`)
+ * is what now conforms timestamp-kind columns, and it preserves that
+ * precision natively.
  */
 export function serializeCellValue(value: unknown): unknown {
   if (value && typeof value === "object" && "_bsontype" in value) {

@@ -172,6 +172,39 @@ export async function getPool(cred: CredentialRef, config: ConnectorConfig): Pro
 }
 
 /**
+ * Fail-fast startup probe — every credential resolution on this service
+ * goes through `resolveVaultSecret()` above, which reaches Supabase over
+ * `process.env.SUPABASE_URL`. If that URL isn't reachable from inside this
+ * container (wrong host — e.g. a host-only `127.0.0.1`/`localhost` value
+ * copied from a native `.env`, which inside a Docker container's network
+ * namespace never routes to the host), every single `/introspect`,
+ * `/test`, `/execute`, `/stage`, `/write` call would individually fail
+ * with a generic `TypeError: fetch failed` — often minutes into a run,
+ * once Vault resolution is finally attempted. Calling this once at process
+ * start turns that into one clear, immediate failure instead. Hits Auth's
+ * `/auth/v1/health` (no API key required, cheap, present on every Supabase
+ * deployment — hosted or local) purely as a network-reachability probe;
+ * it says nothing about the service-role key's validity, which is only
+ * ever exercised by a real `resolve_connector_secret` call.
+ */
+export async function checkVaultReachable(): Promise<void> {
+  const base = process.env.SUPABASE_URL ?? "";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    await fetch(`${base}/auth/v1/health`, { signal: controller.signal });
+  } catch (err) {
+    throw new Error(
+      `Cannot reach Supabase Vault at SUPABASE_URL="${base}": ${err instanceof Error ? err.message : String(err)}. ` +
+        `If this service runs in Docker and SUPABASE_URL points at 127.0.0.1/localhost, that address resolves to ` +
+        `the container itself, not the host — use host.docker.internal (or a reachable network address) instead.`,
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
  * Phase 6 Block 2 — write path gets its own pool, keyed
  * `connectionId:write:credVersion`, so a write credential's connections
  * never share a socket with the read pool (different Postgres role,

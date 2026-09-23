@@ -12,12 +12,14 @@ import { createClient } from '@/lib/supabase/client';
 export class ChecksApiError extends Error {
   status: number;
   code: string;
+  details?: unknown;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
     this.name = 'ChecksApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -50,7 +52,7 @@ export async function runWorkflowChecks(workflowId: string): Promise<WorkflowChe
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new ChecksApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new ChecksApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
   return res.json() as Promise<WorkflowCheckRun>;
 }
@@ -63,7 +65,7 @@ export async function getLatestCheckRun(workflowId: string): Promise<WorkflowChe
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new ChecksApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new ChecksApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
   return res.json() as Promise<WorkflowCheckRun | null>;
 }
@@ -76,7 +78,7 @@ export async function listCheckRuns(workflowId: string): Promise<WorkflowCheckRu
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new ChecksApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText);
+    throw new ChecksApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? res.statusText, body?.error?.details);
   }
   return res.json() as Promise<WorkflowCheckRun[]>;
 }

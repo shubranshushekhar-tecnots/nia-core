@@ -103,7 +103,7 @@ describe("confirmWriteGrant — test-connects before confirming", () => {
   });
 
   it("rolls back the Vault write and never confirms when the test fails", async () => {
-    vi.mocked(dispatchTest).mockResolvedValueOnce({ ok: false, error: "ECONNREFUSED" });
+    vi.mocked(dispatchTest).mockResolvedValueOnce({ ok: false, error: { message: "ECONNREFUSED", details: "ECONNREFUSED" } });
     const { supabase, rpcCalls } = createFakeClient([]);
 
     await expect(

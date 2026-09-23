@@ -148,6 +148,19 @@ export interface ExprCall {
     | "format_number"
     | "to_boolean"
     | "to_date"
+    // Bug fix (all-rows-quarantined): a dedicated timestamp coercion,
+    // distinct from `to_date`. Internal-only — NOT in the parser's
+    // function-name keyword list below, so it is never typeable in a
+    // user-authored formula/transform-step expression; only
+    // ops/conformance.ts ever constructs a `{kind:"call", fn:"to_timestamp"}`
+    // node directly (bypassing the parser). `to_date`'s output has always
+    // been fixed-width `YYYY-MM-DDTHH:MM:SSZ` (no fractional seconds) and
+    // many existing callers/tests already pin that exact shape, so it was
+    // safer to add a new function than to change `to_date`'s contract.
+    // `to_timestamp` accepts and preserves millisecond precision (see
+    // residualEval.ts's `evalCoercionFn` case), matching what a real
+    // Date/timestamptz value round-trips as end to end.
+    | "to_timestamp"
     // Phase 8b-2, batch 5: Date-part vocabulary. year/month/day/hour/
     // minute/second/quarter/weekday take a single date-shaped argument
     // (a real typed date/timestamp/timestamptz column, or an ISO-8601
@@ -319,6 +332,7 @@ const CALL_ARITY: Record<ExprCall["fn"], { min: number; max: number }> = {
   format_number: { min: 2, max: 2 },
   to_boolean: { min: 1, max: 1 },
   to_date: { min: 1, max: 1 },
+  to_timestamp: { min: 1, max: 1 },
   year: { min: 1, max: 1 },
   month: { min: 1, max: 1 },
   day: { min: 1, max: 1 },
@@ -1046,6 +1060,7 @@ export const FALLIBLE_CALL_FNS: ReadonlySet<CallFn> = new Set([
   "to_integer",
   "to_boolean",
   "to_date",
+  "to_timestamp",
   "parse_date",
   "parse_number",
 ]);

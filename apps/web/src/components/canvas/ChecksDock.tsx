@@ -37,6 +37,12 @@ const DOCK_BAR_HEIGHT = 36;
 const DOCK_BODY_DEFAULT_HEIGHT = 260;
 const DOCK_BODY_MIN_HEIGHT = 120;
 const DOCK_BODY_MAX_HEIGHT = 480;
+// Below MIN, the body keeps shrinking down to this visual floor instead of
+// snapping — dragging past it (release below COLLAPSE_THRESHOLD) fully
+// collapses the dock so it stops covering node popups. Lets a drag do what
+// used to require a separate click on the summary pill.
+const DOCK_BODY_DRAG_FLOOR = 24;
+const DOCK_BODY_COLLAPSE_THRESHOLD = 80;
 
 const barStyle = {
   height: DOCK_BAR_HEIGHT,
@@ -166,8 +172,12 @@ export default function ChecksDock({
 }) {
   const [bodyHeight, setBodyHeight] = useState(DOCK_BODY_DEFAULT_HEIGHT);
   const [dragging, setDragging] = useState(false);
-  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const dragRef = useRef<{ startY: number; startHeight: number; currentHeight: number } | null>(null);
   const dockRef = useRef<HTMLDivElement>(null);
+  const onToggleExpandedRef = useRef(onToggleExpanded);
+  useEffect(() => {
+    onToggleExpandedRef.current = onToggleExpanded;
+  }, [onToggleExpanded]);
 
   useEffect(() => {
     const el = dockRef.current;
@@ -184,11 +194,23 @@ export default function ChecksDock({
     function onMove(e: PointerEvent) {
       const drag = dragRef.current;
       if (!drag) return;
-      const next = Math.min(DOCK_BODY_MAX_HEIGHT, Math.max(DOCK_BODY_MIN_HEIGHT, drag.startHeight + (drag.startY - e.clientY)));
+      // Below MIN, let the body keep shrinking (down to a visual floor)
+      // rather than clamping, so the drag itself previews the collapse.
+      const next = Math.min(DOCK_BODY_MAX_HEIGHT, Math.max(DOCK_BODY_DRAG_FLOOR, drag.startHeight + (drag.startY - e.clientY)));
+      drag.currentHeight = next;
       setBodyHeight(next);
     }
     function onUp() {
-      if (dragRef.current) {
+      const drag = dragRef.current;
+      if (drag) {
+        if (drag.currentHeight < DOCK_BODY_COLLAPSE_THRESHOLD) {
+          // Snap collapsed and reset the body height so the next expand
+          // (via a tab/pill click) opens back at a usable size.
+          onToggleExpandedRef.current();
+          setBodyHeight(DOCK_BODY_DEFAULT_HEIGHT);
+        } else if (drag.currentHeight < DOCK_BODY_MIN_HEIGHT) {
+          setBodyHeight(DOCK_BODY_MIN_HEIGHT);
+        }
         dragRef.current = null;
         setDragging(false);
         document.body.style.cursor = '';
@@ -205,7 +227,7 @@ export default function ChecksDock({
 
   function handleDragPointerDown(e: ReactPointerEvent) {
     e.preventDefault();
-    dragRef.current = { startY: e.clientY, startHeight: bodyHeight };
+    dragRef.current = { startY: e.clientY, startHeight: bodyHeight, currentHeight: bodyHeight };
     setDragging(true);
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';

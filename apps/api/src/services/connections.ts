@@ -362,7 +362,12 @@ export async function updateConnection(
   const testResult = await dispatchTest(manifest, credential, mergedConfig);
   if (!testResult.ok) {
     if (newVaultRef) await supabase.rpc("delete_connector_secret", { p_ref: newVaultRef });
-    throw new AppError(422, "TEST_FAILED", testResult.error ?? "Connection test failed.");
+    throw new AppError(
+      422,
+      "TEST_FAILED",
+      testResult.error?.message ?? "Connection test failed.",
+      testResult.error?.details,
+    );
   }
 
   const patch: Record<string, unknown> = {};
@@ -449,7 +454,7 @@ export async function testConnection(
   scope: WorkspaceScope,
   id: string,
   actorUserId: string,
-): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
+): Promise<{ ok: boolean; latencyMs?: number; error?: string; details?: string }> {
   let query = supabase
     .from("connections")
     .select("id, connector_id, handle, config, vault_secret_ref, cred_version, owner_user_id")
@@ -498,7 +503,7 @@ export async function testConnection(
     })
     .eq("id", id);
 
-  return result;
+  return { ok: result.ok, latencyMs: result.latencyMs, error: result.error?.message, details: result.error?.details };
 }
 
 /**
@@ -540,7 +545,7 @@ export async function getConnectionSchema(
   if (cached) return cached;
 
   const result = await dispatchIntrospect(manifest, credential, data.config);
-  if (!result.ok) throw new AppError(502, "INTROSPECT_FAILED", result.error);
+  if (!result.ok) throw new AppError(502, "INTROSPECT_FAILED", result.error.message, result.error.details);
 
   setCachedSchema(credential, result.value);
   return result.value;

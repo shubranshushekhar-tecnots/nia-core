@@ -54,7 +54,10 @@ describe("dispatchIntrospect", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "connector service responded 500: connection is insecure (try using `sslmode=require`)",
+      error: {
+        message: "connector service responded 500: connection is insecure (try using `sslmode=require`)",
+        details: "connector service responded 500: connection is insecure (try using `sslmode=require`)",
+      },
     });
   });
 
@@ -63,6 +66,33 @@ describe("dispatchIntrospect", () => {
 
     const result = await dispatchIntrospect(manifest, credential, { host: "x", port: 5432, database: "d" });
 
-    expect(result).toEqual({ ok: false, error: "connector service responded 502" });
+    expect(result).toEqual({
+      ok: false,
+      error: { message: "connector service responded 502", details: "connector service responded 502" },
+    });
+  });
+
+  /**
+   * Bug fix: a vault-connectivity failure (the connector's resolveVaultSecret
+   * wraps a network error as "vault resolution failed for ref X: TypeError:
+   * fetch failed") used to surface a raw TypeError string straight to the UI.
+   * Now it maps to a plain-language headline while the raw connector text
+   * stays available in `details`.
+   */
+  it("maps a vault-unreachable failure to a plain-language message, keeping the raw text in details", async () => {
+    const rawMessage = "vault resolution failed for ref abc-123: TypeError: fetch failed";
+    global.fetch = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ statusCode: 500, message: rawMessage }), { status: 500 })),
+    ) as unknown as typeof fetch;
+
+    const result = await dispatchIntrospect(manifest, credential, { host: "x", port: 5432, database: "d" });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        message: "Can't reach the credential store.",
+        details: `connector service responded 500: ${rawMessage}`,
+      },
+    });
   });
 });
