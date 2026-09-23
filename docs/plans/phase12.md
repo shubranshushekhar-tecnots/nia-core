@@ -45,6 +45,6 @@ Step 3: Tests (minimal; this is the full list)
 
 Step 4: Close Phase 12
 - docs/decisions.md: one Phase 12 entry covering the snapshot-based diff, revert-as-inverse, refuse-on-conflict, and why pre-Phase-12 plans aren't revertible.
-- PHASE12_EXIT.md: short. What shipped, bugs found, open risks.
+- docs/history/PHASE12_EXIT.md: short. What shipped, bugs found, open risks.
 
 Output: step 1 findings, any deviations with reasons, test counts, and the untruncated git status --porcelain. Don't commit.

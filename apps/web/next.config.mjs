@@ -18,6 +18,17 @@ const nextConfig = {
   devIndicators: false,
   transpilePackages: ['@nia/ui'],
   outputFileTracingRoot: path.join(__dirname, '../..'),
+  experimental: {
+    // Next's dev-server rewrite proxy caps proxied requests at 30s by
+    // default (next/dist/server/lib/router-utils/proxy-request.js). The
+    // copilot-agent tool-use loop (up to MAX_TOOL_CALLS sequential LLM
+    // round-trips through apps/api's /copilot-agent, proxied same-origin
+    // via the rewrite below) can legitimately take longer than that on a
+    // multi-tool turn, which otherwise surfaces as a client-visible
+    // ECONNRESET/"socket hang up" partway through — not a real failure,
+    // just this proxy giving up early.
+    proxyTimeout: 120_000,
+  },
   async rewrites() {
     return [
       // Same-origin proxy so the browser's httpOnly Supabase session

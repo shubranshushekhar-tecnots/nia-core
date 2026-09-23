@@ -95,7 +95,7 @@ queries. Re-measure after any lever; target ≤5s p50, aspiration ≤3s."
 
 Session 4 numbers this ruling responds to: p50 7846ms / p95 8089ms
 (`apps/web/latency_hops.mjs`, 10 runs), vs. Phase 4's p50 8431-8603ms /
-p95 12276-12642ms (`PHASE4_EXIT.md`). Time-to-first-stage-event (not
+p95 12276-12642ms (`docs/history/PHASE4_EXIT.md`). Time-to-first-stage-event (not
 first-token) is separately p50 ~219-220ms, which is what "immediate
 visible progress" refers to above — the UI shows activity within ~220ms
 even though the full answer's first token doesn't land until ~7.8s later.
@@ -106,7 +106,7 @@ Re-checked the four levers this ruling lists, against the plan's specific
 requirement to re-verify with live evidence rather than re-reading old
 docs. Nothing implemented — all four close out as investigation-only,
 consistent with "implement only if cheap and golden-gated," since none
-clears that bar. Cross-references `PHASE4_EXIT.md` §4.4 Fix 1-3, which
+clears that bar. Cross-references `docs/history/PHASE4_EXIT.md` §4.4 Fix 1-3, which
 originally diagnosed these; this entry reconfirms live, today, that
 nothing has changed.
 
@@ -3695,7 +3695,7 @@ now recognizes as handled, so they're expected to no longer abort. The
 untagged full-suite re-run that would confirm this for all 12 wasn't
 re-done this round (only `--tag=onfailure`'s 4 cases plus the new unit
 coverage, per this follow-up's own scoping); re-verify before closing
-out the `PHASE8_EXIT.md` §8 follow-up item this superseded.
+out the `docs/history/PHASE8_EXIT.md` §8 follow-up item this superseded.
 
 **Amendment (Phase 9 close-out session): the `coalesce` half of this rule
 is narrower than stated above.** "`coalesce` directly wrapping a fallible
@@ -3999,7 +3999,7 @@ error the residual path raises if true — the step stays pushed and no
 longer forces itself and later steps residual just to get a failure count.
 `'null'`/`'drop'` run `COUNT(failure predicate)` and report that count the
 same way the residual path does, with the step still fully pushed. This
-resolves `PHASE8_EXIT.md` §8's "8b-3 pushed `'null'`/`'drop'` failure
+resolves `docs/history/PHASE8_EXIT.md` §8's "8b-3 pushed `'null'`/`'drop'` failure
 counts are silent" risk — marked resolved there, pointing back here.
 
 ### Part 5: consistency (documented, not fixed, per the plan)
@@ -4469,7 +4469,7 @@ Phase 7 authorship, mirroring the runtime's OLD single-chunk row caps
 (`packages/guardrails/src/sql/validator.ts`'s `maxRows`, `apps/worker/
 src/lib/etl/queryBuilder.ts`'s `MAX_CHUNK_ROWS`) from when a pushed
 aggregate ran as one unpaginated query capped at 1000 total rows.
-**Phase 9 Part 1/3** (`PHASE9_EXIT.md`; this file's Phase 9 entry)
+**Phase 9 Part 1/3** (`docs/history/PHASE9_EXIT.md`; this file's Phase 9 entry)
 replaced that with group-key keyset pagination for every pushed
 aggregate and explicitly removed the old runtime fail-at-cap guard —
 "pagination supersedes it." The planner's design-time check was never
@@ -4650,7 +4650,7 @@ destination rows, 0 duplicates, `workflow_runs.status: succeeded`).
 ## Phase 13: the LLM cleaning pipeline (router, specialists, CleanPlan bindings) — closed
 
 Covers `docs/plans/phase13.md` Steps 2–10. Full ledger:
-`PHASE13_EXIT.md`.
+`docs/history/PHASE13_EXIT.md`.
 
 **Router (`apps/worker/src/lib/clean/router.ts`) is deliberately
 deterministic, no LLM.** Per-column rule, one module, in order:
@@ -4748,7 +4748,7 @@ reviews `meta.json`'s `reviewed: false` flag to `true`. Latest run: 6/10
 datasets passed, 0 hard failures (no `mustNotChange` column was ever
 touched, on any dataset, across every run this phase). All 4 failures
 are single-completion LLM behavior, not code bugs, and fall into three
-categories documented as open risks in `PHASE13_EXIT.md`:
+categories documented as open risks in `docs/history/PHASE13_EXIT.md`:
 1. **Token-omission variance.** The missing-value and coercion
    specialists' prompt contract has no closed-vocabulary "is one of
    these N literal tokens" function — each call must reconstruct the
@@ -4913,3 +4913,149 @@ endpoint — no multi-document transactions on standalone `mongod` — so
 this bug never applied there; `grantNamespace` is still threaded through
 mongo's `/write`/`/create-entity` for type/signature consistency, with
 no behavior change).
+
+## Copilot agent: tool registry, unbypassable confirmation, data minimization
+
+Full plan: `docs/plans/copilot-agent.md`. This adds a second, agentic
+surface (`POST /copilot-agent`) alongside the existing single-shot
+propose/validate/apply chat flow (`POST /chat`, untouched) — a tool-use
+loop where the model can read data and, subject to the constraints below,
+make changes, all as the signed-in user through the same service
+functions the UI already calls. No new privileged code path exists
+anywhere in this feature: every tool handler calls an existing
+`apps/api/src/services/*` function with `ctx.supabase` (the per-request,
+RLS-scoped client) and `ctx.user.scope` — Copilot never touches the
+service-role key, and can never do anything the signed-in user couldn't
+already do by clicking through the UI.
+
+**Tool registry** (`apps/api/src/copilot/registry.ts`, `types.ts`,
+`tools/*.ts`). One module per tool, each calling `registerTool` with a
+`ToolDefinition`: `name`, `description` (what the model reads to decide
+how to call it), `tier` (`read | edit | execute`), `inputSchema` (a Zod
+schema), `handler`, `summarize` (a short string — what the model sees
+back), and `render` (a typed payload — what the UI shows the user). A
+tool registered without a tier or a summarizer fails at load time, not
+silently at call time — `registry.test.ts` pins this. `getActingUser`
+(`copilot/actingUser.ts`) is the single identity-resolution helper used
+by every tool handler, the pending-action confirm route, and the audit
+log, so a future auth change only touches that one module. Every tool
+call is written to the audit log with `source: 'copilot'`.
+
+**Tiers (v1)**. `read` (no confirmation): `list_connections`,
+`list_workflows`, `get_workflow`, `describe_source`, `get_profile`,
+`preview_rows`, `list_runs`, `get_run_status`, `get_run_result`,
+`explain_last_error`, plus three setup-help explainers added per Part 5
+(`explain_write_grant`, `explain_source_rls_policy`,
+`explain_missing_privilege`) — these three are read-tier by design: they
+only produce text and DDL/GRANT/CREATE POLICY statements for the user to
+read and run themselves, never anything Copilot executes. `edit`
+(reversible): `change_graph` (the existing PlanDiff apply flow, reused
+as-is), `propose_cleaning`, `set_destination`, `propose_mapping`,
+`revert_plan`. `execute` (always confirmed): `start_run`; `cancel_run`
+stays unconfirmed since it only stops work and staging leaves the
+destination intact. Explicitly **not** exposed to Copilot at any tier:
+creating/editing connection credentials, confirming write grants,
+granting database privileges, raw SQL writes, deleting workflows — see
+Part 3/Part 5 rationale below.
+
+**Confirmation the model can't bypass** (`copilot/pendingActions.ts`,
+`copilot/executeTool.ts`, `routes/copilotAgent.ts`). An `execute`-tier
+call creates a pending action keyed by tool name plus a hash of the
+exact arguments, expiring after 10 minutes. `executeTool` refuses to run
+an execute-tier tool unless it's called with a `pendingActionId` whose
+stored hash matches the arguments being executed — and there is exactly
+**one** call site in the whole codebase that ever passes a
+`pendingActionId` into `executeTool`: `POST
+/copilot-agent/pending-actions/:id/confirm`, which requires the user's
+own cookie session and only runs after `confirmPendingAction` has
+recorded a real click. The agent loop (`agentLoop.ts`) never has access
+to a pending action's id or hash, and every ordinary tool call in the
+loop goes through `executeTool` with no `pendingActionId` at all — the
+model has no code path that reaches a confirmed execution. The
+confirmation card itself is rendered by the UI from real data returned
+by the tool (source/destination names from the database, write mode, a
+create-table preview if any) — never from text the model wrote — and
+tool results are treated as data everywhere in the loop: nothing read
+from a database, a profile, an error message, or a run result can ever
+confirm a pending action, because the only path to confirmation is the
+human-only confirm route.
+
+**Agent loop and data minimization** (`agentLoop.ts`). A tool-use loop
+through the existing LLM gateway at temperature 0, capped at
+`MAX_TOOL_CALLS = 8` tool calls per user turn, then a final
+no-more-tools call to summarize and stop. `preview_rows` and
+`get_run_result` return only summaries to the model (row counts, column
+names/types, failure counts) — the actual row data is carried in the
+tool's `render` payload and shown to the user directly by the UI, never
+sent back into the chat/model context. `start_run` returns a run card
+with live status; the chat isn't blocked while a run executes, and a
+follow-up "how's my run going" resolves via `get_run_status` rather than
+blocking the original turn. Tool failures surface the tool's real error
+message (the same friendly `AppError`-derived text the UI already shows
+elsewhere) as the tool result content, never a generic fallback.
+
+**Two real bugs found and fixed while building the required E2E test**
+(`copilot.spec.ts`'s new agent-driven filter-and-run flow):
+
+1. *Next.js dev-server proxy timeout.* The app's dev rewrite proxy has a
+   hardcoded 30s timeout; a full multi-tool-call agent turn against a
+   real LLM gateway routinely takes 45-60s, so every real turn was
+   getting killed mid-flight with `ECONNRESET` before the loop could
+   even finish, independent of anything Copilot-specific. Fixed by
+   setting `experimental.proxyTimeout: 120_000` in
+   `apps/web/next.config.mjs`. Dev-only setting; production doesn't run
+   behind this proxy.
+
+2. *Schema-blind tool input silently no-ops or false-positives.*
+   `change_graph`'s `inputSchema.diff` is deliberately typed
+   `z.unknown()`, not schemas' `PlanDiff` — `PlanDiff`'s
+   `.default()`-bearing fields make its Zod *input* type wider than its
+   *output* type, which is incompatible with `ToolDefinition`'s
+   `inputSchema: z.ZodType<TInput>` constraint (requires input===output).
+   `applyPlanDiff` already calls `PlanDiff.parse(input.diff)` itself, so
+   nothing skips real validation — but `zodToJsonSchema`
+   (`agentLoop.ts`'s `buildToolSpecs`) can't generate any structural
+   schema for a `z.unknown()` field, so the tool spec the model actually
+   sees carries **zero** information about `diff`'s shape. Combined with
+   `PlanDiff.baseGraphVersion: z.number().int().nonnegative().default(0)`
+   and `PlanDiff.ops: z.array(PlanOp).default([])`, an LLM call that
+   omits either field doesn't error — it silently gets `baseGraphVersion:
+   0` (guaranteed to trigger a false `409 PLAN_STALE` "ghost preview"
+   conflict on any workflow already past version 0, i.e. effectively
+   every real workflow) and/or `ops: []` (a `200 OK` apply that changes
+   nothing and doesn't bump the graph version, with the model none the
+   wiser). Both were reproduced end-to-end via the E2E test before being
+   fixed. Fixed with no schema/type changes — `changeGraph.ts`'s
+   `description` string was rewritten to state, in prose, that
+   `baseGraphVersion` and `ops` are required and must never be omitted,
+   spell out each field's silent-failure consequence, enumerate every
+   `PlanOp` variant's exact shape and `TransformStep`'s six kinds, and
+   give one fully worked JSON example. **Durable rule:** any tool whose
+   `inputSchema` uses `z.unknown()` for part of its input inherits this
+   failure class — the tool's `description` is the model's *only* source
+   of truth for that field's shape, and every `.default()`-bearing
+   nested field needs an explicit "required, never omit, here's what
+   happens if you do" callout in prose, since the JSON schema sent to
+   the model won't carry it.
+
+Separately, `CommandBar.tsx`'s agent entry point now stamps
+`[Current workflow id: ...]` onto the first message of a fresh agent
+conversation (mirroring how the existing propose/apply flow already
+threads `workflowId` explicitly) — without it, the model had to
+disambiguate the current workflow via `list_workflows`/`get_workflow`
+every time, which fails badly once a workspace accumulates multiple
+similarly-named workflows.
+
+**Why credentials and grant confirmation never go through chat**
+(Part 5). Setup friction (connecting a database, granting write access)
+is real, but the fix is *narrower tools*, not more powerful ones: the
+three read-tier explainer tools let Copilot show the user the exact DDL,
+`CREATE POLICY`, or `GRANT` statement they need — sourced from the same
+preflight/grant logic the UI's grant panel already runs — but the user
+still runs and confirms it themselves, outside of chat, the same way
+they always have. Connection credentials are never accepted, stored, or
+transmitted through the chat surface at all — the model can only ever
+point the user at the existing "Add connection" dialog. This keeps the
+one deliberately-drawn line in this whole feature: `RLS`/service-role
+credentials, and the human act of running privileged DDL, are the two
+things the agent can describe but never itself perform.

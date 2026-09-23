@@ -357,3 +357,150 @@ test.describe('copilot: propose -> ghost preview -> apply', () => {
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
   });
 });
+
+/**
+ * Copilot agent (docs/plans/copilot-agent.md, Part 3/4) — the plan's one
+ * required E2E flow: "Add a filter on amount > 100 and run it" applies the
+ * change, shows a confirmation card, doesn't start the run until the card
+ * is clicked, then starts it.
+ *
+ * "amount" doesn't exist in the dev-mysql sandbox seed (docker/dev-mysql-
+ * init.sql has only sandbox_items(id,name) and employees(id,name,salary))
+ * — adapted to employees.salary > 100000, the same real-column-substitution
+ * convention the propose/apply test above already documents for table
+ * names.
+ *
+ * Own project/workflow (not the shared "Canvas E2E Personal
+ * Project"/"Personal Workflow" fixture the two tests above use) because
+ * this test pre-seeds a real graph via direct API PUT rather than the
+ * empty-canvas self-heal those tests rely on. Runs as canvasC for the same
+ * audit_log RLS reason documented above, though this flow doesn't itself
+ * assert an audit row.
+ *
+ * The pre-seeded graph gives the model a source -> transform -> destination
+ * chain already in place (mysql -> mysql, canvasC's one seeded connection
+ * used for both ends) so the one live LLM call only has to add a single
+ * filter step to the existing transform node (change_graph, addStep) and
+ * then call start_run with a real node id it just read via get_workflow —
+ * not construct a whole graph from scratch, which the tool's diff: z.unknown()
+ * input schema gives it no structural help with (see changeGraph.ts).
+ * The destination deliberately has no mapping/entity set, mirroring canvas.
+ * spec.ts's "Test A" no-mapping fixture — start_run can create a real run
+ * without first needing a write grant, and the run fails fast afterward
+ * with "Destination has no approved field mapping for this path yet.",
+ * which is itself proof the run genuinely executed through the real worker
+ * rather than being a UI-only "started" flag.
+ */
+test.describe('copilot: agent tool-use loop (Part 3/4)', () => {
+  test.use({ storageState: personas.canvasC.storageStatePath });
+
+  test('"//" agent command adds a filter step, shows a run confirmation card, and only starts the run once confirmed', async ({ page }) => {
+    test.setTimeout(150_000);
+
+    const projectName = `Copilot Agent E2E ${Date.now()}`;
+    const workflowName = 'Copilot Agent E2E Workflow';
+    await page.goto('/app');
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await page.getByRole('button', { name: 'New project', exact: true }).click();
+    await page.locator('#project-name').fill(projectName);
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
+
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await page.getByRole('button', { name: 'New workflow', exact: true }).click();
+    await page.locator('#workflow-project').selectOption({ label: projectName });
+    await page.locator('#workflow-name').fill(workflowName);
+    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await gotoWorkflow(page, projectName, workflowName);
+
+    const workflowId = page.url().match(/\/app\/workflows\/([0-9a-f-]{36})/)?.[1];
+    expect(workflowId).toBeTruthy();
+
+    const accessToken = await getAccessToken(page);
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
+    const authHeaders = { Authorization: `Bearer ${accessToken}` };
+
+    // canvasC has exactly one seeded connection (mysql, dev sandbox) — look
+    // it up rather than hardcoding a seed-time id.
+    const connsRes = await page.request.get(`${apiUrl}/connections`, { headers: authHeaders });
+    expect(connsRes.ok(), `GET connections should succeed: ${connsRes.status()} ${await connsRes.text()}`).toBeTruthy();
+    const conns = (await connsRes.json()) as { id: string; connectorId: string }[];
+    const mysqlConn = conns.find((c) => c.connectorId === 'mysql');
+    expect(mysqlConn, 'canvasC should have a seeded mysql connection').toBeTruthy();
+
+    const currentRes = await page.request.get(`${apiUrl}/workflows/${workflowId}/graph`, { headers: authHeaders });
+    const current = await currentRes.json();
+    const seedGraph = {
+      nodes: [
+        {
+          id: 'src',
+          type: 'source',
+          connectionId: mysqlConn!.id,
+          manifestId: 'mysql',
+          position: { x: 0, y: 0 },
+          config: { operation: 'read', entity: { namespace: 'sandbox', name: 'employees' } },
+        },
+        { id: 't1', type: 'transform', position: { x: 250, y: 0 }, config: { steps: [] } },
+        {
+          id: 'dest',
+          type: 'destination',
+          connectionId: mysqlConn!.id,
+          manifestId: 'mysql',
+          // Deliberately no mapping/entity — see header comment.
+          position: { x: 500, y: 0 },
+          config: { operation: 'insert' },
+        },
+      ],
+      edges: [
+        { id: 'e0', source: 'src', target: 't1' },
+        { id: 'e1', source: 't1', target: 'dest' },
+      ],
+    };
+    const seedRes = await page.request.put(`${apiUrl}/workflows/${workflowId}/graph`, {
+      headers: authHeaders,
+      data: { graph: seedGraph, expectedVersion: current.version },
+    });
+    expect(seedRes.ok(), `seed graph PUT should succeed: ${seedRes.status()} ${await seedRes.text()}`).toBeTruthy();
+
+    await page.reload();
+    await expect(page.locator('.react-flow__node')).toHaveCount(3);
+
+    // "//" triggers the agent loop (registry.ts's change_graph + start_run
+    // tools), never the "/" plan-propose flow the tests above exercise.
+    const input = page.getByTestId('command-bar-input');
+    await input.fill('//Add a filter on the transform step keeping only rows where salary is greater than 100000, then run the workflow.');
+    await page.getByTestId('command-bar-send').click();
+
+    await expect(page.getByTestId('command-bar-agent-pending')).toBeVisible({ timeout: 15_000 });
+
+    // Part 3: the confirmation card must appear before anything runs,
+    // rendered from start_run's own structured payload — never from text
+    // the model wrote.
+    const confirmCard = page.getByTestId('agent-confirmation-card');
+    await expect(confirmCard).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByTestId('command-bar-agent-pending')).not.toBeVisible();
+
+    // Nothing has started yet.
+    await expect(page.getByTestId('run-status-card')).toHaveCount(0);
+    await expect(page.getByTestId('agent-runs-started')).toHaveCount(0);
+
+    // The edit-tier change_graph call needs no confirmation and should
+    // already be applied — assert against the real, persisted graph, not
+    // just client state.
+    const afterEditRes = await page.request.get(`${apiUrl}/workflows/${workflowId}/graph`, { headers: authHeaders });
+    const afterEdit = await afterEditRes.json();
+    const transformNode = (afterEdit.graph.nodes as { id: string; config: { steps?: unknown[] } }[]).find((n) => n.id === 't1');
+    expect(transformNode?.config?.steps?.length ?? 0, 'expected the agent to add a filter step to the transform node').toBeGreaterThan(0);
+
+    // Only a click in the user's own session confirms it (Part 3) — this is
+    // the moment the run is actually allowed to start.
+    await confirmCard.getByTestId('agent-confirm-run').click();
+    await expect(page.getByTestId('agent-runs-started')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('run-status-card')).toBeVisible({ timeout: 15_000 });
+
+    // No approved field mapping on the destination — the same fail-fast
+    // path as canvas.spec.ts's no-mapping fixture. A real status transition
+    // through the worker, not a UI-only flag.
+    await expect(page.getByTestId('run-status-value')).toContainText('Failed', { timeout: 30_000 });
+  });
+});

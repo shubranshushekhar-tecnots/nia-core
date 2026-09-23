@@ -981,6 +981,61 @@ export const appliedPlanErrorStyle: CSSProperties = {
   color: 'var(--bad)',
 };
 
+// ---------- Copilot agent tool-call cards (docs/plans/copilot-agent.md, Part 3/4) ----------
+// Rendered under a "//"-command assistant bubble in CommandBar.tsx, keyed
+// off agentRenders[m.id]. Deliberately plain, same visual language as the
+// applied-plans list above — a bordered block is enough, no new tokens.
+
+export const agentCardStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  marginTop: 8,
+  padding: '10px 12px',
+  borderRadius: 10,
+  background: 'var(--surface2)',
+  border: '1px solid var(--copilot-accent)',
+};
+
+export const agentCardTitleStyle: CSSProperties = {
+  fontSize: 11.5,
+  fontWeight: 700,
+  color: 'var(--ink)',
+};
+
+export const agentCardEntryStyle: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--ink3)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+};
+
+export const agentCardConfirmBtnStyle = (disabled: boolean): CSSProperties => ({
+  alignSelf: 'flex-start',
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: disabled ? 'var(--ink4)' : 'var(--onacc)',
+  background: disabled ? 'var(--surface2)' : 'var(--acc)',
+  border: `1px solid ${disabled ? 'var(--line2)' : 'var(--acc)'}`,
+  borderRadius: 6,
+  padding: '6px 12px',
+  cursor: disabled ? 'default' : 'pointer',
+});
+
+// Post-confirm / no-confirmation-needed acknowledgement (graph_applied,
+// runs_started) — a small "done" pill, not a full card.
+export const agentCardBadgeStyle: CSSProperties = {
+  alignSelf: 'flex-start',
+  fontSize: 11,
+  fontWeight: 600,
+  color: 'var(--ok)',
+  background: 'var(--surface)',
+  border: '1px solid var(--line2)',
+  borderRadius: 999,
+  padding: '3px 10px',
+};
+
 // ---------- viewport toolbar (zoom / fit / fullscreen) ----------
 
 // ChecksDock is a full-width absolutely-positioned bottom bar (36px

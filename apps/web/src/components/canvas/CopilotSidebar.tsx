@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import type { GraphDoc } from '@nia/schemas';
 import type { Connection } from '@/lib/connections/types';
 import type { LocalMessage } from '@/lib/chat/useChatSession';
 import type { AppliedPlan } from '@/lib/api/copilotClient';
@@ -46,6 +47,8 @@ export default function CopilotSidebar({
   onRevertPlan,
   revertingPlanId,
   revertError,
+  onAgentGraphResult,
+  onAgentRunsStarted,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -65,6 +68,10 @@ export default function CopilotSidebar({
   onRevertPlan: (planId: string) => void;
   revertingPlanId: string | null;
   revertError: { planId: string; message: string; conflicts?: string[] } | null;
+  /** Copilot agent (Part 4) — applies a change_graph tool result to the live canvas. */
+  onAgentGraphResult: (result: { graph: GraphDoc; version: number }) => void;
+  /** Copilot agent (Part 4) — attaches the live run-status cards to an already-started start_run tool result. */
+  onAgentRunsStarted: (runs: { destNodeId: string; runId: string }[]) => void;
 }) {
   const [width, setWidth] = useState(COPILOT_WIDTH_DEFAULT);
   const [dragging, setDragging] = useState(false);
@@ -157,6 +164,8 @@ export default function CopilotSidebar({
           onRevertPlan={onRevertPlan}
           revertingPlanId={revertingPlanId}
           revertError={revertError}
+          onAgentGraphResult={onAgentGraphResult}
+          onAgentRunsStarted={onAgentRunsStarted}
         />
       </div>
     </div>

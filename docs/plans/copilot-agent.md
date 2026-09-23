@@ -47,6 +47,6 @@ Tests (exactly these)
 
 Close
 - docs/decisions.md: a Copilot agent entry covering the tiers, the confirmation mechanism, data minimization, and why credentials and grant confirmation never go through chat.
-- COPILOT_AGENT_EXIT.md: short.
+- docs/history/COPILOT_AGENT_EXIT.md: short.
 
 Output: inventory findings, deviations with reasons, test counts, and the untruncated git status --porcelain. Don't commit.

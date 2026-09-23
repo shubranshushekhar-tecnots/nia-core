@@ -613,6 +613,28 @@ function CanvasInner({
     clearGhost();
   }, [clearGhost]);
 
+  // Copilot agent (Part 4 — "the canvas updates live as Copilot edits the
+  // graph"). change_graph's handler (copilot/tools/changeGraph.ts) is a
+  // direct passthrough to the same applyPlanDiff() service call
+  // handleApplyPlanDiff above already uses, so its result has the exact
+  // same { graph, version } shape — this mirrors that handler's
+  // remap-and-set-state tail (useNodesState/useEdgesState aren't reactively
+  // tied to react-query's cache, so setNodes/setEdges must be called
+  // explicitly; see this file's queryKey/useQuery wiring above) without a
+  // second network round-trip, since the agent turn already did the write.
+  const handleAgentGraphResult = useCallback(
+    (result: { graph: WorkflowGraphResult['graph']; version: number }) => {
+      queryClient.setQueryData(queryKey, result);
+      const remapped = graphToFlow(result.graph, ctx);
+      setNodes(remapped.nodes);
+      setEdges(remapped.edges);
+      setVersion(result.version);
+      setSaveState('idle');
+      queryClient.invalidateQueries({ queryKey: appliedPlansQueryKey });
+    },
+    [queryClient, queryKey, ctx, setNodes, setEdges, setVersion, setSaveState, appliedPlansQueryKey],
+  );
+
   // Phase 12 — revert. Refusal (409 REVERT_CONFLICT) carries a
   // `{ conflicts: string[] }` details payload (see copilotClient.ts's
   // CopilotApiError) naming which touched elements changed since apply; no
@@ -719,6 +741,68 @@ function CanvasInner({
     [destinationNodes, ctx.connectionsById],
   );
 
+  // Wires one destNodeId/runId pair into the live SSE status stream —
+  // pulled out of handleRun's loop body so the Copilot agent's start_run
+  // tool (which starts the run server-side itself, via the exact same
+  // startWorkflowRun call — see apps/api/src/copilot/tools/startRun.ts) can
+  // attach to the same live run-status cards below without this component
+  // starting a second, duplicate run.
+  const attachRunStream = useCallback(
+    (destNodeId: string, runId: string) => {
+      runIdByDestRef.current[destNodeId] = runId;
+      runTeardownsRef.current[destNodeId] = streamRun(workflow.id, runId, {
+        onEvent: (event) => {
+          if (event.type === 'started') {
+            setRunStates((prev) => ({ ...prev, [destNodeId]: { status: 'running', totalRowsProcessed: 0 } }));
+            logRunActivity(`Run started — ${destLabel(destNodeId)}`);
+          } else if (event.type === 'progress') {
+            setRunStates((prev) => ({
+              ...prev,
+              [destNodeId]: {
+                status: prev[destNodeId]?.status === 'cancelling' ? 'cancelling' : 'running',
+                totalRowsProcessed: event.totalRowsProcessed,
+              },
+            }));
+            const now = Date.now();
+            if (now - lastProgressLogRef.current >= 3000) {
+              lastProgressLogRef.current = now;
+              logRunActivity(`Run progress — ${destLabel(destNodeId)} — ${event.totalRowsProcessed.toLocaleString()} rows`);
+            }
+          } else if (event.type === 'done') {
+            delete runIdByDestRef.current[destNodeId];
+            setRunStates((prev) => ({
+              ...prev,
+              [destNodeId]: { status: 'done', totalRowsProcessed: event.totalRowsProcessed, durationMs: event.durationMs },
+            }));
+            logRunActivity(
+              `Run complete — ${destLabel(destNodeId)} — ${event.totalRowsProcessed.toLocaleString()} rows in ${(event.durationMs / 1000).toFixed(1)}s`,
+            );
+          } else if (event.type === 'error') {
+            delete runIdByDestRef.current[destNodeId];
+            setRunStates((prev) => ({ ...prev, [destNodeId]: { status: 'error', message: event.message } }));
+            logRunActivity(`Run failed — ${destLabel(destNodeId)} — ${event.message}`);
+          } else if (event.type === 'cancel') {
+            delete runIdByDestRef.current[destNodeId];
+            setRunStates((prev) => ({
+              ...prev,
+              [destNodeId]: {
+                status: 'cancelled',
+                totalRowsProcessed:
+                  prev[destNodeId]?.status === 'running' || prev[destNodeId]?.status === 'cancelling'
+                    ? (prev[destNodeId] as { totalRowsProcessed: number }).totalRowsProcessed
+                    : 0,
+              },
+            }));
+            logRunActivity(`Run cancelled — ${destLabel(destNodeId)}`);
+          }
+        },
+        onTransportError: () =>
+          setRunStates((prev) => ({ ...prev, [destNodeId]: { status: 'error', message: 'Lost connection to the run stream.' } })),
+      });
+    },
+    [workflow.id, logRunActivity, destLabel],
+  );
+
   const handleRun = useCallback(async () => {
     if (runNodeIds.length === 0) return;
     for (const teardown of Object.values(runTeardownsRef.current)) teardown();
@@ -728,63 +812,28 @@ function CanvasInner({
     setRunStates(Object.fromEntries(runNodeIds.map((id) => [id, { status: 'starting' } as RunState])));
     try {
       const { runs } = await startWorkflowRun(workflow.id, runNodeIds);
-      for (const { destNodeId, runId } of runs) {
-        runIdByDestRef.current[destNodeId] = runId;
-        runTeardownsRef.current[destNodeId] = streamRun(workflow.id, runId, {
-          onEvent: (event) => {
-            if (event.type === 'started') {
-              setRunStates((prev) => ({ ...prev, [destNodeId]: { status: 'running', totalRowsProcessed: 0 } }));
-              logRunActivity(`Run started — ${destLabel(destNodeId)}`);
-            } else if (event.type === 'progress') {
-              setRunStates((prev) => ({
-                ...prev,
-                [destNodeId]: {
-                  status: prev[destNodeId]?.status === 'cancelling' ? 'cancelling' : 'running',
-                  totalRowsProcessed: event.totalRowsProcessed,
-                },
-              }));
-              const now = Date.now();
-              if (now - lastProgressLogRef.current >= 3000) {
-                lastProgressLogRef.current = now;
-                logRunActivity(`Run progress — ${destLabel(destNodeId)} — ${event.totalRowsProcessed.toLocaleString()} rows`);
-              }
-            } else if (event.type === 'done') {
-              delete runIdByDestRef.current[destNodeId];
-              setRunStates((prev) => ({
-                ...prev,
-                [destNodeId]: { status: 'done', totalRowsProcessed: event.totalRowsProcessed, durationMs: event.durationMs },
-              }));
-              logRunActivity(
-                `Run complete — ${destLabel(destNodeId)} — ${event.totalRowsProcessed.toLocaleString()} rows in ${(event.durationMs / 1000).toFixed(1)}s`,
-              );
-            } else if (event.type === 'error') {
-              delete runIdByDestRef.current[destNodeId];
-              setRunStates((prev) => ({ ...prev, [destNodeId]: { status: 'error', message: event.message } }));
-              logRunActivity(`Run failed — ${destLabel(destNodeId)} — ${event.message}`);
-            } else if (event.type === 'cancel') {
-              delete runIdByDestRef.current[destNodeId];
-              setRunStates((prev) => ({
-                ...prev,
-                [destNodeId]: {
-                  status: 'cancelled',
-                  totalRowsProcessed:
-                    prev[destNodeId]?.status === 'running' || prev[destNodeId]?.status === 'cancelling'
-                      ? (prev[destNodeId] as { totalRowsProcessed: number }).totalRowsProcessed
-                      : 0,
-                },
-              }));
-              logRunActivity(`Run cancelled — ${destLabel(destNodeId)}`);
-            }
-          },
-          onTransportError: () =>
-            setRunStates((prev) => ({ ...prev, [destNodeId]: { status: 'error', message: 'Lost connection to the run stream.' } })),
-        });
-      }
+      for (const { destNodeId, runId } of runs) attachRunStream(destNodeId, runId);
     } catch (err) {
       const message = err instanceof RunApiError ? err.message : 'Failed to start the run.';
       setRunStates(Object.fromEntries(runNodeIds.map((id) => [id, { status: 'error', message } as RunState])));
     }
-  }, [workflow.id, runNodeIds, logRunActivity, destLabel]);
+  }, [workflow.id, runNodeIds, attachRunStream]);
+
+  // Copilot agent (Part 4 — "start_run returns a run card with live
+  // status"). The agent's start_run tool has already called the same
+  // startWorkflowRun this component's own Run button uses (by the time its
+  // confirm click resolves) — this only attaches the same live-status cards
+  // above to those already-started runs, it never starts anything itself.
+  const beginAgentRuns = useCallback(
+    (runs: { destNodeId: string; runId: string }[]) => {
+      for (const { destNodeId, runId } of runs) {
+        if (runTeardownsRef.current[destNodeId]) runTeardownsRef.current[destNodeId]();
+        setRunStates((prev) => ({ ...prev, [destNodeId]: { status: 'starting' } }));
+        attachRunStream(destNodeId, runId);
+      }
+    },
+    [attachRunStream],
+  );
 
   // Block 3.5 item 3 — cooperative cancel, per destination. Doesn't set
   // 'cancelled' itself: the worker only actually stops between chunks
@@ -1160,6 +1209,7 @@ function CanvasInner({
                 {Object.entries(runStates).map(([destNodeId, runState]) => (
                   <div
                     key={destNodeId}
+                    data-testid="run-status-card"
                     style={{
                       boxSizing: 'border-box',
                       padding: '14px 16px',
@@ -1173,7 +1223,7 @@ function CanvasInner({
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }} data-testid="run-status-value">
                         {destLabel(destNodeId)} —{' '}
                         {runState.status === 'starting' && 'Starting run…'}
                         {runState.status === 'running' && 'Running…'}
@@ -1247,6 +1297,8 @@ function CanvasInner({
             onRevertPlan={handleRevertPlan}
             revertingPlanId={revertingPlanId}
             revertError={revertError}
+            onAgentGraphResult={handleAgentGraphResult}
+            onAgentRunsStarted={beginAgentRuns}
           />
         </div>
       </div>

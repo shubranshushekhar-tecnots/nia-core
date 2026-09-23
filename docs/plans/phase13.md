@@ -58,6 +58,6 @@ Step 9: Tests (the full list besides the gate and the eval)
 
 Step 10: Close Phase 13
 - docs/decisions.md: a Phase 13 entry covering the router rules, profile-only specialist input, no imputation, the dry-run guards, and CleanPlan bindings.
-- PHASE13_EXIT.md: what shipped, a summary of the eval report, bugs found, and open risks.
+- docs/history/PHASE13_EXIT.md: what shipped, a summary of the eval report, bugs found, and open risks.
 
 Output: gate results, any deviations with reasons, the eval report, test counts, and the untruncated git status --porcelain. Don't commit.

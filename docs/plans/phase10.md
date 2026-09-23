@@ -50,6 +50,6 @@ Step 4: Tests (minimal; this is the full list)
 
 Step 5: Close Phase 10
 - docs/decisions.md: one short Phase 10 entry.
-- PHASE10_EXIT.md: short. What shipped, bugs found, open risks.
+- docs/history/PHASE10_EXIT.md: short. What shipped, bugs found, open risks.
 
 Output: step 1 and step 2 findings, any deviations with reasons, test counts, and the untruncated git status --porcelain. Don't commit.

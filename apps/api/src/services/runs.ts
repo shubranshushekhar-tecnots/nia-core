@@ -103,6 +103,85 @@ export async function startWorkflowRun(
   return { runs };
 }
 
+export type WorkflowRunSummary = {
+  id: string;
+  workflowId: string;
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  rowsProcessed: number;
+  durationMs: number | null;
+  startedAt: string;
+  finishedAt: string | null;
+};
+
+function toRunSummary(row: {
+  id: string;
+  workflow_id: string;
+  status: string;
+  rows_processed: number;
+  duration_ms: number | null;
+  started_at: string;
+  finished_at: string | null;
+}): WorkflowRunSummary {
+  return {
+    id: row.id,
+    workflowId: row.workflow_id,
+    status: row.status as WorkflowRunSummary["status"],
+    rowsProcessed: row.rows_processed,
+    durationMs: row.duration_ms,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+/**
+ * Copilot agent (docs/plans/copilot-agent.md, Part 2) — list_runs/get_run_status/
+ * get_run_result tools' backing reads. Plain RLS-scoped selects against
+ * `workflow_runs`, the same table and the same "row visibility through the
+ * caller's own req.supabase client is itself the access proof" reasoning
+ * resolveRunOwnership above already relies on — not a new privileged path.
+ *
+ * NOTE: `workflow_runs` has no persisted failure-message column — the
+ * worker's real per-failure text (runEtl.ts's `fail()`) is only ever
+ * published transiently over Redis to an open SSE stream (publishRunEvent),
+ * never written to this row. A run read after its stream has closed can
+ * only report `status: "failed"` plus counters, not the original message.
+ * This is a pre-existing architectural gap, not something introduced or
+ * fixed here — see docs/plans/copilot-agent.md's Close section deviation
+ * note for get_run_result/explain_last_error.
+ */
+export async function listRunsForWorkflow(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  workflowId: string,
+  limit = 20,
+): Promise<WorkflowRunSummary[]> {
+  await assertWorkflowInScope(supabase, scope, workflowId);
+  const { data } = await supabase
+    .from("workflow_runs")
+    .select("id, workflow_id, status, rows_processed, duration_ms, started_at, finished_at")
+    .eq("workflow_id", workflowId)
+    .order("started_at", { ascending: false })
+    .limit(limit);
+  return (data ?? []).map(toRunSummary);
+}
+
+export async function getRunStatus(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  workflowId: string,
+  runId: string,
+): Promise<WorkflowRunSummary> {
+  await assertWorkflowInScope(supabase, scope, workflowId);
+  const { data } = await supabase
+    .from("workflow_runs")
+    .select("id, workflow_id, status, rows_processed, duration_ms, started_at, finished_at")
+    .eq("id", runId)
+    .eq("workflow_id", workflowId)
+    .maybeSingle();
+  if (!data) throw new AppError(404, "NOT_FOUND", "No run found for that id on this workflow.");
+  return toRunSummary(data);
+}
+
 /** Structural equality for the org/owner XOR union — same helper as routes/chat.ts's sameScope. */
 function sameScope(a: WorkspaceScope, b: WorkspaceScope): boolean {
   return ("orgId" in a && "orgId" in b && a.orgId === b.orgId) || ("ownerId" in a && "ownerId" in b && a.ownerId === b.ownerId);

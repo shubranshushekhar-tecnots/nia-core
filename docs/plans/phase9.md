@@ -28,13 +28,13 @@ Part 3: Aggregate pagination (pushed)
 - NULL group keys sort first on every dialect (force NULLS FIRST on postgres). Expand the keyset predicate lexicographically with explicit IS NULL handling. Don't use row-constructor comparison.
 - ORDER BY, GROUP BY, and the keyset comparison must use the same collation (standing rule 2).
 - Checkpoint the last group-key tuple as the cursor, the same way Extract checkpoints, so pushed aggregate runs resume.
-- Remove the fail-at-cap guard and its TODO.md / PHASE8_EXIT.md entries; pagination supersedes it.
+- Remove the fail-at-cap guard and its TODO.md / docs/history/PHASE8_EXIT.md entries; pagination supersedes it.
 
 Part 4: Pushed onFailure pre-checks
 - For each pushed fallible step, run one pre-check query before extraction, against the same source and upstream filters:
   - 'fail': EXISTS(failure predicate). If true, abort before any write, with the same error as the residual path. The step stays pushed and no longer forces itself and later steps residual.
   - 'null' / 'drop': COUNT(failure predicate), reported as the step's failure count.
-- If PHASE8_EXIT.md §8 has a "no failure count when pushed" risk, mark it resolved and point to this fix.
+- If docs/history/PHASE8_EXIT.md §8 has a "no failure count when pushed" risk, mark it resolved and point to this fix.
 
 Part 5: Consistency (document, don't fix)
 - Pages, chunks, and pre-checks are separate queries, not a snapshot. Rows changed mid-run can shift between pages or escape a pre-check, as with existing chunked Extract. Record this in docs/decisions.md.
@@ -48,7 +48,7 @@ Tests for Parts 2–4 (minimal; this is the full list)
 
 Close Phase 9
 - docs/decisions.md: one short Phase 9 entry covering these decisions and anything found along the way.
-- PHASE9_EXIT.md: short. What shipped, bugs found, open risks.
+- docs/history/PHASE9_EXIT.md: short. What shipped, bugs found, open risks.
 - Full verification once, covering 8b-3 and Phase 9: typecheck (all four packages), unit tests (guardrails, schemas, worker), the full ops-agreement suite, and all smoke scripts. Cite counts. If Docker crashes, restart and rerun; discard crashed runs.
 
 Don't commit. Output: findings and any deviations with reasons, test results with counts, the untruncated git status --porcelain, and Part 1's files listed separately so I can commit the bug fix on its own.

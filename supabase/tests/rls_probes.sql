@@ -1740,6 +1740,86 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 48 — 0031_copilot_agent.sql (Copilot agent Part 3: confirm/consume
+-- pending actions). apps/api/src/copilot/pendingActions.test.ts
+-- reimplements consume_pending_action/confirm_pending_action's semantics in
+-- a JS fake for fast unit coverage — this probe exercises the real SQL
+-- functions directly, so nothing only proves the fake matches itself.
+-- =========================================================================
+
+-- Probe 48 — consume_pending_action: a correct, matching args_hash consumes
+-- exactly once; a mismatched hash is rejected; a replay of an already-
+-- consumed row is rejected; and a confirmed-but-expired row is rejected
+-- even with a matching hash.
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_workflow_a uuid := (select id from test_ids where key = 'workflow_a');
+  v_pending uuid;
+  v_pending_expired uuid;
+  v_row public.copilot_pending_actions;
+  mismatch_rejected boolean := false;
+  correct_consumed boolean := false;
+  replay_rejected boolean := false;
+  expired_rejected boolean := false;
+begin
+  -- Fixture inserted as postgres (bypasses RLS) — created_by has no
+  -- request.jwt.claims to default from outside a client session.
+  insert into public.copilot_pending_actions (workflow_id, tool, args_hash, args, created_by)
+  values (v_workflow_a, 'start_run', 'probe-hash-correct', '{"workflowId":"probe"}'::jsonb, v_member)
+  returning id into v_pending;
+
+  perform pg_temp.act_as(v_member);
+  perform public.confirm_pending_action(v_pending);
+
+  -- Confirmed and not expired, but the wrong hash — must be rejected, and
+  -- must not consume the row.
+  begin
+    perform public.consume_pending_action(v_pending, 'start_run', 'probe-hash-wrong');
+  exception when others then
+    mismatch_rejected := true;
+  end;
+
+  -- The correct hash — must succeed exactly once.
+  select * into v_row from public.consume_pending_action(v_pending, 'start_run', 'probe-hash-correct');
+  correct_consumed := v_row.consumed_at is not null;
+
+  -- Replay: the same, now-already-consumed pending action, same correct
+  -- hash — must be rejected.
+  begin
+    perform public.consume_pending_action(v_pending, 'start_run', 'probe-hash-correct');
+  exception when others then
+    replay_rejected := true;
+  end;
+  reset role;
+
+  -- Expired: confirmed, correct hash, but past expires_at — must be
+  -- rejected. Direct-inserted already-confirmed (bypassing RLS as
+  -- postgres), since confirm_pending_action itself refuses to confirm an
+  -- already-expired row, so the probe could never reach consume otherwise.
+  insert into public.copilot_pending_actions (workflow_id, tool, args_hash, args, created_by, confirmed_at, confirmed_by, expires_at)
+  values (v_workflow_a, 'start_run', 'probe-hash-expired', '{"workflowId":"probe"}'::jsonb, v_member, now() - interval '5 minutes', v_member, now() - interval '1 minute')
+  returning id into v_pending_expired;
+
+  perform pg_temp.act_as(v_member);
+  begin
+    perform public.consume_pending_action(v_pending_expired, 'start_run', 'probe-hash-expired');
+  exception when others then
+    expired_rejected := true;
+  end;
+  reset role;
+
+  if mismatch_rejected and correct_consumed and replay_rejected and expired_rejected then
+    insert into probe_results values (48, 'consume_pending_action: matching hash consumes exactly once; mismatched hash, replay, and expiry are all rejected', true);
+  else
+    insert into probe_results values (48, 'consume_pending_action: matching hash consumes exactly once; mismatched hash, replay, and expiry are all rejected', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (48, 'consume_pending_action probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

@@ -11,6 +11,11 @@ import { connectionsRouter } from "./routes/connections.js";
 import { grantsRouter } from "./routes/grants.js";
 import { chatRouter } from "./routes/chat.js";
 import { runsRouter } from "./routes/runs.js";
+import { copilotAgentRouter } from "./routes/copilotAgent.js";
+// Copilot agent (Part 1/2): importing this registers every v1 tool
+// (registerTool side effect at each module's bottom) before any request
+// can reach copilotAgentRouter below.
+import "./copilot/tools/index.js";
 
 const app = express();
 
@@ -63,6 +68,13 @@ app.use("/connections/:connectionId/grants", grantsRouter);
 // only because every router above it fully owns and responds to its own
 // prefix first). See routes/chat.ts for the EventSource/Bearer rationale.
 app.use("/", chatRouter);
+
+// Copilot agent (docs/plans/copilot-agent.md) — the new agentic tool-use
+// surface, separate from chatRouter's existing single-shot propose/apply
+// flow above. Own prefix, own blanket cookie-auth .use(), same reasoning
+// as chatRouter for why it's safe to mount here (nothing above owns
+// "/copilot-agent").
+app.use("/copilot-agent", copilotAgentRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

@@ -58,6 +58,6 @@ Step 3: Tests (minimal; this is the full list)
 Step 4: Close Phase 11
 - docs/decisions.md: one Phase 11 entry covering the transactional apply (and why not a rename), the nia schema, direct mode, and the assertion set.
 - TODO.md: quarantine pushdown, quarantine retention, row-count reconciliation, and mongo staged-mode testing if it was skipped.
-- PHASE11_EXIT.md: short. What shipped, bugs found, open risks.
+- docs/history/PHASE11_EXIT.md: short. What shipped, bugs found, open risks.
 
 Output: step 1 findings, any deviations with reasons, test counts, and the untruncated git status --porcelain. Don't commit.

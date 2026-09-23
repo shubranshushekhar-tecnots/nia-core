@@ -17,6 +17,9 @@ export default defineConfig({
       SUPABASE_URL: "http://localhost:54321",
       SUPABASE_ANON_KEY: "test-anon-key",
       WEB_ORIGIN: "http://localhost:3100",
+      NIA_GATEWAY_API_KEY: "test-gateway-key",
+      NIA_GATEWAY_BASE_URL: "https://api.nia.naslabs.ai/v1",
+      NIA_GATEWAY_MODEL: "test-model",
     },
     testTimeout: 15_000,
     exclude: [

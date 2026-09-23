@@ -416,3 +416,29 @@
   input schema is known) and is called from hot parser code paths — folding
   it into (a) needs to confirm that's not a performance or ordering problem,
   which is real investigation, not a quick rename.
+- **`change_graph`'s `z.unknown()` diff input can drift from `PlanDiff`
+  undetected (added 2026-09-23).** `apps/api/src/copilot/tools/changeGraph.ts`'s
+  `inputSchema.diff` is `z.unknown()`, not schemas' `PlanDiff` — `PlanDiff`'s
+  `.default()`-bearing fields (`baseGraphVersion`, `ops`) make its Zod
+  *input* type wider than its *output* type, which is incompatible with
+  `ToolDefinition<TInput, TOutput>`'s `inputSchema: z.ZodType<TInput>`
+  constraint (requires input===output). Real validation still happens —
+  `applyPlanDiff` calls `PlanDiff.parse(input.diff)` itself — but the LLM's
+  tool spec (`zodToJsonSchema` in `agentLoop.ts`'s `buildToolSpecs`) gets
+  zero structural schema for `diff`, so the tool's hand-written prose
+  `description` is the model's *only* source of truth for `diff`'s shape
+  (see `docs/decisions.md`'s Copilot agent entry for the two real bugs this
+  already caused: a false `baseGraphVersion`-omitted staleness conflict,
+  and a silent `ops`-omitted no-op apply, both fixed by expanding that
+  description). This is inherently fragile: nothing enforces that the
+  description stays in sync with `PlanDiff`'s actual shape if the schema
+  changes later — a field rename/addition to `PlanDiff` or `PlanOp` won't
+  fail typecheck or tests here, it'll just silently make the description
+  wrong again. Proper fix means resolving the underlying type-variance
+  constraint so `change_graph` can use a real, schema-derived input type —
+  either relaxing/widening `ToolDefinition.inputSchema` to accept a
+  `z.ZodType` whose Input can differ from Output (and having
+  `buildToolSpecs`/`executeTool` consistently pick the right one), or
+  giving `PlanDiff` a parallel no-`.default()` "strict" variant for this
+  one call site. Not done now — scoped as its own follow-up, not folded
+  into the Copilot agent plan's v1 delivery.

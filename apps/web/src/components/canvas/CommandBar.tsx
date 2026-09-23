@@ -1,10 +1,17 @@
 'use client';
 
-import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import type { PlanProposeOutcome } from '@nia/schemas';
+import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import type { GraphDoc, PlanProposeOutcome } from '@nia/schemas';
 import type { Connection } from '@/lib/connections/types';
 import { STAGE_LABEL, type LocalMessage } from '@/lib/chat/useChatSession';
 import { proposePlan, CopilotApiError, type AppliedPlan } from '@/lib/api/copilotClient';
+import {
+  runAgentTurn,
+  confirmPendingAction as confirmAgentPendingAction,
+  CopilotAgentApiError,
+  type AgentChatMessage,
+  type AgentToolRender,
+} from '@/lib/api/copilotAgentClient';
 import { useCanvasStore } from '@/lib/canvas/store';
 import {
   chatCitationChipStyle,
@@ -33,6 +40,11 @@ import {
   chatUnfaithfulNoteStyle,
 } from '@/components/app/styles';
 import {
+  agentCardBadgeStyle,
+  agentCardConfirmBtnStyle,
+  agentCardEntryStyle,
+  agentCardStyle,
+  agentCardTitleStyle,
   appliedPlanErrorStyle,
   appliedPlanRevertBtnStyle,
   appliedPlanRevertedTagStyle,
@@ -99,6 +111,20 @@ function outcomeToLocalMessage(outcome: PlanProposeOutcome): LocalMessage {
       return { id, role: 'assistant', content: outcome.error, citations: [], status: 'error', createdAt };
   }
 }
+
+// Structural shapes of the two Copilot-agent render kinds this file
+// actually renders a bespoke card for (apps/api/src/copilot/tools/
+// startRun.ts) — AgentToolRender's payload is `unknown` on the wire, so
+// these narrow it locally rather than importing server-only types.
+type RunConfirmationCardEntry = {
+  destNodeId: string;
+  connectionDisplayName: string;
+  entityNamespace: string;
+  entityName: string;
+  writeMode: string;
+};
+type RunConfirmationPayload = { status: 'needs_confirmation'; pendingActionId: string; card: RunConfirmationCardEntry[] };
+type RunsStartedPayload = { status: 'started'; runs: { destNodeId: string; runId: string }[] };
 
 // Static example prompts for the "/" suggestion menu. Copilot's
 // plan-propose flow has no distinct command sub-types (every "/" message
@@ -301,6 +327,8 @@ export default function CommandBar({
   onRevertPlan,
   revertingPlanId,
   revertError,
+  onAgentGraphResult,
+  onAgentRunsStarted,
 }: {
   workflowId: string;
   connections: Connection[];
@@ -320,6 +348,9 @@ export default function CommandBar({
   onRevertPlan: (planId: string) => void;
   revertingPlanId: string | null;
   revertError: { planId: string; message: string; conflicts?: string[] } | null;
+  /** Copilot agent (docs/plans/copilot-agent.md, Part 4) — canvas/run-card side effects of a tool result. */
+  onAgentGraphResult: (result: { graph: GraphDoc; version: number }) => void;
+  onAgentRunsStarted: (runs: { destNodeId: string; runId: string }[]) => void;
 }) {
   const setGhostPlan = useCanvasStore((s) => s.setGhostPlan);
   const clearGhost = useCanvasStore((s) => s.clearGhost);
@@ -332,6 +363,21 @@ export default function CommandBar({
   const [planConversationId, setPlanConversationId] = useState<string | undefined>(undefined);
   const [threadOpen, setThreadOpen] = useState(messages.length > 0);
   const [expandedCitation, setExpandedCitation] = useState<string | null>(null);
+
+  // Copilot agent (Part 4) — "//"-prefixed messages (distinct from the
+  // single-"/" plan-propose flow above, which stays untouched) drive the
+  // new tool-use loop. Deliberately stateless server-side (see
+  // copilotAgentClient.ts's header comment) — agentHistoryRef is this
+  // component's own copy of the { role, content } transcript, resent in
+  // full on every turn; it's a ref, not state, since it never drives a
+  // render itself (planMessages does that). Tool-call renders are kept in
+  // a separate agentRenders map, keyed by the LocalMessage id of the
+  // summary bubble they belong to, rather than widening LocalMessage's
+  // shared type with an agent-only field.
+  const agentHistoryRef = useRef<AgentChatMessage[]>([]);
+  const [agentPending, setAgentPending] = useState(false);
+  const [agentRenders, setAgentRenders] = useState<Record<string, AgentToolRender>>({});
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   // Merges real (persisted) chat messages with local-only plan turns into
   // one chronological thread — see this file's header comment on why plan
@@ -357,8 +403,12 @@ export default function CommandBar({
     [connections, wiredConnectionIds],
   );
 
-  const isCommand = draft.trim().startsWith('/');
-  const sendDisabled = !draft.trim() || sending || planPending || (!isCommand && effectiveScope.length === 0);
+  // "//" (agent) is checked before "/" (plan-propose) — a message starting
+  // with "//" is NOT also treated as a plan command by handleSend below.
+  const isAgentCommand = draft.trim().startsWith('//');
+  const isPlanCommand = !isAgentCommand && draft.trim().startsWith('/');
+  const isCommand = isAgentCommand || isPlanCommand;
+  const sendDisabled = !draft.trim() || sending || planPending || agentPending || (!isCommand && effectiveScope.length === 0);
 
   function pickMention(connection: Connection) {
     setDraft((d) => d.replace(/@[^\s]*$/, ''));
@@ -418,7 +468,11 @@ export default function CommandBar({
 
   async function handleSend() {
     const trimmed = draft.trim();
-    if (!trimmed || sending || planPending) return;
+    if (!trimmed || sending || planPending || agentPending) return;
+    if (trimmed.startsWith('//')) {
+      await handleAgentCommand(trimmed);
+      return;
+    }
     if (trimmed.startsWith('/')) {
       await handlePlanCommand(trimmed);
       return;
@@ -437,6 +491,113 @@ export default function CommandBar({
     setPlanMessages([]);
     setPlanConversationId(undefined);
     clearGhost();
+    agentHistoryRef.current = [];
+    setAgentRenders({});
+  }
+
+  // Applies this turn's tool-call side effects as soon as they come back —
+  // canvas edits (change_graph) and run-status attachment (start_run, once
+  // actually started) shouldn't wait for the whole thread to re-render.
+  function applyAgentSideEffects(toolCalls: { name: string; render: AgentToolRender }[]) {
+    for (const call of toolCalls) {
+      if (call.render.kind === 'graph_applied') {
+        onAgentGraphResult(call.render.payload as { graph: GraphDoc; version: number });
+      } else if (call.render.kind === 'runs_started') {
+        onAgentRunsStarted((call.render.payload as { runs: { destNodeId: string; runId: string }[] }).runs);
+      }
+    }
+  }
+
+  async function handleAgentCommand(trimmed: string) {
+    const message = trimmed.replace(/^\/\/\s*/, '');
+    if (!message) return;
+    const userMsg: LocalMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: trimmed,
+      citations: [],
+      status: 'complete',
+      createdAt: new Date().toISOString(),
+    };
+    setPlanMessages((prev) => [...prev, userMsg]);
+    setDraft('');
+    setMentionOpen(false);
+    setSlashMenuOpen(false);
+    setThreadOpen(true);
+    setAgentPending(true);
+    // Unlike handlePlanCommand's proposePlan(workflowId, ...), runAgentTurn
+    // takes no workflowId param (a single turn can in principle touch more
+    // than one workflow's tools — see copilotAgent.ts's header comment), so
+    // the model would otherwise have to guess/ask which workflow "this
+    // canvas" refers to via list_workflows/get_workflow. Stamp the current
+    // workflow's id onto the first user message of a fresh agent
+    // conversation (agentHistoryRef is reset per page load / New chat) so
+    // it never has to disambiguate what's already unambiguous from the
+    // page the user is looking at.
+    const contextualMessage =
+      agentHistoryRef.current.length === 0 ? `[Current workflow id: ${workflowId}]\n${message}` : message;
+    const nextHistory: AgentChatMessage[] = [...agentHistoryRef.current, { role: 'user', content: contextualMessage }];
+    try {
+      const result = await runAgentTurn(nextHistory);
+      agentHistoryRef.current = [...nextHistory, { role: 'assistant', content: result.reply }];
+      const toolMsgs: LocalMessage[] = result.toolCalls.map((call) => ({
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: call.summary,
+        citations: [],
+        status: 'complete',
+        createdAt: new Date().toISOString(),
+      }));
+      const renderById: Record<string, AgentToolRender> = {};
+      result.toolCalls.forEach((call, i) => {
+        renderById[toolMsgs[i]!.id] = call.render;
+      });
+      const newMessages = [...toolMsgs];
+      if (result.reply) {
+        newMessages.push({
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: result.reply,
+          citations: [],
+          status: 'complete',
+          createdAt: new Date().toISOString(),
+        });
+      }
+      setPlanMessages((prev) => [...prev, ...newMessages]);
+      setAgentRenders((prev) => ({ ...prev, ...renderById }));
+      applyAgentSideEffects(result.toolCalls);
+    } catch (err) {
+      const text = err instanceof CopilotAgentApiError ? err.message : 'Copilot is unavailable right now.';
+      setPlanMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: 'assistant', content: text, citations: [], status: 'error', createdAt: new Date().toISOString() },
+      ]);
+    } finally {
+      setAgentPending(false);
+    }
+  }
+
+  // Part 3's one confirmation entry point — a real click here, nowhere
+  // else. Replaces the confirmation card's render with whatever the
+  // confirmed tool call actually returned (e.g. start_run's card flips to
+  // "runs_started"), and applies that result's side effects the same way a
+  // first-pass tool call would.
+  async function handleConfirmAgentAction(msgId: string, pendingActionId: string) {
+    setConfirmingId(pendingActionId);
+    try {
+      const result = await confirmAgentPendingAction(pendingActionId);
+      setAgentRenders((prev) => ({ ...prev, [msgId]: result.render }));
+      setPlanMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, content: result.summary } : m)));
+      applyAgentSideEffects([{ name: 'start_run', render: result.render }]);
+    } catch (err) {
+      const text = err instanceof CopilotAgentApiError ? err.message : 'Confirming this action failed — try again.';
+      setPlanMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: 'assistant', content: text, citations: [], status: 'error', createdAt: new Date().toISOString() },
+      ]);
+    } finally {
+      setConfirmingId(null);
+    }
   }
 
   return (
@@ -509,6 +670,7 @@ export default function CommandBar({
                         })}
                       </div>
                     )}
+                    {agentRenders[m.id] && <AgentRenderCard render={agentRenders[m.id]!} confirmingId={confirmingId} onConfirm={handleConfirmAgentAction} msgId={m.id} />}
                   </>
                 )}
               </div>
@@ -524,6 +686,12 @@ export default function CommandBar({
             <div style={chatStatusRowStyle} data-testid="command-bar-plan-pending">
               <span style={chatStatusDotStyle} />
               <span>Copilot is drafting a plan…</span>
+            </div>
+          )}
+          {agentPending && (
+            <div style={chatStatusRowStyle} data-testid="command-bar-agent-pending">
+              <span style={chatStatusDotStyle} />
+              <span>Copilot is working…</span>
             </div>
           )}
           {transportError && (
@@ -644,7 +812,8 @@ export default function CommandBar({
             onChange={(e) => {
               const val = e.target.value;
               setDraft(val);
-              const isSlashToken = /^\/[^\s]*$/.test(val.trimStart());
+              // "//" (agent command) never triggers the plan-propose slash menu.
+              const isSlashToken = /^\/[^\s]*$/.test(val.trimStart()) && !val.trimStart().startsWith('//');
               setSlashMenuOpen(isSlashToken);
               setMentionOpen(!isSlashToken && val.includes('@'));
             }}
@@ -662,11 +831,16 @@ export default function CommandBar({
             onClick={handleSend}
             data-testid="command-bar-send"
           >
-            {planPending ? 'Working…' : 'Send'}
+            {planPending || agentPending ? 'Working…' : 'Send'}
           </button>
         </div>
 
-        {isCommand && !planPending && (
+        {isAgentCommand && !agentPending && (
+          <div style={commandHintStyle} data-testid="command-bar-hint">
+            Copilot will act as an agent — it may edit the graph or run the workflow, always confirming risky actions.
+          </div>
+        )}
+        {isPlanCommand && !planPending && (
           <div style={commandHintStyle} data-testid="command-bar-hint">
             Copilot will propose a plan — review the ghost preview on the canvas before applying.
           </div>
@@ -714,4 +888,67 @@ function MentionRow({ connection, onPick }: { connection: Connection; onPick: ()
       <span style={chatMentionToolStyle}>{connection.connectorId}</span>
     </button>
   );
+}
+
+/**
+ * Copilot agent (Part 3/4) tool-call card — renders straight from the
+ * structured payload the tool's own renderer produced (never from text the
+ * model wrote, per Part 3). `run_confirmation` is the only kind requiring a
+ * click to proceed; every other kind (currently `graph_applied` and
+ * `runs_started`, whose side effects already landed on the canvas/run cards
+ * via applyAgentSideEffects) just gets a small acknowledgement badge here.
+ */
+function AgentRenderCard({
+  render,
+  confirmingId,
+  onConfirm,
+  msgId,
+}: {
+  render: AgentToolRender;
+  confirmingId: string | null;
+  onConfirm: (msgId: string, pendingActionId: string) => void;
+  msgId: string;
+}) {
+  if (render.kind === 'run_confirmation') {
+    const payload = render.payload as RunConfirmationPayload;
+    const confirming = confirmingId === payload.pendingActionId;
+    return (
+      <div style={agentCardStyle} data-testid="agent-confirmation-card">
+        <span style={agentCardTitleStyle}>Confirm run</span>
+        {payload.card.map((entry) => (
+          <div key={entry.destNodeId} style={agentCardEntryStyle}>
+            <span>
+              {entry.connectionDisplayName} · {entry.entityNamespace}.{entry.entityName}
+            </span>
+            <span>Write mode: {entry.writeMode}</span>
+          </div>
+        ))}
+        <button
+          type="button"
+          style={agentCardConfirmBtnStyle(confirming)}
+          disabled={confirming}
+          onClick={() => onConfirm(msgId, payload.pendingActionId)}
+          data-testid="agent-confirm-run"
+        >
+          {confirming ? 'Starting…' : 'Confirm run'}
+        </button>
+      </div>
+    );
+  }
+  if (render.kind === 'runs_started') {
+    const payload = render.payload as RunsStartedPayload;
+    return (
+      <span style={agentCardBadgeStyle} data-testid="agent-runs-started">
+        {payload.runs.length === 1 ? 'Run started' : `${payload.runs.length} runs started`}
+      </span>
+    );
+  }
+  if (render.kind === 'graph_applied') {
+    return (
+      <span style={agentCardBadgeStyle} data-testid="agent-graph-applied">
+        Applied to canvas
+      </span>
+    );
+  }
+  return null;
 }

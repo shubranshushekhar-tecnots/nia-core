@@ -112,6 +112,20 @@ const EnvSchema = z.object({
    * rather than hanging the HTTP request indefinitely.
    */
   CLEAN_PROPOSE_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
+  /**
+   * Copilot agent (docs/plans/copilot-agent.md, Part 1/4) — apps/api's own
+   * LLM gateway client (copilot/gatewayClient.ts), a thin duplicate of
+   * apps/worker's lib/llm/gatewayClient.ts. A separate client (not a
+   * shared package, not a reuse of the worker's) specifically so every
+   * Copilot tool call stays on this service's own per-request req.supabase
+   * client — apps/worker only ever has a service-role client, which the
+   * plan requires Copilot never uses. Same three vars as the worker's,
+   * deliberately not defaulted (fail fast on boot if unset, same
+   * SUPABASE_URL/ANON_KEY precedent above).
+   */
+  NIA_GATEWAY_API_KEY: z.string().min(1),
+  NIA_GATEWAY_BASE_URL: z.string().url(),
+  NIA_GATEWAY_MODEL: z.string().min(1),
 });
 
 export const env = EnvSchema.parse(process.env);
