@@ -65,9 +65,15 @@ export function buildGrantStatementText(
     return [
       `-- Run against the target database with an admin/owner credential.`,
       `CREATE ROLE ${role} WITH LOGIN PASSWORD ${quoteLiteral(rolePassword)};`,
-      `GRANT USAGE ON SCHEMA ${schema} TO ${role};`,
+      `GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${role};`,
       `GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA ${schema} TO ${role};`,
       `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schema} GRANT SELECT, INSERT, UPDATE ON TABLES TO ${role};`,
+      `-- "nia" is Nia's own internal schema (staging + quarantine tables for`,
+      `-- staged runs against this destination). A confirmed grant here only`,
+      `-- ever authorizes staging/quarantine writes for runs whose destination`,
+      `-- is this same schema (${namespace}) — see docs/decisions.md.`,
+      `CREATE SCHEMA IF NOT EXISTS "nia";`,
+      `GRANT USAGE, CREATE ON SCHEMA "nia" TO ${role};`,
     ].join("\n");
   }
 
@@ -77,7 +83,14 @@ export function buildGrantStatementText(
     return [
       `-- Run against the target database with an admin credential.`,
       `CREATE USER ${role}@'%' IDENTIFIED BY ${quoteLiteral(rolePassword)};`,
-      `GRANT SELECT, INSERT, UPDATE ON ${db}.* TO ${role}@'%';`,
+      `GRANT SELECT, INSERT, UPDATE, CREATE ON ${db}.* TO ${role}@'%';`,
+      `-- \`nia\` is Nia's own internal database (staging + quarantine tables`,
+      `-- for staged runs against this destination). MySQL allows granting`,
+      `-- privileges on a database before it exists, so no separate CREATE`,
+      `-- DATABASE step is needed. A confirmed grant here only ever authorizes`,
+      `-- staging/quarantine writes for runs whose destination is this same`,
+      `-- database (${namespace}) — see docs/decisions.md.`,
+      "GRANT CREATE, DROP ON `nia`.* TO " + `${role}@'%';`,
       `FLUSH PRIVILEGES;`,
     ].join("\n");
   }
@@ -91,4 +104,27 @@ export function buildGrantStatementText(
     `  roles: [{ role: "readWrite", db: ${JSON.stringify(namespace)} }],`,
     `});`,
   ].join("\n");
+}
+
+/**
+ * Counterpart to buildGrantStatementText for the other end of a write grant's
+ * life: the role/user name is the only part of a confirmed grant that's ever
+ * retrievable again (write_grants.write_role_name, since 0028 — the password
+ * itself is never persisted anywhere retrievable, by design). Used both to
+ * keep reminding the user which role a confirmed grant created (NodeDrawer's
+ * RevokeAccessPanel) and to show the DROP statement when a connection with
+ * confirmed write grants is deleted (ConnectionsClient's delete flow).
+ */
+export function buildDropRoleStatementText(connectorId: string, roleUser: string): string | null {
+  const dialect = dialectForConnector(connectorId);
+  if (!dialect) return null;
+
+  if (dialect === "postgres") {
+    return `DROP ROLE ${postgresAdapter.quoteIdent(roleUser)};`;
+  }
+  if (dialect === "mysql") {
+    return `DROP USER ${mysqlAdapter.quoteIdent(roleUser)}@'%';`;
+  }
+  // mongodb
+  return `db.getSiblingDB(<database>).dropUser(${JSON.stringify(roleUser)});`;
 }

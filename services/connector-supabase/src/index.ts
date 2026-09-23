@@ -23,6 +23,7 @@ import { mapPostgresColumnType } from "./column-types.js";
 import { executeWithStatementTimeout } from "./query.js";
 import { verifyWriteContext } from "./writeSignature.js";
 import { buildUpsertSql, buildCreateTableSql, buildEnableRlsSql } from "./writeSql.js";
+import { buildIntrospectPrivilegeSql } from "./rlsSql.js";
 import {
   buildCreateStagingSql,
   buildDropStagingSql,
@@ -75,14 +76,24 @@ app.post("/test", async (req) => {
   }
 });
 
+// Hard-excluded from every /introspect response, regardless of the
+// client-side "Show system schemas" toggle (NodeDrawer.tsx's
+// SYSTEM_SCHEMAS list): `nia` is Nia's own staging/quarantine schema and
+// must never be offered as a source or destination, and `vault` holds
+// Supabase's encrypted secrets and must never be readable/writable through
+// a workflow, even with the toggle on. This exclusion happens here, not
+// just client-side, so no client bug can ever surface either schema.
+const HARD_EXCLUDED_SCHEMAS = ["information_schema", "pg_catalog", "pg_toast", "nia", "vault"];
+
 app.post("/introspect", async (req) => {
   const { credential, config } = IntrospectRequest.parse(req.body);
   const pool = await getPool(credential, config);
   const result = await pool.query(
     `SELECT table_schema, table_name, column_name, data_type
      FROM information_schema.columns
-     WHERE table_schema NOT IN ('information_schema','pg_catalog','pg_toast')
+     WHERE table_schema != ALL($1::text[])
      ORDER BY table_schema, table_name, ordinal_position`,
+    [HARD_EXCLUDED_SCHEMAS],
   );
   // Postgres's information_schema.columns has no PK flag of its own (unlike
   // MySQL's column_key) — primary-key columns are discovered separately and
@@ -107,14 +118,36 @@ app.post("/introspect", async (req) => {
      JOIN pg_namespace n ON n.oid = c.relnamespace
      JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
      WHERE i.indisprimary
-       AND n.nspname NOT IN ('information_schema','pg_catalog','pg_toast')
+       AND n.nspname != ALL($1::text[])
      ORDER BY n.nspname, c.relname, a.attnum`,
+    [HARD_EXCLUDED_SCHEMAS],
   );
   const pkColsByEntity = new Map<string, string[]>();
   for (const r of pkResult.rows as Array<Record<string, string>>) {
     const key = `${r.table_schema}.${r.table_name}`;
     if (!pkColsByEntity.has(key)) pkColsByEntity.set(key, []);
     pkColsByEntity.get(key)!.push(r.column_name!);
+  }
+
+  // Bug fix (system-schema leakage / privilege / RLS): has_table_privilege
+  // and pg_policies are plain functions/catalog views, not subject to the
+  // information_schema constraint-view privilege restriction the PK query
+  // above works around — safe to query directly for a SELECT-only role.
+  // rls_blocks_read is true only when the role has SELECT, RLS is ON, and
+  // no policy applicable to this role (or a role it's a member of) or
+  // PUBLIC covers it — i.e. a SELECT would silently return 0 rows rather
+  // than error, which is worth a UI warning distinct from "no access at
+  // all" (can_select=false already covers that case). See rlsSql.ts for
+  // why this needs pg_has_role, not literal current_user identity.
+  const privResult = await pool.query(buildIntrospectPrivilegeSql(), [HARD_EXCLUDED_SCHEMAS]);
+  const privByEntity = new Map<string, { canRead: boolean; canWrite: boolean; rlsBlocksRead: boolean; rlsFixSql: string | null }>();
+  for (const r of privResult.rows as Array<{ table_schema: string; table_name: string; can_select: boolean; can_insert: boolean; rls_blocks_read: boolean; rls_fix_sql: string | null }>) {
+    privByEntity.set(`${r.table_schema}.${r.table_name}`, {
+      canRead: r.can_select,
+      canWrite: r.can_insert,
+      rlsBlocksRead: r.rls_blocks_read,
+      rlsFixSql: r.rls_fix_sql,
+    });
   }
 
   const byEntity = new Map<string, { namespace: string; name: string; fields: { name: string; type: string }[] }>();
@@ -130,7 +163,18 @@ app.post("/introspect", async (req) => {
   return {
     entities: [...byEntity.entries()].map(([key, entity]) => {
       const pkCols = pkColsByEntity.get(key) ?? [];
-      return { ...entity, primaryKey: pkCols.length === 1 ? pkCols[0]! : null };
+      const priv = privByEntity.get(key);
+      return {
+        ...entity,
+        primaryKey: pkCols.length === 1 ? pkCols[0]! : null,
+        // priv is absent for views (privResult only scans relkind='r'
+        // tables) — leaving canRead/canWrite/rlsBlocksRead/rlsFixSql
+        // undefined for those, i.e. "not restricted", same as mysql/
+        // mongo's connectors.
+        ...(priv
+          ? { canRead: priv.canRead, canWrite: priv.canWrite, rlsBlocksRead: priv.rlsBlocksRead, rlsFixSql: priv.rlsFixSql }
+          : {}),
+      };
     }),
   };
 });
@@ -232,6 +276,7 @@ app.post("/write", async (req): Promise<WriteResponse> => {
       grantId: body.context.grantId,
       runId: body.context.runId,
       entity: body.context.entity,
+      grantNamespace: body.context.grantNamespace,
       columns: body.context.columns,
       mode: body.context.mode,
       stagingEntity: body.context.stagingEntity,
@@ -246,7 +291,7 @@ app.post("/write", async (req): Promise<WriteResponse> => {
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
-    body.entity.namespace,
+    body.context.grantNamespace,
   );
   if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
 
@@ -334,6 +379,7 @@ app.post("/stage", async (req): Promise<StageResponse> => {
       grantId: body.context.grantId,
       runId: body.context.runId,
       entity: body.context.entity,
+      grantNamespace: body.context.grantNamespace,
       columns: body.context.columns,
       mode: body.context.mode,
       stagingEntity: body.context.stagingEntity,
@@ -368,7 +414,7 @@ app.post("/stage", async (req): Promise<StageResponse> => {
     throw new Error("request quarantineEntity does not match the signed context's quarantineEntity");
   }
 
-  const grantActive = await verifyActiveWriteGrant(body.context.grantId, body.context.connectionId, body.entity.namespace);
+  const grantActive = await verifyActiveWriteGrant(body.context.grantId, body.context.connectionId, body.context.grantNamespace);
   if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
 
   const pool = await getWritePool(body.credential, body.config);
@@ -706,6 +752,7 @@ app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
       grantId: body.context.grantId,
       runId: body.context.runId,
       entity: body.context.entity,
+      grantNamespace: body.context.grantNamespace,
       columns: body.context.columns,
       mode: body.context.mode,
       stagingEntity: body.context.stagingEntity,
@@ -720,7 +767,7 @@ app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
-    body.entity.namespace,
+    body.context.grantNamespace,
   );
   if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
 

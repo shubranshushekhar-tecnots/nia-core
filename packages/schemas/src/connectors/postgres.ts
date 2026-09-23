@@ -15,8 +15,8 @@ import type { ConnectorManifest } from "../manifest.js";
  * same connector-supabase:4030 service today.
  *
  * configSchema/operations/capabilities intentionally mirror supabase.ts
- * exactly (see that file's header comment for the read-only-v1 write-path
- * rationale) — this connector has no behavior of its own beyond the label.
+ * exactly (see that file's header comment for the write-path rationale) —
+ * this connector has no behavior of its own beyond the label.
  */
 export const postgresManifest: ConnectorManifest = {
   id: "postgres",
@@ -32,7 +32,7 @@ export const postgresManifest: ConnectorManifest = {
     { key: "user", label: "Username", type: "text", required: true, placeholder: "nia_ro", secret: true },
     { key: "password", label: "Password", type: "password", required: true, secret: true },
   ],
-  operations: ["read"],
+  operations: ["read", "insert"],
   capabilities: ["queryable", "etl_source", "etl_sink"],
   service: { host: "connector-supabase", port: 4030 },
 };

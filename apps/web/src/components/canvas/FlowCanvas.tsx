@@ -17,9 +17,16 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, type ActorRole, type Plan, type PlanDiff } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, type ActorRole, type EntityRef, type Plan, type PlanDiff } from '@nia/schemas';
 import type { SidebarProject, WorkflowDetail } from '@/lib/dashboard/types';
-import type { Connection } from '@/lib/connections/types';
+import type { Connection, ConnectorInstall } from '@/lib/connections/types';
+import {
+  listConnections,
+  testConnection as apiTestConnection,
+  refreshConnectionSchema as apiRefreshConnectionSchema,
+  refreshConnectionProfile as apiRefreshConnectionProfile,
+  ConnectionsApiError,
+} from '@/lib/api/connectionsClient';
 import type { ChatMessage, Conversation } from '@/lib/api/chatServer';
 import {
   buildCanvasNode,
@@ -46,6 +53,10 @@ import NodeConfigPanel from './NodeConfigPanel';
 import ChecksDock from './ChecksDock';
 import CopilotSidebar from './CopilotSidebar';
 import CanvasHeader from './CanvasHeader';
+import NodeContextMenu, { type MenuAction } from './NodeContextMenu';
+import { useToasts, ToastStack } from './Toast';
+import DeleteConnectionDialog from './DeleteConnectionDialog';
+import EditConnectionDialog from '@/components/app/EditConnectionDialog';
 import { breadcrumbSepStyle } from '@/components/app/styles';
 import {
   canvasBodyStyle,
@@ -90,7 +101,8 @@ function CanvasInner({
   sidebarProjects,
   email,
   workflow,
-  connections,
+  connections: initialConnections,
+  connectorInstalls,
   initialGraph,
   initialConversation,
   initialMessages,
@@ -102,10 +114,24 @@ function CanvasInner({
   email: string;
   workflow: WorkflowDetail;
   connections: Connection[];
+  connectorInstalls: ConnectorInstall[];
   initialGraph: WorkflowGraphResult;
   initialConversation: Conversation | null;
   initialMessages: ChatMessage[];
 }) {
+  // Local, refreshable copy of the server-loaded connections list — the
+  // canvas NodesRail's right-click "Add connection" flow creates connections
+  // via a Server Action that only revalidates '/app/connections' (not this
+  // already-mounted route), so NodesRail calls refreshConnections() after a
+  // successful create to pick up the new connection without a full reload.
+  const [connections, setConnections] = useState(initialConnections);
+  const refreshConnections = useCallback(async () => {
+    try {
+      setConnections(await listConnections());
+    } catch {
+      // keep the stale list rather than surfacing a transient fetch error
+    }
+  }, []);
   const ctx = useMappingContext(connections);
   const [copilotOpen, setCopilotOpen] = useState(true);
   const { screenToFlowPosition, setCenter, getNode, zoomIn, zoomOut, fitView } = useReactFlow();
@@ -206,6 +232,11 @@ function CanvasInner({
   const setVersion = useCanvasStore((s) => s.setVersion);
   const selectedNodeId = useCanvasStore((s) => s.selectedNodeId);
   const setSelectedNodeId = useCanvasStore((s) => s.setSelectedNodeId);
+  const contextMenu = useCanvasStore((s) => s.contextMenu);
+  const setContextMenu = useCanvasStore((s) => s.setContextMenu);
+  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
+  const [editConnectionId, setEditConnectionId] = useState<string | null>(null);
+  const [deleteConnectionTarget, setDeleteConnectionTarget] = useState<{ connectionId: string; label: string; connectorId?: string } | null>(null);
   const versionInitialized = useRef(false);
   if (!versionInitialized.current) {
     setVersion(data!.version);
@@ -367,19 +398,28 @@ function CanvasInner({
     [selectedNodeId, setNodes, edges, scheduleSave],
   );
 
+  // Shared by the drawer's trash icon (deleteSelectedNode, below) and the
+  // context menu's "Remove from workflow" item — one delete path, not two.
+  const deleteNodeById = useCallback(
+    (nodeId: string) => {
+      if (useCanvasStore.getState().selectedNodeId === nodeId) setSelectedNodeId(null);
+      setNodes((current) => {
+        const next = current.filter((n) => n.id !== nodeId);
+        setEdges((currentEdges) => {
+          const nextEdges = currentEdges.filter((e) => e.source !== nodeId && e.target !== nodeId);
+          scheduleSave(next, nextEdges);
+          return nextEdges;
+        });
+        return next;
+      });
+    },
+    [setSelectedNodeId, setNodes, setEdges, scheduleSave],
+  );
+
   const deleteSelectedNode = useCallback(() => {
     if (!selectedNodeId) return;
-    setSelectedNodeId(null);
-    setNodes((current) => {
-      const next = current.filter((n) => n.id !== selectedNodeId);
-      setEdges((currentEdges) => {
-        const nextEdges = currentEdges.filter((e) => e.source !== selectedNodeId && e.target !== selectedNodeId);
-        scheduleSave(next, nextEdges);
-        return nextEdges;
-      });
-      return next;
-    });
-  }, [selectedNodeId, setSelectedNodeId, setNodes, setEdges, scheduleSave]);
+    deleteNodeById(selectedNodeId);
+  }, [selectedNodeId, deleteNodeById]);
 
   const reloadAfterConflict = useCallback(async () => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -391,6 +431,99 @@ function CanvasInner({
     setVersion(fresh.version);
     setSaveState('idle');
   }, [workflow.id, queryClient, queryKey, ctx, setNodes, setEdges, setVersion, setSaveState]);
+
+  // Right-click / ⋯-button / keyboard context menu (GraphFlowNode.tsx).
+  // Suppresses the browser's own context menu only on nodes — the pane's
+  // own right-click behavior, if any, is untouched.
+  const onNodeContextMenu: NodeMouseHandler = useCallback(
+    (e, node) => {
+      const data = node.data as CanvasNode['data'];
+      if (data.isGhost) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const hasConnection = Boolean(data.resolved && data.connectionId);
+      setContextMenu({ x: e.clientX, y: e.clientY, nodeId: node.id, graphNodeType: data.graphNodeType, hasConnection });
+    },
+    [setContextMenu],
+  );
+
+  // After a connection is deleted (or its host/database changes), already-
+  // rendered nodes' data.resolved/connectionLabel are stale (baked in at
+  // graphToFlow/buildCanvasNode time — see mapping.ts's header comment).
+  // Refetches both connections and the graph and remaps, mirroring
+  // reloadAfterConflict's exact shape but with a freshly-built ctx rather
+  // than the (still-stale-this-tick) closure's ctx.
+  const refreshConnectionsAndRemap = useCallback(async () => {
+    const freshConnections = await listConnections();
+    setConnections(freshConnections);
+    const freshCtx: MappingContext = {
+      manifests: CONNECTOR_MANIFESTS,
+      connectionsById: new Map(freshConnections.map((c) => [c.id, c])),
+    };
+    const fresh = await getWorkflowGraph(workflow.id);
+    queryClient.setQueryData(queryKey, fresh);
+    const remapped = graphToFlow(fresh.graph, freshCtx);
+    setNodes(remapped.nodes);
+    setEdges(remapped.edges);
+    setVersion(fresh.version);
+  }, [workflow.id, queryClient, queryKey, setNodes, setEdges, setVersion]);
+
+  const handleMenuAction = useCallback(
+    async (action: MenuAction, nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const connectionId = node.data.connectionId;
+      switch (action) {
+        case 'test-connection': {
+          if (!connectionId) return;
+          try {
+            const result = await apiTestConnection(connectionId);
+            pushToast(result.ok ? 'success' : 'error', result.ok ? `Connection OK${result.latencyMs != null ? ` (${result.latencyMs}ms)` : ''}` : (result.error ?? 'Test failed'));
+          } catch (err) {
+            pushToast('error', err instanceof ConnectionsApiError ? err.message : 'Test failed.');
+          }
+          break;
+        }
+        case 'refresh': {
+          if (!connectionId) return;
+          try {
+            await apiRefreshConnectionSchema(connectionId);
+            queryClient.invalidateQueries({ queryKey: ['connection-schema', connectionId] });
+            if (node.data.graphNodeType === 'source') {
+              const entity = (node.data.config as { entity?: EntityRef }).entity;
+              if (entity) {
+                await apiRefreshConnectionProfile(connectionId, entity);
+                queryClient.invalidateQueries({ queryKey: ['connection-profile', connectionId] });
+              }
+            }
+            pushToast('success', 'Schema refreshed');
+          } catch (err) {
+            pushToast('error', err instanceof ConnectionsApiError ? err.message : 'Refresh failed.');
+          }
+          break;
+        }
+        case 'edit-connection': {
+          if (!connectionId) return;
+          setEditConnectionId(connectionId);
+          break;
+        }
+        case 'remove-node': {
+          deleteNodeById(nodeId);
+          break;
+        }
+        case 'delete-connection': {
+          if (!connectionId) return;
+          setDeleteConnectionTarget({
+            connectionId,
+            label: node.data.connectionLabel ?? node.data.manifestName ?? 'this connection',
+            connectorId: node.data.manifestId,
+          });
+          break;
+        }
+      }
+    },
+    [nodes, deleteNodeById, pushToast, queryClient],
+  );
 
   // Phase 7 Session 3 — Apply. applyPlan() already returns the merged
   // GraphDoc + its new version (services/copilotApply.ts's putWorkflowGraph
@@ -808,7 +941,7 @@ function CanvasInner({
         <Sidebar orgId={orgId} role={role} projects={sidebarProjects} email={email} />
 
         <div style={canvasBodyStyle}>
-        <NodesRail connections={connections} />
+        <NodesRail connections={connections} connectorInstalls={connectorInstalls} onConnectionCreated={refreshConnections} />
 
         <div ref={fullscreenRef} style={canvasFullscreenWrapStyle}>
           <div style={canvasColumnStyle}>
@@ -837,6 +970,7 @@ function CanvasInner({
               onEdgesChange={handleEdgesChange}
               onConnect={onConnect}
               onNodeClick={onNodeClick}
+              onNodeContextMenu={onNodeContextMenu}
               onPaneClick={onPaneClick}
               fitView
               // A brand-new workflow mounts with zero nodes (workflow_graphs has
@@ -855,6 +989,12 @@ function CanvasInner({
                 style={{ background: 'var(--surface)', border: '1px solid var(--panel-line)', borderRadius: 10 }}
               />
             </ReactFlow>
+
+            <ToastStack toasts={toasts} onDismiss={dismissToast} />
+
+            {contextMenu && (
+              <NodeContextMenu menu={contextMenu} onAction={handleMenuAction} onClose={() => setContextMenu(null)} />
+            )}
 
             {ghostPlan && (
               <div style={planBannerStyle} data-testid="plan-banner">
@@ -1103,6 +1243,36 @@ function CanvasInner({
           />
         </div>
       </div>
+
+      {editConnectionId && (() => {
+        const editingConnection = connections.find((c) => c.id === editConnectionId);
+        if (!editingConnection) return null;
+        return (
+          <EditConnectionDialog
+            connection={editingConnection}
+            onClose={() => setEditConnectionId(null)}
+            onSaved={() => {
+              setEditConnectionId(null);
+              pushToast('success', 'Connection updated');
+              void refreshConnectionsAndRemap();
+            }}
+          />
+        );
+      })()}
+
+      {deleteConnectionTarget && (
+        <DeleteConnectionDialog
+          connectionId={deleteConnectionTarget.connectionId}
+          connectionLabel={deleteConnectionTarget.label}
+          connectorId={deleteConnectionTarget.connectorId}
+          onClose={() => setDeleteConnectionTarget(null)}
+          onDeleted={async () => {
+            setDeleteConnectionTarget(null);
+            pushToast('success', 'Connection deleted');
+            await refreshConnectionsAndRemap();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1115,6 +1285,7 @@ export default function FlowCanvas(props: {
   email: string;
   workflow: WorkflowDetail;
   connections: Connection[];
+  connectorInstalls: ConnectorInstall[];
   initialGraph: WorkflowGraphResult;
   initialConversation: Conversation | null;
   initialMessages: ChatMessage[];

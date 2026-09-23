@@ -1,10 +1,47 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
-import { EtlRunJob } from "@nia/schemas";
+import { EtlRunJob, GraphDoc } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 import { enqueueEtlRun, getEtlRunJobData } from "../lib/runQueue.js";
 import { assertWorkflowInScope } from "./checks.js";
+
+/**
+ * Refuse-to-run guard: a node's connectionId can go stale if its
+ * connection was deleted from another tab/the Connections page after the
+ * canvas last loaded — nothing else in the enqueue path checks this
+ * (runEtl.ts resolves connections in the worker, but only once a chunk job
+ * is already running). Checking every node with a connectionId, not just
+ * destNodeIds, since an upstream source node's connection is just as
+ * fatal to the run as the destination's. Message flows through
+ * RunApiError -> the existing run-status-card error path unchanged — no
+ * new client code needed for this to surface.
+ */
+async function assertGraphConnectionsExist(supabase: SupabaseClient, scope: WorkspaceScope, workflowId: string): Promise<void> {
+  const { data } = await supabase.from("workflow_graphs").select("graph").eq("workflow_id", workflowId).maybeSingle();
+  if (!data) return;
+
+  const parsed = GraphDoc.safeParse(data.graph);
+  if (!parsed.success) return;
+
+  const referencedNodes = parsed.data.nodes.filter((n) => n.connectionId);
+  if (referencedNodes.length === 0) return;
+
+  const connectionIds = [...new Set(referencedNodes.map((n) => n.connectionId as string))];
+  let query = supabase.from("connections").select("id").in("id", connectionIds);
+  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
+  const { data: existingConnections } = await query;
+  const existingIds = new Set((existingConnections ?? []).map((c) => c.id as string));
+
+  const missingNode = referencedNodes.find((n) => !existingIds.has(n.connectionId as string));
+  if (missingNode) {
+    throw new AppError(
+      409,
+      "CONNECTION_MISSING",
+      `Can't run — the connection for "${missingNode.manifestId ?? missingNode.id}" was deleted.`,
+    );
+  }
+}
 
 /**
  * Phase 6 Block 3 — starting and re-attaching to an ETL run.
@@ -45,6 +82,7 @@ export async function startWorkflowRun(
   triggeredByUserId: string,
 ): Promise<{ runs: { destNodeId: string; runId: string }[] }> {
   await assertWorkflowInScope(supabase, scope, workflowId);
+  await assertGraphConnectionsExist(supabase, scope, workflowId);
 
   const runs: { destNodeId: string; runId: string }[] = [];
   for (const destNodeId of destNodeIds) {

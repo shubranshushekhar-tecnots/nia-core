@@ -67,6 +67,33 @@ export const IntrospectResponse = z.object({
        * start" precondition in runEtl.ts.
        */
       primaryKey: z.string().nullable().default(null),
+      /**
+       * Whether the connection's role can SELECT (canRead) / INSERT
+       * (canWrite) this entity, per Postgres's has_table_privilege().
+       * Optional: only postgres/supabase's /introspect populates these
+       * today (mysql/mongo don't check yet) — `undefined` means
+       * "unknown/not restricted", never treated as a hard false. Backs
+       * NodeDrawer.tsx's role-aware table picker (a source shouldn't
+       * offer a table the role can't SELECT; a destination shouldn't
+       * offer one it can't INSERT into).
+       */
+      canRead: z.boolean().optional(),
+      canWrite: z.boolean().optional(),
+      /**
+       * True when this table has row-level security enabled and no
+       * policy covers the connecting role — a SELECT against it will
+       * silently return 0 rows rather than erroring. Optional/
+       * postgres+supabase-only, same reasoning as canRead/canWrite.
+       */
+      rlsBlocksRead: z.boolean().optional(),
+      /**
+       * Ready-to-run `CREATE POLICY ... FOR SELECT TO <role> USING (true)`
+       * statement that would cover the connecting role, present only when
+       * rlsBlocksRead is true. Null/absent whenever rlsBlocksRead isn't
+       * true — never shown as a "fix" for a case that isn't genuinely
+       * blocked.
+       */
+      rlsFixSql: z.string().nullable().optional(),
     }),
   ),
 });
@@ -155,12 +182,31 @@ export type WriteMode = z.infer<typeof WriteMode>;
  * mutating" model as the row-write path, never a new raw-SQL surface.
  * `stagingEntity`/`quarantineEntity` are null for a plain row-upsert
  * WriteRequest context (today's only use before Phase 11).
+ *
+ * `grantNamespace` (added alongside the "nia" write-grant-scope fix, see
+ * docs/decisions.md): the schema/database whose confirmed, unrevoked
+ * write_grants row authorizes this write — NOT necessarily `entity.namespace`.
+ * For a plain or destination-targeted write (including /stage and
+ * /create-entity, which always operate on the real destination entity)
+ * these are the same value. For a per-chunk write into `stagingEntity`/
+ * `quarantineEntity` (both always in Nia's own internal "nia" schema —
+ * see stagingRegistry.ts), `grantNamespace` is instead the RUN's real
+ * destination namespace: staging/quarantine writes in "nia" are
+ * authorized by that run's own destination grant, and nothing wider — a
+ * grant confirmed for one destination must never authorize "nia" writes
+ * for a different, unapproved destination. The worker computes this value
+ * from the run's own resolved destination config (never client-supplied)
+ * and it is part of the signed payload, so a connector's independent
+ * re-check (verifyActiveWriteGrant) tests the SAME namespace the worker
+ * already validated, not the physical `entity.namespace`.
  */
 export const WriteContext = z.object({
   connectionId: z.string().uuid(),
   grantId: z.string().uuid(),
   runId: z.string().uuid().nullable().default(null),
   entity: WriteEntityRef,
+  /** See doc comment above — the namespace whose write grant authorizes this write; equals entity.namespace except for staging/quarantine writes into "nia". */
+  grantNamespace: SqlIdentifier,
   columns: z.array(SqlIdentifier).min(1),
   mode: WriteMode.default("upsert"),
   stagingEntity: WriteEntityRef.nullable().default(null),

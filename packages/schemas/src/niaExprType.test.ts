@@ -34,12 +34,14 @@ describe("typeOfExpr — coercion functions", () => {
 
   it("a coercion call's result type is fixed by the function itself, independent of its argument's own type", () => {
     // Unlike `field`/`binary`/`coalesce`/`conditional`, a plain call's
-    // output type never depends on its arguments' types (a coercion
-    // function's return type is the same regardless of input) — so
-    // typeOfExpr does not need to recurse into a plain call's args to
-    // determine its own type. Field-reference validity for a call's own
-    // arguments is a separate concern (checkConfig/collectFieldRefs), not
-    // typeOfExpr's.
+    // output *type* never depends on its arguments' types (a coercion
+    // function's return type is the same regardless of input) — so this
+    // still resolves to the fixed CALL_FN_TYPE entry, not something derived
+    // from "amount"'s own type. This is orthogonal to argument *validity*:
+    // typeOfExpr still recurses into a plain call's args to confirm every
+    // field reference they contain actually exists (see the "fails naming
+    // the column" test below) — there is no separate checkConfig/
+    // collectFieldRefs mechanism that does this instead.
     const result = typeOfExpr(call("to_number"), schema);
     expect(result.ok).toBe(true);
   });
@@ -48,5 +50,11 @@ describe("typeOfExpr — coercion functions", () => {
     const result = typeOfExpr({ kind: "field", name: "nope" }, schema);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("nope");
+  });
+
+  it("fails naming the column for an unknown field nested inside a call's arguments", () => {
+    const result = typeOfExpr(call("to_number", [{ kind: "field", name: "missing_col" }]), schema);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("missing_col");
   });
 });

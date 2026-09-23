@@ -9,14 +9,21 @@ import type { ConnectorManifest } from "../manifest.js";
  * host/port/database are non-secret and live in Postgres so they can be
  * SSRF-validated at save/connect time and displayed without a Vault round trip.
  *
- * Only "read" is listed in `operations` — connector-mysql's /execute endpoint
- * runs whatever dialect-native query the worker sends, and the ETL write path
- * (Phase 6 Block 5) dispatches writes directly via dispatchWrite()/entity+
- * upsertKeys, not through the operations-radio-driven action-node mechanism
- * (same pattern as connector-supabase, which also keeps operations:["read"]
- * despite having a working /write). `capabilities` does carry "etl_sink" now
- * that connector-mysql/src/index.ts exposes POST /write (batch upsert via
- * `ON DUPLICATE KEY UPDATE`, HMAC-checked write context + grant re-check).
+ * `operations` includes "read" and "insert" (Item 6.3, fix-chain plan): the
+ * actual write execution still dispatches via dispatchWrite()/entity+
+ * upsertKeys (connector-mysql/src/index.ts's POST /write, batch upsert via
+ * `ON DUPLICATE KEY UPDATE`, HMAC-checked write context + grant re-check),
+ * not through a per-op SQL statement — but the operations array is also what
+ * NodeDrawer.tsx's verb-radio (operationsForRole) and mapping.ts's
+ * initialOperation resolve against once a node is placed as a destination.
+ * `capabilities` already includes "etl_sink" (Phase 6 Block 5), so a mysql
+ * connection is already offered as a destination in NodesRail.tsx's palette;
+ * leaving `operations` at `["read"]` left that destination node with no
+ * initial operation and a verb-radio that fell back to showing "read" as a
+ * destination's only (nonsensical) verb. Matches connector-supabase's/
+ * connector-postgres's `operations: ["read", "insert"]` shape — an earlier
+ * version of this comment claimed parity with connector-supabase keeping
+ * `operations: ["read"]`, which was stale/inaccurate even before this change.
  */
 export const mysqlManifest: ConnectorManifest = {
   id: "mysql",
@@ -31,7 +38,7 @@ export const mysqlManifest: ConnectorManifest = {
     { key: "user", label: "Username", type: "text", required: true, placeholder: "nia_ro", secret: true },
     { key: "password", label: "Password", type: "password", required: true, secret: true },
   ],
-  operations: ["read"],
+  operations: ["read", "insert"],
   capabilities: ["queryable", "etl_source", "etl_sink"],
   service: { host: "connector-mysql", port: 4010 },
 };

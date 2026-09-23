@@ -129,7 +129,7 @@ describe("connector-supabase /write (route-level)", () => {
   const entity = { namespace: "sales", name: "orders" };
   const columns = ["id", "total"];
 
-  const stagingFields = { runId: null, mode: "upsert" as const, stagingEntity: null, quarantineEntity: null };
+  const stagingFields = { runId: null, mode: "upsert" as const, stagingEntity: null, quarantineEntity: null, grantNamespace: entity.namespace };
 
   function validPayload(app: { signWriteContext: (typeof import("./writeSignature.js"))["signWriteContext"] }, overrides: Record<string, unknown> = {}) {
     const issuedAt = Date.now();
@@ -348,7 +348,7 @@ describe("connector-supabase /write (route-level)", () => {
     const runId = "33333333-3333-3333-3333-333333333333";
     const issuedAt = Date.now();
     const signature = signWriteContext(
-      { connectionId: baseCredential.connectionId, grantId: baseGrantId, runId, entity, columns, mode: "upsert", stagingEntity: null, quarantineEntity, issuedAt },
+      { connectionId: baseCredential.connectionId, grantId: baseGrantId, runId, entity, columns, mode: "upsert", stagingEntity: null, quarantineEntity, issuedAt, grantNamespace: entity.namespace },
       "a".repeat(32),
     );
     const res = await app.inject({
@@ -361,7 +361,7 @@ describe("connector-supabase /write (route-level)", () => {
         columns: ["run_id", "dest_table", "step_id", "function", "input_value", "source_row"],
         rows: [[runId, "sales.orders", "step1", "parse_date", "bad-date", "{}"]],
         upsertKeys: ["run_id"],
-        context: { connectionId: baseCredential.connectionId, grantId: baseGrantId, runId, entity, columns, mode: "upsert", stagingEntity: null, quarantineEntity, issuedAt, signature },
+        context: { connectionId: baseCredential.connectionId, grantId: baseGrantId, runId, entity, columns, mode: "upsert", stagingEntity: null, quarantineEntity, issuedAt, signature, grantNamespace: entity.namespace },
       },
     });
     expect(res.statusCode).toBe(200);
@@ -379,7 +379,7 @@ describe("connector-supabase /stage (route-level)", () => {
 
   function signedContext(app: { signWriteContext: (typeof import("./writeSignature.js"))["signWriteContext"] }, overrides: Record<string, unknown> = {}) {
     const issuedAt = Date.now();
-    const base = { connectionId: baseCredential.connectionId, grantId: baseGrantId, runId, entity, columns, mode: "upsert" as const, stagingEntity, quarantineEntity: null, issuedAt };
+    const base = { connectionId: baseCredential.connectionId, grantId: baseGrantId, runId, entity, columns, mode: "upsert" as const, stagingEntity, quarantineEntity: null, issuedAt, grantNamespace: entity.namespace };
     const payload = { ...base, ...overrides };
     const signature = app.signWriteContext(payload, "a".repeat(32));
     return { ...payload, signature };

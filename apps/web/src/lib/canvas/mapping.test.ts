@@ -145,17 +145,41 @@ describe("resolution + write-lock", () => {
     expect(nodes[0]!.data.resolved).toBe(true);
   });
 
-  it("writeLocked is false for every manifest today (all 3 are read-only)", () => {
+  it("Item 6.2: connectionLabel appends host/database so same-named connections are distinguishable, and falls back to bare displayName when config has neither", () => {
+    const withConfig: MappingContext = {
+      manifests: CONNECTOR_MANIFESTS,
+      connectionsById: new Map([[mysqlConnId, { ...connection(mysqlConnId, "mysql"), config: { host: "db.example.com", database: "sandbox" } }]]),
+    };
+    const doc = GraphDoc.parse({
+      nodes: [
+        { id: "n1", type: "source", manifestId: "mysql", connectionId: mysqlConnId, position: { x: 0, y: 0 }, config: {} },
+        { id: "n2", type: "source", manifestId: "mysql", connectionId: mysqlConnId, position: { x: 0, y: 0 }, config: {} },
+      ],
+      edges: [],
+    });
+    const { nodes: withHostDb } = graphToFlow(doc, withConfig);
+    expect(withHostDb[0]!.data.connectionLabel).toBe("mysql dev (db.example.com/sandbox)");
+
+    const { nodes: withoutConfig } = graphToFlow(doc, baseCtx);
+    expect(withoutConfig[0]!.data.connectionLabel).toBe("mysql dev");
+  });
+
+  it("writeLocked is false for read-only manifests (mysql/mongodb) but true for postgres/supabase, which both offer a write verb", () => {
     const doc = GraphDoc.parse({
       nodes: [
         { id: "n1", type: "source", manifestId: "mysql", position: { x: 0, y: 0 }, config: {} },
         { id: "n2", type: "source", manifestId: "mongodb", position: { x: 0, y: 0 }, config: {} },
         { id: "n3", type: "destination", manifestId: "supabase", position: { x: 0, y: 0 }, config: {} },
+        { id: "n4", type: "destination", manifestId: "postgres", position: { x: 0, y: 0 }, config: {} },
       ],
       edges: [],
     });
     const { nodes } = graphToFlow(doc, baseCtx);
-    expect(nodes.every((n) => n.data.writeLocked === false)).toBe(true);
+    const byId = new Map(nodes.map((n) => [n.id, n.data.writeLocked]));
+    expect(byId.get("n1")).toBe(false);
+    expect(byId.get("n2")).toBe(false);
+    expect(byId.get("n3")).toBe(true);
+    expect(byId.get("n4")).toBe(true);
   });
 
   it("resolving an unresolved node's manifestId leaves the round-trip byte-identical (resolved/unknownReason/writeLocked are derived-only, not persisted)", () => {

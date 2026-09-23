@@ -170,6 +170,55 @@ describe("proposeMapping", () => {
     expect(userMsg!.content).toContain('"email","name"'); // scoped list, not the flat union including legacy_id
   });
 
+  it("scopes destination fields to the persisted entity, not the flat union of every table in the connection", async () => {
+    resolveGraphMock.mockResolvedValueOnce({
+      nodes: [
+        { id: "src", type: "source", manifestId: "mysql", connectionId: SOURCE_CONN, position: { x: 0, y: 0 }, config: {} },
+        {
+          id: "dest",
+          type: "destination",
+          manifestId: "supabase",
+          connectionId: DEST_CONN,
+          position: { x: 0, y: 0 },
+          config: { entity: { namespace: "public", name: "customers" } },
+        },
+      ],
+      edges: [{ id: "e1", source: "src", target: "dest" }],
+    });
+    // The destination connection has an unrelated table with a field named
+    // "email" — before the fix, the flat union would let source "email"
+    // deterministically match that unrelated field even though the actual
+    // target table ("customers") has no "email" column at all (only
+    // "customer_email"). Scoped correctly, that false match must not happen.
+    getSchemaMock.mockImplementation(async (connection: { id: string }) =>
+      connection.id === SOURCE_CONN
+        ? schema(["first_name", "last_name", "email"])
+        : {
+            ok: true as const,
+            value: {
+              entities: [
+                { namespace: "public", name: "customers", fields: [{ name: "customer_email", type: "text" }] },
+                { namespace: "public", name: "other_table", fields: [{ name: "email", type: "text" }] },
+              ],
+            },
+          },
+    );
+    completeMock.mockResolvedValueOnce('{"entries":[]}');
+
+    const result = await proposeMapping("wf-1", "dest", SCOPE);
+
+    expect(result).toEqual({ ok: true, value: { entries: [] } });
+    const [, userMsg] = completeMock.mock.calls[0]![0] as { role: string; content: string }[];
+    // Destination fields offered to the LLM must be scoped to "customers"
+    // only — "email" (the unrelated table's field) must never appear. Check
+    // the "Destination fields:" line specifically, since the source side
+    // legitimately still contains "email" (that's the whole point: it has
+    // nothing to deterministically match against once scoped).
+    const destLine = userMsg!.content.split("\n").find((l) => l.startsWith("Destination fields:"));
+    expect(destLine).toContain('"customer_email"');
+    expect(destLine).not.toContain('"email"');
+  });
+
   it("resolves the upstream source through an intervening transform node (Source -> Transform -> Destination)", async () => {
     resolveGraphMock.mockResolvedValueOnce({
       nodes: [

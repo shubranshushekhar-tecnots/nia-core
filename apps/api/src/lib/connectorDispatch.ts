@@ -23,6 +23,26 @@ function baseUrl(manifest: ConnectorManifest): string {
   return `http://${host}:${manifest.service.port}`;
 }
 
+/**
+ * Bug fix: a non-2xx connector response used to collapse to
+ * `"connector service responded 500"`, discarding whatever the connector
+ * actually said (e.g. Fastify's default error handler already returns
+ * `{statusCode, code, error, message}` — see connector-supabase's /introspect,
+ * which surfaces pg errors like "connection is insecure (try using
+ * `sslmode=require`)" in `message`). Only `message` is ever read out of the
+ * body — never `stack` — so nothing beyond what the connector service chose
+ * to put in that one field can reach the UI; connector services never put
+ * credentials in it (secrets are resolved and used entirely inside the
+ * service, never echoed back).
+ */
+async function connectorErrorMessage(res: Response): Promise<string> {
+  const body = await res.json().catch(() => null);
+  const message = body && typeof body === "object" ? (body as Record<string, unknown>).message : undefined;
+  return typeof message === "string" && message.length > 0
+    ? `connector service responded ${res.status}: ${message}`
+    : `connector service responded ${res.status}`;
+}
+
 export async function dispatchTest(
   manifest: ConnectorManifest,
   credential: CredentialRef,
@@ -34,7 +54,7 @@ export async function dispatchTest(
     body: JSON.stringify({ credential, config }),
   });
   if (!res.ok) {
-    return { ok: false, error: `connector service responded ${res.status}` };
+    return { ok: false, error: await connectorErrorMessage(res) };
   }
   return TestResponse.parse(await res.json());
 }
@@ -50,7 +70,7 @@ export async function dispatchIntrospect(
     body: JSON.stringify({ credential, config }),
   });
   if (!res.ok) {
-    return { ok: false, error: `connector service responded ${res.status}` };
+    return { ok: false, error: await connectorErrorMessage(res) };
   }
   return { ok: true, value: IntrospectResponseSchema.parse(await res.json()) };
 }

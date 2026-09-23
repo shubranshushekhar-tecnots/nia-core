@@ -92,6 +92,7 @@ const baseContext = {
   quarantineEntity: null,
   issuedAt: Date.now(),
   signature: "irrelevant-never-checked",
+  grantNamespace: baseEntity.namespace,
 };
 
 describe("connector-mongodb /stage (route-level)", () => {

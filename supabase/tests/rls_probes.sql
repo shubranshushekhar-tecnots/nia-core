@@ -1295,7 +1295,7 @@ begin
   perform pg_temp.act_as(v_member);
 
   select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["reporting"]}'::jsonb);
-  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-36');
+  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-36', 'nia_write_probe_36');
   select * into v_grant from public.revoke_write_grant(v_grant.id);
 
   reset role;
@@ -1369,10 +1369,10 @@ begin
   perform pg_temp.act_as(v_member);
 
   select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["ops"]}'::jsonb);
-  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-38');
+  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-38', 'nia_write_probe_38');
 
   begin
-    perform public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-38-again');
+    perform public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-38-again', 'nia_write_probe_38');
   exception when others then
     double_confirm_denied := true;
   end;
@@ -1409,7 +1409,7 @@ begin
   perform pg_temp.act_as(v_member);
 
   select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["finance"]}'::jsonb);
-  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-39');
+  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-39', 'nia_write_probe_39');
   select * into v_grant from public.revoke_write_grant(v_grant.id);
 
   select count(*) into n_active
@@ -1446,7 +1446,7 @@ begin
   returning id into v_conn;
 
   select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["personal"]}'::jsonb);
-  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-40');
+  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-40', 'nia_write_probe_40');
   select * into v_grant from public.revoke_write_grant(v_grant.id);
   reset role;
 
@@ -1581,6 +1581,162 @@ begin
 exception when others then
   reset role;
   insert into probe_results values (43, 'source_profiles cross-org isolation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probes 44-46 — 0027_connection_lifecycle_audit.sql (merge/delete secret
+-- RPCs + generic connection-audit RPC)
+-- =========================================================================
+
+-- Probe 44 — merge_connector_secret/delete_connector_secret/
+-- log_connection_audit are callable by authenticated, not by anon/public
+-- (privilege check only — no anon-role probe exists elsewhere in this
+-- file to mirror for an actual call-attempt).
+do $$
+declare
+  ok boolean;
+begin
+  ok := has_function_privilege('authenticated', 'public.merge_connector_secret(uuid, jsonb)', 'execute')
+    and has_function_privilege('authenticated', 'public.delete_connector_secret(uuid)', 'execute')
+    and has_function_privilege('authenticated', 'public.log_connection_audit(uuid, text, jsonb, uuid)', 'execute')
+    and not has_function_privilege('anon', 'public.merge_connector_secret(uuid, jsonb)', 'execute')
+    and not has_function_privilege('anon', 'public.delete_connector_secret(uuid)', 'execute')
+    and not has_function_privilege('anon', 'public.log_connection_audit(uuid, text, jsonb, uuid)', 'execute');
+
+  insert into probe_results values (44, 'merge/delete_connector_secret + log_connection_audit: granted to authenticated, not anon', ok);
+exception when others then
+  insert into probe_results values (44, 'connection-lifecycle RPC privilege probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 45 — merge_connector_secret shallow-merges a partial over the
+-- decrypted existing secret (blank/omitted fields keep their stored
+-- value) and mints a NEW vault row rather than mutating the old one;
+-- delete_connector_secret then removes a ref by id.
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_ref1 uuid;
+  v_ref2 uuid;
+  v_merged jsonb;
+  n_old_remains int;
+  merge_ok boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+  v_ref1 := (public.create_connector_secret('{"user":"orig-user","password":"orig-pass"}'::jsonb))::uuid;
+  v_ref2 := public.merge_connector_secret(v_ref1, '{"password":"new-pass"}'::jsonb);
+  perform public.delete_connector_secret(v_ref1);
+  reset role;
+
+  select decrypted_secret::jsonb into v_merged from vault.decrypted_secrets where id = v_ref2;
+  select count(*) into n_old_remains from vault.decrypted_secrets where id = v_ref1;
+
+  merge_ok := v_ref2 <> v_ref1
+    and v_merged = '{"user":"orig-user","password":"new-pass"}'::jsonb
+    and n_old_remains = 0;
+
+  if merge_ok then
+    insert into probe_results values (45, 'merge_connector_secret keeps unset fields, overwrites given ones, mints a new ref; delete_connector_secret removes the old one', true);
+  else
+    insert into probe_results values (45, 'merge_connector_secret keeps unset fields, overwrites given ones, mints a new ref; delete_connector_secret removes the old one', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (45, 'merge/delete_connector_secret probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 46 — log_connection_audit: an authenticated caller's action is
+-- always attributed to auth.uid(), ignoring any p_actor_user_id passed
+-- (same asymmetric-actor rule as log_execution_audit, 0009); detail is
+-- stored verbatim and scoped to the connection's own org.
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_conn uuid := (select id from test_ids where key = 'connection_org');
+  v_bogus_actor uuid := gen_random_uuid();
+  n_correct int;
+  n_bogus int;
+begin
+  perform pg_temp.act_as(v_member);
+  perform public.log_connection_audit(v_conn, 'connection.updated', '{"changedFields":["host"]}'::jsonb, v_bogus_actor);
+  reset role;
+
+  select count(*) into n_correct from public.audit_log
+  where org_id = v_org and action = 'connection.updated' and actor = v_member
+    and detail = '{"changedFields":["host"]}'::jsonb;
+  select count(*) into n_bogus from public.audit_log
+  where org_id = v_org and action = 'connection.updated' and actor = v_bogus_actor;
+
+  if n_correct = 1 and n_bogus = 0 then
+    insert into probe_results values (46, 'log_connection_audit: authenticated caller always attributed to auth.uid(), detail stored verbatim, org-scoped', true);
+  else
+    insert into probe_results values (46, 'log_connection_audit: authenticated caller always attributed to auth.uid(), detail stored verbatim, org-scoped', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (46, 'log_connection_audit probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 47 — Item 6.1 (fix-chain plan): connections_scope_display_name_unique_idx
+-- (0029_connection_name_unique.sql) rejects a case-insensitive duplicate
+-- display_name within the same scope (org or personal), but allows the same
+-- name to be reused across different scopes (a different org, or a personal
+-- workspace). Reuses probe 14's still-live `connection_org` fixture, whose
+-- display_name was renamed to 'Renamed by member' by that probe's own
+-- update — so the same-scope collision check below targets that exact
+-- current value (case-flipped), not the fixture's original 'Probe DB' name.
+do $$
+declare
+  v_owner       uuid := (select id from test_ids where key = 'owner');
+  v_org         uuid := (select id from test_ids where key = 'org');
+  v_org_b_owner uuid := (select id from test_ids where key = 'org_b_owner');
+  v_org_b       uuid := (select id from test_ids where key = 'org_b');
+  v_individual  uuid := (select id from test_ids where key = 'individual');
+  same_org_rejected boolean := false;
+  cross_org_ok boolean := false;
+  personal_ok boolean := false;
+begin
+  -- Same org, case-flipped duplicate of the existing connection_org row's
+  -- current name ('Renamed by member') — must be rejected.
+  perform pg_temp.act_as(v_owner);
+  begin
+    insert into public.connections (org_id, connector_id, handle, display_name, owner_user_id, vault_secret_ref)
+    values (v_org, 'mysql', '@dup-name-probe', 'RENAMED BY MEMBER', v_owner, 'vault:probe-dup');
+  exception when others then
+    same_org_rejected := true;
+  end;
+  reset role;
+
+  -- Same exact name, but a different org — must be allowed.
+  perform pg_temp.act_as(v_org_b_owner);
+  begin
+    insert into public.connections (org_id, connector_id, handle, display_name, owner_user_id, vault_secret_ref)
+    values (v_org_b, 'mysql', '@dup-name-probe-b', 'Renamed by member', v_org_b_owner, 'vault:probe-dup-b');
+    cross_org_ok := true;
+  exception when others then
+    cross_org_ok := false;
+  end;
+  reset role;
+
+  -- Same exact name, but a personal workspace — must be allowed.
+  perform pg_temp.act_as(v_individual);
+  begin
+    insert into public.connections (owner_id, connector_id, handle, display_name, owner_user_id, vault_secret_ref)
+    values (v_individual, 'mysql', '@dup-name-probe-p', 'Renamed by member', v_individual, 'vault:probe-dup-p');
+    personal_ok := true;
+  exception when others then
+    personal_ok := false;
+  end;
+  reset role;
+
+  if same_org_rejected and cross_org_ok and personal_ok then
+    insert into probe_results values (47, 'connections_scope_display_name_unique_idx: rejects a case-insensitive duplicate name within the same scope, allows it across orgs/personal scopes', true);
+  else
+    insert into probe_results values (47, 'connections_scope_display_name_unique_idx: rejects a case-insensitive duplicate name within the same scope, allows it across orgs/personal scopes', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (47, 'connections display_name uniqueness probe (errored: ' || sqlerrm || ')', false);
 end $$;
 
 -- =========================================================================

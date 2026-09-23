@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getConnectorManifest, EntityProfile, type ConfigField, type CredentialRef, type IntrospectResponse, type EntityRef } from "@nia/schemas";
+import {
+  getConnectorManifest,
+  EntityProfile,
+  GraphDoc,
+  type ConfigField,
+  type CredentialRef,
+  type IntrospectResponse,
+  type EntityRef,
+} from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 import { dispatchInvalidate, dispatchIntrospect, dispatchTest } from "../lib/connectorDispatch.js";
@@ -88,6 +96,31 @@ function slugify(input: string): string {
   return slug || "connection";
 }
 
+// Item 4.2 fix (fix-chain plan): the web form already trims non-secret text
+// fields and validates nothing server-side (apps/web/src/lib/connections/
+// actions.ts) — but that's a UI convenience, not a trust boundary. Any other
+// caller of this API (a client with JS bypassed, a future integration) could
+// previously reach the connector/pool layer with an untrimmed or malformed
+// `host`, which — beyond just "looking wrong" — silently breaks TLS SNI
+// (see pool-manager.ts's `resolveSsl`/`parsePostgresConfig`) and can, for
+// odd-enough characters, be an SSRF-relevant free-text field. Never trims
+// `password`/secret fields (leading/trailing whitespace can be part of a
+// real secret).
+const HOST_CHARACTER_PATTERN = /^[a-zA-Z0-9.-]+$/;
+
+function normalizeAndValidateConfigValue(field: ConfigField, value: unknown): unknown {
+  if (field.secret || typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (field.key === "host" && trimmed && !HOST_CHARACTER_PATTERN.test(trimmed)) {
+    throw new AppError(
+      400,
+      "INVALID_FIELD",
+      `Field "host" must not contain whitespace and may only contain letters, digits, dots, and hyphens.`,
+    );
+  }
+  return trimmed;
+}
+
 /** Splits a connector's raw field values into (non-secret) config vs. secret payload, per its manifest.configSchema. */
 function splitFields(
   configSchema: ConfigField[],
@@ -96,12 +129,42 @@ function splitFields(
   const config: Record<string, unknown> = {};
   const secret: Record<string, unknown> = {};
   for (const field of configSchema) {
-    const value = fields[field.key];
+    const value = normalizeAndValidateConfigValue(field, fields[field.key]);
     if (field.required && (value === undefined || value === null || value === "")) {
       throw new AppError(400, "MISSING_FIELD", `Missing required field "${field.key}".`);
     }
     if (value === undefined) continue;
     (field.secret ? secret : config)[field.key] = value;
+  }
+  return { config, secret };
+}
+
+/**
+ * Same split as splitFields, for updateConnection's edit flow: non-secret
+ * fields are still required as normal, but secret fields are NEVER
+ * required — a blank/omitted secret field means "keep the stored value",
+ * not "clear it", so it's simply absent from the returned `secret`
+ * payload rather than raising MISSING_FIELD.
+ */
+function splitFieldsForEdit(
+  configSchema: ConfigField[],
+  fields: Record<string, unknown>,
+): { config: Record<string, unknown>; secret: Record<string, unknown> } {
+  const config: Record<string, unknown> = {};
+  const secret: Record<string, unknown> = {};
+  for (const field of configSchema) {
+    if (field.secret) {
+      const value = fields[field.key];
+      if (value === undefined || value === null || value === "") continue;
+      secret[field.key] = value;
+      continue;
+    }
+    const value = normalizeAndValidateConfigValue(field, fields[field.key]);
+    if (field.required && (value === undefined || value === null || value === "")) {
+      throw new AppError(400, "MISSING_FIELD", `Missing required field "${field.key}".`);
+    }
+    if (value === undefined) continue;
+    config[field.key] = value;
   }
   return { config, secret };
 }
@@ -173,62 +236,204 @@ export async function createConnection(
             .single();
     if (!error) return toConnection(data as ConnectionRow);
     if (error.code !== "23505") throw new AppError(500, "CREATE_FAILED", error.message);
+    // Two distinct unique constraints can raise 23505 here: the handle
+    // uniqueness this retry loop is built to work around, and
+    // connections_scope_display_name_unique_idx (0029, Item 6.1) on
+    // display_name — a display_name collision won't go away by retrying
+    // with a new handle suffix (display_name doesn't change across
+    // attempts), so it must be surfaced immediately rather than exhausting
+    // every attempt only to report the wrong error (HANDLE_EXHAUSTED).
+    if (error.message.includes("connections_scope_display_name_unique_idx")) {
+      throw new AppError(409, "NAME_TAKEN", `A connection named "${input.displayName}" already exists.`);
+    }
     // Unique violation on handle — try the next suffix.
   }
   throw new AppError(409, "HANDLE_EXHAUSTED", `Could not mint a unique handle from "${base}" after ${MAX_HANDLE_ATTEMPTS} attempts.`);
 }
 
+export type ConnectionUsage = { id: string; name: string; nodeCount: number; cleanPlanCount: number };
+
 /**
- * Config-only update (display name + non-secret manifest fields). Credential
- * rotation (new Vault secret + cred_version bump + /invalidate on the old
- * key) is NOT wired here — that write path doesn't exist yet and is
- * explicitly out of scope for this pass rather than half-built.
+ * Scans every workflow_graphs row in scope for canvas nodes whose
+ * connectionId matches, and reports the CleanPlan bindings on those same
+ * (workflow_id, node_id) pairs. No GIN index on workflow_graphs.graph (see
+ * 0012's header comment) and no structured connectionId column to filter
+ * on server-side, so this parses each row's graph client-side in this
+ * process rather than pushing a jsonb predicate down to Postgres — fine at
+ * this data size (one row per workflow, small node arrays), and it's the
+ * one place this scan lives, reused by both deleteConnection's precheck
+ * and updateConnection's host/database-change warning.
+ */
+export async function listConnectionUsages(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  connectionId: string,
+): Promise<{ workflows: ConnectionUsage[] }> {
+  let workflowsQuery = supabase.from("workflows").select("id, name");
+  workflowsQuery =
+    "orgId" in scope ? workflowsQuery.eq("org_id", scope.orgId) : workflowsQuery.is("org_id", null).eq("owner_id", scope.ownerId);
+  const { data: workflows } = await workflowsQuery;
+  if (!workflows || workflows.length === 0) return { workflows: [] };
+
+  const workflowIds = workflows.map((w) => w.id as string);
+  const { data: graphRows } = await supabase.from("workflow_graphs").select("workflow_id, graph").in("workflow_id", workflowIds);
+
+  const usages: ConnectionUsage[] = [];
+  for (const row of graphRows ?? []) {
+    const parsed = GraphDoc.safeParse(row.graph);
+    if (!parsed.success) continue;
+    const matchingNodeIds = parsed.data.nodes.filter((n) => n.connectionId === connectionId).map((n) => n.id);
+    if (matchingNodeIds.length === 0) continue;
+
+    const { count: cleanPlanCount } = await supabase
+      .from("clean_plans")
+      .select("id", { count: "exact", head: true })
+      .eq("workflow_id", row.workflow_id)
+      .in("node_id", matchingNodeIds);
+
+    const workflow = workflows.find((w) => w.id === row.workflow_id);
+    usages.push({
+      id: row.workflow_id as string,
+      name: (workflow?.name as string | undefined) ?? "Untitled workflow",
+      nodeCount: matchingNodeIds.length,
+      cleanPlanCount: cleanPlanCount ?? 0,
+    });
+  }
+  return { workflows: usages };
+}
+
+type ConnectionRowWithSecret = ConnectionRow & { vault_secret_ref: string };
+
+/**
+ * Full edit flow: config-only changes, credential rotation, or both, in
+ * one call. Unlike createConnection (which requires every configSchema
+ * field up front), edits are partial — splitFieldsForEdit never requires a
+ * secret field, so leaving username/password blank means "keep what's
+ * stored." Every save (even a display-name-only rename) round-trips
+ * through dispatchTest against the connector before anything is persisted
+ * — see the plan's step 5 for why this is unconditional rather than only
+ * gated on config/credential changes.
  */
 export async function updateConnection(
   supabase: SupabaseClient,
   scope: WorkspaceScope,
   id: string,
-  input: { displayName?: string; fields?: Record<string, unknown> },
+  actorUserId: string,
+  input: { displayName?: string; fields?: Record<string, unknown>; confirmed?: boolean },
 ): Promise<Connection> {
-  const existing = await getConnection(supabase, scope, id);
-  if (!existing) throw new AppError(404, "NOT_FOUND", "Connection not found.");
+  let existingQuery = supabase.from("connections").select(`${CONNECTIONS_SELECT}, vault_secret_ref`).eq("id", id);
+  existingQuery = "orgId" in scope ? existingQuery.eq("org_id", scope.orgId) : existingQuery.is("org_id", null).eq("owner_id", scope.ownerId);
+  const { data: existingRow } = await existingQuery.maybeSingle<ConnectionRowWithSecret>();
+  if (!existingRow) throw new AppError(404, "NOT_FOUND", "Connection not found.");
+  const existing = toConnection(existingRow);
 
   const manifest = getConnectorManifest(existing.connectorId);
   if (!manifest) throw new AppError(500, "UNKNOWN_CONNECTOR", `No manifest for connector "${existing.connectorId}".`);
 
-  const patch: Record<string, unknown> = {};
-  if (input.displayName !== undefined) patch.display_name = input.displayName;
-  if (input.fields !== undefined) {
-    const secretKeys = manifest.configSchema.filter((f) => f.secret).map((f) => f.key);
-    for (const key of Object.keys(input.fields)) {
-      if (secretKeys.includes(key)) {
-        throw new AppError(400, "SECRET_ROTATION_NOT_SUPPORTED", `"${key}" is a credential field — rotation isn't available yet.`);
-      }
+  const { config: configPatch, secret: secretPatch } = splitFieldsForEdit(manifest.configSchema, input.fields ?? {});
+  const mergedConfig = { ...existing.config, ...configPatch };
+  const changedConfigKeys = Object.keys(configPatch).filter(
+    (key) => JSON.stringify(configPatch[key]) !== JSON.stringify(existing.config[key]),
+  );
+  const displayNameChanged = input.displayName !== undefined && input.displayName !== existing.displayName;
+
+  if ((changedConfigKeys.includes("host") || changedConfigKeys.includes("database")) && !input.confirmed) {
+    const usages = await listConnectionUsages(supabase, scope, id);
+    if (usages.workflows.length > 0) {
+      throw new AppError(409, "USAGE_WARNING_REQUIRED", "This connection is used by other workflows.", usages);
     }
-    patch.config = { ...existing.config, ...input.fields };
   }
 
-  let query = supabase.from("connections").update(patch).eq("id", id);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data, error } = await query.select(CONNECTIONS_SELECT).single();
-  if (error) throw new AppError(500, "UPDATE_FAILED", error.message);
+  let newVaultRef: string | undefined;
+  if (Object.keys(secretPatch).length > 0) {
+    const { data: mergedRef, error: mergeError } = await supabase.rpc("merge_connector_secret", {
+      p_old_ref: existingRow.vault_secret_ref,
+      p_partial: secretPatch,
+    });
+    if (mergeError || !mergedRef) throw new AppError(500, "VAULT_WRITE_FAILED", mergeError?.message ?? "Failed to update credential.");
+    newVaultRef = mergedRef as string;
+  }
+
+  const credential: CredentialRef = {
+    connectionId: id,
+    credVersion: existing.credVersion,
+    vaultRef: newVaultRef ?? existingRow.vault_secret_ref,
+  };
+  const testResult = await dispatchTest(manifest, credential, mergedConfig);
+  if (!testResult.ok) {
+    if (newVaultRef) await supabase.rpc("delete_connector_secret", { p_ref: newVaultRef });
+    throw new AppError(422, "TEST_FAILED", testResult.error ?? "Connection test failed.");
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (displayNameChanged) patch.display_name = input.displayName;
+  const credentialsRotated = changedConfigKeys.length > 0 || Object.keys(secretPatch).length > 0;
+  if (credentialsRotated) {
+    patch.config = mergedConfig;
+    patch.vault_secret_ref = newVaultRef ?? existingRow.vault_secret_ref;
+    patch.cred_version = existing.credVersion + 1;
+  }
+
+  let updateQuery = supabase.from("connections").update(patch).eq("id", id);
+  updateQuery = "orgId" in scope ? updateQuery.eq("org_id", scope.orgId) : updateQuery.is("org_id", null).eq("owner_id", scope.ownerId);
+  const { data, error } = await updateQuery.select(CONNECTIONS_SELECT).single();
+  if (error) {
+    // Same connections_scope_display_name_unique_idx collision as
+    // createConnection (Item 6.1) — a renamed connection colliding with an
+    // existing one in the same scope.
+    if (error.code === "23505" && error.message.includes("connections_scope_display_name_unique_idx")) {
+      throw new AppError(409, "NAME_TAKEN", `A connection named "${input.displayName}" already exists.`);
+    }
+    throw new AppError(500, "UPDATE_FAILED", error.message);
+  }
+
+  if (credentialsRotated) await dispatchInvalidate(manifest, id);
+
+  const changedFields = [...changedConfigKeys, ...Object.keys(secretPatch), ...(displayNameChanged ? ["displayName"] : [])];
+  if (changedFields.length > 0) {
+    await supabase.rpc("log_connection_audit", {
+      p_connection_id: id,
+      p_action: "connection.updated",
+      p_detail: { changedFields },
+      p_actor_user_id: actorUserId,
+    });
+  }
+
   return toConnection(data as ConnectionRow);
 }
 
 /**
- * Delete-while-referenced guard is NOT implemented: workflow definitions
- * (workflows.definition jsonb, 0006_workflow_definition.sql) store canvas
- * nodes as opaque JSON with no structured/typed reference to a connectionId
- * anywhere in the codebase yet (no canvas node schema exists in
- * @nia/schemas). A guard here would mean scanning that jsonb for a raw UUID
- * substring — fragile, and as likely to produce a false negative (a
- * differently-shaped reference) as a false positive. This is a real gap,
- * not a nicety, and must be built once the canvas node schema exists rather
- * than guessed at now.
+ * Delete-while-referenced is now guarded via listConnectionUsages (scans
+ * workflow_graphs for nodes referencing this connectionId) rather than
+ * left unimplemented — callers must pass confirmed: true once they've
+ * shown the user the usage list to proceed anyway.
  */
-export async function deleteConnection(supabase: SupabaseClient, scope: WorkspaceScope, id: string): Promise<void> {
+export async function deleteConnection(
+  supabase: SupabaseClient,
+  scope: WorkspaceScope,
+  id: string,
+  actorUserId: string,
+  confirmed: boolean,
+): Promise<void> {
   const existing = await getConnection(supabase, scope, id);
   if (!existing) throw new AppError(404, "NOT_FOUND", "Connection not found.");
+
+  if (!confirmed) {
+    const usages = await listConnectionUsages(supabase, scope, id);
+    if (usages.workflows.length > 0) {
+      throw new AppError(409, "IN_USE", "This connection is used by other workflows.", usages);
+    }
+  }
+
+  // Logged before the row is deleted — log_connection_audit looks up
+  // org_id/owner_id from the connections row itself, same as
+  // log_execution_audit, so it must run while the row still exists.
+  await supabase.rpc("log_connection_audit", {
+    p_connection_id: id,
+    p_action: "connection.deleted",
+    p_detail: { connectorId: existing.connectorId, handle: existing.handle },
+    p_actor_user_id: actorUserId,
+  });
 
   let query = supabase.from("connections").delete().eq("id", id);
   query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
@@ -384,6 +589,14 @@ export async function refreshConnectionSchema(
   const schema = await runSchemaRefreshJob({ scope, connectionId: id, triggeredByUserId });
 
   setCachedSchema(credential, schema);
+
+  await supabase.rpc("log_connection_audit", {
+    p_connection_id: id,
+    p_action: "connection.schema_refreshed",
+    p_detail: {},
+    p_actor_user_id: triggeredByUserId,
+  });
+
   return schema;
 }
 

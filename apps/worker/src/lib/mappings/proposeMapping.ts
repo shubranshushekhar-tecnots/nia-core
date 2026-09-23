@@ -1,4 +1,4 @@
-import { ProposalSchema, parseNodeConfig, fieldNamesForSource, type IntrospectResponse, type MappingEntry } from "@nia/schemas";
+import { ProposalSchema, parseNodeConfig, fieldNamesForEntity, type MappingEntry } from "@nia/schemas";
 import { resolveGraph } from "../checks/runWorkflowChecks.js";
 import { resolveConnection } from "../resolveConnection.js";
 import { getSchema } from "../introspection.js";
@@ -25,14 +25,6 @@ export type ProposeMappingErrorKind =
 export type ProposeMappingResult =
   | { ok: true; value: { entries: MappingEntry[] } }
   | { ok: false; error: { kind: ProposeMappingErrorKind; message: string } };
-
-function uniqueFieldNames(schema: IntrospectResponse): string[] {
-  const names = new Set<string>();
-  for (const entity of schema.entities) {
-    for (const field of entity.fields) names.add(field.name);
-  }
-  return Array.from(names).sort();
-}
 
 /**
  * Pure orchestration (aside from its I/O calls, all of which already follow
@@ -81,11 +73,21 @@ export async function proposeMapping(workflowId: string, destNodeId: string, sco
   // Phase 6 Block 0: prefer the source node's persisted entity (scoped field
   // list, no cross-table ambiguity) over the flat union; falls back to the
   // flat union automatically when no entity is persisted or it no longer
-  // resolves against the live schema (see fieldNamesForSource's doc comment).
+  // resolves against the live schema (see fieldNamesForEntity's doc comment).
   const sourceConfig = parseNodeConfig("source", source.config);
   const sourceEntity = !sourceConfig.unrecognized && sourceConfig.type !== "transform" ? sourceConfig.value.entity : undefined;
-  const sourceFields = fieldNamesForSource(sourceSchema.value, sourceEntity).sort();
-  const destFields = uniqueFieldNames(destSchema.value);
+  const sourceFields = fieldNamesForEntity(sourceSchema.value, sourceEntity).sort();
+
+  // Item 2 fix: the destination side used to match against `uniqueFieldNames`
+  // — a flat union of every table in the destination connection — so a
+  // target table's exact-name-match fields could be masked or diluted by
+  // unrelated tables' columns. Scope to the destination node's persisted
+  // `entity` the same way the source side already does; `uniqueFieldNames`
+  // is kept only as the fallback fieldNamesForEntity itself already applies
+  // for legacy nodes with no persisted entity.
+  const destConfig = parseNodeConfig("destination", dest.config);
+  const destEntity = !destConfig.unrecognized && destConfig.type !== "transform" ? destConfig.value.entity : undefined;
+  const destFields = fieldNamesForEntity(destSchema.value, destEntity);
 
   // Follow-up item 3: a destination field whose name exactly matches a
   // source field (case-insensitive) is mapped deterministically, without

@@ -54,3 +54,4 @@ export * from "./niaInference.js";
 export * as niaExprType from "./niaExprType.js";
 export * from "./writeValueCoercion.js";
 export * from "./destinationContract.js";
+export * from "./connectionErrorMessages.js";

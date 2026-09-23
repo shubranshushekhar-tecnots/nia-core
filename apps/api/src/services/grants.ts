@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getConnectorManifest } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
+import { dispatchInvalidate, dispatchTest } from "../lib/connectorDispatch.js";
 import { getConnection } from "./connections.js";
 
 export type WriteGrant = {
@@ -13,10 +15,11 @@ export type WriteGrant = {
   confirmedAt: string | null;
   credVersion: number;
   writeCredentialVaultRef: string | null;
+  writeRoleName: string | null;
 };
 
 const GRANTS_SELECT =
-  "id, connection_id, granted_by_user_id, scope, granted_at, revoked_at, confirmed_at, cred_version, write_credential_vault_ref";
+  "id, connection_id, granted_by_user_id, scope, granted_at, revoked_at, confirmed_at, cred_version, write_credential_vault_ref, write_role_name";
 
 type WriteGrantRow = {
   id: string;
@@ -28,6 +31,7 @@ type WriteGrantRow = {
   confirmed_at: string | null;
   cred_version: number;
   write_credential_vault_ref: string | null;
+  write_role_name: string | null;
 };
 
 function toWriteGrant(row: WriteGrantRow): WriteGrant {
@@ -41,6 +45,7 @@ function toWriteGrant(row: WriteGrantRow): WriteGrant {
     confirmedAt: row.confirmed_at,
     credVersion: row.cred_version,
     writeCredentialVaultRef: row.write_credential_vault_ref,
+    writeRoleName: row.write_role_name,
   };
 }
 
@@ -105,6 +110,22 @@ export async function createWriteGrant(
  * creation. Fails (RPC raises) if the grant is already confirmed or already
  * revoked — 0016's deliberate non-idempotence; rotation is revoke + create
  * a new grant, not re-confirm.
+ *
+ * Before confirm_write_grant is ever called, the freshly-stored credential
+ * is test-connected (same dispatchTest boundary connections.ts's
+ * updateConnection uses — /test only ever accepts a CredentialRef, never
+ * raw creds, so "store in Vault, then test" is the only order available).
+ * The credVersion passed to dispatchTest is a prediction of what
+ * confirm_write_grant's RPC will assign (max existing cred_version for
+ * this connection's write_grants, +1 — see
+ * 0018_write_grant_cred_version_bump.sql) purely so the pool-manager cache
+ * key it produces is shaped consistently; dispatchInvalidate is called
+ * unconditionally right after so that ephemeral test pool never lingers
+ * (connector-supabase's getPool/getWritePool key formats differ only by a
+ * "write:" segment, and evict() strips both by connectionId prefix). A
+ * failed test rolls the Vault write back via delete_connector_secret and
+ * throws before confirm_write_grant is ever reached — an untested (or
+ * bad) credential can never become the confirmed one.
  */
 export async function confirmWriteGrant(
   supabase: SupabaseClient,
@@ -116,14 +137,36 @@ export async function confirmWriteGrant(
   const connection = await getConnection(supabase, scope, connectionId);
   if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
+  const manifest = getConnectorManifest(connection.connectorId);
+  if (!manifest) throw new AppError(500, "UNKNOWN_CONNECTOR", `No manifest for connector "${connection.connectorId}".`);
+
   const { data: vaultRef, error: vaultError } = await supabase.rpc("create_connector_secret", { p_secret: credential });
   if (vaultError || !vaultRef) {
     throw new AppError(500, "VAULT_WRITE_FAILED", vaultError?.message ?? "Failed to store write credential.");
   }
 
+  const { data: existingGrants } = await supabase
+    .from("write_grants")
+    .select("cred_version")
+    .eq("connection_id", connectionId);
+  const predictedCredVersion =
+    (existingGrants ?? []).reduce((max, row) => Math.max(max, (row as { cred_version: number }).cred_version), 0) + 1;
+
+  const testResult = await dispatchTest(
+    manifest,
+    { connectionId, credVersion: predictedCredVersion, vaultRef: vaultRef as string },
+    connection.config,
+  );
+  await dispatchInvalidate(manifest, connectionId);
+  if (!testResult.ok) {
+    await supabase.rpc("delete_connector_secret", { p_ref: vaultRef as string });
+    throw new AppError(422, "WRITE_GRANT_TEST_FAILED", testResult.error ?? "The write credential could not connect.");
+  }
+
   const { data, error } = await supabase.rpc("confirm_write_grant", {
     p_grant_id: grantId,
     p_write_credential_vault_ref: vaultRef as string,
+    p_write_role_name: credential.user,
   });
   if (error) throw new AppError(409, "CONFIRM_FAILED", error.message);
   return toWriteGrant(data as WriteGrantRow);

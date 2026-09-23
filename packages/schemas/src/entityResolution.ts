@@ -80,14 +80,21 @@ export function findPersistedEntity(schema: IntrospectResponse, ref: EntityRef):
 
 /**
  * Phase 6 Block 0: the field-name list a mapping/preview/check consumer
- * should use for a source. When `entity` is given and still resolves against
- * the live schema, this scopes strictly to that one entity's fields — no
- * more flat union losing table context. Otherwise (no persisted entity, or
- * it no longer resolves) it falls back to the pre-Block-0 flat, deduplicated
- * union across every entity, preserving existing behavior for graphs saved
- * before `entity` existed.
+ * should use for an entity. When `entity` is given and still resolves
+ * against the live schema, this scopes strictly to that one entity's fields
+ * — no more flat union losing table context. Otherwise (no persisted
+ * entity, or it no longer resolves) it falls back to the pre-Block-0 flat,
+ * deduplicated union across every entity, preserving existing behavior for
+ * graphs saved before `entity` existed.
+ *
+ * Originally source-only (`fieldNamesForSource`) — generalized here (Item 2
+ * of the write-grant/mapping fix chain, docs/plans if present) so
+ * `proposeMapping.ts`'s destination side can scope the same way the source
+ * side already did, instead of matching against every table in the
+ * destination connection. `fieldNamesForSource` is kept as an alias, same
+ * function, for existing call sites (no behavior change to the source path).
  */
-export function fieldNamesForSource(schema: IntrospectResponse, entity?: EntityRef): string[] {
+export function fieldNamesForEntity(schema: IntrospectResponse, entity?: EntityRef): string[] {
   if (entity) {
     const resolved = findPersistedEntity(schema, entity);
     if (resolved) return resolved.fields.map((f) => f.name);
@@ -101,8 +108,11 @@ export function fieldNamesForSource(schema: IntrospectResponse, entity?: EntityR
   // site, is the user-facing nudge) — this is dev/ops visibility only.
   console.warn(
     entity
-      ? `fieldNamesForSource: persisted entity ${entity.namespace}.${entity.name} does not resolve against the live schema — falling back to the flat field union.`
-      : "fieldNamesForSource: no persisted entity — falling back to the flat field union (legacy pre-Block-0 node).",
+      ? `fieldNamesForEntity: persisted entity ${entity.namespace}.${entity.name} does not resolve against the live schema — falling back to the flat field union.`
+      : "fieldNamesForEntity: no persisted entity — falling back to the flat field union (legacy pre-Block-0 node).",
   );
   return Array.from(new Set(schema.entities.flatMap((e) => e.fields.map((f) => f.name))));
 }
+
+/** @deprecated alias of {@link fieldNamesForEntity} kept for existing source-side call sites. */
+export const fieldNamesForSource = fieldNamesForEntity;

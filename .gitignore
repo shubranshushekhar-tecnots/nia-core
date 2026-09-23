@@ -20,6 +20,8 @@ apps/worker/eval-reports/
 # env
 .env
 .env.local
+.env.production
+**/.env.production
 
 # supabase CLI local state
 supabase/.temp

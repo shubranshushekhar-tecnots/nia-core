@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   buildDestinationContract,
+  fieldNamesForEntity,
   manifestDialect,
   schemaFromIntrospection,
   type CheckResult,
@@ -14,6 +15,7 @@ import {
   type SourceDestConfig,
 } from '@nia/schemas';
 import type { EntityRef, IntrospectResponse } from '@nia/schemas';
+import { defaultDestinationField } from '@/lib/canvas/mappingDefaults';
 import { getConnectionSchema } from '@/lib/api/connectionsClient';
 import { proposeMapping, MappingsApiError } from '@/lib/api/mappingsClient';
 import { previewDestination, PreviewApiError } from '@/lib/api/previewClient';
@@ -142,14 +144,21 @@ function driftedField(value: string, fields: string[]): boolean {
   return value !== '' && fields.length > 0 && !fields.includes(value);
 }
 
-function useEntityFields(connectionId?: string): string[] {
+/**
+ * Item 2 fix: scoped to `entity` (a node's persisted table/collection
+ * selection) via `fieldNamesForEntity` when given, instead of always
+ * flattening every entity in the connection's schema into one union — the
+ * same asymmetry fix applied to `proposeMapping.ts`'s destination side.
+ * `entity` undefined (no persisted selection yet, e.g. a legacy node or a
+ * brand-new "+ Create new…" table) falls back to `fieldNamesForEntity`'s
+ * own flat-union behavior, unchanged from before this fix.
+ */
+function useEntityFields(connectionId?: string, entity?: EntityRef): string[] {
   const schema = useEntitySchema(connectionId);
   return useMemo(() => {
     if (!schema) return [];
-    const set = new Set<string>();
-    for (const entity of schema.entities) for (const f of entity.fields) set.add(f.name);
-    return Array.from(set).sort();
-  }, [schema]);
+    return fieldNamesForEntity(schema, entity).slice().sort();
+  }, [schema, entity]);
 }
 
 /** Shares the `['connection-schema', connectionId]` query (and its react-query cache entry) with useEntityFields above — this just returns the raw IntrospectResponse instead of a flattened field-name union, since the contract preview below needs one specific entity's typed fields, not a cross-entity name union. */
@@ -207,9 +216,9 @@ export default function MappingEditor({
   onChange: (next: SourceDestConfig) => void;
 }) {
   const mapping = config.mapping ?? emptyMapping;
-  const rawSourceFields = useEntityFields(sourceConnectionId);
+  const rawSourceFields = useEntityFields(sourceConnectionId, sourceEntity);
   const sourceFields = sourceFieldsOverride ?? rawSourceFields;
-  const destFields = useEntityFields(destConnectionId);
+  const destFields = useEntityFields(destConnectionId, config.entity);
 
   const [proposing, setProposing] = useState(false);
   const [proposeError, setProposeError] = useState<string | undefined>(undefined);
@@ -234,7 +243,8 @@ export default function MappingEditor({
   }
 
   function addEntry() {
-    updateEntries([...mapping.entries, { from: sourceFields[0] ?? '', to: destFields[0] ?? '' }]);
+    const from = sourceFields[0] ?? '';
+    updateEntries([...mapping.entries, { from, to: defaultDestinationField(from, destFields, mapping.entries) }]);
   }
 
   /** Schema layer, Part 5 — snapshots the source's current live field list alongside the approval, so every run can later diff against it to detect new source columns (nodeConfig.ts's FieldMapping.sourceColumnsAtApproval doc comment). */

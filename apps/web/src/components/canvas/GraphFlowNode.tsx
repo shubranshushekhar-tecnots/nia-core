@@ -2,6 +2,7 @@
 
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { CanvasNode } from '@/lib/canvas/mapping';
+import { useCanvasStore } from '@/lib/canvas/store';
 import { getConnectorIcon } from './icons';
 
 // One component for all 3 GraphNodeTypes (source/transform/destination) —
@@ -24,7 +25,9 @@ export const KIND_LABEL: Record<CanvasNode['data']['graphNodeType'], string> = {
 // NodeConfigPanel's header ribbon (NodeDrawer.tsx's onDelete), which is
 // already reachable the moment a node is selected. useReactFlow's
 // deleteElements is therefore no longer needed here.
-export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>) {
+export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNode>) {
+  const setContextMenu = useCanvasStore((s) => s.setContextMenu);
+  const hasConnection = Boolean(data.resolved && data.connectionId);
   const color = data.resolved ? KIND_COLOR[data.graphNodeType] : 'var(--warn)';
   // Handle ring color is a simpler 2-bucket scheme than KIND_COLOR's 3
   // icon colors — source vs. everything downstream of it.
@@ -36,9 +39,26 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
   const isDiffRemoved = diffStatus === 'removed';
   const Icon = getConnectorIcon(data.manifestId, data.graphNodeType);
 
+  const openMenuAt = (x: number, y: number) => {
+    setContextMenu({ x, y, nodeId: id, graphNodeType: data.graphNodeType, hasConnection });
+  };
+
   return (
     <div
       title={isGhost ? 'Proposed by Copilot — read-only until applied' : (data.ghostDiffLabel ?? data.unknownReason)}
+      tabIndex={isGhost ? undefined : 0}
+      onKeyDown={
+        isGhost
+          ? undefined
+          : (e) => {
+              if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+                e.preventDefault();
+                e.stopPropagation();
+                const rect = e.currentTarget.getBoundingClientRect();
+                openMenuAt(rect.left, rect.bottom);
+              }
+            }
+      }
       style={{
         position: 'relative',
         width: 196,
@@ -62,6 +82,41 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
         userSelect: 'none',
       }}
     >
+      {!isGhost && (
+        <button
+          type="button"
+          aria-haspopup="menu"
+          aria-label="Node actions"
+          title="Node actions"
+          className="nodrag"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const rect = e.currentTarget.getBoundingClientRect();
+            openMenuAt(rect.left, rect.bottom);
+          }}
+          style={{
+            position: 'absolute',
+            top: 4,
+            right: 4,
+            width: 18,
+            height: 18,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--ink4)',
+            cursor: 'pointer',
+            borderRadius: 4,
+            fontSize: 13,
+            lineHeight: 1,
+            padding: 0,
+          }}
+        >
+          ⋯
+        </button>
+      )}
       {showTargetHandle && (
         <Handle type="target" position={Position.Left} style={{ width: 8, height: 8, background: 'var(--surface)', border: `1.5px solid ${handleColor}` }} />
       )}
@@ -73,7 +128,7 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
         <span style={{ fontSize: 12, color: 'var(--ink3)' }}>{KIND_LABEL[data.graphNodeType]}</span>
         {data.writeLocked && (
           <span
-            title="Requires write grant — Phase 6"
+            title="Write access requires a confirmed write grant"
             style={{
               marginLeft: 4,
               fontSize: 10,
@@ -85,7 +140,7 @@ export default function GraphFlowNode({ data, selected }: NodeProps<CanvasNode>)
               padding: '1px 6px',
             }}
           >
-            Locked
+            Needs write grant
           </span>
         )}
         {isGhost && (

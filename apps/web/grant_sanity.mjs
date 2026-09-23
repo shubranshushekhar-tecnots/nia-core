@@ -80,8 +80,8 @@ if (grantBtnCount === 0) {
 }
 
 // Check the write verb (insert) is no longer locked.
-const lockedBadges = await page.getByText("Locked", { exact: true }).count();
-console.log("STEP: remaining 'Locked' badges in drawer:", lockedBadges);
+const lockedBadges = await page.getByText("Needs write grant", { exact: true }).count();
+console.log("STEP: remaining 'Needs write grant' badges in drawer:", lockedBadges);
 
 // Close the drawer, then run checks + run the workflow for real.
 await page.keyboard.press("Escape").catch(() => {});

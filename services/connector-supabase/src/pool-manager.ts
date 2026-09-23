@@ -45,16 +45,46 @@ const IDLE_EVICT_MS = 5 * 60 * 1000;
 type Entry = { poolPromise: Promise<pg.Pool>; lastUsed: number };
 const pools = new Map<string, Entry>();
 
+// Item 4.1 fix (fix-chain plan): TLS used to default OFF (`config.ssl === true`)
+// — safe for the mysql/mongo-style dev-container pattern this was copied from,
+// but wrong for Postgres-family targets, where a real hosted instance
+// (Supabase, Neon, ...) both supports and typically requires TLS, and a
+// silent plaintext fallback on a typo'd/missing `ssl` field is a real data-
+// exposure risk. Flip the default to ON, but keep local/sandbox hosts
+// (docker-compose dev DBs, localhost) defaulting to OFF so the existing dev
+// workflow (docker/dev-postgres-init.sql, plaintext by design) keeps working
+// without every developer needing to know to untick a box. Item 4A: hosts
+// matching a known managed-Postgres provider force TLS on regardless of the
+// stored `ssl` value — reproducing a real deployment "TLS off but pointed at
+// Neon/Supabase" typo should not be honored as silently-broken plaintext.
+//
+// Sandbox detection also treats any bare (dot-less) hostname as local/sandbox
+// — this is how docker-compose service-name hosts look (e.g. this repo's own
+// `dev-postgres`, see docker-compose.yml/dispatch-smoke.ts), and no real
+// public DNS name is ever a single label. Without this, the existing
+// plaintext docker-compose sandbox flow would silently start requesting TLS
+// against a container that never speaks it.
+const SANDBOX_HOST_PATTERN = /^(localhost|127\.0\.0\.1|host\.docker\.internal)$|\.internal$/i;
+const FORCED_TLS_HOST_PATTERN = /(\.|^)(neon\.tech|supabase\.co|pooler\.supabase\.com)$/i;
+
+function resolveSsl(host: string, explicit: unknown): boolean {
+  if (FORCED_TLS_HOST_PATTERN.test(host)) return true;
+  if (explicit === true) return true;
+  if (explicit === false) return false;
+  const isSandboxHost = SANDBOX_HOST_PATTERN.test(host) || !host.includes(".");
+  return !isSandboxHost;
+}
+
 function parsePostgresConfig(
   config: ConnectorConfig,
 ): { host: string; port: number; database: string; ssl: boolean } {
   const host = config.host;
   const port = Number(config.port);
   const database = config.database;
-  const ssl = config.ssl === true;
   if (typeof host !== "string" || !host) throw new Error("config.host must be a non-empty string");
   if (!Number.isInteger(port) || port <= 0) throw new Error("config.port must be a positive integer");
   if (typeof database !== "string" || !database) throw new Error("config.database must be a non-empty string");
+  const ssl = resolveSsl(host, config.ssl);
   return { host, port, database, ssl };
 }
 

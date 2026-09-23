@@ -1,0 +1,6 @@
+# Intentionally empty. apps/api's and apps/worker's Dockerfiles use `pnpm
+# deploy`, which also re-packages this workspace dependency (materializing
+# it into the deployed package's node_modules) using the same file-
+# selection rules. Without this file, `pnpm deploy` falls back to the root
+# .gitignore's blanket `dist/` rule and would ship this package without
+# its build output. See apps/api/.npmignore's longer comment.

@@ -19,6 +19,7 @@ import {
   refreshConnectionSchema,
   getConnectionProfile,
   refreshConnectionProfile,
+  listConnectionUsages,
 } from "../services/connections.js";
 
 export const connectionsRouter: ExpressRouter = Router();
@@ -67,6 +68,7 @@ connectionsRouter.post(
 const updateBodySchema = z.object({
   displayName: z.string().min(1).optional(),
   fields: z.record(z.string(), z.unknown()).optional(),
+  confirmed: z.boolean().optional(),
 });
 
 connectionsRouter.patch(
@@ -75,19 +77,38 @@ connectionsRouter.patch(
   validate({ params: connectionParamsSchema, body: updateBodySchema }),
   asyncHandler(async (req, res) => {
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await updateConnection(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body);
+    const data = await updateConnection(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId, req.body);
     res.json(data);
   }),
 );
 
+const deleteQuerySchema = z.object({
+  confirmed: z
+    .enum(["true", "false"])
+    .optional()
+    .default("false")
+    .transform((v) => v === "true"),
+});
+
 connectionsRouter.delete(
   "/:id",
   requireCapability("connections.delete"),
+  validate({ params: connectionParamsSchema, query: deleteQuerySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const confirmed = (req.query as unknown as z.infer<typeof deleteQuerySchema>).confirmed;
+    await deleteConnection(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId, confirmed);
+    res.status(204).end();
+  }),
+);
+
+connectionsRouter.get(
+  "/:id/usages",
   validate({ params: connectionParamsSchema }),
   asyncHandler(async (req, res) => {
     if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    await deleteConnection(req.supabase, scopeFromActor(req.actor), req.params.id!);
-    res.status(204).end();
+    const data = await listConnectionUsages(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    res.json(data);
   }),
 );
 

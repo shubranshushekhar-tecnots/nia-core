@@ -200,6 +200,7 @@ app.post("/write", async (req): Promise<WriteResponse> => {
       grantId: body.context.grantId,
       runId: body.context.runId,
       entity: body.context.entity,
+      grantNamespace: body.context.grantNamespace,
       columns: body.context.columns,
       mode: body.context.mode,
       stagingEntity: body.context.stagingEntity,
@@ -214,7 +215,7 @@ app.post("/write", async (req): Promise<WriteResponse> => {
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
-    body.entity.namespace,
+    body.context.grantNamespace,
   );
   if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
 
@@ -310,6 +311,7 @@ app.post("/stage", async (req): Promise<StageResponse> => {
       grantId: body.context.grantId,
       runId: body.context.runId,
       entity: body.context.entity,
+      grantNamespace: body.context.grantNamespace,
       columns: body.context.columns,
       mode: body.context.mode,
       stagingEntity: body.context.stagingEntity,
@@ -344,7 +346,7 @@ app.post("/stage", async (req): Promise<StageResponse> => {
     throw new Error("request quarantineEntity does not match the signed context's quarantineEntity");
   }
 
-  const grantActive = await verifyActiveWriteGrant(body.context.grantId, body.context.connectionId, body.entity.namespace);
+  const grantActive = await verifyActiveWriteGrant(body.context.grantId, body.context.connectionId, body.context.grantNamespace);
   if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
 
   const pool = await getWritePool(body.credential, body.config);
@@ -548,6 +550,7 @@ app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
       grantId: body.context.grantId,
       runId: body.context.runId,
       entity: body.context.entity,
+      grantNamespace: body.context.grantNamespace,
       columns: body.context.columns,
       mode: body.context.mode,
       stagingEntity: body.context.stagingEntity,
@@ -562,7 +565,7 @@ app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
-    body.entity.namespace,
+    body.context.grantNamespace,
   );
   if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
 

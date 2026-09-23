@@ -7,6 +7,12 @@ import { createClient } from "@/lib/supabase/server";
 
 export type ActionState = {
   error?: string;
+  // Item 5 (fix-chain plan): raw driver/connector text behind a "Show
+  // details" toggle, set alongside a friendlier `error` summary by actions
+  // that surface connector test/refresh errors (see connections/actions.ts's
+  // friendlyApiErrorMessage). Additive/optional so auth actions (which never
+  // set it) are unaffected.
+  errorDetails?: string;
   fieldErrors?: Record<string, string[]>;
   success?: boolean;
 } | null;

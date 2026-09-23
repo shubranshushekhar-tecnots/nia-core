@@ -20,6 +20,30 @@ function alterEmployeesSalaryColumn(from: string, to: string) {
 }
 
 /**
+ * Bug report item 2/3/5's e2e check needs a genuinely empty Postgres
+ * database to prove the Table field resolves to an empty (not
+ * stuck-loading) list. dev-postgres-init.sql's `sandbox` database is real
+ * seed data (sandbox_items/employees), not empty, so this provisions a
+ * second, always-empty database on the same container instead of touching
+ * that seed. `nia_ro` (docker/dev-postgres-init.sql) is a cluster-wide
+ * role, not per-database, so it only needs GRANT CONNECT/USAGE on the new
+ * database, not re-creating. Checks pg_database first (Postgres has no
+ * `CREATE DATABASE IF NOT EXISTS`) so this is idempotent/self-healing
+ * against a fresh volume or CI run, same convention as
+ * alterEmployeesSalaryColumn above.
+ */
+function ensureEmptyPostgresDatabase() {
+  const exists = execSync(`docker exec nia-core-dev-postgres-1 psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='empty_e2e'"`)
+    .toString()
+    .trim();
+  if (exists === '1') return;
+  execSync(`docker exec nia-core-dev-postgres-1 psql -U postgres -c "CREATE DATABASE empty_e2e"`);
+  execSync(
+    `docker exec nia-core-dev-postgres-1 psql -U postgres -d empty_e2e -c "GRANT CONNECT ON DATABASE empty_e2e TO nia_ro; GRANT USAGE ON SCHEMA public TO nia_ro; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT ON TABLES TO nia_ro;"`,
+  );
+}
+
+/**
  * Navigates via real UI links (project list -> project detail -> workflow),
  * not a hardcoded /app/workflows/:id URL — workflow ids are gen_random_uuid()
  * at seed time, so the id is only knowable by actually clicking through.
@@ -119,6 +143,20 @@ async function dragRailSectionItemOnto(page: Page, section: string, label: strin
   const surface = page.getByTestId('canvas-surface');
   await surface.dispatchEvent('dragover', { dataTransfer, clientX: point.x, clientY: point.y });
   await surface.dispatchEvent('drop', { dataTransfer, clientX: point.x, clientY: point.y });
+}
+
+/**
+ * Same section-scoping as dragRailSectionItemOnto, but for a plain click —
+ * a not-yet-connected connector's rail row (buildEntries' zero-connections
+ * branch) isn't draggable at all, and clicking it directly opens
+ * AddConnectionDialog (NodesRail.tsx). A manifest with both etl_source and
+ * etl_sink (e.g. postgres) renders this same "not connected" label once per
+ * section, so this needs the same strict-mode scoping.
+ */
+async function clickRailSectionItem(page: Page, section: string, label: string) {
+  const rail = page.getByTestId('nodes-rail');
+  const sectionContainer = rail.getByText(section, { exact: true }).locator('..');
+  await sectionContainer.getByText(label, { exact: true }).click();
 }
 
 /**
@@ -1143,5 +1181,442 @@ test.describe('canvas: palette purity — zero-connection persona', () => {
     // Only one draggable entry in the whole rail — the generic Transform
     // node. No hardcoded tool fills the gap left by zero connections.
     await expect(rail.locator('[draggable="true"]')).toHaveCount(1);
+  });
+});
+
+/**
+ * Bug report's closing e2e check — a destination node for a postgres
+ * connection pointing at a genuinely empty database (packages/schemas/src/
+ * connectors/postgres.ts shares connector-supabase's service, so it
+ * exercises the exact same introspect/privilege/RLS path as the Supabase
+ * bug reports above, minus RLS since a fresh empty database has none).
+ * Covers, in order: item 1 (verb follows role — only "insert" offered,
+ * never "read"), item 2 (empty table list renders as empty, not stuck on
+ * "Loading tables…"), item 3 (the new-table picker + column preview).
+ *
+ * Own describe block (not the shared serial fixture above) since this
+ * needs to install a connector and mint a brand-new connection — state no
+ * other test in this file depends on, so a fresh project/workflow (same
+ * pattern as the zero-connection persona test above) keeps it isolated.
+ * Uses canvasA (not canvasB/C) because it needs a real, already-installed
+ * mysql source connection to pair against.
+ */
+test.describe('canvas: destination drawer — empty-database postgres connection', () => {
+  test.use({ storageState: personas.canvasA.storageStatePath });
+
+  test('a postgres destination pointed at an empty database offers only "insert", an empty (not stuck-loading) table list, the new-table option, and a mapped column preview', async ({ page }) => {
+    ensureEmptyPostgresDatabase();
+
+    // Install the PostgreSQL connector for this org if it isn't already —
+    // idempotent across reruns: ConnectionsClient.tsx's REAL_AVAILABLE
+    // filters out connectors already in `installs`, so the Install button
+    // simply won't exist once this has run once for canvasA's org.
+    await page.goto('/app/connections');
+    const installBtn = page.getByRole('button', { name: 'Install PostgreSQL' });
+    if (await installBtn.isVisible().catch(() => false)) {
+      await installBtn.click();
+      await expect(installBtn).not.toBeVisible();
+    }
+
+    // Fresh project/workflow, same isolation reasoning as the
+    // zero-connection persona test above — this test mints a real
+    // connection and shouldn't share state with the shared serial fixture.
+    const projectName = `Empty DB E2E ${Date.now()}`;
+    const workflowName = 'Empty DB E2E Check';
+    await page.goto('/app');
+    // Unlike the zero-connection persona test above, canvasA already has a
+    // project/workflow (dev-bootstrap.ts seeding), so the dashboard shows the
+    // "Continue" card instead of an empty-state "New workflow" CTA — the
+    // create flow has to go through the sidebar's "New" dropdown
+    // (Sidebar.tsx) instead of a page-level button.
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await page.getByRole('button', { name: 'New project', exact: true }).click();
+    await page.locator('#project-name').fill(projectName);
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
+
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await page.getByRole('button', { name: 'New workflow', exact: true }).click();
+    await page.locator('#workflow-project').selectOption({ label: projectName });
+    await page.locator('#workflow-name').fill(workflowName);
+    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await gotoWorkflow(page, projectName, workflowName);
+
+    // mysql source first — its "employees" table is what the mapping /
+    // column preview below reads from.
+    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+
+    // PostgreSQL is installed but not yet connected for this org — clicking
+    // its "not connected" Destinations row opens AddConnectionDialog
+    // directly (NodesRail.tsx's buildEntries + onClick handler).
+    await clickRailSectionItem(page, 'Destinations', 'PostgreSQL');
+    await expect(page.getByText('Add PostgreSQL connection')).toBeVisible();
+    await page.locator('#connection-display-name').fill('Empty DB E2E');
+    await page.locator('#connection-field-host').fill('dev-postgres');
+    await page.locator('#connection-field-port').fill('5432');
+    await page.locator('#connection-field-database').fill('empty_e2e');
+    // Bug 4's fix defaults "Use TLS" to checked; this local sandbox
+    // container doesn't speak TLS, so it must be explicitly unchecked.
+    await page.locator('#connection-field-ssl').uncheck();
+    await page.locator('#connection-field-user').fill('nia_ro');
+    await page.locator('#connection-field-password').fill('nia_ro_pw');
+    await page.getByRole('button', { name: 'Add connection' }).click();
+    await expect(page.getByText('Add PostgreSQL connection')).not.toBeVisible();
+
+    // Now connected — the same rail row becomes a draggable entry labeled
+    // with the connection's own displayName (buildEntries' connected branch).
+    await dragRailSectionItemOnto(page, 'Destinations', 'Empty DB E2E', { x: 800, y: 200 });
+    await connectNodes(page, 0, 1);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    // Source node first: MappingEditor's contract preview needs the source
+    // node's own persisted entity (upstream.ts's findUpstreamSource reads
+    // it straight off the source node's config, no inference) — select
+    // "employees" so a typed schema is available to build a contract from.
+    await page.locator('.react-flow__node').nth(0).click();
+    const sourceDrawer = page.getByTestId('node-drawer');
+    await page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema'));
+    // mysql entities are namespaced by database ("sandbox.employees"), not
+    // by bare table name — selectOption's `label` only does exact string
+    // matches, so find the option's real value via a text-substring match
+    // instead of assuming there's no namespace prefix.
+    const sourceTableSelect = sourceDrawer.locator('select').first();
+    const employeesValue = await sourceTableSelect.locator('option', { hasText: 'employees' }).getAttribute('value');
+    await sourceTableSelect.selectOption(employeesValue!);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    // The floating config panel (NodeConfigPanel.tsx) is still open for the
+    // just-configured source node and physically overlaps the destination
+    // node — deselect via a pane click before selecting node 1, same fix as
+    // the sibling "run" test below.
+    await page.locator('.react-flow__pane').click({ position: { x: 300, y: 500 } });
+
+    // Destination node: item 1 + item 2 assertions, on the default "Setup" tab.
+    await page.locator('.react-flow__node').nth(1).click();
+    const drawer = page.getByTestId('node-drawer');
+    await page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema'));
+
+    // Item 1 — verb follows role: postgres's manifest offers ["read",
+    // "insert"], but a destination node must only ever offer the write verb.
+    const verbGroup = drawer.getByRole('radiogroup', { name: 'Verb' });
+    await expect(verbGroup.locator('label')).toHaveCount(1);
+    await expect(verbGroup.locator('label')).toHaveText('insert');
+    await expect(verbGroup.getByText('read', { exact: true })).toHaveCount(0);
+
+    // Item 2 — an empty database's table list must resolve to a real,
+    // interactive picker (not stuck on "Loading tables…"), with nothing
+    // invented in an empty list: just the placeholder + "+ Create new…".
+    await expect(drawer.getByText('Loading tables…')).not.toBeVisible();
+    const tableSelect = drawer.locator('select');
+    await expect(tableSelect).toHaveCount(1);
+    await expect(tableSelect.locator('option')).toHaveCount(2);
+    await expect(tableSelect.locator('option').first()).toHaveText('Select a table…');
+    await expect(tableSelect.locator('option').last()).toHaveText('+ Create new…');
+
+    // Item 3 — the new-table picker: selecting "+ Create new…" swaps the
+    // <select> for the namespace/name inputs (NewTargetInputs).
+    await tableSelect.selectOption('__new__');
+    await expect(drawer.getByPlaceholder('namespace')).toBeVisible();
+    await drawer.getByPlaceholder('namespace').fill('public');
+    await drawer.getByPlaceholder('new table name').fill('new_records');
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    // Item 3, column preview: map the source's unique "salary" field onto
+    // the not-yet-existing table's "salary" column, mark it the upsert key,
+    // and confirm the destination-contract preview renders it.
+    await drawer.getByRole('button', { name: 'Field mapping' }).click();
+    await drawer.getByRole('button', { name: '+ Entry' }).click();
+    // Table select/NewTargetInputs only render on the Setup tab
+    // (NodeDrawer.tsx's `(!showTabs || activeTab === 'setup')` guard), so
+    // on the Field mapping tab the only <select> left is this entry's own
+    // "from" field — destFields is [] (empty database), so its "to" side
+    // is a plain text input, not a <select> (MappingEditor.tsx's FieldSelect).
+    const fromSelect = drawer.locator('select');
+    await expect(fromSelect).toHaveCount(1);
+    await fromSelect.selectOption('salary');
+    await drawer.getByPlaceholder('dest field').fill('salary');
+
+    // Scope to the <label> wrapping the "salary" checkbox specifically —
+    // getByText('salary', exact) would otherwise strict-mode-violate on
+    // both the <label> and its inner <span>, since the checkbox itself
+    // contributes no text.
+    await drawer.getByText('Upsert keys').locator('..').locator('label', { hasText: 'salary' }).locator('input[type="checkbox"]').check();
+
+    await expect(drawer.getByText('Map at least one field, pick a destination table, and select an upsert key to preview the contract.')).not.toBeVisible();
+    const contractTable = drawer.locator('table');
+    await expect(contractTable).toBeVisible();
+    await expect(contractTable.locator('th')).toHaveText(['Source', 'Destination', 'Type', 'Fidelity', 'Key']);
+    await expect(contractTable.locator('tbody tr')).toHaveCount(1);
+    const contractRow = contractTable.locator('tbody tr').first();
+    await expect(contractRow.locator('td').nth(0)).toHaveText('salary');
+    await expect(contractRow.locator('td').nth(1)).toContainText('salary');
+  });
+
+  /**
+   * Item 7 (fix-chain plan) — end-to-end coverage for the empty-postgres-
+   * destination flow, going all the way through to a real run and a
+   * real row landing in the database (the sibling test above stops at the
+   * mapping/contract preview and never runs anything).
+   *
+   * Two deviations from the plan's literal Item 7 text, both discovered via
+   * code trace (not guessed) before writing this test:
+   *   1. "Click Propose mapping, wait for entries to populate" doesn't apply
+   *      to a genuinely brand-new destination table: proposeMapping.ts's
+   *      destFields resolves to [] for a table with no columns yet, so its
+   *      early-return ("every destination field already resolved
+   *      deterministically") fires vacuously and Propose is a silent no-op.
+   *      Uses one manual "+ Entry" instead, same as the sibling test above.
+   *   2. writeDispatch.ts's dispatchWrite() unconditionally calls
+   *      resolveWriteGrant() before any destination write, for every
+   *      connector, not only Supabase — so a fresh connection with no
+   *      confirmed write grant would fail at the worker on Run, not in the
+   *      UI. This test drives NodeDrawer.tsx's GrantAccessPanel for real:
+   *      it extracts the generated CREATE ROLE/GRANT statement text out of
+   *      the panel's own <pre> (the same text a real user would copy-paste)
+   *      and executes it verbatim via docker exec, then confirms access —
+   *      not something the plan's Item 7 text mentions, but structurally
+   *      required by the codebase for the write to actually succeed.
+   *
+   * Own project/workflow/connection/table name (not the sibling test's),
+   * since migration 0029 (Item 6.1) enforces per-org connection-name
+   * uniqueness and this shouldn't assume test execution order against the
+   * sibling test above for either the PostgreSQL install state or any
+   * already-existing "Empty DB E2E" connection.
+   */
+  test('an empty-database postgres destination can be granted write access, approved, and actually run — the table and rows land for real', async ({ page }) => {
+    ensureEmptyPostgresDatabase();
+
+    await page.goto('/app/connections');
+    const installBtn = page.getByRole('button', { name: 'Install PostgreSQL' });
+    if (await installBtn.isVisible().catch(() => false)) {
+      await installBtn.click();
+      await expect(installBtn).not.toBeVisible();
+    }
+
+    const projectName = `Empty DB E2E Run ${Date.now()}`;
+    const workflowName = 'Empty DB E2E Run Check';
+    await page.goto('/app');
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await page.getByRole('button', { name: 'New project', exact: true }).click();
+    await page.locator('#project-name').fill(projectName);
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
+
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await page.getByRole('button', { name: 'New workflow', exact: true }).click();
+    await page.locator('#workflow-project').selectOption({ label: projectName });
+    await page.locator('#workflow-name').fill(workflowName);
+    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await gotoWorkflow(page, projectName, workflowName);
+
+    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+
+    // PostgreSQL may already be connected for canvasA's org (the sibling
+    // test above, or a prior run) — buildEntries' zero-connections branch
+    // ("PostgreSQL", unconnected) and its one-or-more-connections branch
+    // ("Add PostgreSQL connection") are mutually exclusive, so probe for
+    // whichever is actually present instead of assuming execution order.
+    // Scoped to the Destinations section specifically (not the whole rail):
+    // PostgreSQL's manifest has both etl_source and etl_sink, so its
+    // unconnected placeholder row renders under BOTH Sources and
+    // Destinations — an unscoped exact-text locator would strict-mode-
+    // violate across the two, and isVisible()'s .catch(() => false) would
+    // silently swallow that into a wrong "false" instead of surfacing it.
+    const destinationsSection = page.getByTestId('nodes-rail').getByText('Destinations', { exact: true }).locator('..');
+    const unconnectedRow = destinationsSection.getByText('PostgreSQL', { exact: true });
+    if (await unconnectedRow.isVisible().catch(() => false)) {
+      await clickRailSectionItem(page, 'Destinations', 'PostgreSQL');
+    } else {
+      // The rail's add-another-connection row visibly renders as just "Add
+      // connection" (NodesRail.tsx), shared verbatim across every connector
+      // in the section — its connector-specific `title` attribute (not its
+      // text) is what's actually unique, so target that instead of
+      // clickRailSectionItem's exact-text match.
+      await destinationsSection.locator('[title="Add another PostgreSQL connection"]').click();
+    }
+    await expect(page.getByText('Add PostgreSQL connection')).toBeVisible();
+    const connectionName = `Empty DB E2E Run ${Date.now()}`;
+    await page.locator('#connection-display-name').fill(connectionName);
+    await page.locator('#connection-field-host').fill('dev-postgres');
+    await page.locator('#connection-field-port').fill('5432');
+    await page.locator('#connection-field-database').fill('empty_e2e');
+    await page.locator('#connection-field-ssl').uncheck();
+    await page.locator('#connection-field-user').fill('nia_ro');
+    await page.locator('#connection-field-password').fill('nia_ro_pw');
+    await page.getByRole('button', { name: 'Add connection' }).click();
+    await expect(page.getByText('Add PostgreSQL connection')).not.toBeVisible();
+
+    await dragRailSectionItemOnto(page, 'Destinations', connectionName, { x: 800, y: 200 });
+    await connectNodes(page, 0, 1);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await page.locator('.react-flow__node').nth(0).click();
+    await page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema'));
+    const sourceDrawer = page.getByTestId('node-drawer');
+    const sourceTableSelect = sourceDrawer.locator('select').first();
+    const employeesValue = await sourceTableSelect.locator('option', { hasText: 'employees' }).getAttribute('value');
+    await sourceTableSelect.selectOption(employeesValue!);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    // The floating config panel (NodeConfigPanel.tsx, right:12/width:360,
+    // absolutely positioned over the canvas surface) is still open for the
+    // just-configured source node and physically overlaps the destination
+    // node's (800, 200) drop point at this viewport size — deselect via a
+    // pane click (FlowCanvas.tsx's onPaneClick) before selecting node 1, or
+    // the click on node 1 is intercepted by node 0's own panel.
+    await page.locator('.react-flow__pane').click({ position: { x: 300, y: 500 } });
+    await page.locator('.react-flow__node').nth(1).click();
+    const drawer = page.getByTestId('node-drawer');
+    await page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema'));
+
+    const tableSelect = drawer.locator('select');
+    await tableSelect.selectOption('__new__');
+    await drawer.getByPlaceholder('namespace').fill('public');
+    const tableName = `new_records_run_${Date.now()}`;
+    await drawer.getByPlaceholder('new table name').fill(tableName);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    // GrantAccessPanel (NodeDrawer.tsx) renders right here, on the Setup
+    // tab, once `namespace` is set and no confirmed grant covers it yet —
+    // this fresh connection has none. Mint it, run the generated DDL for
+    // real against the sandbox container, then confirm.
+    await expect(drawer.getByText('Grant write access to "public"')).toBeVisible();
+    await drawer.getByRole('button', { name: 'Grant write access' }).click();
+    const ddl = await drawer.locator('pre').innerText();
+    execSync(`docker exec -i nia-core-dev-postgres-1 psql -U postgres -d empty_e2e`, { input: ddl });
+    await drawer.getByRole('button', { name: "I've run this — confirm access" }).click();
+    // GrantAccessPanel's own "Confirmed." text is unreachable in practice:
+    // the confirm invalidates the grants query, and the parent (NodeDrawer's
+    // pendingGrant/activeGrant switch) immediately swaps to RevokeAccessPanel
+    // once the refetch resolves — assert on its "Write access granted" text.
+    await expect(drawer.getByText('Write access granted')).toBeVisible({ timeout: 10_000 });
+
+    // Manual "+ Entry" (see the test's own doc comment above for why
+    // "Propose mapping" would be a no-op here), mark the upsert key,
+    // confirm the contract preview.
+    await drawer.getByRole('button', { name: 'Field mapping' }).click();
+    await drawer.getByRole('button', { name: '+ Entry' }).click();
+    const fromSelect = drawer.locator('select');
+    await expect(fromSelect).toHaveCount(1);
+    await fromSelect.selectOption('salary');
+    await drawer.getByPlaceholder('dest field').fill('salary');
+    await drawer.getByText('Upsert keys').locator('..').locator('label', { hasText: 'salary' }).locator('input[type="checkbox"]').check();
+
+    const contractTable = drawer.locator('table');
+    await expect(contractTable).toBeVisible();
+    await expect(contractTable.locator('th')).toHaveText(['Source', 'Destination', 'Type', 'Fidelity', 'Key']);
+    await expect(contractTable.locator('tbody tr')).toHaveCount(1);
+
+    const approved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
+    await drawer.getByRole('button', { name: 'Approve' }).click();
+    await expect(drawer.getByText('Approved', { exact: true })).toBeVisible();
+    await approved;
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await page.getByRole('button', { name: 'Run checks' }).click();
+    const pill = page.getByTestId('checks-dock-pill');
+    await expect(pill).toContainText('All checks passed', { timeout: 15_000 });
+
+    const runBtn = page.getByRole('button', { name: 'Run', exact: true });
+    await expect(runBtn).toBeEnabled();
+    await runBtn.click();
+
+    await expect(page.getByText('Complete', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/row.*written/)).toBeVisible();
+
+    // The deliverable itself: assert directly against the database, not
+    // just the UI's say-so — the table now exists with the mapped column,
+    // and the source's row(s) actually arrived.
+    const columnCheck = execSync(
+      `docker exec nia-core-dev-postgres-1 psql -U postgres -d empty_e2e -tAc "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='${tableName}' AND column_name='salary'"`,
+    )
+      .toString()
+      .trim();
+    expect(columnCheck).toBe('salary');
+
+    const rowCount = execSync(
+      `docker exec nia-core-dev-postgres-1 psql -U postgres -d empty_e2e -tAc "SELECT count(*) FROM public.${tableName}"`,
+    )
+      .toString()
+      .trim();
+    expect(Number(rowCount)).toBeGreaterThan(0);
+
+    // This run went through the FULL new-table staged path — a per-run
+    // staging table created in Nia's internal "nia" schema, the chunk write
+    // into it, the atomic apply into public.<tableName>, and finally
+    // dropping the staging table — all authorized by the single grant DDL
+    // block copy-pasted from GrantAccessPanel above (which now also covers
+    // "nia": see writeGrantStatement.ts / docs/decisions.md). Before that
+    // fix, the staging write into "nia" would have failed with "No
+    // confirmed, unrevoked write grant covers schema 'nia'" the moment
+    // writeChunkRows ran, well before this test's row-landed assertions
+    // above could ever be reached.
+    //
+    // Confirm the "nia" schema itself exists (created by the copied DDL's
+    // own `CREATE SCHEMA IF NOT EXISTS "nia"`, not by Nia code) and that no
+    // per-run staging table was left behind — dropStaging only succeeds
+    // post-apply if the "nia" writes it depends on succeeded.
+    const niaSchemaExists = execSync(
+      `docker exec nia-core-dev-postgres-1 psql -U postgres -d empty_e2e -tAc "SELECT 1 FROM information_schema.schemata WHERE schema_name='nia'"`,
+    )
+      .toString()
+      .trim();
+    expect(niaSchemaExists).toBe('1');
+
+    const leftoverStagingTables = execSync(
+      `docker exec nia-core-dev-postgres-1 psql -U postgres -d empty_e2e -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='nia' AND table_name LIKE 'nia_stg_%'"`,
+    )
+      .toString()
+      .trim();
+    expect(Number(leftoverStagingTables)).toBe(0);
+  });
+});
+
+/**
+ * Right-click context menu (FlowCanvas.tsx's onNodeContextMenu +
+ * NodeContextMenu.tsx). Own fresh project/workflow, same isolation
+ * reasoning as the two test.describe blocks above — this only needs a
+ * single resolved mysql source node, not the shared serial fixture's
+ * multi-node state.
+ */
+test.describe('canvas: node context menu', () => {
+  test.use({ storageState: personas.canvasA.storageStatePath });
+
+  test('right-clicking a resolved source node opens the menu and "Test connection" shows a success toast', async ({ page }) => {
+    const projectName = `Context Menu E2E ${Date.now()}`;
+    const workflowName = 'Context Menu E2E Check';
+    await page.goto('/app');
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await page.getByRole('button', { name: 'New project', exact: true }).click();
+    await page.locator('#project-name').fill(projectName);
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
+
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await page.getByRole('button', { name: 'New workflow', exact: true }).click();
+    await page.locator('#workflow-project').selectOption({ label: projectName });
+    await page.locator('#workflow-name').fill(workflowName);
+    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await gotoWorkflow(page, projectName, workflowName);
+
+    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    const node = page.locator('.react-flow__node').first();
+    await node.click({ button: 'right' });
+
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible();
+    // Resolved source node: full connection-scoped action set (NodeContextMenu's
+    // getContextMenuItems), not just "Remove from workflow".
+    await expect(menu.getByRole('menuitem', { name: 'Test connection' })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: 'Delete connection…' })).toBeVisible();
+
+    await menu.getByRole('menuitem', { name: 'Test connection' }).click();
+    await expect(menu).not.toBeVisible();
+
+    // Toast.tsx: pushToast('success', `Connection OK...`) on a real dispatchTest
+    // round trip against the mysql sandbox connector service.
+    await expect(page.getByText(/Connection OK/)).toBeVisible({ timeout: 10_000 });
   });
 });

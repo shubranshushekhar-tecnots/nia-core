@@ -15,3 +15,14 @@ dist
 .turbo
 **/.turbo
 .git
+
+# Generated artifacts irrelevant to any image build — kept out of the
+# build context sent to the Docker daemon.
+eval-reports
+**/eval-reports
+test-results
+**/test-results
+playwright-report
+**/playwright-report
+coverage
+**/coverage

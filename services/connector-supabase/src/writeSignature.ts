@@ -36,6 +36,8 @@ export type WriteSignaturePayload = {
   grantId: string;
   runId: string | null;
   entity: { namespace: string; name: string };
+  /** The namespace whose write grant authorizes this write — see contract.ts's WriteContext doc comment. Signed so a connector's re-check can't be fooled by an unsigned field. */
+  grantNamespace: string;
   columns: string[];
   mode: string;
   stagingEntity: { namespace: string; name: string } | null;
@@ -50,6 +52,7 @@ function canonicalPayload(input: WriteSignaturePayload): string {
     runId: input.runId,
     namespace: input.entity.namespace,
     name: input.entity.name,
+    grantNamespace: input.grantNamespace,
     columns: [...input.columns].sort(),
     mode: input.mode,
     stagingNamespace: input.stagingEntity?.namespace ?? null,

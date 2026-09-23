@@ -81,10 +81,49 @@ describe("connector-supabase pool-manager", () => {
     expect(constructedOptions[0]?.ssl).toEqual({ rejectUnauthorized: false });
   });
 
-  it("leaves ssl undefined when config.ssl is not set", async () => {
+  it("leaves ssl undefined when config.ssl is not set on a sandbox host (localhost)", async () => {
     const { getPool } = await freshPoolManager();
     await getPool(cred(), config);
     expect(constructedOptions[0]?.ssl).toBeUndefined();
+  });
+
+  // Item 4.1/4A fix: TLS now defaults ON for real hosts, OFF for known
+  // local/sandbox hosts (unchanged dev-container workflow), and is forced ON
+  // for known managed-Postgres providers regardless of the stored value.
+  it("defaults ssl on for a non-sandbox host with no explicit ssl value", async () => {
+    const { getPool } = await freshPoolManager();
+    await getPool(cred(), { ...config, host: "db.mycompany.com" });
+    expect(constructedOptions[0]?.ssl).toEqual({ rejectUnauthorized: false });
+  });
+
+  it("defaults ssl off for other known sandbox hosts with no explicit ssl value", async () => {
+    const { getPool } = await freshPoolManager();
+    await getPool(cred(), { ...config, host: "127.0.0.1" });
+    expect(constructedOptions[0]?.ssl).toBeUndefined();
+    const { getPool: getPool2 } = await freshPoolManager();
+    await getPool2(cred(), { ...config, host: "host.docker.internal" });
+    expect(constructedOptions[1]?.ssl).toBeUndefined();
+  });
+
+  it("defaults ssl off for a bare (dot-less) docker-compose service-name host, e.g. dev-postgres", async () => {
+    const { getPool } = await freshPoolManager();
+    await getPool(cred(), { ...config, host: "dev-postgres" });
+    expect(constructedOptions[0]?.ssl).toBeUndefined();
+  });
+
+  it("respects an explicit ssl:false for a non-sandbox, non-managed host", async () => {
+    const { getPool } = await freshPoolManager();
+    await getPool(cred(), { ...config, host: "db.mycompany.com", ssl: false });
+    expect(constructedOptions[0]?.ssl).toBeUndefined();
+  });
+
+  it("forces ssl on for known managed-Postgres hosts even when ssl is explicitly false", async () => {
+    const { getPool } = await freshPoolManager();
+    await getPool(cred(), { ...config, host: "ep-cool-name-123456.us-east-2.aws.neon.tech", ssl: false });
+    expect(constructedOptions[0]?.ssl).toEqual({ rejectUnauthorized: false });
+    const { getPool: getPool2 } = await freshPoolManager();
+    await getPool2(cred(), { ...config, host: "db.abcxyz.supabase.co", ssl: false });
+    expect(constructedOptions[1]?.ssl).toEqual({ rejectUnauthorized: false });
   });
 
   it("evicts idle pools after the idle window", async () => {

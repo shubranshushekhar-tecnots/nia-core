@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getSidebarProjects, getWorkflowDetail } from '@/lib/api/dashboardServer';
-import { getConnections } from '@/lib/api/connectionsServer';
+import { getConnections, getConnectorInstalls } from '@/lib/api/connectionsServer';
 import { getWorkflowGraph } from '@/lib/api/workflowGraphServer';
 import { getWorkflowConversation } from '@/lib/api/chatServer';
 import CanvasQueryProvider from '@/components/canvas/CanvasQueryProvider';
@@ -22,8 +22,9 @@ export default async function WorkflowPage({ params }: { params: Promise<{ id: s
   const workflow = await getWorkflowDetail(id);
   if (!workflow) redirect('/app');
 
-  const [connections, initialGraph, projects, workflowConversation] = await Promise.all([
+  const [connections, connectorInstalls, initialGraph, projects, workflowConversation] = await Promise.all([
     getConnections(),
+    getConnectorInstalls(),
     getWorkflowGraph(id),
     getSidebarProjects(),
     getWorkflowConversation(id),
@@ -39,6 +40,7 @@ export default async function WorkflowPage({ params }: { params: Promise<{ id: s
         email={user.email}
         workflow={workflow}
         connections={connections}
+        connectorInstalls={connectorInstalls}
         initialGraph={initialGraph}
         initialConversation={workflowConversation?.conversation ?? null}
         initialMessages={workflowConversation?.messages ?? []}

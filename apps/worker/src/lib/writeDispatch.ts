@@ -25,6 +25,16 @@ export type WriteDispatchInput = {
   mode?: WriteContext["mode"];
   stagingEntity?: WriteEntityRef | null;
   quarantineEntity?: WriteEntityRef | null;
+  /**
+   * The namespace whose confirmed write grant authorizes this write — see
+   * contract.ts's WriteContext doc comment. Defaults to `entity.namespace`
+   * (today's only behavior before this field existed). Callers writing
+   * into a staging/quarantine entity in Nia's internal "nia" schema (see
+   * stagedWrite.ts) must set this explicitly to the run's real destination
+   * namespace: "nia" writes are authorized by that run's own destination
+   * grant, and nothing wider.
+   */
+  grantNamespace?: string;
 };
 
 /**
@@ -59,7 +69,8 @@ export async function dispatchWrite(
   if (!resolved.ok) return resolved;
   const connection = resolved.value;
 
-  const grant = await resolveWriteGrant(connection.id, input.entity.namespace);
+  const grantNamespace = input.grantNamespace ?? input.entity.namespace;
+  const grant = await resolveWriteGrant(connection.id, grantNamespace);
   if (!grant.ok) {
     await auditWrite(connection, actorUserId, input, `rejected: ${grant.error.message}`);
     return grant;
@@ -76,6 +87,7 @@ export async function dispatchWrite(
       grantId: grant.value.grantId,
       runId,
       entity: input.entity,
+      grantNamespace,
       columns: input.columns,
       mode,
       stagingEntity,
@@ -89,6 +101,7 @@ export async function dispatchWrite(
     grantId: grant.value.grantId,
     runId,
     entity: input.entity,
+    grantNamespace,
     columns: input.columns,
     mode,
     stagingEntity,

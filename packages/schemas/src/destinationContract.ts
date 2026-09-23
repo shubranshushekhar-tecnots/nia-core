@@ -153,21 +153,157 @@ export interface ContractDiff {
   kind: "missing-column" | "type-mismatch";
   column: string;
   detail: string;
+  /**
+   * The ALTER the user could run themselves to close this diff (Part 5
+   * follow-up: this function never ALTERs anything itself, but a human
+   * can copy/paste this to resolve a real mismatch). `undefined` for
+   * mongo (schemaless — no ALTER equivalent).
+   */
+  alterStatement?: string;
 }
 
 export type ContractCompareResult = { ok: true } | { ok: false; diffs: ContractDiff[] };
+
+// ---------------------------------------------------------------------------
+// Type-identity canonicalization
+// ---------------------------------------------------------------------------
+
+/**
+ * Alias tables mapping every spelling a dialect's information_schema/driver
+ * can report (or a contract's fromNiaType() can emit) to one canonical
+ * spelling per DISTINCT type — e.g. postgres's "timestamptz" and "timestamp
+ * with time zone" both canonicalize to the same string, but "integer" and
+ * "bigint" stay distinct (different byte width, a real mismatch). Built from
+ * niaAdapters.ts's actual fromNiaType()/toNiaType() vocabularies for each
+ * dialect, not guessed. Postgres's information_schema.columns.data_type never
+ * includes a length/precision suffix (confirmed by connector-supabase's
+ * /introspect query and postgresToNiaType's comment on numeric precision),
+ * so canonicalization first strips any trailing "(...)" parameter list before
+ * the alias lookup — this also means a contract's `NUMERIC(10,2)` correctly
+ * compares equal to an existing bare `numeric` column, since the existing
+ * side can never report precision anyway.
+ */
+const POSTGRES_TYPE_ALIASES: Record<string, string> = {
+  timestamptz: "timestamp with time zone",
+  "timestamp with time zone": "timestamp with time zone",
+  timestamp: "timestamp without time zone",
+  "timestamp without time zone": "timestamp without time zone",
+  int8: "bigint",
+  bigint: "bigint",
+  int4: "integer",
+  int: "integer",
+  integer: "integer",
+  int2: "smallint",
+  smallint: "smallint",
+  float8: "double precision",
+  "double precision": "double precision",
+  float4: "real",
+  real: "real",
+  bool: "boolean",
+  boolean: "boolean",
+  varchar: "character varying",
+  "character varying": "character varying",
+  numeric: "numeric",
+  decimal: "numeric",
+};
+
+const MYSQL_TYPE_ALIASES: Record<string, string> = {
+  bigint: "bigint",
+  int: "int",
+  integer: "int",
+  mediumint: "mediumint",
+  smallint: "smallint",
+  tinyint: "tinyint",
+  bool: "tinyint",
+  boolean: "tinyint",
+  double: "double",
+  "double precision": "double",
+  float: "float",
+  decimal: "decimal",
+  numeric: "decimal",
+  char: "char",
+  varchar: "varchar",
+  text: "text",
+  datetime: "datetime",
+  timestamp: "timestamp",
+  date: "date",
+  blob: "blob",
+  json: "json",
+};
+
+/**
+ * Mongo's existing side reports connector-mongodb's column-types.ts
+ * `ColumnType` vocabulary ("string"/"number"/"boolean"/"date"/"json"/
+ * "binary"/"unknown"), not a BSON type name — a genuinely different
+ * vocabulary from mongoFromNiaType()'s contract-side output ("string"/
+ * "long"/"double"/"decimal128"/"boolean"/"date"/"binData"/"object"/
+ * "array"), so both sides are folded down to the shared ColumnType-shaped
+ * buckets here.
+ */
+const MONGO_TYPE_ALIASES: Record<string, string> = {
+  string: "string",
+  long: "number",
+  double: "number",
+  decimal128: "number",
+  number: "number",
+  int: "number",
+  boolean: "boolean",
+  bool: "boolean",
+  date: "date",
+  bindata: "binary",
+  binary: "binary",
+  object: "json",
+  array: "json",
+  json: "json",
+  unknown: "unknown",
+};
+
+function canonicalizeNativeType(dialect: SourceDialect, raw: string): string {
+  const base = raw
+    .trim()
+    .toLowerCase()
+    .replace(/\(.*\)$/, "")
+    .trim();
+  const table =
+    dialect === "postgres" ? POSTGRES_TYPE_ALIASES : dialect === "mysql" ? MYSQL_TYPE_ALIASES : MONGO_TYPE_ALIASES;
+  return table[base] ?? base;
+}
+
+function buildAlterStatement(
+  dialect: SourceDialect,
+  entity: { namespace: string; name: string },
+  kind: "missing-column" | "type-mismatch",
+  column: string,
+  nativeType: string,
+): string | undefined {
+  if (dialect === "postgres") {
+    const table = `"${entity.namespace}"."${entity.name}"`;
+    return kind === "missing-column"
+      ? `ALTER TABLE ${table} ADD COLUMN "${column}" ${nativeType};`
+      : `ALTER TABLE ${table} ALTER COLUMN "${column}" TYPE ${nativeType};`;
+  }
+  if (dialect === "mysql") {
+    const table = `\`${entity.name}\``;
+    return kind === "missing-column"
+      ? `ALTER TABLE ${table} ADD COLUMN \`${column}\` ${nativeType};`
+      : `ALTER TABLE ${table} MODIFY COLUMN \`${column}\` ${nativeType};`;
+  }
+  return undefined;
+}
 
 /**
  * Existing targets: read their structure back (IntrospectResponse's
  * per-entity fields, from the connector's /introspect) and compare
  * against the contract. Refuses (returns diffs, never throws/ALTERs) on
- * any missing column or native-type mismatch. Case-insensitive type
- * comparison — every dialect adapter emits its native type strings in a
- * consistent case, but IntrospectResponse's `type` field is whatever the
- * driver/information_schema reports verbatim (e.g. Postgres always
- * lowercases; MySQL's driver can vary) — comparing case-insensitively
- * avoids a false-positive refusal over pure casing. An existing column
- * NOT in the contract is not a diff here (Part 4 never fails on extra
+ * any missing column or native-type mismatch. Types are compared by
+ * IDENTITY, not string equality: both sides are resolved to one canonical
+ * spelling per distinct dialect type (canonicalizeNativeType above) before
+ * comparing, so equivalent spellings (postgres's "timestamptz" vs
+ * "timestamp with time zone", mysql's "int" as reported by
+ * information_schema vs mongo's ColumnType-vs-BSON-name split) don't
+ * false-positive as drift, while genuinely different types (postgres
+ * "integer" vs "bigint") still correctly mismatch. An existing column NOT
+ * in the contract is not a diff here (Part 4 never fails on extra
  * existing columns; only Part 5's unknown-field policy is about columns
  * the RUN produces that aren't in the contract, a different direction).
  */
@@ -184,14 +320,16 @@ export function compareContractToExisting(
         kind: "missing-column",
         column: col.destinationName,
         detail: `contract expects column "${col.destinationName}" (${col.nativeType}) but the existing target has no such column`,
+        alterStatement: buildAlterStatement(contract.dialect, contract.entity, "missing-column", col.destinationName, col.nativeType),
       });
       continue;
     }
-    if (existingType.trim().toLowerCase() !== col.nativeType.trim().toLowerCase()) {
+    if (canonicalizeNativeType(contract.dialect, existingType) !== canonicalizeNativeType(contract.dialect, col.nativeType)) {
       diffs.push({
         kind: "type-mismatch",
         column: col.destinationName,
         detail: `column "${col.destinationName}" is "${existingType}" on the existing target but the contract expects "${col.nativeType}"`,
+        alterStatement: buildAlterStatement(contract.dialect, contract.entity, "type-mismatch", col.destinationName, col.nativeType),
       });
     }
   }

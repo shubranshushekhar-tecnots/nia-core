@@ -328,6 +328,71 @@ export const railReopenBtnCountStyle: CSSProperties = {
   lineHeight: 1,
 };
 
+// Small pill on an installed-but-not-yet-connected entry (NodesRail.tsx) —
+// same visual language as railReopenBtnCountStyle's badge, just inline
+// instead of floating.
+export const railEntryConnectBadgeStyle: CSSProperties = {
+  flex: 'none',
+  fontSize: 10,
+  fontWeight: 600,
+  color: 'var(--ink4)',
+  background: 'var(--surface-2)',
+  border: '1px solid var(--panel-line)',
+  borderRadius: 999,
+  padding: '1px 6px',
+};
+
+// Right-click context menu on a NodesRail entry ("Add connection"). Fixed
+// positioning at the click point, same floating-panel shadow/border as the
+// rest of the canvas chrome (railReopenBtnStyle, NodeConfigPanel).
+export const railContextMenuStyle = (x: number, y: number): CSSProperties => ({
+  position: 'fixed',
+  top: y,
+  left: x,
+  zIndex: 50,
+  minWidth: 160,
+  background: 'var(--surface)',
+  border: '1px solid var(--panel-line)',
+  borderRadius: 8,
+  boxShadow: 'var(--floating-panel-shadow)',
+  padding: 4,
+});
+
+// Trailing "+ Add connection" row appended after a connector's real
+// connection rows (NodesRail.tsx) — lets a connector with N connections
+// (e.g. two Supabase DBs) always keep an explicit way to add connection
+// N+1, instead of that affordance disappearing once at least one
+// connection exists. Dashed border distinguishes it from both the solid
+// connected rows above it and the muted (but solid-border-less)
+// not-yet-connected placeholder row.
+export const railAddEntryStyle: CSSProperties = {
+  height: 36,
+  padding: '0 10px 0 8px',
+  margin: '0 8px 2px',
+  borderRadius: 8,
+  border: '1px dashed var(--panel-line)',
+  background: 'none',
+  fontSize: 12.5,
+  color: 'var(--ink4)',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+};
+
+export const railContextMenuItemStyle: CSSProperties = {
+  display: 'block',
+  width: '100%',
+  textAlign: 'left',
+  border: 'none',
+  background: 'none',
+  borderRadius: 6,
+  padding: '7px 10px',
+  fontSize: 12.5,
+  color: 'var(--ink)',
+  cursor: 'pointer',
+};
+
 export const railCollapsedToggleStyle: CSSProperties = {
   height: 40,
   flex: 'none',

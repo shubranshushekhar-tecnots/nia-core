@@ -1,7 +1,7 @@
 'use client';
 
 import { useActionState, useMemo, useState } from 'react';
-import { getConnectorManifest, type ConfigField } from '@nia/schemas';
+import { useRouter } from 'next/navigation';
 import type { Connection, ConnectorCatalogEntry, ConnectorInstall } from '@/lib/connections/types';
 import {
   installConnectorAction,
@@ -72,11 +72,10 @@ import {
   modalErrorStyle,
   pageEmptyCardStyle,
   pageTitleStyle,
-  primaryBtnStyle,
   soonBtnStyle,
 } from './styles';
-import AddConnectionDialog from './AddConnectionDialog';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
+import EditConnectionDialog from './EditConnectionDialog';
 import { CONNECTOR_ICONS, getConnectorIcon } from '@/components/canvas/icons';
 
 type ConnectionBadge = {
@@ -96,7 +95,6 @@ type Provider = {
   version: string;
   lastUsed: string;
   category: ConnectorCategory;
-  configSchema: ConfigField[];
   connections: ConnectionBadge[];
 };
 
@@ -346,7 +344,7 @@ function TestButton({ connectionId }: { connectionId: string }) {
       <button type="submit" disabled={pending} style={connectionsBadgeLinkStyle}>
         {pending ? 'Testing\u2026' : 'Test'}
       </button>
-      {state?.error && <span style={connectionsBadgeMetaStyle}>{'\u2014'} {state.error}</span>}
+      {state?.error && <ActionErrorDetail error={state.error} details={state.errorDetails} />}
     </form>
   );
 }
@@ -362,8 +360,28 @@ function RefreshSchemaButton({ connectionId }: { connectionId: string }) {
       <button type="submit" disabled={pending} style={connectionsBadgeLinkStyle}>
         {pending ? 'Refreshing\u2026' : 'Refresh schema'}
       </button>
-      {state?.error && <span style={connectionsBadgeMetaStyle}>{'\u2014'} {state.error}</span>}
+      {state?.error && <ActionErrorDetail error={state.error} details={state.errorDetails} />}
     </form>
+  );
+}
+
+/**
+ * Item 5 (fix-chain plan): renders the friendly `error` summary inline, plus
+ * the raw `details` (original driver/connector text) behind a "Show
+ * details" toggle when present and distinct from the summary — never
+ * dropped, just not shown by default.
+ */
+function ActionErrorDetail({ error, details }: { error: string; details?: string }) {
+  return (
+    <span style={connectionsBadgeMetaStyle}>
+      {'\u2014'} {error}
+      {details && details !== error && (
+        <details style={{ display: 'inline', marginLeft: 4 }}>
+          <summary style={{ display: 'inline', cursor: 'pointer' }}>Show details</summary>
+          <span style={{ display: 'block', marginTop: 2 }}>{details}</span>
+        </details>
+      )}
+    </span>
   );
 }
 
@@ -384,20 +402,20 @@ export default function ConnectionsClient({
   installs: ConnectorInstall[];
   connections: Connection[];
 }) {
+  const router = useRouter();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<ConnectorCategory | 'all'>('all');
   const [hoveredCard, setHoveredCard] = useState<string | null>(null);
   const [dialog, setDialog] = useState<
-    | { type: 'add'; connectorId: string; connectorName: string; configSchema: ConfigField[] }
     | { type: 'delete'; connectionId: string; handle: string }
     | { type: 'uninstall'; installId: string; name: string }
     | null
   >(null);
+  const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
 
   const PROVIDERS: Provider[] = useMemo(() => {
     return installs.map((install) => {
       const catalogEntry = catalog.find((c) => c.id === install.connectorId);
-      const manifest = getConnectorManifest(install.connectorId);
       const providerConnections = connections.filter((c) => c.connectorId === install.connectorId);
       const lastUsedAt = providerConnections
         .map((c) => c.lastUsedAt)
@@ -413,7 +431,6 @@ export default function ConnectionsClient({
         version: catalogEntry?.version ?? '',
         lastUsed: lastUsedAt ? relativeTime(lastUsedAt) : 'never used',
         category: mapManifestCategory(catalogEntry?.category ?? 'database'),
-        configSchema: manifest?.configSchema ?? [],
         connections: providerConnections.map((c) => ({
           id: c.id,
           handle: c.handle,
@@ -555,6 +572,9 @@ export default function ConnectionsClient({
                       {c.owner && <span style={connectionsBadgeMetaStyle}>{c.owner}</span>}
                       <TestButton connectionId={c.id} />
                       <RefreshSchemaButton connectionId={c.id} />
+                      <button type="button" style={connectionsBadgeLinkStyle} onClick={() => setEditingConnectionId(c.id)}>
+                        Edit
+                      </button>
                       <button
                         type="button"
                         style={connectionsBadgeLinkStyle}
@@ -566,13 +586,9 @@ export default function ConnectionsClient({
                   ))}
                 </div>
                 <div style={connectionsProviderActionsStyle}>
-                  <button
-                    type="button"
-                    style={primaryBtnStyle}
-                    onClick={() => setDialog({ type: 'add', connectorId: p.id, connectorName: p.name, configSchema: p.configSchema })}
-                  >
-                    Add connection
-                  </button>
+                  <span style={connectionsProviderMetaStyle} title="Right-click this connector's node in a workflow canvas">
+                    Add a connection from the canvas
+                  </span>
                   <button type="button" style={soonBtnStyle} disabled title="Coming soon">
                     Manage
                   </button>
@@ -686,15 +702,6 @@ export default function ConnectionsClient({
         )}
       </div>
 
-      {dialog?.type === 'add' && (
-        <AddConnectionDialog
-          connectorId={dialog.connectorId}
-          connectorName={dialog.connectorName}
-          configSchema={dialog.configSchema}
-          onClose={() => setDialog(null)}
-        />
-      )}
-
       {dialog?.type === 'delete' && (
         <DeleteConfirmDialog
           title="Delete connection?"
@@ -714,6 +721,21 @@ export default function ConnectionsClient({
           onClose={() => setDialog(null)}
         />
       )}
+
+      {editingConnectionId && (() => {
+        const editingConnection = connections.find((c) => c.id === editingConnectionId);
+        if (!editingConnection) return null;
+        return (
+          <EditConnectionDialog
+            connection={editingConnection}
+            onClose={() => setEditingConnectionId(null)}
+            onSaved={() => {
+              setEditingConnectionId(null);
+              router.refresh();
+            }}
+          />
+        );
+      })()}
     </>
   );
 }

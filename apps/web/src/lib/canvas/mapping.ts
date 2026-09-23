@@ -1,7 +1,7 @@
 import type { Node, Edge } from "@xyflow/react";
 import type { ConnectorManifest, GraphDoc, GraphEdge, GraphNode, GraphNodeType } from "@nia/schemas";
 import { WRITE_OPERATIONS } from "@nia/schemas";
-import type { Connection } from "@/lib/connections/types";
+import { connectionSecondaryLabel, type Connection } from "@/lib/connections/types";
 
 /**
  * Pure, two-way GraphDoc <-> React Flow mapper. GraphDoc (packages/schemas)
@@ -30,7 +30,7 @@ export type CanvasNodeData = {
   /** false when manifestId is set but not in the registry, or connectionId is set but not in connectionsById. */
   resolved: boolean;
   unknownReason?: string;
-  /** true when the resolved manifest supports any write operation. Always false today (all 3 manifests are read-only) — implemented for forward compat, see manifest.ts's WRITE_OPERATIONS. */
+  /** true when the resolved manifest supports any write operation (postgres/supabase/mysql/mongodb all do, per their `operations` arrays — see manifest.ts's WRITE_OPERATIONS). This only means the node's connector CAN offer a write verb; whether one is actually unlocked still depends on an active write grant (NodeDrawer.tsx's grantCovers). */
   writeLocked: boolean;
   /** Display-only, resolved here so node components never need their own manifest/connections lookup. */
   manifestName?: string;
@@ -71,7 +71,7 @@ type Resolution = Pick<
  * duplicating this lookup logic.
  */
 export function resolveCanvasNode(
-  node: Pick<GraphNode, "manifestId" | "connectionId">,
+  node: Pick<GraphNode, "manifestId" | "connectionId" | "type">,
   ctx: MappingContext,
 ): Resolution {
   if (node.manifestId) {
@@ -83,8 +83,17 @@ export function resolveCanvasNode(
     if (node.connectionId && !connection) {
       return { resolved: false, unknownReason: "Connection not found", writeLocked: false, manifestName: manifest.name };
     }
-    const writeLocked = manifest.operations.some((op) => WRITE_OPERATIONS.includes(op));
-    return { resolved: true, writeLocked, manifestName: manifest.name, connectionLabel: connection?.displayName };
+    // Sources only ever read — "needs a write grant" is meaningless on a
+    // source node even when its connector also offers a write verb (e.g.
+    // postgres/supabase can be both a source and a destination manifest).
+    const writeLocked = node.type !== "source" && manifest.operations.some((op) => WRITE_OPERATIONS.includes(op));
+    // Item 6.2 (fix-chain plan): same as NodesRail.tsx's palette entries —
+    // append the connection's host/database so two same-named connections
+    // are distinguishable once placed on canvas (GraphFlowNode's pill,
+    // NodeDrawer's header).
+    const secondary = connection ? connectionSecondaryLabel(connection) : undefined;
+    const connectionLabel = connection ? (secondary ? `${connection.displayName} (${secondary})` : connection.displayName) : undefined;
+    return { resolved: true, writeLocked, manifestName: manifest.name, connectionLabel };
   }
   if (node.connectionId && !ctx.connectionsById.has(node.connectionId)) {
     return { resolved: false, unknownReason: "Connection not found", writeLocked: false };
@@ -141,7 +150,17 @@ export function buildCanvasNode(
   },
   ctx: MappingContext,
 ): CanvasNode {
-  const resolution = resolveCanvasNode(params, ctx);
+  const resolution = resolveCanvasNode({ manifestId: params.manifestId, connectionId: params.connectionId, type: params.graphNodeType }, ctx);
+  // Seeds a role-appropriate initial verb instead of leaving config: {}
+  // (whose zod default is "read" for every node, source or destination —
+  // see nodeConfig.ts's SourceDestConfig). Without this, a freshly-dropped
+  // destination node persists operation: "read" until its drawer is opened,
+  // which both looks wrong and silently bypasses checkGrants' write-grant
+  // gate (checks.ts only checks write verbs).
+  const manifest = params.manifestId ? ctx.manifests[params.manifestId] : undefined;
+  const initialOperation = manifest?.operations.find((op) =>
+    params.graphNodeType === "destination" ? WRITE_OPERATIONS.includes(op) : !WRITE_OPERATIONS.includes(op),
+  );
   return {
     id: params.id,
     type: params.graphNodeType,
@@ -150,7 +169,7 @@ export function buildCanvasNode(
       graphNodeType: params.graphNodeType,
       connectionId: params.connectionId,
       manifestId: params.manifestId,
-      config: {},
+      config: initialOperation ? { operation: initialOperation } : {},
       ...resolution,
     },
   };

@@ -7,7 +7,10 @@
     "build": "turbo build",
     "typecheck": "turbo typecheck",
     "test": "turbo test",
-    "lint": "turbo lint"
+    "lint": "turbo lint",
+    "migrate:status": "bash scripts/migrate.sh status",
+    "migrate:push": "bash scripts/migrate.sh push",
+    "migrate:verify": "bash scripts/migrate.sh verify"
   },
   "devDependencies": {
     "turbo": "^2.3.3",

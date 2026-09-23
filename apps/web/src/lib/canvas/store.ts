@@ -25,9 +25,28 @@ export type CleanProposal = CleanProposalResult & { nodeId: string };
 //              doc comment)
 export type SaveState = "idle" | "saving" | "saved" | "conflict";
 
+/**
+ * Right-click / \u22ef-button / keyboard context menu position for a canvas
+ * node. Lives here (not local FlowCanvas state) because the menu is opened
+ * from inside GraphFlowNode.tsx (a React Flow custom node component that
+ * only ever receives `data`/`id`/`selected` from React Flow itself \u2014 no
+ * arbitrary parent callback can reach it) but rendered by FlowCanvas.tsx,
+ * which owns the actual test/refresh/edit/delete handlers. Same
+ * cross-component-UI-state role as selectedNodeId above.
+ */
+export type ContextMenuState = {
+  x: number;
+  y: number;
+  nodeId: string;
+  graphNodeType: "source" | "transform" | "destination";
+  hasConnection: boolean;
+};
+
 type CanvasState = {
   selectedNodeId: string | null;
   setSelectedNodeId: (id: string | null) => void;
+  contextMenu: ContextMenuState | null;
+  setContextMenu: (menu: ContextMenuState | null) => void;
   saveState: SaveState;
   setSaveState: (state: SaveState) => void;
   version: number;
@@ -72,6 +91,8 @@ type CanvasState = {
 export const useCanvasStore = create<CanvasState>((set) => ({
   selectedNodeId: null,
   setSelectedNodeId: (selectedNodeId) => set({ selectedNodeId }),
+  contextMenu: null,
+  setContextMenu: (contextMenu) => set({ contextMenu }),
   saveState: "idle",
   setSaveState: (saveState) => set({ saveState }),
   version: 0,

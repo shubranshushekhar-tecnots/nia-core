@@ -39,7 +39,7 @@ export function planToGhostFlow(
     // node's manifestId is expected to line up with connections.connector_id.
     const connection = planNode.connectionId ? ctx.connectionsById.get(planNode.connectionId) : undefined;
     const manifestId = connection?.connectorId;
-    const resolution = resolveCanvasNode({ manifestId, connectionId: planNode.connectionId }, ctx);
+    const resolution = resolveCanvasNode({ manifestId, connectionId: planNode.connectionId, type: planNode.type }, ctx);
 
     return {
       id: planNode.id,

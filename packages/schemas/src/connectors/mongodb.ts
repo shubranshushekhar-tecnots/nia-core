@@ -5,15 +5,20 @@ import type { ConnectorManifest } from "../manifest.js";
  * (host/port/database — SSRF-validatable, non-secret) plus a Vault-resolved
  * `user`/`password` fetched by the service itself. Reads stay
  * pipeline-only (aggregation-pipeline, enforced by @nia/guardrails's
- * validateMongoPipeline before dispatch) — only "read" is listed in
- * `operations`, matching MySQL's/Supabase's stance (the ETL write path
- * dispatches directly via dispatchWrite()/entity+upsertKeys, not through
- * the operations-radio action-node mechanism).
+ * validateMongoPipeline before dispatch).
  *
- * capabilities now carries "etl_sink": connector-mongodb/src/index.ts
- * exposes POST /write (Phase 6 Block 5 — batch bulkWrite replaceOne
- * upserts, HMAC-checked write context + grant re-check, same contract as
- * the SQL dialects).
+ * `operations` includes "read" and "insert" (Item 6.3, fix-chain plan, same
+ * rationale as mysql.ts): actual write execution still dispatches via
+ * dispatchWrite()/entity+upsertKeys (connector-mongodb/src/index.ts's POST
+ * /write, Phase 6 Block 5 — batch bulkWrite replaceOne upserts, HMAC-checked
+ * write context + grant re-check), not a per-op mongo command — but
+ * `operations` is also what NodeDrawer.tsx's verb-radio (operationsForRole)
+ * and mapping.ts's initialOperation resolve against once a node is placed as
+ * a destination. `capabilities` already includes "etl_sink", so a mongodb
+ * connection is already offered as a destination in NodesRail.tsx's palette;
+ * leaving `operations` at `["read"]` left that destination node with no
+ * initial operation and a verb-radio that fell back to showing "read" as a
+ * destination's only (nonsensical) verb.
  */
 export const mongodbManifest: ConnectorManifest = {
   id: "mongodb",
@@ -28,7 +33,7 @@ export const mongodbManifest: ConnectorManifest = {
     { key: "user", label: "Username", type: "text", required: true, placeholder: "nia_ro", secret: true },
     { key: "password", label: "Password", type: "password", required: true, secret: true },
   ],
-  operations: ["read"],
+  operations: ["read", "insert"],
   capabilities: ["queryable", "etl_source", "etl_sink"],
   service: { host: "connector-mongodb", port: 4020 },
 };

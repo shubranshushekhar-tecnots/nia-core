@@ -1,10 +1,20 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildGrantStatementText, parseNodeConfig, transformOutputFields, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildDropRoleStatementText, buildGrantStatementText, friendlyConnectionError, parseNodeConfig, transformOutputFields, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
-import { confirmWriteGrant, createWriteGrant, getConnectionSchema, getWriteGrants, revokeWriteGrant, type WriteGrant } from '@/lib/api/connectionsClient';
+import { resolveTableFieldState } from '@/lib/canvas/tableFieldState';
+import { filterEntities } from '@/lib/canvas/entityFiltering';
+import {
+  confirmWriteGrant,
+  ConnectionsApiError,
+  createWriteGrant,
+  getConnectionSchema,
+  getWriteGrants,
+  revokeWriteGrant,
+  type WriteGrant,
+} from '@/lib/api/connectionsClient';
 import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
 import ProfileTab from './ProfileTab';
@@ -56,6 +66,20 @@ function parseEntityKey(key: string): EntityRef {
 }
 
 /**
+ * A manifest's `operations` (e.g. postgres/supabase's `["read", "insert"]`)
+ * describes what the connector CAN do, not what a given node's role should
+ * offer — a source node reads, a destination node writes, never both. This
+ * narrows the manifest's list to the verbs valid for `nodeType`, falling
+ * back to the unfiltered list if that role has no matching verb (keeps
+ * source-only connectors like mysql/mongodb, whose `operations` is just
+ * `["read"]`, working unchanged on source nodes).
+ */
+function operationsForRole(operations: Operation[], nodeType: 'source' | 'destination'): Operation[] {
+  const filtered = operations.filter((op) => (nodeType === 'destination' ? WRITE_OPERATIONS.includes(op) : !WRITE_OPERATIONS.includes(op)));
+  return filtered.length > 0 ? filtered : operations;
+}
+
+/**
  * Phase 6 Block 0 — mirrors MappingEditor.tsx's useEntityFields, same query
  * key (`['connection-schema', connectionId]`) so both hooks share one
  * react-query cache entry per connection rather than double-fetching.
@@ -64,20 +88,33 @@ function parseEntityKey(key: string): EntityRef {
  * caller to destination nodes too — a destination now also needs an entity
  * selected so checkGrants/the lock logic below have a namespace to check
  * write-grant coverage against.
+ *
+ * Also surfaces isLoading/isError/error distinctly from the entities array
+ * itself: `schema.entities` legitimately being `[]` (a real database with
+ * zero tables) used to be indistinguishable from "still fetching" or
+ * "fetch failed" since all three collapsed to the same `[]` return — the
+ * Table field below used entities.length===0 as its sole loading gate,
+ * which left it permanently stuck on "Loading tables…" for the empty case.
  */
-function useConnectionEntities(connectionId?: string): { namespace: string; name: string }[] {
-  const { data: schema } = useQuery({
+function useConnectionEntities(connectionId?: string): {
+  entities: { namespace: string; name: string; canRead?: boolean; canWrite?: boolean; rlsBlocksRead?: boolean; rlsFixSql?: string | null }[];
+  isLoading: boolean;
+  isError: boolean;
+  error: string | null;
+} {
+  const { data: schema, isLoading, isError, error } = useQuery({
     queryKey: ['connection-schema', connectionId],
     queryFn: () => getConnectionSchema(connectionId!),
     enabled: !!connectionId,
     staleTime: 5 * 60_000,
   });
-  return useMemo(() => {
+  const entities = useMemo(() => {
     if (!schema) return [];
     return schema.entities
-      .map((e) => ({ namespace: e.namespace, name: e.name }))
+      .map((e) => ({ namespace: e.namespace, name: e.name, canRead: e.canRead, canWrite: e.canWrite, rlsBlocksRead: e.rlsBlocksRead, rlsFixSql: e.rlsFixSql }))
       .sort((a, b) => (a.namespace + a.name).localeCompare(b.namespace + b.name));
   }, [schema]);
+  return { entities, isLoading, isError, error: error instanceof Error ? error.message : null };
 }
 
 /**
@@ -181,6 +218,7 @@ function GrantAccessPanel({
   const [grant, setGrant] = useState<WriteGrant | undefined>(pendingGrant);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const statementText = connectorId ? buildGrantStatementText(connectorId, namespace, credential.user, credential.password) : null;
@@ -188,6 +226,7 @@ function GrantAccessPanel({
   async function handleCreate() {
     setBusy(true);
     setError(null);
+    setErrorDetails(null);
     try {
       const created = await createWriteGrant(connectionId, { schemas: [namespace] });
       setGrant(created);
@@ -202,11 +241,24 @@ function GrantAccessPanel({
     if (!grant) return;
     setBusy(true);
     setError(null);
+    setErrorDetails(null);
     try {
       await confirmWriteGrant(connectionId, grant.id, credential);
       await queryClient.invalidateQueries({ queryKey: ['connection-write-grants', connectionId] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to confirm write grant.');
+      // Item 5 (fix-chain plan): WRITE_GRANT_TEST_FAILED carries the write
+      // credential's own raw connector test-connect error (grants.ts's
+      // confirmWriteGrant) — pattern-match it into a friendly summary, same
+      // as the standalone "Test" button. Other confirm failures (e.g. a
+      // Vault write or DB update error) aren't raw driver text, so they
+      // pass through as-is.
+      if (err instanceof ConnectionsApiError && err.code === 'WRITE_GRANT_TEST_FAILED') {
+        const { summary, details } = friendlyConnectionError(err.message);
+        setError(summary);
+        setErrorDetails(details);
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to confirm write grant.');
+      }
     } finally {
       setBusy(false);
     }
@@ -267,7 +319,17 @@ function GrantAccessPanel({
       ) : (
         <div style={{ fontSize: 11.5, color: 'var(--ok)' }}>Confirmed.</div>
       )}
-      {error && <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>{error}</div>}
+      {error && (
+        <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>
+          {error}
+          {errorDetails && errorDetails !== error && (
+            <details style={{ marginTop: 4 }}>
+              <summary style={{ cursor: 'pointer' }}>Show details</summary>
+              <span style={{ display: 'block', marginTop: 2 }}>{errorDetails}</span>
+            </details>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -281,10 +343,24 @@ function GrantAccessPanel({
  * `CREATE ROLE`/`GRANT`) — it only flips the row so `checkGrants`/the verb
  * lock immediately treat this namespace as uncovered again.
  */
-function RevokeAccessPanel({ connectionId, grant, namespace }: { connectionId: string; grant: WriteGrant; namespace: string }) {
+function RevokeAccessPanel({
+  connectionId,
+  connectorId,
+  grant,
+  namespace,
+}: {
+  connectionId: string;
+  connectorId?: string;
+  grant: WriteGrant;
+  namespace: string;
+}) {
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const dropStatement =
+    connectorId && grant.writeRoleName ? buildDropRoleStatementText(connectorId, grant.writeRoleName) : null;
 
   async function handleRevoke() {
     setBusy(true);
@@ -299,11 +375,42 @@ function RevokeAccessPanel({ connectionId, grant, namespace }: { connectionId: s
     }
   }
 
+  async function handleCopy() {
+    if (!dropStatement) return;
+    await navigator.clipboard.writeText(dropStatement);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
   return (
     <div style={grantPanelStyle}>
       <div style={{ fontSize: 11.5, color: 'var(--ok)', marginBottom: 8 }}>
-        Write access granted to &quot;{namespace}&quot;.
+        Write access granted to &quot;{namespace}&quot;{grant.writeRoleName ? <> as role <code>{grant.writeRoleName}</code></> : null}.
       </div>
+      {dropStatement && (
+        <details style={{ marginBottom: 8 }}>
+          <summary style={{ fontSize: 11.5, color: 'var(--ink4)', cursor: 'pointer' }}>Show role removal statement</summary>
+          <pre
+            style={{
+              fontFamily: 'var(--font-data)',
+              fontSize: 11,
+              background: 'var(--surface)',
+              border: '1px solid var(--line2)',
+              borderRadius: 6,
+              padding: 8,
+              whiteSpace: 'pre-wrap',
+              overflowX: 'auto',
+              marginTop: 6,
+              marginBottom: 6,
+            }}
+          >
+            {dropStatement}
+          </pre>
+          <button type="button" style={{ ...grantButtonStyle, marginRight: 8 }} onClick={handleCopy}>
+            {copied ? 'Copied' : 'Copy statement'}
+          </button>
+        </details>
+      )}
       <button type="button" style={grantButtonStyle} disabled={busy} onClick={handleRevoke}>
         {busy ? 'Revoking…' : 'Revoke access'}
       </button>
@@ -340,12 +447,19 @@ function SourceDestForm({
   manifestId?: string;
   onChange: (next: SourceDestConfig) => void;
 }) {
-  const entities = useConnectionEntities(connectionId);
+  const { entities, isLoading: entitiesLoading, isError: entitiesError, error: entitiesErrorMessage } = useConnectionEntities(connectionId);
   const grants = useWriteGrants(connectionId);
   const grantedNamespaces = useGrantedNamespaces(grants);
   /** Schema layer Part 4's "type a new name" toggle — see NewTargetInputs's doc comment. Declared unconditionally (before the slot==='detail' early return below) since this component renders twice (ribbon + detail slots) and hooks must stay in the same order every render. */
   const [newTargetMode, setNewTargetMode] = useState(false);
+  /** "Show system schemas" toggle — off by default, same unconditional-declaration reasoning as newTargetMode above. See entityFiltering.ts's SYSTEM_SCHEMAS for what this reveals (vault/nia stay hidden regardless). */
+  const [showSystemSchemas, setShowSystemSchemas] = useState(false);
+  const visibleEntities = useMemo(
+    () => filterEntities(entities, { nodeType, showSystemSchemas }),
+    [entities, nodeType, showSystemSchemas],
+  );
   const selectedKey = config.entity ? entityKey(config.entity) : '';
+  const selectedEntity = config.entity ? entities.find((e) => entityKey(e) === selectedKey) : undefined;
   const namespace = config.entity?.namespace;
   const grantCovers = namespace !== undefined && grantedNamespaces.has(namespace);
   const pendingGrant =
@@ -357,16 +471,47 @@ function SourceDestForm({
       ? grants.find((g) => !g.revokedAt && g.confirmedAt && grantScopeHasNamespace(g, namespace))
       : undefined;
 
+  // Self-heals nodes persisted before role-appropriate verbs existed (or any
+  // node whose stored `operation` otherwise falls outside this role's valid
+  // list) — e.g. a destination node saved back when only "read" was ever
+  // offered. Guarded to the ribbon slot only (this component renders twice
+  // per node, ribbon + detail) so it fires once per mount, not twice. The
+  // `operations.includes` check makes this idempotent: after the corrective
+  // onChange, the next run is a no-op.
+  useEffect(() => {
+    if (slot !== 'ribbon') return;
+    if (operations.length === 0) return;
+    if (!operations.includes(config.operation)) {
+      onChange({ ...config, operation: operations[0]! });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slot, operations.join(','), config.operation]);
+
   if (slot === 'detail') {
     if (nodeType !== 'destination' || !connectionId || namespace === undefined) return null;
     if (!grantCovers) {
       return <GrantAccessPanel connectionId={connectionId} connectorId={manifestId} namespace={namespace} pendingGrant={pendingGrant} />;
     }
     if (activeGrant) {
-      return <RevokeAccessPanel connectionId={connectionId} grant={activeGrant} namespace={namespace} />;
+      return <RevokeAccessPanel connectionId={connectionId} connectorId={manifestId} grant={activeGrant} namespace={namespace} />;
     }
     return null;
   }
+
+  // Phase 6 Block 2: a write verb unlocks once the node's connection has a
+  // confirmed, unrevoked write grant covering the selected entity's
+  // namespace — mirrors checkGrants' server-side pass condition exactly
+  // (@nia/schemas/checks.ts). This is layer 1 of the three-layer guardrail;
+  // the connector service and its actual DB privileges (layers 2/3) still
+  // enforce this independently. Same reason applies to every locked verb
+  // (doesn't vary by op), so it's computed once here — Item 5 (fix-chain
+  // plan) renders this as visible inline text next to the disabled verb(s),
+  // not only as a `title` tooltip (which is easy to miss/not discoverable
+  // on touch devices).
+  const lockedReason = !namespace
+    ? 'Select a table with an active write grant to unlock this verb.'
+    : `Requires a confirmed write grant covering "${namespace}".`;
+  const anyVerbLocked = operations.some((op) => WRITE_OPERATIONS.includes(op) && !grantCovers);
 
   return (
     <>
@@ -374,17 +519,8 @@ function SourceDestForm({
         <span style={configPanelGroupLabelStyle}>Verb</span>
         <div role="radiogroup" aria-label="Verb" style={segmentedControlStyle}>
           {operations.map((op) => {
-            // Phase 6 Block 2: a write verb unlocks once the node's connection
-            // has a confirmed, unrevoked write grant covering the selected
-            // entity's namespace — mirrors checkGrants' server-side pass
-            // condition exactly (@nia/schemas/checks.ts). This is layer 1 of
-            // the three-layer guardrail; the connector service and its actual
-            // DB privileges (layers 2/3) still enforce this independently.
             const isWriteOp = WRITE_OPERATIONS.includes(op);
             const locked = isWriteOp && !grantCovers;
-            const lockedReason = !namespace
-              ? 'Select a table with an active write grant to unlock this verb.'
-              : `Requires a confirmed write grant covering "${namespace}".`;
             const active = config.operation === op;
             return (
               <label
@@ -405,40 +541,89 @@ function SourceDestForm({
             );
           })}
         </div>
+        {anyVerbLocked && <span style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 4, display: 'block' }}>{lockedReason}</span>}
       </div>
 
       <div style={configPanelDividerStyle} />
 
       <div style={configPanelGroupStyle}>
         <span style={configPanelGroupLabelStyle}>Table</span>
-        {entities.length === 0 ? (
-          <span style={{ fontSize: 12, color: 'var(--ink4)', whiteSpace: 'nowrap' }}>
-            {connectionId ? 'Loading tables…' : 'Select a connection first.'}
-          </span>
-        ) : newTargetMode ? (
-          <NewTargetInputs entity={config.entity} onChange={(entity) => onChange({ ...config, entity })} onCancel={() => setNewTargetMode(false)} />
-        ) : (
-          <select
-            value={selectedKey}
-            onChange={(e) => {
-              if (e.target.value === NEW_TARGET_SENTINEL) {
-                setNewTargetMode(true);
-                return;
-              }
-              onChange({ ...config, entity: e.target.value ? parseEntityKey(e.target.value) : undefined });
-            }}
-            style={configPanelSelectStyle}
-          >
-            <option value="">{nodeType === 'source' ? 'Infer from mapping…' : 'Select a table…'}</option>
-            {entities.map((e) => (
-              <option key={entityKey(e)} value={entityKey(e)}>
-                {e.namespace ? `${e.namespace}.${e.name}` : e.name}
-              </option>
-            ))}
-            {/* Schema layer Part 4: "choose an existing target or type a new name" — destination only, since ensureDestination.ts (apps/worker) auto-creates a missing destination target from the contract, but a source still requires a pre-existing table to read from. */}
-            {nodeType === 'destination' && <option value={NEW_TARGET_SENTINEL}>+ Create new…</option>}
-          </select>
-        )}
+        {(() => {
+          const state = resolveTableFieldState({
+            connectionId,
+            newTargetMode,
+            isLoading: entitiesLoading,
+            isError: entitiesError,
+            errorMessage: entitiesErrorMessage,
+          });
+          if (state.kind === 'select-connection') {
+            return <span style={{ fontSize: 12, color: 'var(--ink4)', whiteSpace: 'nowrap' }}>Select a connection first.</span>;
+          }
+          if (state.kind === 'new-target') {
+            return <NewTargetInputs entity={config.entity} onChange={(entity) => onChange({ ...config, entity })} onCancel={() => setNewTargetMode(false)} />;
+          }
+          if (state.kind === 'loading') {
+            return <span style={{ fontSize: 12, color: 'var(--ink4)', whiteSpace: 'nowrap' }}>Loading tables…</span>;
+          }
+          if (state.kind === 'error') {
+            return <span style={{ fontSize: 12, color: 'var(--bad)' }}>{state.message}</span>;
+          }
+          // state.kind === 'select' — entities may legitimately be [] here (a
+          // real database with zero tables); the select still renders so
+          // destination nodes can reach "+ Create new…" below.
+          return (
+            <>
+              <select
+                value={selectedKey}
+                onChange={(e) => {
+                  if (e.target.value === NEW_TARGET_SENTINEL) {
+                    setNewTargetMode(true);
+                    return;
+                  }
+                  onChange({ ...config, entity: e.target.value ? parseEntityKey(e.target.value) : undefined });
+                }}
+                style={configPanelSelectStyle}
+              >
+                <option value="">{nodeType === 'source' ? 'Infer from mapping…' : 'Select a table…'}</option>
+                {visibleEntities.map((e) => (
+                  <option key={entityKey(e)} value={entityKey(e)}>
+                    {(e.namespace ? `${e.namespace}.${e.name}` : e.name) + (nodeType === 'source' && e.rlsBlocksRead ? ' (RLS: 0 rows)' : '')}
+                  </option>
+                ))}
+                {/* Schema layer Part 4: "choose an existing target or type a new name" — destination only, since ensureDestination.ts (apps/worker) auto-creates a missing destination target from the contract, but a source still requires a pre-existing table to read from. */}
+                {nodeType === 'destination' && <option value={NEW_TARGET_SENTINEL}>+ Create new…</option>}
+              </select>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--ink4)', marginTop: 6 }}>
+                <input type="checkbox" checked={showSystemSchemas} onChange={(e) => setShowSystemSchemas(e.target.checked)} />
+                Show system schemas
+              </label>
+              {nodeType === 'source' && selectedEntity?.rlsBlocksRead && (
+                <>
+                  <span style={{ fontSize: 12, color: 'var(--bad)', display: 'block', marginTop: 4 }}>
+                    Row-level security is enabled on this table with no policy covering this connection&apos;s role — reads will return 0 rows.
+                  </span>
+                  {selectedEntity.rlsFixSql && (
+                    <pre
+                      style={{
+                        fontFamily: 'var(--font-data)',
+                        fontSize: 11,
+                        background: 'var(--surface2)',
+                        border: '1px solid var(--line2)',
+                        borderRadius: 6,
+                        padding: 8,
+                        whiteSpace: 'pre-wrap',
+                        overflowX: 'auto',
+                        marginTop: 6,
+                      }}
+                    >
+                      {selectedEntity.rlsFixSql}
+                    </pre>
+                  )}
+                </>
+              )}
+            </>
+          );
+        })()}
       </div>
     </>
   );
@@ -625,7 +810,7 @@ export default function NodeDrawer({
             <SourceDestForm
               slot="ribbon"
               config={parsed.value as SourceDestConfig}
-              operations={manifest?.operations ?? ['read']}
+              operations={operationsForRole(manifest?.operations ?? ['read'], data.graphNodeType === 'destination' ? 'destination' : 'source')}
               nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
               connectionId={data.connectionId}
               manifestId={data.manifestId}
@@ -635,7 +820,7 @@ export default function NodeDrawer({
               <SourceDestForm
                 slot="detail"
                 config={parsed.value as SourceDestConfig}
-                operations={manifest?.operations ?? ['read']}
+                operations={operationsForRole(manifest?.operations ?? ['read'], data.graphNodeType === 'destination' ? 'destination' : 'source')}
                 nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
                 connectionId={data.connectionId}
                 manifestId={data.manifestId}

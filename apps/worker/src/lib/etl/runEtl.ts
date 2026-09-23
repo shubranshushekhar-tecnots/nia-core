@@ -581,7 +581,16 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   if (job.cursor === null) {
     const sourceFieldNames = entity.fields.map((f) => f.name);
     const mappedFromFields = new Set(mapping.entries.map((e) => e.from));
-    const unmapped = sourceFieldNames.filter((f) => !mappedFromFields.has(f));
+    // Compared against the pipeline's OUTPUT schema (runtimeContract.
+    // sourceSchema, post-transform), not the raw source entity: a
+    // transform step (computed_field, aggregate, ...) can rename or
+    // produce fields the mapping legitimately references, and those never
+    // appear in entity.fields. Comparing against the raw entity here would
+    // misreport every raw column as "unmapped" whenever any transform
+    // step renamed/added a field, since the mapping's `from` names refer
+    // to the transform-produced names, not the raw source's.
+    const outputFieldNames = Object.keys(runtimeContract.sourceSchema.fields);
+    const unmapped = outputFieldNames.filter((f) => !mappedFromFields.has(f));
     if (unmapped.length > 0) {
       if (contract.unknownFieldPolicy === "fail") {
         return failStaged(`${unmapped.length} source field(s) are not covered by the approved mapping: ${unmapped.join(", ")}.`);
@@ -589,6 +598,10 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       unknownFields = unmapped;
     }
 
+    // sourceColumnsAtApproval is a snapshot of the RAW source table's
+    // columns at mapping-approval time (schema drift on the underlying
+    // table itself), unrelated to the transform pipeline — this diff
+    // intentionally stays against entity.fields, not the output schema.
     if (mapping.sourceColumnsAtApproval) {
       const approvedColumns = new Set(mapping.sourceColumnsAtApproval);
       const added = sourceFieldNames.filter((f) => !approvedColumns.has(f));

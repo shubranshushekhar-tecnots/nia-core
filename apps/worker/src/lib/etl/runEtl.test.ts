@@ -143,7 +143,18 @@ function schema(primaryKey: string | null = "id") {
         {
           namespace: "public",
           name: "users",
-          fields: [{ name: "id", type: "string" }, { name: "email", type: "string" }],
+          // "cohort"/"amount" are raw source columns some suites below
+          // group-by/reference directly (aggregate pagination, stateful
+          // residual, onFailure) — must be declared here so
+          // compileTransformOutputSchema/buildDestinationContract can
+          // resolve them against the pipeline's real (introspected) input
+          // schema, same as "id"/"email".
+          fields: [
+            { name: "id", type: "string" },
+            { name: "email", type: "string" },
+            { name: "cohort", type: "string" },
+            { name: "amount", type: "string" },
+          ],
           primaryKey,
         },
       ],
@@ -305,6 +316,66 @@ describe("runEtl — mapping references a field missing after transforms (item 0
     expect(dispatchWriteMock).not.toHaveBeenCalled();
     expect(recordChunkProgressMock).not.toHaveBeenCalled();
     expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
+  });
+});
+
+describe("runEtl — unknownFields compares against the pipeline's output schema, not the raw source entity", () => {
+  it("reports no unknown fields for a pipeline whose computed_field renames a column", async () => {
+    // computed_field derives "full_name" from "email" without removing
+    // "email" itself, so drop_fields follows to remove every raw column —
+    // the pipeline's real OUTPUT schema ends up as just { full_name }. The
+    // mapping only maps "full_name". Comparing against the raw source
+    // entity (id/email/cohort/amount) would misreport all four raw columns
+    // as unmapped, even though the pipeline legitimately consumed/dropped
+    // them and never exposed them to the mapping.
+    const parsed = parseExpression("to_text(email)");
+    if (!parsed.ok) throw new Error(parsed.error);
+    const renameGraph: GraphDoc = {
+      nodes: [
+        graph().nodes[0]!,
+        { id: "noop", type: "transform", position: { x: 100, y: 0 }, config: { steps: [] } },
+        {
+          id: "rename",
+          type: "transform",
+          position: { x: 200, y: 0 },
+          config: {
+            steps: [
+              { kind: "computed_field", name: "full_name", expression: parsed.expr },
+              { kind: "drop_fields", fields: ["id", "email", "cohort", "amount"] },
+            ],
+          },
+        },
+        {
+          id: "dest",
+          type: "destination",
+          manifestId: "supabase",
+          connectionId: DEST_CONN,
+          position: { x: 400, y: 0 },
+          config: {
+            operation: "insert",
+            entity: { namespace: "public", name: "users_dest" },
+            mapping: { version: 1, entries: [{ from: "full_name", to: "full_name" }], approvedAt: "2026-01-01T00:00:00.000Z" },
+            upsertKeys: ["full_name"],
+            writeMode: "direct",
+          },
+        },
+      ],
+      edges: [
+        { id: "e0", source: "src", target: "noop" },
+        { id: "e1", source: "noop", target: "rename" },
+        { id: "e2", source: "rename", target: "dest" },
+      ],
+    };
+    resolveGraphMock.mockResolvedValueOnce(renameGraph);
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result.status).toBe("done");
+    const doneCall = publishRunEventMock.mock.calls.find(([, , event]) => (event as { type: string }).type === "done");
+    expect(doneCall).toBeDefined();
+    expect((doneCall![2] as { unknownFields?: unknown }).unknownFields).toBeUndefined();
   });
 });
 
@@ -642,7 +713,14 @@ describe("runEtl — onFailure abort / failure-count threading (Phase 8b-3)", ()
       job.runId,
       expect.objectContaining({
         type: "done",
-        failures: [{ label: 'computed_field "y"', fns: ["to_number"], policy: "null", count: 1 }],
+        // Schema layer Part 5's runtime conformance cast (ops/conformance.ts)
+        // always runs after the residual steps too — "y"'s contract type is
+        // float, so it always contributes its own (possibly count: 0)
+        // "conformance" report alongside this step's own residual report.
+        failures: [
+          { label: 'computed_field "y"', fns: ["to_number"], policy: "null", count: 1 },
+          { label: 'conformance "y"', fns: ["to_number"], policy: "quarantine", count: 0 },
+        ],
       }),
     );
   });
@@ -672,7 +750,10 @@ describe("runEtl — onFailure abort / failure-count threading (Phase 8b-3)", ()
       job.runId,
       expect.objectContaining({
         type: "done",
-        failures: [{ label: 'computed_field "y"', fns: ["to_number"], policy: "null", count: 0 }],
+        failures: [
+          { label: 'computed_field "y"', fns: ["to_number"], policy: "null", count: 0 },
+          { label: 'conformance "y"', fns: ["to_number"], policy: "quarantine", count: 0 },
+        ],
       }),
     );
   });

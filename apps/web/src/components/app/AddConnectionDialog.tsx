@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef } from 'react';
 import type { ConfigField } from '@nia/schemas';
 import { createConnectionAction } from '@/lib/connections/actions';
+import { autoCompleteFor } from '@/lib/connections/formFields';
 import type { ActionState } from '@/lib/auth/actions';
 import {
   modalActionsStyle,
@@ -111,6 +112,12 @@ export default function AddConnectionDialog({
                     id={`connection-field-${field.key}`}
                     name={field.key}
                     type="checkbox"
+                    // Boolean fields today are exactly one thing: "Use TLS"
+                    // (postgres/supabase's `ssl`). Defaulting to on matches
+                    // real hosted targets (Supabase, Neon, etc.) which all
+                    // require TLS — an unchecked-by-default toggle just
+                    // means most users silently fail their first connect.
+                    defaultChecked
                     ref={(el) => {
                       fieldRefs.current[field.key] = el;
                     }}
@@ -132,6 +139,12 @@ export default function AddConnectionDialog({
                   type={inputType(field)}
                   required={field.required}
                   placeholder={field.placeholder}
+                  // The browser autofilling a *different* connection's saved
+                  // credentials (e.g. the Supabase admin login) into this
+                  // form is worse than useless here — every connection's
+                  // username/password is target-specific and should never be
+                  // suggested from another site/account's saved credentials.
+                  autoComplete={autoCompleteFor(field)}
                   ref={(el) => {
                     fieldRefs.current[field.key] = el;
                   }}

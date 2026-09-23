@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { getConnectorManifest } from '@nia/schemas';
+import { friendlyConnectionError, getConnectorManifest } from '@nia/schemas';
 import { apiFetchServer, ApiError } from '@/lib/api/server';
 import type { ActionState } from '@/lib/auth/actions';
 
@@ -15,6 +15,23 @@ import type { ActionState } from '@/lib/auth/actions';
 function apiErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiError) return err.message || fallback;
   return fallback;
+}
+
+/**
+ * Item 5 (fix-chain plan): only `testConnectionAction`/`refreshConnectionSchemaAction`
+ * surface raw connector/driver text (the `/test` and `/schema/refresh` Express
+ * routes forward the connector service's own error message verbatim) — the
+ * other actions in this file (install/create/uninstall/delete) surface
+ * structured `AppError`-style messages (e.g. "No manifest for connector...",
+ * usage-warning text) that aren't raw driver errors and shouldn't be run
+ * through `friendlyConnectionError`'s pattern-matching (its generic
+ * "Connection failed." fallback would mislabel them). So this helper is used
+ * only by those two actions, not folded into `apiErrorMessage` itself.
+ */
+function friendlyApiErrorMessage(err: unknown, fallback: string): ActionState {
+  if (!(err instanceof ApiError) || !err.message) return { error: fallback };
+  const { summary, details } = friendlyConnectionError(err.message);
+  return { error: summary, errorDetails: details };
 }
 
 export async function installConnectorAction(
@@ -63,7 +80,16 @@ export async function createConnectionAction(
     if (raw === null || raw === '') continue;
     if (field.type === 'number') fields[field.key] = Number(raw);
     else if (field.type === 'boolean') fields[field.key] = raw === 'on' || raw === 'true';
-    else fields[field.key] = String(raw);
+    // Trim text fields (host/database/user) but never `password` — accidental
+    // leading/trailing whitespace here doesn't just look wrong, it silently
+    // corrupts the value: node-postgres sends `host` verbatim as the TLS SNI
+    // `servername`, and a servername with leading whitespace makes Neon's
+    // (and presumably any SNI-routing proxy's) TLS layer reject the
+    // handshake with an opaque "SSL alert number 47 (illegal_parameter)" —
+    // a confusing failure mode with no hint that the real problem is a
+    // pasted/typed space in the Host field.
+    else if (field.type === 'password') fields[field.key] = String(raw);
+    else fields[field.key] = String(raw).trim();
   }
 
   try {
@@ -97,7 +123,7 @@ export async function testConnectionAction(
   try {
     await apiFetchServer(`/connections/${connectionId}/test`, { method: 'POST' });
   } catch (err) {
-    return { error: apiErrorMessage(err, "Couldn't run the test. Try again.") };
+    return friendlyApiErrorMessage(err, "Couldn't run the test. Try again.");
   }
   revalidatePath('/app/connections');
   return { success: true };
@@ -120,7 +146,7 @@ export async function refreshConnectionSchemaAction(
   try {
     await apiFetchServer(`/connections/${connectionId}/schema/refresh`, { method: 'POST' });
   } catch (err) {
-    return { error: apiErrorMessage(err, "Couldn't refresh the schema. Try again.") };
+    return friendlyApiErrorMessage(err, "Couldn't refresh the schema. Try again.");
   }
   revalidatePath('/app/connections');
   return { success: true };

@@ -4844,3 +4844,72 @@ correctly on their own). Fixed by `writeValueCoercion.ts`:
 destination column's actual type and `JSON.stringify` only for real
 `json`/`jsonb` columns, refusing (not silently stringifying) an
 object/array value bound to any other column type.
+
+## Staging/quarantine writes in `nia` inherit the destination grant for that run, and nothing wider
+
+Staged runs (the default write mode) write every chunk to a per-run
+staging table, and any quarantined rows to `nia_quarantine`, both
+physically located in Nia's own internal `"nia"` schema/database (see
+`stagingRegistry.ts`'s `STAGING_NAMESPACE`) — not the user-chosen
+destination schema. The write-grant model only ever lets a user confirm
+a grant for a destination schema they picked in the UI; there is no UI
+path to confirm a grant for `"nia"` itself, since it isn't a user
+choice. Before this fix, both the worker's pre-check
+(`resolveWriteGrant.ts`) and each connector's independent re-check
+(`verifyActiveWriteGrant`) matched on the *physical* write target's
+namespace — so every staged run's first quarantine/staging write failed
+with "No confirmed, unrevoked write grant covers schema 'nia'", 100% of
+the time, for every staged run, regardless of how the destination
+schema's own grant was configured.
+
+**Rejected fix:** treating `"nia"` as covered by "any confirmed grant on
+the connection." That would let a grant confirmed for one destination
+schema silently authorize staging/quarantine writes for a *different,
+unapproved* destination schema on the same connection — too wide.
+
+**Chosen fix:** a write into `"nia"` is authorized only by the confirmed,
+unrevoked grant belonging to *that same run's own destination schema* —
+never inferred from the physical entity, always passed through
+explicitly. This is threaded end-to-end as a new `grantNamespace` field
+on the signed `WriteContext`/`WriteSignaturePayload`
+(`packages/schemas/src/contract.ts`, duplicated in each connector's
+`writeSignature.ts` per the existing no-shared-runtime-code-with-the-
+browser-bundle constraint): the namespace whose grant authorizes a write,
+distinct from `entity.namespace` only for staging/quarantine writes. The
+worker computes it once, from the run's own resolved destination config
+(`stagedWrite.ts`'s `writeChunkRows`/`writeQuarantineRows`) — never
+client-supplied — and it's part of the HMAC-signed payload, so a
+connector's independent re-check (`verifyActiveWriteGrant`) tests the
+exact same namespace the worker already validated, not the physical
+entity it's writing to. `/stage` and `/create-entity` always operate on
+the real destination entity already, so `grantNamespace` there simply
+equals `entity.namespace` (no behavior change, just consistent field
+population for signature binding).
+
+Because `runPreflight` (`stagedWrite.ts`) already checks the
+destination namespace's grant before extraction starts, and every later
+staging/quarantine write for that run now checks that identical
+namespace, a missing/revoked destination grant is caught up front —
+preflight fail-fast falls out of the `grantNamespace` fix itself, no
+separate ordering change needed (`ensureDestination()`'s real `CREATE
+TABLE` already runs after preflight passes).
+
+**Generated grant DDL** (`writeGrantStatement.ts`) was also missing the
+privileges a staged run needs for a **new** destination table: `CREATE`
+on the destination schema/database, plus `"nia"`'s own `CREATE SCHEMA`/
+`USAGE, CREATE` (postgres) or `CREATE, DROP` (mysql). Deliberately
+**not** `GRANT CREATE ON DATABASE` — too powerful for what's needed.
+Postgres: the admin-run statement itself does
+`CREATE SCHEMA IF NOT EXISTS "nia"` and grants the role only
+`USAGE, CREATE` on that schema (plus `CREATE` added to the existing
+`GRANT ... ON SCHEMA <dest>`). Mysql: `GRANT CREATE, DROP ON`
+`` `nia`.* `` — MySQL uniquely allows granting privileges on a database
+name that doesn't exist yet, so no admin pre-creation step is needed,
+unlike postgres schemas (plus `CREATE` added to the existing
+`GRANT ... ON <dest>.*`). Mongodb needs no DDL change: its existing
+`readWrite` role already includes `createCollection`, and mongo never
+uses `"nia"`/staged mode at all (mongo's connector has no `/stage`
+endpoint — no multi-document transactions on standalone `mongod` — so
+this bug never applied there; `grantNamespace` is still threaded through
+mongo's `/write`/`/create-entity` for type/signature consistency, with
+no behavior change).

@@ -195,6 +195,7 @@ app.post("/write", async (req): Promise<WriteResponse> => {
       grantId: body.context.grantId,
       runId: body.context.runId,
       entity: body.context.entity,
+      grantNamespace: body.context.grantNamespace,
       columns: body.context.columns,
       mode: body.context.mode,
       stagingEntity: body.context.stagingEntity,
@@ -209,7 +210,7 @@ app.post("/write", async (req): Promise<WriteResponse> => {
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
-    body.entity.namespace,
+    body.context.grantNamespace,
   );
   if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
 
@@ -305,6 +306,7 @@ app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
       grantId: body.context.grantId,
       runId: body.context.runId,
       entity: body.context.entity,
+      grantNamespace: body.context.grantNamespace,
       columns: body.context.columns,
       mode: body.context.mode,
       stagingEntity: body.context.stagingEntity,
@@ -319,7 +321,7 @@ app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
-    body.entity.namespace,
+    body.context.grantNamespace,
   );
   if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
 

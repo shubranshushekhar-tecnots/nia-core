@@ -128,6 +128,18 @@ function typeOfCall(expr: ExprCall, input: NiaSchema): ExprTypeResult {
     }
     return { ok: true, type: candidates.reduce((acc, t) => join(acc, t).type) };
   }
+  // Every other call fn has a fixed return type (CALL_FN_TYPE[expr.fn]),
+  // independent of its arguments' types — but its arguments still need to
+  // be valid expressions against `input`. Without this, a typo'd/missing
+  // field reference nested inside a call's arguments (e.g.
+  // to_number(missing_col)) would silently pass validation, contradicting
+  // the "never guess" rule this module otherwise enforces uniformly.
+  // typeOfExpr recurses through nested calls/binary/conditional on its own,
+  // so a single pass over `expr.args` here is sufficient depth.
+  for (const arg of expr.args) {
+    const t = typeOfExpr(arg, input);
+    if (!t.ok) return t;
+  }
   return { ok: true, type: CALL_FN_TYPE[expr.fn] };
 }
 

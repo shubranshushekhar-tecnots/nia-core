@@ -151,4 +151,49 @@ describe("dispatchWrite", () => {
     expect(result).toEqual({ ok: false, error: { kind: "service-error", message: "boom" } });
     expect(logExecutionAuditMock).toHaveBeenCalledWith(expect.objectContaining({ query: expect.stringContaining("boom") }));
   });
+
+  // "nia" scope rule (see docs/decisions.md): a write physically targeting
+  // Nia's internal "nia" schema (a staging/quarantine entity) is authorized
+  // by the run's own destination grant, passed through explicitly as
+  // `grantNamespace` — never inferred from the physical entity's namespace.
+  describe("grantNamespace (nia scope rule)", () => {
+    const niaInput = {
+      entity: { namespace: "nia", name: "stg_run1_orders" },
+      columns: ["id", "total"],
+      rows: [[1, 100]],
+      upsertKeys: ["id"],
+      grantNamespace: "sales",
+    };
+
+    it("allowed: checks the grant for the run's destination namespace, not the physical 'nia' entity", async () => {
+      resolveConnectionMock.mockResolvedValue({ ok: true, value: resolvedConnection });
+      resolveWriteGrantMock.mockResolvedValue({
+        ok: true,
+        value: { grantId: "grant-1", credVersion: 7, vaultRef: "write-vault-ref" },
+      });
+      sendWriteRequestMock.mockResolvedValue({ ok: true, value: { written: 1, durationMs: 5 } });
+
+      const result = await dispatchWrite(CONNECTION_ID, niaInput, SCOPE, ACTOR_ID);
+
+      expect(result.ok).toBe(true);
+      expect(resolveWriteGrantMock).toHaveBeenCalledWith(CONNECTION_ID, "sales");
+      const [, request] = sendWriteRequestMock.mock.calls[0] as [unknown, { context: { grantNamespace: string } }];
+      expect(request.context.grantNamespace).toBe("sales");
+    });
+
+    it("refused: a grant confirmed only for a different schema does not authorize the 'nia' write", async () => {
+      resolveConnectionMock.mockResolvedValue({ ok: true, value: resolvedConnection });
+      resolveWriteGrantMock.mockResolvedValue({
+        ok: false,
+        error: { kind: "grant-invalid", message: 'No confirmed, unrevoked write grant covers schema "sales" on connection ' + CONNECTION_ID + "." },
+      });
+
+      const result = await dispatchWrite(CONNECTION_ID, niaInput, SCOPE, ACTOR_ID);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.kind).toBe("grant-invalid");
+      expect(resolveWriteGrantMock).toHaveBeenCalledWith(CONNECTION_ID, "sales");
+      expect(sendWriteRequestMock).not.toHaveBeenCalled();
+    });
+  });
 });

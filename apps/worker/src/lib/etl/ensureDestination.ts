@@ -8,6 +8,7 @@ import {
   type CreateEntityKind,
   type DestinationContract,
   type DestinationMappingEntry,
+  type NiaSchema,
   type SchemaEntity,
   type SourceDestConfig,
   type SourceDialect,
@@ -21,7 +22,9 @@ import { computeContractHash } from "./destinationContractHash.js";
 import type { WorkspaceScope } from "../workspaceScope.js";
 
 type SimpleResult = { ok: true } | { ok: false; message: string };
-type ContractResult = { ok: true; contract: DestinationContract } | { ok: false; message: string };
+type ContractResult =
+  | { ok: true; contract: DestinationContract; sourceSchema: NiaSchema }
+  | { ok: false; message: string };
 
 /**
  * Schema layer, Part 5 — the pure, no-I/O contract-building step factored
@@ -46,6 +49,12 @@ type ContractResult = { ok: true; contract: DestinationContract } | { ok: false;
  * building only ever saw the raw source schema, so an Aggregate-sourced
  * mapping could never resolve) is what this function now fixes, not a
  * case to degrade gracefully around.
+ *
+ * Returns `sourceSchema` (the pipeline's OUTPUT schema, post-transform)
+ * alongside the contract so callers that need to reason about which
+ * fields the mapping had available to it — e.g. runEtl.ts's unknown-
+ * field-policy check — compare against the same schema the contract was
+ * actually built from, not the raw pre-transform source entity.
  */
 export function buildRuntimeContract(
   destDialect: SourceDialect,
@@ -93,7 +102,7 @@ export function buildRuntimeContract(
     }
   }
 
-  return { ok: true, contract };
+  return { ok: true, contract, sourceSchema };
 }
 
 /**
@@ -156,7 +165,9 @@ export async function ensureDestination(
   if (existing) {
     const compared = compareContractToExisting(contract, existing);
     if (!compared.ok) {
-      const detail = compared.diffs.map((d) => d.detail).join("; ");
+      const detail = compared.diffs
+        .map((d) => (d.alterStatement ? `${d.detail} (fix: ${d.alterStatement})` : d.detail))
+        .join("; ");
       return {
         ok: false,
         message: `Destination "${destEntity.namespace}.${destEntity.name}" already exists but doesn't match the approved contract: ${detail}`,
