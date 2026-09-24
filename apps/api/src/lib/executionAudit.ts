@@ -1,5 +1,5 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { ExecutionAuditInput, type ExecutionAuditInput as ExecutionAuditInputType } from "@nia/schemas";
+import type { WithUser } from "./withUser.js";
 
 /**
  * The one and only execution-audit call site for apps/api. Every route that
@@ -9,24 +9,20 @@ import { ExecutionAuditInput, type ExecutionAuditInput as ExecutionAuditInputTyp
  * RPC, which is the only insert path that exists for this table from
  * application code.
  *
- * `supabase` must be the caller's own per-request client (req.supabase) —
- * the RPC derives the actor from auth.uid() for authenticated callers, so
- * passing a different client would misattribute the execution.
+ * `withUser` must be the caller's own request-scoped closure (req.withUser)
+ * — the function derives the actor from auth.uid() for authenticated
+ * callers, so passing a different acting-user context would misattribute
+ * the execution.
  */
 export async function logExecutionAudit(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   input: ExecutionAuditInputType,
 ): Promise<void> {
   const parsed = ExecutionAuditInput.parse(input);
-  const { error } = await supabase.rpc("log_execution_audit", {
-    p_connection_id: parsed.connectionId,
-    p_connection_owner_user_id: parsed.connectionOwnerUserId,
-    p_connector_id: parsed.connectorId,
-    p_handle: parsed.handle,
-    p_operation: parsed.operation,
-    p_query: parsed.query,
-  });
-  if (error) {
-    throw new Error(`execution audit failed: ${error.message}`);
-  }
+  await withUser((db) =>
+    db.query(
+      `select public.log_execution_audit($1, $2, $3, $4, $5, $6)`,
+      [parsed.connectionId, parsed.connectionOwnerUserId, parsed.connectorId, parsed.handle, parsed.operation, parsed.query],
+    ),
+  );
 }

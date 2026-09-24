@@ -40,7 +40,7 @@ import { ensureDestination, buildRuntimeContract } from "./ensureDestination.js"
 import { buildEtlReadQuery, buildFailurePreCheckQuery, MAX_CHUNK_ROWS } from "./queryBuilder.js";
 import { startRun, recordChunkProgress, finishRun, getRunCheckpoint } from "./workflowRuns.js";
 import { publishRunEvent } from "./publish.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 import { dispatchDropEntity } from "../stagedWriteDispatch.js";
 import { registerDestinationObject, findActiveDestinationObject, markDestinationDropped } from "./stagingRegistry.js";
 import {

@@ -1,5 +1,5 @@
-import { supabase } from "../supabaseClient.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import { withServiceRole, type WorkspaceScope } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 
 /** Subset of TabularMeta (@nia/schemas' tabular.ts) persisted per citation. */
 export interface PersistedCitation {
@@ -15,9 +15,9 @@ export type AssistantMessageStatus = "complete" | "refused" | "error" | "conflic
  * Writes the final assistant message row once a chat job reaches a
  * terminal state (done/refused/error/conflict — see index.ts's call
  * sites, one per terminal branch of both the single- and multi-source
- * graphs). Uses the service-role client (supabaseClient.ts) because RLS
- * forbids any authenticated client from ever inserting role='assistant'
- * rows (supabase/migrations/0010_chat_conversations.sql's
+ * graphs). Uses withServiceRole (@nia/db) because RLS forbids any
+ * authenticated client from ever inserting role='assistant' rows
+ * (supabase/migrations/0010_chat_conversations.sql's
  * messages_insert_own_user_messages policy hard-requires role='user') —
  * scope/conversationId here come straight from the trusted BullMQ job
  * payload, never re-derived from anything client-controlled, so this is
@@ -36,19 +36,23 @@ export async function persistAssistantMessage(params: {
   citations: PersistedCitation[];
   status: AssistantMessageStatus;
 }): Promise<void> {
-  const { error } = await supabase.from("messages").insert({
-    conversation_id: params.conversationId,
-    org_id: "orgId" in params.scope ? params.scope.orgId : null,
-    owner_id: "orgId" in params.scope ? null : params.scope.ownerId,
-    role: "assistant",
-    content: params.content,
-    citations: params.citations,
-    status: params.status,
-  });
-  if (error) {
-    console.error(
-      `[chat] failed to persist assistant message for conversation ${params.conversationId}:`,
-      error.message,
+  try {
+    await withServiceRole(dbPool, (db) =>
+      db.query(
+        `insert into public.messages (conversation_id, org_id, owner_id, role, content, citations, status)
+         values ($1, $2, $3, 'assistant', $4, $5, $6)`,
+        [
+          params.conversationId,
+          "orgId" in params.scope ? params.scope.orgId : null,
+          "orgId" in params.scope ? null : params.scope.ownerId,
+          params.content,
+          JSON.stringify(params.citations),
+          params.status,
+        ],
+      ),
     );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[chat] failed to persist assistant message for conversation ${params.conversationId}:`, message);
   }
 }

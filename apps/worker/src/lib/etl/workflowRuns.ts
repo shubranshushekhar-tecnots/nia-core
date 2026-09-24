@@ -1,5 +1,5 @@
-import type { WorkspaceScope } from "../workspaceScope.js";
-import { supabase } from "../supabaseClient.js";
+import { withServiceRole, type WorkspaceScope } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 
 /**
  * Phase 6 Block 3 — the ETL runner's own writes to `workflow_runs`
@@ -24,17 +24,13 @@ import { supabase } from "../supabaseClient.js";
  * columns is ever set on a row; no migration was needed for this change.
  */
 export async function startRun(runId: string, workflowId: string, scope: WorkspaceScope): Promise<void> {
-  await supabase.from("workflow_runs").upsert(
-    {
-      id: runId,
-      workflow_id: workflowId,
-      org_id: "orgId" in scope ? scope.orgId : null,
-      owner_id: "ownerId" in scope ? scope.ownerId : null,
-      status: "running",
-      rows_processed: 0,
-      started_at: new Date().toISOString(),
-    },
-    { onConflict: "id", ignoreDuplicates: true },
+  await withServiceRole(dbPool, (db) =>
+    db.query(
+      `insert into public.workflow_runs (id, workflow_id, org_id, owner_id, status, rows_processed, started_at)
+       values ($1, $2, $3, $4, 'running', 0, now())
+       on conflict (id) do nothing`,
+      [runId, workflowId, "orgId" in scope ? scope.orgId : null, "ownerId" in scope ? scope.ownerId : null],
+    ),
   );
 }
 
@@ -52,9 +48,13 @@ export async function startRun(runId: string, workflowId: string, scope: Workspa
  * cursor_json only ever advances past a chunk that's durably landed.
  */
 export async function recordChunkProgress(runId: string, rowsWrittenThisChunk: number, cursorJson: string): Promise<number> {
-  const { data } = await supabase.from("workflow_runs").select("rows_processed").eq("id", runId).maybeSingle();
-  const total = (data?.rows_processed ?? 0) + rowsWrittenThisChunk;
-  await supabase.from("workflow_runs").update({ rows_processed: total, cursor_json: cursorJson }).eq("id", runId);
+  const selectResult = await withServiceRole(dbPool, (db) =>
+    db.query<{ rows_processed: number }>("select rows_processed from public.workflow_runs where id = $1", [runId]),
+  );
+  const total = (selectResult.rows[0]?.rows_processed ?? 0) + rowsWrittenThisChunk;
+  await withServiceRole(dbPool, (db) =>
+    db.query("update public.workflow_runs set rows_processed = $1, cursor_json = $2 where id = $3", [total, cursorJson, runId]),
+  );
   return total;
 }
 
@@ -69,17 +69,27 @@ export type RunCheckpoint = { status: "running" | "succeeded" | "failed" | "canc
  * between chunks and this call already reads the same row.
  */
 export async function getRunCheckpoint(runId: string): Promise<RunCheckpoint> {
-  const { data } = await supabase.from("workflow_runs").select("status, cursor_json").eq("id", runId).single();
-  return { status: data!.status as RunCheckpoint["status"], cursor: (data!.cursor_json as string | null) ?? null };
+  const result = await withServiceRole(dbPool, (db) =>
+    db.query<{ status: string; cursor_json: string | null }>("select status, cursor_json from public.workflow_runs where id = $1", [runId]),
+  );
+  const data = result.rows[0];
+  return { status: data!.status as RunCheckpoint["status"], cursor: data!.cursor_json ?? null };
 }
 
 export async function finishRun(runId: string, status: "succeeded" | "failed" | "cancelled"): Promise<number> {
-  const { data } = await supabase.from("workflow_runs").select("started_at").eq("id", runId).maybeSingle();
+  const selectResult = await withServiceRole(dbPool, (db) =>
+    db.query<{ started_at: string | null }>("select started_at from public.workflow_runs where id = $1", [runId]),
+  );
+  const startedAt = selectResult.rows[0]?.started_at ?? null;
   const finishedAt = new Date();
-  const durationMs = data?.started_at ? finishedAt.getTime() - new Date(data.started_at as string).getTime() : 0;
-  await supabase
-    .from("workflow_runs")
-    .update({ status, finished_at: finishedAt.toISOString(), duration_ms: durationMs })
-    .eq("id", runId);
+  const durationMs = startedAt ? finishedAt.getTime() - new Date(startedAt).getTime() : 0;
+  await withServiceRole(dbPool, (db) =>
+    db.query("update public.workflow_runs set status = $1, finished_at = $2, duration_ms = $3 where id = $4", [
+      status,
+      finishedAt.toISOString(),
+      durationMs,
+      runId,
+    ]),
+  );
   return durationMs;
 }

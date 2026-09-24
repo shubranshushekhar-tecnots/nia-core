@@ -1,6 +1,7 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
+import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
 import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
@@ -10,13 +11,13 @@ import { getContinueWorkflow, getDashboardStats, getRecentRuns } from "../servic
 
 export const dashboardRouter: ExpressRouter = Router();
 
-dashboardRouter.use(requireAuth, attachActor);
+dashboardRouter.use(requireAuth, attachDb, attachActor);
 
 dashboardRouter.get(
   "/stats",
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await getDashboardStats(req.supabase, scopeFromActor(req.actor));
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getDashboardStats(req.withUser, scopeFromActor(req.actor));
     res.json(data);
   }),
 );
@@ -24,8 +25,8 @@ dashboardRouter.get(
 dashboardRouter.get(
   "/continue",
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await getContinueWorkflow(req.supabase, scopeFromActor(req.actor));
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getContinueWorkflow(req.withUser, scopeFromActor(req.actor));
     res.json(data);
   }),
 );
@@ -38,9 +39,9 @@ dashboardRouter.get(
   "/recent-runs",
   validate({ query: recentRunsQuerySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const limit = req.query.limit as number | undefined;
-    const data = await getRecentRuns(req.supabase, scopeFromActor(req.actor), limit);
+    const data = await getRecentRuns(req.withUser, scopeFromActor(req.actor), limit);
     res.json(data);
   }),
 );

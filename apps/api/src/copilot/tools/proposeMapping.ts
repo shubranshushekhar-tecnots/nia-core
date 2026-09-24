@@ -19,7 +19,7 @@ const tool: ToolDefinition<Input, Output> = {
   description: "Proposes field mappings from source to a destination node. Returns entries for the user to review; does not apply anything.",
   tier: "edit",
   inputSchema: InputSchema,
-  handler: async (ctx, input) => proposeMappingForWorkflow(ctx.supabase, ctx.user.scope, input.workflowId, input.destNodeId, ctx.user.userId),
+  handler: async (ctx, input) => proposeMappingForWorkflow(ctx.withUser, ctx.user.scope, input.workflowId, input.destNodeId, ctx.user.userId),
   summarize: (output) =>
     output.entries.length === 0
       ? "No mapping entries proposed."

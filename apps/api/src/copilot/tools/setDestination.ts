@@ -31,7 +31,7 @@ const tool: ToolDefinition<Input, Output> = {
   tier: "edit",
   inputSchema: InputSchema,
   handler: async (ctx, input) => {
-    const current = await getWorkflowGraph(ctx.supabase, ctx.user.scope, input.workflowId);
+    const current = await getWorkflowGraph(ctx.withUser, ctx.user.scope, input.workflowId);
     const before = current.graph.nodes.find((n) => n.id === input.nodeId);
     if (!before) throw new AppError(404, "NOT_FOUND", "Node not found in this workflow's graph.");
 
@@ -45,7 +45,7 @@ const tool: ToolDefinition<Input, Output> = {
       },
     };
 
-    return applyPlanDiff(ctx.supabase, ctx.user.scope, input.workflowId, {
+    return applyPlanDiff(ctx.withUser, ctx.user.scope, input.workflowId, {
       diff: {
         summary: `Set destination for node ${input.nodeId}`,
         baseGraphVersion: current.version,

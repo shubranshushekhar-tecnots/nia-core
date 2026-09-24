@@ -1,5 +1,6 @@
+import { withServiceRole } from "@nia/db";
+import { dbPool } from "../../dbPool.js";
 import { resolveGraph } from "../../checks/runWorkflowChecks.js";
-import { supabase } from "../../supabaseClient.js";
 import { listVisibleConnections } from "../listConnections.js";
 import type { PlanStateType } from "../state.js";
 
@@ -26,7 +27,9 @@ export async function resolveScopeNode(state: PlanStateType): Promise<Partial<Pl
   if (!graph) {
     return { error: `Workflow ${state.workflowId} not found in the given workspace.` };
   }
-  const { data: graphRow } = await supabase.from("workflow_graphs").select("version").eq("workflow_id", state.workflowId).maybeSingle();
+  const graphResult = await withServiceRole(dbPool, (db) =>
+    db.query<{ version: number }>("select version from public.workflow_graphs where workflow_id = $1", [state.workflowId]),
+  );
   const connections = await listVisibleConnections(state.scope);
-  return { existingGraph: graph, graphVersion: graphRow?.version ?? 0, connections };
+  return { existingGraph: graph, graphVersion: graphResult.rows[0]?.version ?? 0, connections };
 }

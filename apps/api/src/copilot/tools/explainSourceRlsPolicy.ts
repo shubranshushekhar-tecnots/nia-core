@@ -25,7 +25,7 @@ const tool: ToolDefinition<Input, Output> = {
   tier: "read",
   inputSchema: InputSchema,
   handler: async (ctx, input) => {
-    const schema = await getConnectionSchema(ctx.supabase, ctx.user.scope, input.connectionId);
+    const schema = await getConnectionSchema(ctx.withUser, ctx.user.scope, input.connectionId);
     const entity = schema.entities.find((e) => e.namespace === input.entity.namespace && e.name === input.entity.name);
     if (!entity) throw new AppError(404, "ENTITY_NOT_FOUND", `Entity ${input.entity.namespace}.${input.entity.name} not found in this connection's schema.`);
     return { blocked: entity.rlsBlocksRead === true, statement: entity.rlsFixSql ?? null };

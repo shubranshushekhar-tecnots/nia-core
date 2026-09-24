@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { AppError } from "../lib/appError.js";
+import type { WithUser } from "../lib/withUser.js";
 
 /**
  * Copilot agent (Part 3): the confirmation mechanism an execute-tier tool
@@ -65,27 +65,40 @@ function toPendingAction(row: PendingActionRow): PendingAction {
 
 /** Created by an execute-tier tool's handler, before it refuses to proceed — see startRun.ts. */
 export async function createPendingAction(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   workflowId: string,
   tool: string,
   args: unknown,
 ): Promise<PendingAction> {
-  const { data, error } = await supabase
-    .from("copilot_pending_actions")
-    .insert({ workflow_id: workflowId, tool, args_hash: hashToolArgs(tool, args), args })
-    .select("id, workflow_id, tool, args_hash, args, created_at, expires_at, confirmed_at, confirmed_by, consumed_at")
-    .single();
-  if (error || !data) throw new AppError(500, "PENDING_ACTION_WRITE_FAILED", error?.message ?? "Failed to create a pending action.");
-  return toPendingAction(data as PendingActionRow);
+  try {
+    const { rows } = await withUser((db) =>
+      db.query<PendingActionRow>(
+        `insert into public.copilot_pending_actions (workflow_id, tool, args_hash, args)
+         values ($1, $2, $3, $4)
+         returning id, workflow_id, tool, args_hash, args, created_at, expires_at, confirmed_at, confirmed_by, consumed_at`,
+        [workflowId, tool, hashToolArgs(tool, args), args],
+      ),
+    );
+    const row = rows[0];
+    if (!row) throw new AppError(500, "PENDING_ACTION_WRITE_FAILED", "Failed to create a pending action.");
+    return toPendingAction(row);
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "PENDING_ACTION_WRITE_FAILED", message);
+  }
 }
 
-export async function getPendingAction(supabase: SupabaseClient, id: string): Promise<PendingAction | null> {
-  const { data } = await supabase
-    .from("copilot_pending_actions")
-    .select("id, workflow_id, tool, args_hash, args, created_at, expires_at, confirmed_at, confirmed_by, consumed_at")
-    .eq("id", id)
-    .maybeSingle();
-  return data ? toPendingAction(data as PendingActionRow) : null;
+export async function getPendingAction(withUser: WithUser, id: string): Promise<PendingAction | null> {
+  const { rows } = await withUser((db) =>
+    db.query<PendingActionRow>(
+      `select id, workflow_id, tool, args_hash, args, created_at, expires_at, confirmed_at, confirmed_by, consumed_at
+       from public.copilot_pending_actions
+       where id = $1`,
+      [id],
+    ),
+  );
+  return rows[0] ? toPendingAction(rows[0]) : null;
 }
 
 /**
@@ -95,10 +108,17 @@ export async function getPendingAction(supabase: SupabaseClient, id: string): Pr
  * write path for confirmed_at/confirmed_by (see 0031's header comment);
  * this function does nothing more than call it and translate the error.
  */
-export async function confirmPendingAction(supabase: SupabaseClient, id: string): Promise<PendingAction> {
-  const { data, error } = await supabase.rpc("confirm_pending_action", { p_id: id }).single();
-  if (error || !data) throw new AppError(409, "PENDING_ACTION_CONFIRM_FAILED", error?.message ?? "Could not confirm this action.");
-  return toPendingAction(data as PendingActionRow);
+export async function confirmPendingAction(withUser: WithUser, id: string): Promise<PendingAction> {
+  try {
+    const { rows } = await withUser((db) => db.query<PendingActionRow>("select * from public.confirm_pending_action($1)", [id]));
+    const row = rows[0];
+    if (!row) throw new AppError(409, "PENDING_ACTION_CONFIRM_FAILED", "Could not confirm this action.");
+    return toPendingAction(row);
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(409, "PENDING_ACTION_CONFIRM_FAILED", message);
+  }
 }
 
 /**
@@ -108,20 +128,21 @@ export async function confirmPendingAction(supabase: SupabaseClient, id: string)
  * being replayed against different arguments than what was confirmed.
  */
 export async function consumePendingAction(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   id: string,
   tool: string,
   args: unknown,
 ): Promise<PendingAction> {
-  const { data, error } = await supabase
-    .rpc("consume_pending_action", { p_id: id, p_tool: tool, p_args_hash: hashToolArgs(tool, args) })
-    .single();
-  if (error || !data) {
-    throw new AppError(
-      409,
-      "PENDING_ACTION_NOT_CONFIRMED",
-      error?.message ?? "This action needs to be confirmed before it can run.",
+  try {
+    const { rows } = await withUser((db) =>
+      db.query<PendingActionRow>("select * from public.consume_pending_action($1, $2, $3)", [id, tool, hashToolArgs(tool, args)]),
     );
+    const row = rows[0];
+    if (!row) throw new AppError(409, "PENDING_ACTION_NOT_CONFIRMED", "This action needs to be confirmed before it can run.");
+    return toPendingAction(row);
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(409, "PENDING_ACTION_NOT_CONFIRMED", message);
   }
-  return toPendingAction(data as PendingActionRow);
 }

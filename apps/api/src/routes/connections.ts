@@ -2,6 +2,7 @@ import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
 import { EntityRef } from "@nia/schemas";
 import { requireAuth } from "../middleware/auth.js";
+import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
 import { requireCapability } from "../middleware/requireCapability.js";
 import { validate } from "../middleware/validate.js";
@@ -24,13 +25,13 @@ import {
 
 export const connectionsRouter: ExpressRouter = Router();
 
-connectionsRouter.use(requireAuth, attachActor);
+connectionsRouter.use(requireAuth, attachDb, attachActor);
 
 connectionsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await listConnections(req.supabase, scopeFromActor(req.actor));
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await listConnections(req.withUser, scopeFromActor(req.actor));
     res.json(data);
   }),
 );
@@ -41,8 +42,8 @@ connectionsRouter.get(
   "/:id",
   validate({ params: connectionParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await getConnection(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getConnection(req.withUser, scopeFromActor(req.actor), req.params.id!);
     if (!data) throw new AppError(404, "NOT_FOUND", "Connection not found.");
     res.json(data);
   }),
@@ -59,8 +60,8 @@ connectionsRouter.post(
   requireCapability("connections.create"),
   validate({ body: createBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await createConnection(req.supabase, scopeFromActor(req.actor), req.actor.userId, req.body);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await createConnection(req.withUser, scopeFromActor(req.actor), req.actor.userId, req.body);
     res.status(201).json(data);
   }),
 );
@@ -76,8 +77,8 @@ connectionsRouter.patch(
   requireCapability("connections.update"),
   validate({ params: connectionParamsSchema, body: updateBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await updateConnection(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId, req.body);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await updateConnection(req.withUser, scopeFromActor(req.actor), req.params.id!, req.actor.userId, req.body);
     res.json(data);
   }),
 );
@@ -95,9 +96,9 @@ connectionsRouter.delete(
   requireCapability("connections.delete"),
   validate({ params: connectionParamsSchema, query: deleteQuerySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const confirmed = (req.query as unknown as z.infer<typeof deleteQuerySchema>).confirmed;
-    await deleteConnection(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId, confirmed);
+    await deleteConnection(req.withUser, scopeFromActor(req.actor), req.params.id!, req.actor.userId, confirmed);
     res.status(204).end();
   }),
 );
@@ -106,8 +107,8 @@ connectionsRouter.get(
   "/:id/usages",
   validate({ params: connectionParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await listConnectionUsages(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await listConnectionUsages(req.withUser, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
   }),
 );
@@ -117,8 +118,8 @@ connectionsRouter.post(
   requireCapability("connections.test"),
   validate({ params: connectionParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await testConnection(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await testConnection(req.withUser, scopeFromActor(req.actor), req.params.id!, req.actor.userId);
     res.json(data);
   }),
 );
@@ -127,8 +128,8 @@ connectionsRouter.get(
   "/:id/schema",
   validate({ params: connectionParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await getConnectionSchema(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getConnectionSchema(req.withUser, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
   }),
 );
@@ -142,8 +143,8 @@ connectionsRouter.post(
   requireCapability("connections.test"),
   validate({ params: connectionParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await refreshConnectionSchema(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await refreshConnectionSchema(req.withUser, scopeFromActor(req.actor), req.params.id!, req.actor.userId);
     res.json(data);
   }),
 );
@@ -154,9 +155,9 @@ connectionsRouter.get(
   "/:id/profile",
   validate({ params: connectionParamsSchema, query: profileQuerySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const entity = req.query as unknown as z.infer<typeof EntityRef>;
-    const data = await getConnectionProfile(req.supabase, scopeFromActor(req.actor), req.params.id!, entity, req.actor.userId);
+    const data = await getConnectionProfile(req.withUser, scopeFromActor(req.actor), req.params.id!, entity, req.actor.userId);
     res.json(data);
   }),
 );
@@ -169,8 +170,8 @@ connectionsRouter.post(
   requireCapability("connections.test"),
   validate({ params: connectionParamsSchema, body: EntityRef }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await refreshConnectionProfile(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body, req.actor.userId);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await refreshConnectionProfile(req.withUser, scopeFromActor(req.actor), req.params.id!, req.body, req.actor.userId);
     res.json(data);
   }),
 );

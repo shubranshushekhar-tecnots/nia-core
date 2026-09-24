@@ -7,12 +7,14 @@ WORKDIR /repo
 FROM base AS build
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/schemas/package.json packages/schemas/
+COPY packages/secrets/package.json packages/secrets/
 COPY services/connector-mongodb/package.json services/connector-mongodb/
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
 COPY packages/schemas packages/schemas
+COPY packages/secrets packages/secrets
 COPY services/connector-mongodb services/connector-mongodb
-RUN pnpm -r --filter @nia/schemas --filter @nia/connector-mongodb build
+RUN pnpm -r --filter @nia/schemas --filter @nia/secrets --filter @nia/connector-mongodb build
 
 FROM base AS runtime
 ENV NODE_ENV=production

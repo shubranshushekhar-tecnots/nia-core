@@ -1,15 +1,8 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PreviewValue } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
-import { AppError } from "../lib/appError.js";
+import type { WithUser } from "../lib/withUser.js";
 import { runPreviewJob } from "../lib/previewQueue.js";
-
-async function assertWorkflowInScope(supabase: SupabaseClient, scope: WorkspaceScope, workflowId: string): Promise<void> {
-  let query = supabase.from("workflows").select("id", { count: "exact", head: true }).eq("id", workflowId);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { count } = await query;
-  if (!count) throw new AppError(404, "NOT_FOUND", "Workflow not found.");
-}
+import { assertWorkflowInScope } from "./checks.js";
 
 /**
  * Runs the destination-node read preview via the worker (lib/previewQueue.ts
@@ -19,12 +12,12 @@ async function assertWorkflowInScope(supabase: SupabaseClient, scope: WorkspaceS
  * the source, shown straight to the caller and never written anywhere.
  */
 export async function previewWorkflowDestination(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   destNodeId: string,
   triggeredByUserId: string,
 ): Promise<PreviewValue> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
+  await assertWorkflowInScope(withUser, scope, workflowId);
   return runPreviewJob({ scope, workflowId, destNodeId, triggeredByUserId });
 }

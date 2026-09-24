@@ -1,5 +1,5 @@
 import { Annotation } from "@langchain/langgraph";
-import type { WorkspaceScope } from "../../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 import type { ReductionPlan } from "../../llm/prompts/reductionPlan.js";
 import type { ReduceOutcome } from "./reduce.js";
 

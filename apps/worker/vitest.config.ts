@@ -10,6 +10,7 @@ export default defineConfig({
     env: {
       SUPABASE_URL: "http://localhost:54321",
       SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
+      DATABASE_URL: "postgresql://test:test@localhost:5432/test",
       NIA_GATEWAY_API_KEY: "test-gateway-key",
     },
   },

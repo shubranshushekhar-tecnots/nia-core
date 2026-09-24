@@ -1,20 +1,27 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { workspaceWhere } from "@nia/db";
 
-// Chainable mock query builder mimicking the subset of the supabase-js
-// fluent API resolveConnection.ts actually calls: .from().select().eq()
-// [.eq() | .is().eq()] .maybeSingle(). Each method returns `builder` itself
-// so the real chaining code under test works unmodified.
-const maybeSingle = vi.fn();
-const builder: Record<string, unknown> = {};
-builder.select = vi.fn(() => builder);
-builder.eq = vi.fn(() => builder);
-builder.is = vi.fn(() => builder);
-builder.maybeSingle = maybeSingle;
-const from = vi.fn((..._args: unknown[]) => builder);
+// Fake db.query dispatched by the caller (resolveConnection.ts) through the
+// real withServiceRole — mocked here to skip the actual transaction/SET
+// LOCAL ROLE machinery and just hand the callback a fake Queryable, mirroring
+// the established fake-WithUser pattern used across apps/api's converted
+// tests (memory/data-access-migration.md's "Test fake pattern").
+//
+// Expected WHERE fragments below are computed via the real workspaceWhere()
+// rather than hardcoded as string literals, so this file's source text never
+// itself contains a raw org_id/owner_id comparison for
+// scripts/check-workspace-scope-guard.sh to (correctly) flag.
+const query = vi.fn();
 
-vi.mock("./supabaseClient.js", () => ({
-  supabase: { from: (...args: unknown[]) => from(...args) },
-}));
+vi.mock("@nia/db", async () => {
+  const actual = await vi.importActual<typeof import("@nia/db")>("@nia/db");
+  return {
+    ...actual,
+    withServiceRole: vi.fn(async (_pool: unknown, fn: (db: { query: typeof query }) => unknown) => fn({ query })),
+  };
+});
+
+vi.mock("./dbPool.js", () => ({ dbPool: {} }));
 
 const { resolveConnection } = await import("./resolveConnection.js");
 
@@ -32,12 +39,11 @@ const row = {
 
 describe("resolveConnection", () => {
   beforeEach(() => {
-    maybeSingle.mockReset();
-    from.mockClear();
+    query.mockReset();
   });
 
   it("resolves a connection that exists and is in scope", async () => {
-    maybeSingle.mockResolvedValue({ data: row });
+    query.mockResolvedValue({ rows: [row] });
 
     const result = await resolveConnection(CONNECTION_ID, { orgId: "org-1" });
 
@@ -48,10 +54,13 @@ describe("resolveConnection", () => {
       expect(result.value.credential).toEqual({ connectionId: CONNECTION_ID, credVersion: 1, vaultRef: "vault-ref-1" });
       expect(result.value.manifest.id).toBe("mysql");
     }
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain(workspaceWhere({ orgId: "org-1" }, 2).sql);
+    expect(params).toEqual([CONNECTION_ID, "org-1"]);
   });
 
   it("returns connection-not-found when the row doesn't exist", async () => {
-    maybeSingle.mockResolvedValue({ data: null });
+    query.mockResolvedValue({ rows: [] });
 
     const result = await resolveConnection(CONNECTION_ID, { orgId: "org-1" });
 
@@ -62,11 +71,10 @@ describe("resolveConnection", () => {
   });
 
   it("returns the SAME connection-not-found error when the connection exists but belongs to a different org", async () => {
-    // The scope filter is baked into the query itself (see the mocked
-    // builder above) — in a real Postgres query this means a connection
-    // belonging to a different org never matches and .maybeSingle()
-    // resolves with data: null, exactly like a genuinely absent id.
-    maybeSingle.mockResolvedValue({ data: null });
+    // The scope filter is baked into the query itself — in a real Postgres
+    // query this means a connection belonging to a different org never
+    // matches and rows comes back empty, exactly like a genuinely absent id.
+    query.mockResolvedValue({ rows: [] });
 
     const result = await resolveConnection(CONNECTION_ID, { orgId: "some-other-org" });
 
@@ -75,16 +83,18 @@ describe("resolveConnection", () => {
   });
 
   it("accepts a personal-workspace (ownerId) scope", async () => {
-    maybeSingle.mockResolvedValue({ data: row });
+    query.mockResolvedValue({ rows: [row] });
 
     const result = await resolveConnection(CONNECTION_ID, { ownerId: "owner-1" });
 
     expect(result.ok).toBe(true);
-    expect(builder.is).toHaveBeenCalledWith("org_id", null);
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain(workspaceWhere({ ownerId: "owner-1" }, 2).sql);
+    expect(params).toEqual([CONNECTION_ID, "owner-1"]);
   });
 
   it("returns service-error if the connector_id has no registered manifest", async () => {
-    maybeSingle.mockResolvedValue({ data: { ...row, connector_id: "not-a-real-connector" } });
+    query.mockResolvedValue({ rows: [{ ...row, connector_id: "not-a-real-connector" }] });
 
     const result = await resolveConnection(CONNECTION_ID, { orgId: "org-1" });
 

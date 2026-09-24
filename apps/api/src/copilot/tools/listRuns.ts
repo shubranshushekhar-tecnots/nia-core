@@ -18,7 +18,7 @@ const tool: ToolDefinition<Input, Output> = {
   description: "Lists the most recent runs of a workflow, most recent first (status, rows processed, duration, timestamps).",
   tier: "read",
   inputSchema: InputSchema,
-  handler: async (ctx, input) => listRunsForWorkflow(ctx.supabase, ctx.user.scope, input.workflowId),
+  handler: async (ctx, input) => listRunsForWorkflow(ctx.withUser, ctx.user.scope, input.workflowId),
   summarize: (output) => {
     if (output.length === 0) return "No runs yet for this workflow.";
     const lines = output.map((r) => `${r.id} (${r.status}, ${r.rowsProcessed} rows, started ${r.startedAt})`);

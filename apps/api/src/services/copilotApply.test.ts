@@ -1,121 +1,95 @@
 import { describe, it, expect } from "vitest";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { GraphDoc as GraphDocType } from "@nia/schemas";
+import type { WithUser } from "../lib/withUser.js";
 import { applyPlan } from "./copilotApply.js";
 
 /**
- * Hand-rolled fake standing in for the exact subset of the SupabaseClient
- * chain applyPlan's dependencies issue (getWorkflowGraph/putWorkflowGraph's
- * "workflows"/"workflow_graphs" reads+writes, listConnections' "connections"
- * read, and the log_plan_applied RPC) — same style as
- * workflowGraphs.race.test.ts's fake, extended to cover connections + rpc.
+ * Hand-rolled fake standing in for the raw-SQL calls applyPlan's
+ * dependencies issue (getWorkflowGraph/putWorkflowGraph's reads+writes,
+ * listConnections' read, and the log_plan_applied audit call) — same
+ * style as workflowGraphs.race.test.ts's fake, extended to cover
+ * connections and the audit function. `queries` records every call so the
+ * audit write's params can be asserted on (replaces the pre-migration
+ * fake's `rpcCalls`).
  */
-function createFakeClient(state: {
+function createFakeWithUser(state: {
   workflowExists?: boolean;
   graphRow: { workflow_id: string; graph: GraphDocType; version: number } | null;
   connections?: Array<{ id: string; connector_id: string }>;
-  rpcError?: { message: string } | null;
+  auditError?: string;
 }) {
-  const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+  const queries: { text: string; params: readonly unknown[] }[] = [];
   const workflowExists = state.workflowExists ?? true;
   const connections = state.connections ?? [];
 
-  const client = {
-    from(table: string) {
-      if (table === "workflows") {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => Promise.resolve({ count: workflowExists ? 1 : 0 }),
-              is: () => ({
-                eq: () => Promise.resolve({ count: workflowExists ? 1 : 0 }),
-              }),
-            }),
-          }),
-        };
-      }
+  const withUser: WithUser = (async (fn) =>
+    fn({
+      query: async (text: string, params: readonly unknown[] = []) => {
+        queries.push({ text, params });
 
-      if (table === "workflow_graphs") {
-        return {
-          select: () => ({
-            eq: () => ({
-              maybeSingle: async () =>
-                state.graphRow
-                  ? { data: { graph: state.graphRow.graph, version: state.graphRow.version }, error: null }
-                  : { data: null, error: null },
-            }),
-          }),
-          upsert: (input: { workflow_id: string; graph: GraphDocType }) => ({
-            select: () => ({
-              maybeSingle: async () => {
-                if (state.graphRow) return { data: null, error: null };
-                state.graphRow = { workflow_id: input.workflow_id, graph: input.graph, version: 1 };
-                return { data: { graph: state.graphRow.graph, version: state.graphRow.version }, error: null };
-              },
-            }),
-          }),
-          update: (patch: { graph: GraphDocType }) => ({
-            eq: () => ({
-              eq: (_col: string, expectedVersion: number) => ({
-                select: () => ({
-                  maybeSingle: async () => {
-                    if (!state.graphRow || state.graphRow.version !== expectedVersion) {
-                      return { data: null, error: null };
-                    }
-                    state.graphRow = { ...state.graphRow, graph: patch.graph, version: state.graphRow.version + 1 };
-                    return { data: { graph: state.graphRow.graph, version: state.graphRow.version }, error: null };
-                  },
-                }),
-              }),
-            }),
-          }),
-        };
-      }
+        if (text.includes("from workflows where id")) {
+          return { rowCount: workflowExists ? 1 : 0, rows: [] } as never;
+        }
 
-      if (table === "connections") {
-        const rows = connections.map((c) => ({
-          id: c.id,
-          connector_id: c.connector_id,
-          handle: c.id,
-          display_name: c.id,
-          owner_user_id: "user-1",
-          config: {},
-          cred_version: 1,
-          last_test_status: null,
-          last_test_latency_ms: null,
-          last_test_at: null,
-          last_used_at: null,
-          created_at: "2026-01-01T00:00:00.000Z",
-          updated_at: "2026-01-01T00:00:00.000Z",
-        }));
-        const afterFilter = { order: async () => ({ data: rows }) };
-        return {
-          select: () => ({
-            eq: () => afterFilter,
-            is: () => ({ eq: () => afterFilter }),
-          }),
-        };
-      }
+        if (text.includes("select graph, version from workflow_graphs")) {
+          return {
+            rows: state.graphRow ? [{ graph: state.graphRow.graph, version: state.graphRow.version }] : [],
+          } as never;
+        }
 
-      if (table === "clean_plans") {
-        // Not exercised by this file — an empty result lets
-        // putWorkflowGraph's unbindStaleCleanPlans no-op.
-        return {
-          select: () => ({
-            eq: () => Promise.resolve({ data: [], error: null }),
-          }),
-        };
-      }
+        if (text.includes("insert into workflow_graphs")) {
+          if (state.graphRow) return { rows: [] } as never; // ON CONFLICT (workflow_id) DO NOTHING
+          const [workflowId, graph] = params as [string, GraphDocType];
+          state.graphRow = { workflow_id: workflowId, graph, version: 1 };
+          return { rows: [{ graph: state.graphRow.graph, version: state.graphRow.version }] } as never;
+        }
 
-      throw new Error(`unexpected table "${table}" in fake`);
-    },
-    rpc: async (fn: string, args: Record<string, unknown>) => {
-      rpcCalls.push({ fn, args });
-      return { error: state.rpcError ?? null };
-    },
-  };
+        if (text.includes("update workflow_graphs set graph")) {
+          const [graph, , expectedVersion] = params as [GraphDocType, string, number];
+          if (!state.graphRow || state.graphRow.version !== expectedVersion) return { rows: [] } as never;
+          state.graphRow = { ...state.graphRow, graph, version: state.graphRow.version + 1 };
+          return { rows: [{ graph: state.graphRow.graph, version: state.graphRow.version }] } as never;
+        }
 
-  return { supabase: client as unknown as SupabaseClient, rpcCalls, getGraphRow: () => state.graphRow };
+        if (text.includes("select node_id, steps_hash from clean_plans")) {
+          // Not exercised by this file — an empty result lets
+          // putWorkflowGraph's unbindStaleCleanPlans no-op.
+          return { rows: [] } as never;
+        }
+
+        if (text.includes("delete from clean_plans")) {
+          return { rows: [] } as never;
+        }
+
+        if (text.includes("from connections where")) {
+          const rows = connections.map((c) => ({
+            id: c.id,
+            connector_id: c.connector_id,
+            handle: c.id,
+            display_name: c.id,
+            owner_user_id: "user-1",
+            config: {},
+            cred_version: 1,
+            last_test_status: null,
+            last_test_latency_ms: null,
+            last_test_at: null,
+            last_used_at: null,
+            created_at: "2026-01-01T00:00:00.000Z",
+            updated_at: "2026-01-01T00:00:00.000Z",
+          }));
+          return { rows } as never;
+        }
+
+        if (text.includes("select public.log_plan_applied")) {
+          if (state.auditError) throw new Error(state.auditError);
+          return { rows: [] } as never;
+        }
+
+        throw new Error(`unexpected query in fake: ${text}`);
+      },
+    })) as WithUser;
+
+  return { withUser, queries, getGraphRow: () => state.graphRow };
 }
 
 const scope = { ownerId: "user-1" };
@@ -126,7 +100,7 @@ describe("applyPlan", () => {
       nodes: [{ id: "existing-1", type: "destination", position: { x: 0, y: 0 }, config: {} }],
       edges: [],
     };
-    const { supabase } = createFakeClient({
+    const { withUser } = createFakeWithUser({
       graphRow: { workflow_id: "wf-1", graph: existingGraph, version: 1 },
     });
 
@@ -144,7 +118,7 @@ describe("applyPlan", () => {
       probeResults: [],
     };
 
-    const result = await applyPlan(supabase, scope, "wf-1", { plan });
+    const result = await applyPlan(withUser, scope, "wf-1", { plan });
 
     expect(result.graph.nodes).toHaveLength(3);
     expect(result.appliedNodeIds).toHaveLength(2);
@@ -165,7 +139,7 @@ describe("applyPlan", () => {
 
   it("refuses a plan proposed against a stale graph version without writing anything", async () => {
     const existingGraph: GraphDocType = { nodes: [], edges: [] };
-    const { supabase, rpcCalls, getGraphRow } = createFakeClient({
+    const { withUser, queries, getGraphRow } = createFakeWithUser({
       graphRow: { workflow_id: "wf-1", graph: existingGraph, version: 2 },
     });
 
@@ -177,19 +151,19 @@ describe("applyPlan", () => {
       probeResults: [],
     };
 
-    await expect(applyPlan(supabase, scope, "wf-1", { plan })).rejects.toMatchObject({
+    await expect(applyPlan(withUser, scope, "wf-1", { plan })).rejects.toMatchObject({
       statusCode: 409,
       code: "PLAN_STALE",
     });
 
     // Nothing was mutated and no audit event was written.
     expect(getGraphRow()?.version).toBe(2);
-    expect(rpcCalls).toHaveLength(0);
+    expect(queries.filter((q) => q.text.includes("log_plan_applied"))).toHaveLength(0);
   });
 
   it("stamps validatePlanFeasibility's probe evidence onto the matching aggregate step's persisted config", async () => {
     const existingGraph: GraphDocType = { nodes: [], edges: [] };
-    const { supabase } = createFakeClient({
+    const { withUser } = createFakeWithUser({
       graphRow: { workflow_id: "wf-1", graph: existingGraph, version: 1 },
     });
 
@@ -210,7 +184,7 @@ describe("applyPlan", () => {
       ],
     };
 
-    const result = await applyPlan(supabase, scope, "wf-1", { plan });
+    const result = await applyPlan(withUser, scope, "wf-1", { plan });
 
     const persisted = result.graph.nodes.find((n) => n.type === "transform")!;
     const steps = persisted.config.steps as Array<Record<string, unknown>>;
@@ -220,7 +194,7 @@ describe("applyPlan", () => {
 
   it("writes the audit event with the applied (real) node ids, not the plan-local ones", async () => {
     const existingGraph: GraphDocType = { nodes: [], edges: [] };
-    const { supabase, rpcCalls } = createFakeClient({
+    const { withUser, queries } = createFakeWithUser({
       graphRow: { workflow_id: "wf-1", graph: existingGraph, version: 1 },
     });
 
@@ -232,25 +206,30 @@ describe("applyPlan", () => {
       probeResults: [],
     };
 
-    const result = await applyPlan(supabase, scope, "wf-1", { plan, prompt: "add a destination node" });
+    const result = await applyPlan(withUser, scope, "wf-1", { plan, prompt: "add a destination node" });
 
-    expect(rpcCalls).toHaveLength(1);
-    expect(rpcCalls[0]!.fn).toBe("log_plan_applied");
-    expect(rpcCalls[0]!.args).toMatchObject({
-      p_workflow_id: "wf-1",
-      p_plan_summary: "add a destination",
-      p_prompt: "add a destination node",
-      p_graph_version: result.version,
-    });
-    expect(rpcCalls[0]!.args.p_applied_node_ids).toEqual(result.appliedNodeIds);
-    expect(rpcCalls[0]!.args.p_applied_node_ids).not.toContain("new-1");
+    const auditCalls = queries.filter((q) => q.text.includes("log_plan_applied"));
+    expect(auditCalls).toHaveLength(1);
+    const [pWorkflowId, pSummary, pPrompt, pAppliedNodeIds, pGraphVersion] = auditCalls[0]!.params as [
+      string,
+      string,
+      string | null,
+      string[],
+      number,
+    ];
+    expect(pWorkflowId).toBe("wf-1");
+    expect(pSummary).toBe("add a destination");
+    expect(pPrompt).toBe("add a destination node");
+    expect(pGraphVersion).toBe(result.version);
+    expect(pAppliedNodeIds).toEqual(result.appliedNodeIds);
+    expect(pAppliedNodeIds).not.toContain("new-1");
   });
 
   it("surfaces a failed audit write as an error rather than silently dropping it (audit log is load-bearing)", async () => {
     const existingGraph: GraphDocType = { nodes: [], edges: [] };
-    const { supabase } = createFakeClient({
+    const { withUser } = createFakeWithUser({
       graphRow: { workflow_id: "wf-1", graph: existingGraph, version: 1 },
-      rpcError: { message: "boom" },
+      auditError: "boom",
     });
 
     const plan = {
@@ -261,7 +240,7 @@ describe("applyPlan", () => {
       probeResults: [],
     };
 
-    await expect(applyPlan(supabase, scope, "wf-1", { plan })).rejects.toMatchObject({
+    await expect(applyPlan(withUser, scope, "wf-1", { plan })).rejects.toMatchObject({
       statusCode: 500,
       code: "AUDIT_WRITE_FAILED",
     });
@@ -269,7 +248,7 @@ describe("applyPlan", () => {
 
   it("rejects a structurally invalid plan (dangling edge target) before ever calling putWorkflowGraph", async () => {
     const existingGraph: GraphDocType = { nodes: [], edges: [] };
-    const { supabase, rpcCalls, getGraphRow } = createFakeClient({
+    const { withUser, queries, getGraphRow } = createFakeWithUser({
       graphRow: { workflow_id: "wf-1", graph: existingGraph, version: 1 },
     });
 
@@ -281,11 +260,11 @@ describe("applyPlan", () => {
       probeResults: [],
     };
 
-    await expect(applyPlan(supabase, scope, "wf-1", { plan })).rejects.toMatchObject({
+    await expect(applyPlan(withUser, scope, "wf-1", { plan })).rejects.toMatchObject({
       statusCode: 422,
       code: "PLAN_INVALID",
     });
     expect(getGraphRow()?.version).toBe(1);
-    expect(rpcCalls).toHaveLength(0);
+    expect(queries.filter((q) => q.text.includes("log_plan_applied"))).toHaveLength(0);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { WithUser } from "../lib/withUser.js";
 import { decryptSecret, parseMasterKey } from "@nia/secrets";
 import { createConnection, updateConnection } from "./connections.js";
 
@@ -46,8 +46,6 @@ type FakeConnectionRow = {
   last_used_at: null;
   created_at: string;
   updated_at: string;
-  org_id: string | null;
-  owner_id: string | null;
 };
 
 function baseRow(overrides: Partial<FakeConnectionRow> = {}): FakeConnectionRow {
@@ -66,84 +64,82 @@ function baseRow(overrides: Partial<FakeConnectionRow> = {}): FakeConnectionRow 
     last_used_at: null,
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-01-01T00:00:00Z",
-    org_id: "org-A",
-    owner_id: null,
     ...overrides,
   };
 }
 
 /**
- * Records rpc calls and services connections.ts's select-existing /
- * update-and-return chains, matching the real query shape it builds (see
- * updateConnection's body). Also backs a minimal in-memory nia_secrets
- * table for getSecretStore's put/get/delete (packages/secrets/src/store.ts)
- * — baseRow's "old-ref" is treated as a pre-migration ref never present in
- * nia_secrets, so a get() on it falls through to legacyResolve
- * (decrypt_connector_secret_for_edit), mirroring
- * apps/api/src/lib/secretStore.ts's real wiring exactly.
+ * Extracts `col = $N` assignments from a raw `update ... set ... where`
+ * statement and resolves each against `params`, mirroring what Postgres
+ * itself would apply. Written generically (rather than hardcoding
+ * connections.ts's exact SET clause list) so this fake stays correct as
+ * updateConnection's set of conditionally-updated columns evolves.
  */
-function createFakeClient(row: FakeConnectionRow) {
-  const rpcCalls: { name: string; args: unknown }[] = [];
+function parseSetClause(text: string, params: readonly unknown[]): Record<string, unknown> {
+  const match = text.match(/set\s+([\s\S]+?)\s+where/i);
+  if (!match?.[1]) return {};
+  const patch: Record<string, unknown> = {};
+  for (const assignment of match[1].split(",")) {
+    const m = assignment.trim().match(/^(\w+)\s*=\s*\$(\d+)$/);
+    if (!m?.[1] || !m[2]) continue;
+    patch[m[1]] = params[Number(m[2]) - 1];
+  }
+  return patch;
+}
+
+/**
+ * Fake WithUser backing both connections.ts's raw SQL AND
+ * lib/secretStore.ts's getSecretStore (now withUser-based too, since
+ * secretStore.ts no longer takes a SupabaseClient) — one fake in-memory
+ * store per test, matching secretStore.ts's real nia_secrets SQL shapes
+ * exactly: `... from nia_secrets where id = $1`, `insert into nia_secrets
+ * (...) ... returning id`, `delete from nia_secrets where id = $1`, and the
+ * legacy `select public.decrypt_connector_secret_for_edit($1)` fallback.
+ * baseRow's "old-ref" is treated as a pre-migration ref never present in
+ * nia_secrets, so a get() on it falls through to that legacy RPC, mirroring
+ * secretStore.ts's real wiring exactly.
+ */
+function createFakeWithUser(row: FakeConnectionRow) {
+  const queries: { text: string; params: readonly unknown[] }[] = [];
   const secretRows = new Map<string, Record<string, unknown>>();
   let nextSecretId = 1;
 
-  function chain(kind: "existing" | "update", patch?: Record<string, unknown>): unknown {
-    return {
-      eq: () => chain(kind, patch),
-      is: () => chain(kind, patch),
-      maybeSingle: async () => ({ data: row, error: null }),
-      select: () => ({
-        single: async () => ({ data: { ...row, ...patch }, error: null }),
-      }),
-    };
-  }
-
-  const supabase = {
-    from: (table: string) => {
-      if (table === "nia_secrets") {
-        return {
-          insert: (secretRow: Record<string, unknown>) => ({
-            select: () => ({
-              single: async () => {
-                const id = `secret-${nextSecretId++}`;
-                secretRows.set(id, secretRow);
-                return { data: { id }, error: null };
-              },
-            }),
-          }),
-          select: () => ({
-            eq: (_col: string, id: string) => ({
-              maybeSingle: async () => {
-                const stored = secretRows.get(id);
-                return { data: stored ? { id, ...stored } : null, error: null };
-              },
-            }),
-          }),
-          delete: () => ({
-            eq: async (_col: string, id: string) => {
-              secretRows.delete(id);
-              return { error: null };
-            },
-          }),
-        };
-      }
-      if (table !== "connections") throw new Error(`unexpected table "${table}" in fake`);
-      return {
-        select: () => chain("existing"),
-        update: (patch: Record<string, unknown>) => chain("update", patch),
-      };
-    },
-    rpc: async (name: string, args: unknown) => {
-      rpcCalls.push({ name, args });
-      if (name === "log_connection_audit") return { data: null, error: null };
-      if (name === "decrypt_connector_secret_for_edit") {
-        return { data: { user: "old-user", password: "old-password" }, error: null };
-      }
-      throw new Error(`unexpected rpc "${name}" in fake`);
-    },
-  } as unknown as SupabaseClient;
-
-  return { supabase, rpcCalls, secretRows };
+  const withUser: WithUser = (async (fn) =>
+    fn({
+      query: async (text: string, params: readonly unknown[] = []) => {
+        queries.push({ text, params });
+        if (text.includes("select") && text.includes("from connections where id")) {
+          return { rows: [row] } as never;
+        }
+        if (text.includes("update connections set")) {
+          const patch = parseSetClause(text, params);
+          return { rows: [{ ...row, ...patch }] } as never;
+        }
+        if (text.includes("log_connection_audit")) {
+          return { rows: [] } as never;
+        }
+        if (text.includes("insert into nia_secrets")) {
+          const [ciphertext, encrypted_data_key, iv, auth_tag, algorithm, key_version] = params;
+          const id = `secret-${nextSecretId++}`;
+          secretRows.set(id, { ciphertext, encrypted_data_key, iv, auth_tag, algorithm, key_version });
+          return { rows: [{ id }] } as never;
+        }
+        if (text.includes("from nia_secrets where id")) {
+          const id = params[0] as string;
+          const stored = secretRows.get(id);
+          return { rows: stored ? [{ id, ...stored }] : [] } as never;
+        }
+        if (text.includes("delete from nia_secrets where id")) {
+          secretRows.delete(params[0] as string);
+          return { rows: [] } as never;
+        }
+        if (text.includes("decrypt_connector_secret_for_edit")) {
+          return { rows: [{ decrypt_connector_secret_for_edit: { user: "old-user", password: "old-password" } }] } as never;
+        }
+        throw new Error(`unexpected query in fake: ${text}`);
+      },
+    })) as WithUser;
+  return { withUser, queries, secretRows };
 }
 
 describe("updateConnection — edit flow", () => {
@@ -154,9 +150,9 @@ describe("updateConnection — edit flow", () => {
 
   it("leaves the stored secret untouched when user/password are left blank", async () => {
     const row = baseRow();
-    const { supabase, secretRows } = createFakeClient(row);
+    const { withUser, secretRows } = createFakeWithUser(row);
 
-    const result = await updateConnection(supabase, { orgId: "org-A" }, "conn-1", "actor-1", {
+    const result = await updateConnection(withUser, { orgId: "org-A" }, "conn-1", "actor-1", {
       fields: { host: "new-host", port: 3306, database: "sandbox", user: "", password: "" },
       confirmed: true,
     });
@@ -172,16 +168,16 @@ describe("updateConnection — edit flow", () => {
 
   it("rotates only the provided secret field and invalidates the pool", async () => {
     const row = baseRow();
-    const { supabase, rpcCalls, secretRows } = createFakeClient(row);
+    const { withUser, queries, secretRows } = createFakeWithUser(row);
 
-    await updateConnection(supabase, { orgId: "org-A" }, "conn-1", "actor-1", {
+    await updateConnection(withUser, { orgId: "org-A" }, "conn-1", "actor-1", {
       fields: { host: "old-host", port: 3306, database: "sandbox", user: "", password: "new-password" },
       confirmed: true,
     });
 
     // The merge-in-API path (docs/plans/secret-storage.md's update-path
     // report): the old secret is read via legacyResolve (asserted via the
-    // decrypt_connector_secret_for_edit rpc call below), merged with the
+    // decrypt_connector_secret_for_edit query below), merged with the
     // patch in memory, and written as a brand-new nia_secrets row — decrypt
     // it to confirm only "password" changed and "user" carried over.
     expect(secretRows.size).toBe(1);
@@ -195,18 +191,18 @@ describe("updateConnection — edit flow", () => {
       keyVersion: storedRow.key_version as number,
     };
     expect(decryptSecret(TEST_MASTER_KEY, encrypted)).toEqual({ user: "old-user", password: "new-password" });
-    expect(rpcCalls.find((c) => c.name === "decrypt_connector_secret_for_edit")?.args).toEqual({ p_ref: "old-ref" });
+    expect(queries.some((q) => q.text.includes("decrypt_connector_secret_for_edit"))).toBe(true);
     expect(dispatchInvalidate).toHaveBeenCalledTimes(1);
 
-    const auditCall = rpcCalls.find((c) => c.name === "log_connection_audit");
-    expect(auditCall?.args).toMatchObject({ p_action: "connection.updated", p_detail: { changedFields: ["password"] } });
+    const auditQuery = queries.find((q) => q.text.includes("log_connection_audit"));
+    expect(auditQuery?.params).toEqual(["conn-1", "connection.updated", { changedFields: ["password"] }, "actor-1"]);
   });
 
   it("does not call dispatchInvalidate when only the display name changes", async () => {
     const row = baseRow();
-    const { supabase } = createFakeClient(row);
+    const { withUser } = createFakeWithUser(row);
 
-    await updateConnection(supabase, { orgId: "org-A" }, "conn-1", "actor-1", {
+    await updateConnection(withUser, { orgId: "org-A" }, "conn-1", "actor-1", {
       displayName: "New name",
       fields: { host: "old-host", port: 3306, database: "sandbox", user: "", password: "" },
       confirmed: true,
@@ -221,31 +217,25 @@ describe("updateConnection — edit flow", () => {
  * trimmed or validated `host` server-side — only the web form did
  * (apps/web/src/lib/connections/actions.ts), which isn't the trust
  * boundary. This exercises createConnection's rejection path directly; the
- * fake client only implements the `connector_installs` install-check query
- * since the invalid-field rejection happens before any other query runs.
+ * fake withUser only implements the `connector_installs` install-check
+ * query since the invalid-field rejection happens before any other query
+ * runs (and thus before secretStore is ever touched).
  */
 describe("createConnection — Item 4.2 server-side host validation", () => {
-  function fakeInstallCheckClient(): SupabaseClient {
-    const installsStub: { eq: () => typeof installsStub; is: () => typeof installsStub; then: (resolve: (v: { count: number; data: null; error: null }) => void) => void } = {
-      eq: () => installsStub,
-      is: () => installsStub,
-      then: (resolve) => resolve({ count: 1, data: null, error: null }),
-    };
-    return {
-      from: (table: string) => {
-        if (table !== "connector_installs") {
-          throw new Error(`unexpected table "${table}" — this fake only supports the install-check query.`);
-        }
-        return { select: () => installsStub };
-      },
-      rpc: vi.fn(),
-    } as unknown as SupabaseClient;
+  function createFakeWithUserInstallOnly(): WithUser {
+    return (async (fn) =>
+      fn({
+        query: async (text: string) => {
+          if (text.includes("from connector_installs")) return { rows: [{ count: 1 }] } as never;
+          throw new Error(`unexpected query in fake — this fake only supports the install-check query: ${text}`);
+        },
+      })) as WithUser;
   }
 
   it("rejects a host value containing whitespace with INVALID_FIELD", async () => {
-    const supabase = fakeInstallCheckClient();
+    const withUser = createFakeWithUserInstallOnly();
     await expect(
-      createConnection(supabase, { orgId: "org-A" }, "user-1", {
+      createConnection(withUser, { orgId: "org-A" }, "user-1", {
         connectorId: "postgres",
         displayName: "Test",
         fields: { host: "db .example.com", port: 5432, database: "postgres", user: "nia_ro", password: "pw" },
@@ -254,9 +244,9 @@ describe("createConnection — Item 4.2 server-side host validation", () => {
   });
 
   it("rejects a host value containing characters outside [a-zA-Z0-9.-]", async () => {
-    const supabase = fakeInstallCheckClient();
+    const withUser = createFakeWithUserInstallOnly();
     await expect(
-      createConnection(supabase, { orgId: "org-A" }, "user-1", {
+      createConnection(withUser, { orgId: "org-A" }, "user-1", {
         connectorId: "postgres",
         displayName: "Test",
         fields: { host: "db.example.com/../etc", port: 5432, database: "postgres", user: "nia_ro", password: "pw" },
@@ -272,58 +262,36 @@ describe("createConnection — Item 4.2 server-side host validation", () => {
  * (MAX_HANDLE_ATTEMPTS) also catches 23505, so this must be surfaced as
  * NAME_TAKEN on the very first attempt rather than being misdiagnosed as a
  * handle collision and retried until HANDLE_EXHAUSTED — the fake's insert
- * always returns this error, so a passing test proves no retry happened
+ * always throws this error, so a passing test proves no retry happened
  * (only one insert attempt is wired up).
  */
 describe("createConnection — Item 6.1 NAME_TAKEN", () => {
-  function fakeNameTakenClient(): SupabaseClient {
-    const installsStub: { eq: () => typeof installsStub; is: () => typeof installsStub; then: (resolve: (v: { count: number; data: null; error: null }) => void) => void } = {
-      eq: () => installsStub,
-      is: () => installsStub,
-      then: (resolve) => resolve({ count: 1, data: null, error: null }),
-    };
-    return {
-      from: (table: string) => {
-        if (table === "connector_installs") return { select: () => installsStub };
-        if (table === "nia_secrets") {
-          // createConnection's getSecretStore(supabase).put(...) runs before
-          // the connections insert below — this test only cares about the
-          // NAME_TAKEN error path that follows, so a bare insert stub is enough.
-          return {
-            insert: () => ({
-              select: () => ({
-                single: async () => ({ data: { id: "secret-1" }, error: null }),
-              }),
-            }),
-          };
-        }
-        if (table === "connections") {
-          return {
-            insert: () => ({
-              select: () => ({
-                single: async () => ({
-                  data: null,
-                  error: {
-                    code: "23505",
-                    message: 'duplicate key value violates unique constraint "connections_scope_display_name_unique_idx"',
-                  },
-                }),
-              }),
-            }),
-          };
-        }
-        throw new Error(`unexpected table "${table}" in fake`);
-      },
-      rpc: async (name: string) => {
-        throw new Error(`unexpected rpc "${name}" in fake`);
-      },
-    } as unknown as SupabaseClient;
+  function createFakeWithUserNameTaken(): WithUser {
+    return (async (fn) =>
+      fn({
+        query: async (text: string) => {
+          if (text.includes("from connector_installs")) return { rows: [{ count: 1 }] } as never;
+          // createConnection's getSecretStore(withUser).put(...) runs
+          // before the connections insert below — this test only cares
+          // about the NAME_TAKEN error path that follows, so a bare
+          // insert-id stub is enough.
+          if (text.includes("insert into nia_secrets")) return { rows: [{ id: "secret-1" }] } as never;
+          if (text.includes("insert into connections")) {
+            const err = new Error(
+              'duplicate key value violates unique constraint "connections_scope_display_name_unique_idx"',
+            ) as Error & { code: string };
+            err.code = "23505";
+            throw err;
+          }
+          throw new Error(`unexpected query in fake: ${text}`);
+        },
+      })) as WithUser;
   }
 
   it("surfaces a display-name-uniqueness violation as NAME_TAKEN, not HANDLE_EXHAUSTED", async () => {
-    const supabase = fakeNameTakenClient();
+    const withUser = createFakeWithUserNameTaken();
     await expect(
-      createConnection(supabase, { orgId: "org-A" }, "user-1", {
+      createConnection(withUser, { orgId: "org-A" }, "user-1", {
         connectorId: "mysql",
         displayName: "Duplicate Name",
         fields: { host: "db.example.com", port: 3306, database: "sandbox", user: "nia_ro", password: "pw" },

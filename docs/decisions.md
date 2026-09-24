@@ -5218,3 +5218,119 @@ the equivalent `nia_write_*` Postgres-role orphan left behind by write-
 grant rotation, an Azure Key Vault–backed `SecretStore` implementation,
 and removing the Vault fallback branch from `SecretStore.get()` once
 `secrets-verify` reports zero `vault-only` refs everywhere that matters.
+
+## Data-access migration: PostgREST → direct `pg` (`@nia/db`) — close-out
+
+`docs/plans/data-access.md`, Steps 3-5. Every `supabase.from()`/`.rpc()`
+call site in `apps/api`, `apps/web`, and `apps/worker` now goes through
+`packages/db` instead of PostgREST. What follows is the Step 5 write-up
+the plan calls for; the architecture itself (Steps 1-2) predates this
+entry — see the plan file and `packages/db/src/{client,pool,workspaceScope}.ts`'s
+own header comments for the original design reasoning, not repeated here.
+
+**How the acting user is set per connection.** `packages/db` exposes
+exactly two entry points, `withActingUser(pool, userId, fn)` and
+`withServiceRole(pool, fn)` (`client.ts`) — no caller anywhere reaches the
+underlying `pg.Pool` or a raw `pg.PoolClient` directly. Both connect as
+the same login role (`postgres`, the only role hosted Supabase exposes to
+project owners — `authenticator`, which PostgREST itself connects as, is
+never handed out). Privilege narrowing happens per-transaction via `SET
+LOCAL ROLE authenticated` (acting-user calls) or `SET LOCAL ROLE
+service_role` (worker calls), plus, for the acting-user path,
+`set_config('request.jwt.claims', ...)` with the same `{sub, role}` shape
+PostgREST would set — this is what `auth.uid()`/`auth.role()` actually
+read, so every existing RLS policy and `SECURITY DEFINER` function sees
+identical values to a real PostgREST request from that user. `SET LOCAL`
+(not session-level `SET ROLE`) is scoped to the transaction and reverts
+automatically on `COMMIT`/`ROLLBACK` even on an error path, which is what
+makes this safe on a pooled connection: there is no code path that
+returns a connection to the pool still impersonating a role.
+
+**Why RLS is unchanged.** RLS enforcement itself was never touched — the
+same policies, on the same tables, still gate every acting-user query,
+because `withActingUser` reproduces the exact session state (`role`,
+`request.jwt.claims`) PostgREST used to establish before RLS was
+evaluated. The migration only changed *how* that session state gets set
+(explicit `SET LOCAL`/`set_config` calls instead of PostgREST's own
+connection setup), not what it's set to. `apps/worker`'s service-role
+path is unchanged in the same sense: it bypasses RLS via
+`service_role`'s `rolbypassrls` exactly as the old Supabase-JS
+service-role client did, with `workspaceWhere()` (`workspaceScope.ts`)
+remaining the app-level substitute for RLS there, same as before this
+migration. Full unit suite (all 14 packages, listed below) and every
+e2e persona/cross-org isolation test pass unchanged, which is the
+practical proof: nothing in the request-path rewrite altered who can see
+what.
+
+**Pooling.** One `pg.Pool` per process (not one per role — see
+`pool.ts`'s header for why splitting would add sockets without adding
+isolation, since both roles share one login credential), `max: 10` in
+each of `apps/api`, `apps/web`, and `apps/worker` (`dbPool.ts` in each).
+TLS auto-detected from hostname (off for `localhost`/`127.0.0.1`/Docker-
+internal, on otherwise) — no separate `PGSSLMODE`-style config. Documented
+in `DEPLOYMENT.md`'s "Database connection pooling" section from Step 2;
+`max` is a starting point, to be tuned from real connection-count metrics
+once this is live.
+
+**A bug the migration itself introduced, found and fixed during
+verification, not present in the PostgREST-era code.** `workspaceWhere()`
+emits a bare `org_id`/`owner_id` column reference unless given a
+`tableAlias`. Two call sites in `apps/api/src/services/projects.ts`
+(`getSidebarProjects`, `getProjectsList`) join `projects` against
+`workflows` — which also has its own `org_id`/`owner_id` — using an
+unqualified `workspaceWhere()`, so Postgres threw "column reference ...
+is ambiguous" on every real request to two high-traffic pages (the app
+sidebar and the projects list). PostgREST/Supabase-JS's `.eq()` builder
+never had this failure mode since it always scopes to the queried table
+by construction; it's specific to hand-written joined SQL. Fixed by
+giving `workspaceWhere()` an optional `tableAlias` parameter that
+qualifies the emitted column (`p.org_id = $1`), then swept every other
+`workspaceWhere()` call site in the codebase (15 files total) for the
+same join shape — no other live instances found; the other 3 call sites
+that do join two scoped tables (`getWorkflowDetail`, `getContinueWorkflow`,
+`getRecentRuns`) already used a pre-existing subquery workaround and were
+never affected. Those 3 subquery sites could now be simplified to use
+`tableAlias` directly instead, but that's a follow-up, not done here.
+
+**Verification actually run for this close-out:** full typecheck (`turbo
+typecheck`, 14/14 tasks successful across all 11 packages) and full unit
+suite (`turbo test`, 14/14 turbo tasks successful — 7 packages actually
+define a `test` script: `@nia/api`, `@nia/web`, `@nia/worker`,
+`@nia/schemas`, `@nia/connector-mysql`, `@nia/connector-mongodb`,
+`@nia/connector-supabase`; the other 7 tasks in that count are their
+build-dependency tasks, not additional test suites) both pass, 1,322
+tests total across those 7 packages, 0 failures. E2e: the only failures
+traced to this migration were
+the two `workspaceWhere` ambiguous-column bugs above, both fixed and
+re-verified; every remaining e2e failure is either a pre-existing,
+migration-unrelated test bug (logged in `TODO.md`), an external LLM
+provider billing outage unrelated to any code path here, or environment
+flakiness/test-data contamination on `canvas.spec.ts` fixtures — see
+`TODO.md` for the itemized list and reruns still pending before that
+file's tests can be called fully clean. The 44 RLS probes
+(`supabase/tests/rls_probes.sql`) and the one live end-to-end pipeline
+check (Step 4's remaining items) have not been re-run as part of this
+close-out pass.
+
+**`@supabase/supabase-js` removability, per app:**
+- `apps/api`: **not removable.** `src/lib/supabaseClient.ts` and
+  `src/lib/cookieSupabaseClient.ts` are the real Supabase Auth layer
+  (`supabase.auth.*` session/token handling via `@supabase/ssr`) — by
+  design, deliberately not migrated (see `docs/plans/data-access.md`'s
+  scope: data access only, not auth).
+- `apps/web`: **not removable.** `src/lib/supabase/server.ts` backs every
+  real auth action (`lib/auth/actions.ts`: sign in, sign up, OAuth,
+  password reset, sign out, session check) — same reason as `apps/api`.
+- `apps/worker`: **production `src/` is fully clean** — no file under
+  `apps/worker/src` imports `@supabase/supabase-js` any more. The
+  package.json dependency is kept alive only by `apps/worker/scripts/`
+  (the smoke-test suite, e.g. `dispatch-smoke.ts`, and the Vault
+  backfill/verify tooling from the secret-storage migration) — those are
+  standalone ops scripts, not the worker process itself, so the
+  dependency could only be dropped by also migrating or retiring that
+  tooling, which is out of this migration's scope.
+
+Auth itself (`apps/api`'s two client files, `apps/web`'s
+`lib/supabase/server.ts`) is intentionally still on `@supabase/supabase-js`
+— the plan's stated boundary was data access, not auth; a Better Auth (or
+equivalent) migration is a separate, later step.

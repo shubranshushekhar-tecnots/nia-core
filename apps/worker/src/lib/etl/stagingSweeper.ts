@@ -1,7 +1,7 @@
-import { supabase } from "../supabaseClient.js";
+import { withServiceRole, type WorkspaceScope } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 import { listStaleStagingObjects, deriveQuarantineEntity } from "./stagingRegistry.js";
 import { dropStagingByEntity } from "./stagedWrite.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
 
 /**
  * Phase 11 item 12 — the 24h sweeper. Registered as a repeatable BullMQ job
@@ -26,11 +26,10 @@ type ConnectionScopeRow = { org_id: string | null; owner_id: string | null; owne
 async function resolveConnectionScope(
   connectionId: string,
 ): Promise<{ scope: WorkspaceScope; actorUserId: string } | null> {
-  const { data } = await supabase
-    .from("connections")
-    .select("org_id, owner_id, owner_user_id")
-    .eq("id", connectionId)
-    .maybeSingle<ConnectionScopeRow>();
+  const result = await withServiceRole(dbPool, (db) =>
+    db.query<ConnectionScopeRow>("select org_id, owner_id, owner_user_id from public.connections where id = $1", [connectionId]),
+  );
+  const data = result.rows[0] ?? null;
   if (!data) return null;
   const scope: WorkspaceScope = data.org_id ? { orgId: data.org_id } : { ownerId: data.owner_id! };
   return { scope, actorUserId: data.owner_user_id };

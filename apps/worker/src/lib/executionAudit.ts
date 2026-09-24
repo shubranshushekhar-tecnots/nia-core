@@ -1,10 +1,11 @@
+import { withServiceRole } from "@nia/db";
 import { ExecutionAuditInput, type ExecutionAuditInput as ExecutionAuditInputType } from "@nia/schemas";
-import { supabase } from "./supabaseClient.js";
+import { dbPool } from "./dbPool.js";
 
 /**
  * Worker-side mirror of apps/api/src/lib/executionAudit.ts, calling the same
- * log_execution_audit RPC (0009_connector_write_paths.sql) — but through
- * this module's service_role client (supabaseClient.ts). The RPC treats
+ * log_execution_audit RPC (0009_connector_write_paths.sql) — but as
+ * service_role (@nia/db's withServiceRole). The RPC treats
  * service_role callers as a distinct branch and REQUIRES p_actor_user_id
  * explicitly (there is no auth.uid() to fall back on for a client with no
  * live user JWT), which is why `actorUserId` is a required field on
@@ -20,16 +21,20 @@ import { supabase } from "./supabaseClient.js";
  */
 export async function logExecutionAudit(input: ExecutionAuditInputType): Promise<void> {
   const parsed = ExecutionAuditInput.parse(input);
-  const { error } = await supabase.rpc("log_execution_audit", {
-    p_connection_id: parsed.connectionId,
-    p_connection_owner_user_id: parsed.connectionOwnerUserId,
-    p_connector_id: parsed.connectorId,
-    p_handle: parsed.handle,
-    p_operation: parsed.operation,
-    p_query: parsed.query,
-    p_actor_user_id: parsed.actorUserId,
-  });
-  if (error) {
-    throw new Error(`execution audit failed: ${error.message}`);
+  try {
+    await withServiceRole(dbPool, (db) =>
+      db.query("select public.log_execution_audit($1, $2, $3, $4, $5, $6, $7)", [
+        parsed.connectionId,
+        parsed.connectionOwnerUserId,
+        parsed.connectorId,
+        parsed.handle,
+        parsed.operation,
+        parsed.query,
+        parsed.actorUserId,
+      ]),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`execution audit failed: ${message}`);
   }
 }

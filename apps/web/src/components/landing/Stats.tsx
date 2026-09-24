@@ -21,8 +21,9 @@ const STATS = [
 export default function Stats() {
   return (
     <section id="stats" className="hl-scope">
-      <Container style={{ paddingTop: 104, paddingBottom: 96 }}>
-        <Eyebrow>Pricing</Eyebrow>
+      <Container style={{ paddingBottom: 96 }}>
+        <SectionRule tone="strong" />
+        <Eyebrow style={{ marginTop: 80 }}>Pricing</Eyebrow>
         <h2 style={{ ...pageH1, marginTop: 24, maxWidth: 980 }}>Start free. Upgrade when the rows do.</h2>
         <p className="hl-lead" style={{ ...leadStyle, marginTop: 24, maxWidth: 520 }}>
           Rows per run are the only meter. No per-seat surprise, no charge for a run that failed, no invoice you

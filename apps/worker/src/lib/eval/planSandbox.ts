@@ -37,13 +37,9 @@
  *    the real connector without any further grant.
  */
 import { execFileSync } from "node:child_process";
-import { createClient } from "@supabase/supabase-js";
-import { env } from "../../env.js";
+import { withServiceRole } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 import { DEMO_USER_ID } from "./sandbox.js";
-
-const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
 
 const MYSQL_CONTAINER = "nia-core-dev-mysql-1";
 export const HIGH_CARDINALITY_TABLE = "plan_eval_wide";
@@ -102,19 +98,32 @@ export function seedResidualCapTable(): void {
 }
 
 export async function seedPlanWorkflow(orgId: string): Promise<string> {
-  const { data: project, error: projErr } = await supabase
-    .from("projects")
-    .insert({ org_id: orgId, name: "Copilot plan eval", created_by: DEMO_USER_ID })
-    .select("id")
-    .single();
-  if (projErr || !project) throw new Error(`plan-eval project insert failed: ${projErr?.message}`);
+  let projectId: string;
+  try {
+    const result = await withServiceRole(dbPool, (db) =>
+      db.query<{ id: string }>(
+        "insert into public.projects (org_id, name, created_by) values ($1, $2, $3) returning id",
+        [orgId, "Copilot plan eval", DEMO_USER_ID],
+      ),
+    );
+    if (!result.rows[0]) throw new Error("no row returned");
+    projectId = result.rows[0].id;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`plan-eval project insert failed: ${message}`);
+  }
 
-  const { data: workflow, error: wfErr } = await supabase
-    .from("workflows")
-    .insert({ project_id: project.id as string, org_id: orgId, name: "Copilot plan eval workflow", created_by: DEMO_USER_ID })
-    .select("id")
-    .single();
-  if (wfErr || !workflow) throw new Error(`plan-eval workflow insert failed: ${wfErr?.message}`);
-
-  return workflow.id as string;
+  try {
+    const result = await withServiceRole(dbPool, (db) =>
+      db.query<{ id: string }>(
+        "insert into public.workflows (project_id, org_id, name, created_by) values ($1, $2, $3, $4) returning id",
+        [projectId, orgId, "Copilot plan eval workflow", DEMO_USER_ID],
+      ),
+    );
+    if (!result.rows[0]) throw new Error("no row returned");
+    return result.rows[0].id;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`plan-eval workflow insert failed: ${message}`);
+  }
 }

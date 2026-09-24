@@ -1,6 +1,6 @@
 import type { EntityRef, QueryPayload, SourceDialect } from "@nia/schemas";
 import { dispatch } from "../dispatch.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 
 function quoteIdent(name: string, dialect: "mysql" | "postgres"): string {
   if (dialect === "mysql") return `\`${name.replace(/`/g, "``")}\``;

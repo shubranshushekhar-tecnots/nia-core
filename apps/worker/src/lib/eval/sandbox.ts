@@ -8,12 +8,8 @@
  * not worth the regression risk of switching it over) — this is genuinely
  * a second, independent seeding call site for a second script.
  */
-import { createClient } from "@supabase/supabase-js";
-import { env } from "../../env.js";
-
-const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+import { withServiceRole, workspaceWhere } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 
 export const DEMO_USER_ID = "00000000-0000-0000-0000-0000000000d1";
 export const INVALID_CONNECTION_ID = "00000000-0000-0000-0000-000000000000";
@@ -27,63 +23,89 @@ const SANDBOX = {
 export type ConnectorId = keyof typeof SANDBOX;
 
 export async function getOrgId(): Promise<string> {
-  const { data, error } = await supabase.from("organizations").select("id").eq("slug", "icecream-co").single();
-  if (error || !data) throw new Error(`Could not find seed.sql's demo org: ${error?.message}`);
-  return data.id as string;
+  try {
+    const result = await withServiceRole(dbPool, (db) =>
+      db.query<{ id: string }>("select id from public.organizations where slug = $1", ["icecream-co"]),
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("no row returned");
+    return row.id;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Could not find seed.sql's demo org: ${message}`);
+  }
 }
 
 async function seedConnection(orgId: string, connectorId: ConnectorId): Promise<string> {
   const { host, port, database, user, password } = SANDBOX[connectorId];
+  const where = workspaceWhere({ orgId }, 1);
 
-  const { count: installCount } = await supabase
-    .from("connector_installs")
-    .select("id", { count: "exact", head: true })
-    .eq("org_id", orgId)
-    .eq("connector_id", connectorId);
-  if (!installCount) {
-    const { error } = await supabase
-      .from("connector_installs")
-      .insert({ org_id: orgId, connector_id: connectorId, installed_by_user_id: DEMO_USER_ID });
-    if (error) throw new Error(`install ${connectorId} failed: ${error.message}`);
+  const installExists = await withServiceRole(dbPool, (db) =>
+    db.query(`select id from public.connector_installs where ${where.sql} and connector_id = $2`, [...where.params, connectorId]),
+  );
+  if (installExists.rows.length === 0) {
+    try {
+      await withServiceRole(dbPool, (db) =>
+        db.query("insert into public.connector_installs (org_id, connector_id, installed_by_user_id) values ($1, $2, $3)", [
+          orgId,
+          connectorId,
+          DEMO_USER_ID,
+        ]),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`install ${connectorId} failed: ${message}`);
+    }
   }
 
   const handle = `@${connectorId}-eval`;
-  const { data: existing } = await supabase
-    .from("connections")
-    .select("id")
-    .eq("org_id", orgId)
-    .eq("handle", handle)
-    .maybeSingle();
+  const existingResult = await withServiceRole(dbPool, (db) =>
+    db.query<{ id: string }>(`select id from public.connections where ${where.sql} and handle = $2`, [...where.params, handle]),
+  );
+  const existing = existingResult.rows[0] ?? null;
   if (existing) {
-    const { error } = await supabase
-      .from("connections")
-      .update({ config: { host, port, database } })
-      .eq("id", existing.id as string);
-    if (error) throw new Error(`connection config update for ${connectorId} failed: ${error.message}`);
-    return existing.id as string;
+    try {
+      await withServiceRole(dbPool, (db) =>
+        db.query("update public.connections set config = $1 where id = $2", [JSON.stringify({ host, port, database }), existing.id]),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`connection config update for ${connectorId} failed: ${message}`);
+    }
+    return existing.id;
   }
 
-  const { data: vaultRef, error: vaultError } = await supabase.rpc("create_connector_secret", {
-    p_secret: { user, password },
-  });
-  if (vaultError || !vaultRef) throw new Error(`vault write for ${connectorId} failed: ${vaultError?.message}`);
+  let vaultRef: string;
+  try {
+    const result = await withServiceRole(dbPool, (db) =>
+      db.query<{ create_connector_secret: string }>("select public.create_connector_secret($1::jsonb) as create_connector_secret", [
+        JSON.stringify({ user, password }),
+      ]),
+    );
+    const ref = result.rows[0]?.create_connector_secret;
+    if (!ref) throw new Error("no ref returned");
+    vaultRef = ref;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`vault write for ${connectorId} failed: ${message}`);
+  }
 
-  const { data, error } = await supabase
-    .from("connections")
-    .insert({
-      org_id: orgId,
-      owner_id: null,
-      connector_id: connectorId,
-      handle,
-      display_name: `Golden eval (${connectorId})`,
-      owner_user_id: DEMO_USER_ID,
-      config: { host, port, database },
-      vault_secret_ref: vaultRef as string,
-    })
-    .select("id")
-    .single();
-  if (error || !data) throw new Error(`connection insert for ${connectorId} failed: ${error?.message}`);
-  return data.id as string;
+  try {
+    const result = await withServiceRole(dbPool, (db) =>
+      db.query<{ id: string }>(
+        `insert into public.connections (org_id, owner_id, connector_id, handle, display_name, owner_user_id, config, vault_secret_ref)
+         values ($1, null, $2, $3, $4, $5, $6, $7)
+         returning id`,
+        [orgId, connectorId, handle, `Golden eval (${connectorId})`, DEMO_USER_ID, JSON.stringify({ host, port, database }), vaultRef],
+      ),
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("no row returned");
+    return row.id;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`connection insert for ${connectorId} failed: ${message}`);
+  }
 }
 
 export async function seedSandbox(): Promise<{ orgId: string; connectionIds: Record<ConnectorId, string> }> {
@@ -107,27 +129,40 @@ export async function seedSandbox(): Promise<{ orgId: string; connectionIds: Rec
  * eval runner has to do the same.
  */
 export async function createConversation(orgId: string): Promise<string> {
-  const { data, error } = await supabase
-    .from("conversations")
-    .insert({ org_id: orgId, created_by: DEMO_USER_ID })
-    .select("id")
-    .single();
-  if (error || !data) throw new Error(`conversation insert failed: ${error?.message}`);
-  return data.id as string;
+  try {
+    const result = await withServiceRole(dbPool, (db) =>
+      db.query<{ id: string }>("insert into public.conversations (org_id, created_by) values ($1, $2) returning id", [orgId, DEMO_USER_ID]),
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("no row returned");
+    return row.id;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`conversation insert failed: ${message}`);
+  }
 }
 
 /** Reads back the assistant message row a chat job persisted, for scoring. */
 export async function getAssistantMessage(
   conversationId: string,
 ): Promise<{ content: string; citations: { connectionId: string; executedQuery: string; rowCount: number; truncated: boolean }[]; status: string } | null> {
-  const { data, error } = await supabase
-    .from("messages")
-    .select("content, citations, status")
-    .eq("conversation_id", conversationId)
-    .eq("role", "assistant")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error || !data) return null;
-  return data as { content: string; citations: { connectionId: string; executedQuery: string; rowCount: number; truncated: boolean }[]; status: string };
+  type MessageRow = {
+    content: string;
+    citations: { connectionId: string; executedQuery: string; rowCount: number; truncated: boolean }[];
+    status: string;
+  };
+  try {
+    const result = await withServiceRole(dbPool, (db) =>
+      db.query<MessageRow>(
+        `select content, citations, status from public.messages
+         where conversation_id = $1 and role = 'assistant'
+         order by created_at desc
+         limit 1`,
+        [conversationId],
+      ),
+    );
+    return result.rows[0] ?? null;
+  } catch {
+    return null;
+  }
 }

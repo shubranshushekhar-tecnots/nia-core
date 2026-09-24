@@ -25,7 +25,7 @@ const tool: ToolDefinition<Input, Output> = {
   description: "Gets a finished run's final status and counters. Note: if the run failed, only the persisted status is available here, not the original error message (that is only ever streamed live while the run's log panel is open).",
   tier: "read",
   inputSchema: InputSchema,
-  handler: async (ctx, input) => getRunStatus(ctx.supabase, ctx.user.scope, input.workflowId, input.runId),
+  handler: async (ctx, input) => getRunStatus(ctx.withUser, ctx.user.scope, input.workflowId, input.runId),
   summarize: (output) => {
     if (output.status === "running") return `Run ${output.id} is still running (${output.rowsProcessed} rows so far).`;
     const base = `Run ${output.id} ${output.status}: ${output.rowsProcessed} rows processed${output.durationMs != null ? ` in ${output.durationMs}ms` : ""}.`;

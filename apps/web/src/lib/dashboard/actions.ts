@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { withActingUser } from "@nia/db";
 import { createClient } from "@/lib/supabase/server";
+import { dbPool } from "@/lib/db/pool";
 import { requireUser } from "@/lib/auth/session";
 import type { ActionState } from "@/lib/auth/actions";
 import type { WorkflowDefinition } from "./types";
@@ -46,11 +48,16 @@ export async function createProject(
   if (orgId === null) {
     if (ctx.role !== "individual") return { error: "Choose an organization first." };
 
-    const { error } = await supabase
-      .from("projects")
-      .insert({ org_id: null, owner_id: user.id, name: parsed.data.name, created_by: user.id });
-
-    if (error) return { error: "Couldn't create the project. Try again." };
+    try {
+      await withActingUser(dbPool, user.id, (db) =>
+        db.query("insert into public.projects (org_id, owner_id, name, created_by) values (null, $1, $2, $1)", [
+          user.id,
+          parsed.data.name,
+        ]),
+      );
+    } catch {
+      return { error: "Couldn't create the project. Try again." };
+    }
     revalidateAppShell();
     return { success: true };
   }
@@ -64,11 +71,17 @@ export async function createProject(
     return { error: "You're not a member of this organization." };
   }
 
-  const { error } = await supabase
-    .from("projects")
-    .insert({ org_id: orgId, name: parsed.data.name, created_by: user.id });
-
-  if (error) return { error: "Couldn't create the project. Try again." };
+  try {
+    await withActingUser(dbPool, user.id, (db) =>
+      db.query("insert into public.projects (org_id, name, created_by) values ($1, $2, $3)", [
+        orgId,
+        parsed.data.name,
+        user.id,
+      ]),
+    );
+  } catch {
+    return { error: "Couldn't create the project. Try again." };
+  }
 
   revalidateAppShell();
   return { success: true };
@@ -105,15 +118,16 @@ export async function createWorkflow(
   if (orgId === null) {
     if (ctx.role !== "individual") return { error: "Choose an organization first." };
 
-    const { error } = await supabase.from("workflows").insert({
-      org_id: null,
-      owner_id: user.id,
-      project_id: parsed.data.projectId,
-      name: parsed.data.name,
-      created_by: user.id,
-    });
-
-    if (error) return { error: "Couldn't create the workflow. Try again." };
+    try {
+      await withActingUser(dbPool, user.id, (db) =>
+        db.query(
+          "insert into public.workflows (org_id, owner_id, project_id, name, created_by) values (null, $1, $2, $3, $1)",
+          [user.id, parsed.data.projectId, parsed.data.name],
+        ),
+      );
+    } catch {
+      return { error: "Couldn't create the workflow. Try again." };
+    }
     revalidateAppShell();
     return { success: true };
   }
@@ -124,14 +138,18 @@ export async function createWorkflow(
     return { error: "You're not a member of this organization." };
   }
 
-  const { error } = await supabase.from("workflows").insert({
-    org_id: orgId,
-    project_id: parsed.data.projectId,
-    name: parsed.data.name,
-    created_by: user.id,
-  });
-
-  if (error) return { error: "Couldn't create the workflow. Try again." };
+  try {
+    await withActingUser(dbPool, user.id, (db) =>
+      db.query("insert into public.workflows (org_id, project_id, name, created_by) values ($1, $2, $3, $4)", [
+        orgId,
+        parsed.data.projectId,
+        parsed.data.name,
+        user.id,
+      ]),
+    );
+  } catch {
+    return { error: "Couldn't create the workflow. Try again." };
+  }
 
   revalidateAppShell();
   return { success: true };
@@ -156,14 +174,20 @@ export async function renameProject(
   }
 
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("projects")
-    .update({ name: parsed.data.name })
-    .eq("id", projectId)
-    .select("id")
-    .maybeSingle();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Your session expired — sign in again." };
 
-  if (error || !data) return { error: "Couldn't rename the project. Try again." };
+  const result = await withActingUser(dbPool, user.id, (db) =>
+    db.query<{ id: string }>("update public.projects set name = $1 where id = $2 returning id", [
+      parsed.data.name,
+      projectId,
+    ]),
+  );
+  const data = result.rows[0] ?? null;
+
+  if (!data) return { error: "Couldn't rename the project. Try again." };
 
   revalidateAppShell();
   revalidatePath(`/app/projects/${projectId}`);
@@ -181,14 +205,20 @@ export async function renameWorkflow(
   }
 
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("workflows")
-    .update({ name: parsed.data.name })
-    .eq("id", workflowId)
-    .select("id, project_id")
-    .maybeSingle();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Your session expired — sign in again." };
 
-  if (error || !data) return { error: "Couldn't rename the workflow. Try again." };
+  const result = await withActingUser(dbPool, user.id, (db) =>
+    db.query<{ id: string; project_id: string }>(
+      "update public.workflows set name = $1 where id = $2 returning id, project_id",
+      [parsed.data.name, workflowId],
+    ),
+  );
+  const data = result.rows[0] ?? null;
+
+  if (!data) return { error: "Couldn't rename the workflow. Try again." };
 
   revalidateAppShell();
   revalidatePath(`/app/projects/${data.project_id}`);
@@ -208,9 +238,17 @@ export async function deleteProject(_prevState: ActionState, formData: FormData)
   const redirectTo = String(formData.get("redirectTo") || "/app");
 
   const supabase = await createClient();
-  const { data, error } = await supabase.from("projects").delete().eq("id", projectId).select("id").maybeSingle();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Your session expired — sign in again." };
 
-  if (error || !data) return { error: "Couldn't delete the project. Try again." };
+  const result = await withActingUser(dbPool, user.id, (db) =>
+    db.query<{ id: string }>("delete from public.projects where id = $1 returning id", [projectId]),
+  );
+  const data = result.rows[0] ?? null;
+
+  if (!data) return { error: "Couldn't delete the project. Try again." };
 
   revalidateAppShell();
   redirect(redirectTo);
@@ -221,9 +259,17 @@ export async function deleteWorkflow(_prevState: ActionState, formData: FormData
   const projectId = String(formData.get("projectId"));
 
   const supabase = await createClient();
-  const { data, error } = await supabase.from("workflows").delete().eq("id", workflowId).select("id").maybeSingle();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Your session expired — sign in again." };
 
-  if (error || !data) return { error: "Couldn't delete the workflow. Try again." };
+  const result = await withActingUser(dbPool, user.id, (db) =>
+    db.query<{ id: string }>("delete from public.workflows where id = $1 returning id", [workflowId]),
+  );
+  const data = result.rows[0] ?? null;
+
+  if (!data) return { error: "Couldn't delete the workflow. Try again." };
 
   revalidateAppShell();
   redirect(`/app/projects/${projectId}`);
@@ -234,14 +280,20 @@ export async function updateWorkflowDefinition(
   definition: WorkflowDefinition,
 ): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("workflows")
-    .update({ definition })
-    .eq("id", workflowId)
-    .select("id")
-    .maybeSingle();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Your session expired — sign in again." };
 
-  if (error || !data) return { error: "Couldn't save the canvas. Try again." };
+  const result = await withActingUser(dbPool, user.id, (db) =>
+    db.query<{ id: string }>("update public.workflows set definition = $1 where id = $2 returning id", [
+      definition,
+      workflowId,
+    ]),
+  );
+  const data = result.rows[0] ?? null;
+
+  if (!data) return { error: "Couldn't save the canvas. Try again." };
 
   revalidatePath(`/app/workflows/${workflowId}`);
   return { success: true };

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Langfuse } from "langfuse";
 import type { LangfuseTraceClient, LangfuseSpanClient } from "langfuse";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 import { env } from "../../env.js";
 
 /**

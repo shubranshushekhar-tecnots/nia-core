@@ -19,7 +19,7 @@ const tool: ToolDefinition<Input, Output> = {
   description: "Runs a read-only preview of a destination node and returns column names/types and a row count. Row contents are shown to the user in the UI, not returned to the model.",
   tier: "read",
   inputSchema: InputSchema,
-  handler: async (ctx, input) => previewWorkflowDestination(ctx.supabase, ctx.user.scope, input.workflowId, input.destNodeId, ctx.user.userId),
+  handler: async (ctx, input) => previewWorkflowDestination(ctx.withUser, ctx.user.scope, input.workflowId, input.destNodeId, ctx.user.userId),
   summarize: (output) => {
     const columns = output.columns.map((c) => `${c.name} (${c.type})`);
     return `Preview: ${output.rows.length} row(s), columns: ${columns.join(", ")}.`;

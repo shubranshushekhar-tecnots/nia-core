@@ -43,7 +43,7 @@ const tool: ToolDefinition<Input, Output> = {
   tier: "edit",
   inputSchema: InputSchema,
   handler: async (ctx, input) =>
-    applyPlanDiff(ctx.supabase, ctx.user.scope, input.workflowId, { diff: input.diff, prompt: input.prompt }),
+    applyPlanDiff(ctx.withUser, ctx.user.scope, input.workflowId, { diff: input.diff, prompt: input.prompt }),
   summarize: (output) => `Applied plan ${output.appliedPlanId}, graph is now at version ${output.version}.`,
   render: (output) => ({ kind: "graph_applied", payload: output }),
 };

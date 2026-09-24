@@ -3,7 +3,9 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { withActingUser } from "@nia/db";
 import { createClient } from "@/lib/supabase/server";
+import { dbPool } from "@/lib/db/pool";
 
 export type ActionState = {
   error?: string;
@@ -165,14 +167,24 @@ export async function createOrganization(_prevState: ActionState, formData: Form
   }
 
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("create_organization", {
-    p_name: parsed.data.name,
-    p_slug: parsed.data.slug,
-  });
-  if (error) {
-    return { error: error.message };
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Your session expired — sign in again." };
+
+  let orgId: string;
+  try {
+    const result = await withActingUser(dbPool, user.id, (db) =>
+      db.query<{ create_organization: string }>("select public.create_organization($1, $2)", [
+        parsed.data.name,
+        parsed.data.slug,
+      ]),
+    );
+    orgId = result.rows[0]!.create_organization;
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Something went wrong. Try again." };
   }
 
   revalidatePath("/", "layout");
-  redirect(`/app?org=${data}`);
+  redirect(`/app?org=${orgId}`);
 }

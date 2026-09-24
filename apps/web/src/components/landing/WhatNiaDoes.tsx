@@ -24,27 +24,27 @@ const ITEMS: Item[] = [
   {
     n: '01',
     label: 'Draw the pipeline',
-    body: 'Skip the YAML. Sources, transforms and destinations drag onto a grid, connect by hand, and run the moment you press the button — the canvas is the config.',
+    body: 'Skip the YAML. Sources, transforms and destinations drag onto a grid, connect by hand, and run the moment you press the button. MySQL, Postgres and MongoDB, in any direction.',
   },
   {
     n: '02',
-    label: 'Connect every source once',
-    body: 'Authenticate once. Databases, warehouses, files and BI tools become reusable handles that appear in every pipeline you build after, already wired.',
+    label: 'Connect once, with least privilege',
+    body: 'Authenticate a database once and it becomes a handle you reuse in every pipeline. Nia reads through a role you scope yourself, and writing needs a separate grant you approve and run. It never holds admin access to your data.',
   },
   {
     n: '03',
-    label: 'Run it while you sleep',
-    body: 'Set it and close the laptop. Nia moves the rows overnight, retries what fails on its own, and stamps every run with a timecode you can read back.',
+    label: 'Move millions of rows without babysitting',
+    body: "Extracts are checkpointed, so a run that dies at row 900,000 resumes where it stopped instead of starting over. Rerun the same pipeline and rows are matched on your key and updated in place, never duplicated.",
   },
   {
     n: '04',
-    label: 'Put AI in the flow',
-    body: 'Ask in plain words. Describe the pipeline you want, or drop an AI step mid-flow to classify, extract and clean the fields no regular expression was going to reach.',
+    label: 'AI proposes the cleaning. It never runs your data.',
+    body: 'Nia profiles the source, finds the currency symbols, the mixed date formats and the "N/A"s, and proposes the exact transforms to fix them, with before-and-after values on your own rows. You approve, and it compiles to a fixed plan that runs without a model ever touching a row. ID-like columns are left alone: a zip code stays 02134, not 2134.',
   },
   {
     n: '05',
-    label: 'Trust what lands',
-    body: 'Know before they do. Row counts, schema drift and freshness run as checks on every pass, so a dashboard is either correct or it tells you exactly why not.',
+    label: 'Nothing lands half-done',
+    body: "Every run writes to a staging table first and applies in a single transaction, so a failure leaves your destination exactly as it was. Rows that can't be converted are quarantined with the reason, never silently blanked. New destination tables are created with the right types, existing ones are never altered, and a plan refuses to run when the data's shape has drifted.",
   },
 ];
 

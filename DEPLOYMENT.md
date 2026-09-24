@@ -128,6 +128,29 @@ reads or writes. See `supabase/migrations/*.sql` for the existing pattern
 and `supabase/tests/rls_probes.sql` for the RLS regression suite this
 should stay paired with.
 
+## Database connection pooling (`@nia/db`)
+
+`packages/db` is the direct-Postgres data-access module (`pg` driver) that
+replaces PostgREST call sites — see `docs/plans/data-access.md`. It connects
+using `DATABASE_URL`, as the `postgres` role (the only role hosted Supabase
+exposes; `authenticator`, which PostgREST itself connects as, is never
+handed to customers). There is one pool per process, not one per role:
+privilege narrowing to `authenticated` (real end-user calls, via
+`withActingUser`) or `service_role` (worker calls, via `withServiceRole`)
+happens per-transaction with `SET LOCAL ROLE`, which reverts automatically
+at `COMMIT`/`ROLLBACK` — so a pooled connection can never leak back to the
+pool still impersonating a role.
+
+Each service that imports `@nia/db` creates its own pool via
+`createDbPool({ connectionString, max })`. Size `max` per service like any
+other Postgres client pool — as a starting point, mirror what
+`services/connector-supabase`'s pool manager already uses (a small pool per
+process, not one shared across processes) and adjust from real connection-
+count metrics once `api`/`worker` are actually migrated onto this module
+(Step 3 of the plan above). TLS is auto-detected from the hostname (no TLS
+for `localhost`/`127.0.0.1`/Docker-internal hosts, TLS otherwise) — no
+separate `PGSSLMODE`-style env var to configure.
+
 ## Managed services needed
 
 - **Supabase** (hosted): Postgres + Auth + Vault. `SUPABASE_URL` /

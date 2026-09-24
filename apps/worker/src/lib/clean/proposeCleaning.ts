@@ -4,7 +4,8 @@ import { resolveGraph } from "../checks/runWorkflowChecks.js";
 import { resolveConnection } from "../resolveConnection.js";
 import { getSchema } from "../introspection.js";
 import { findSourcePath } from "../preview/runPreview.js";
-import { supabase } from "../supabaseClient.js";
+import { withServiceRole } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 import { sampleEntity } from "../profile/sampleEntity.js";
 import { computeColumnStats } from "../profile/stats.js";
 import { computeSignature, computeProfileHash, computeSchemaHash } from "../profile/signature.js";
@@ -130,8 +131,10 @@ export async function proposeCleaning(workflowId: string, nodeId: string, scope:
   const sampleColumns = sample.value.columns;
   const sampleRows = sample.value.rows.map((row) => sampleColumns.map((c) => row[c]));
 
-  const { data: graphRow } = await supabase.from("workflow_graphs").select("version").eq("workflow_id", workflowId).maybeSingle();
-  const baseGraphVersion = graphRow?.version ?? 0;
+  const graphResult = await withServiceRole(dbPool, (db) =>
+    db.query<{ version: number }>("select version from public.workflow_graphs where workflow_id = $1", [workflowId]),
+  );
+  const baseGraphVersion = graphResult.rows[0]?.version ?? 0;
 
   const assembled = buildAssembledPlan({
     nodeId,

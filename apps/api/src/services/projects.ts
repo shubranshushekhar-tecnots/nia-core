@@ -1,5 +1,5 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
-import type { WorkspaceScope } from "../lib/workspaceScope.js";
+import { workspaceWhere, type WorkspaceScope } from "@nia/db";
+import type { WithUser } from "../lib/withUser.js";
 
 /**
  * 1:1 port of apps/web/src/lib/dashboard/queries.ts's project-facing reads.
@@ -28,18 +28,37 @@ export type ProjectDetail = {
   workflows: { id: string; name: string; status: WorkflowStatus; updatedAt: string }[];
 };
 
-export async function getSidebarProjects(
-  supabase: SupabaseClient,
-  scope: WorkspaceScope,
-): Promise<SidebarProject[]> {
-  let query = supabase.from("projects").select("id, name, workflows ( id, name, status )");
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.order("name", { ascending: true });
+type SidebarProjectRow = {
+  id: string;
+  name: string;
+  workflows: { id: string; name: string; status: WorkflowStatus }[];
+};
 
-  return (data ?? []).map((project) => ({
+export async function getSidebarProjects(withUser: WithUser, scope: WorkspaceScope): Promise<SidebarProject[]> {
+  // Joins workflows, which has its own org_id/owner_id columns — a bare
+  // workspaceWhere() would be ambiguous, so scope it to p (projects) via
+  // the tableAlias param.
+  const where = workspaceWhere(scope, 1, "p");
+  const { rows } = await withUser((db) =>
+    db.query<SidebarProjectRow>(
+      `select p.id, p.name,
+         coalesce(
+           json_agg(json_build_object('id', w.id, 'name', w.name, 'status', w.status)) filter (where w.id is not null),
+           '[]'
+         ) as workflows
+       from projects p
+       left join workflows w on w.project_id = p.id
+       where ${where.sql}
+       group by p.id, p.name
+       order by p.name asc`,
+      where.params,
+    ),
+  );
+
+  return rows.map((project) => ({
     id: project.id,
     name: project.name,
-    workflows: (project.workflows ?? []) as SidebarProject["workflows"],
+    workflows: project.workflows,
   }));
 }
 
@@ -50,36 +69,53 @@ export async function getSidebarProjects(
  * aggregate style as the source). No per-project member avatars — this app
  * has no per-project membership concept.
  */
-export async function getProjectsList(
-  supabase: SupabaseClient,
-  scope: WorkspaceScope,
-): Promise<ProjectListItem[]> {
-  let projectsQuery = supabase.from("projects").select("id, name, workflows ( id )");
-  projectsQuery =
-    "orgId" in scope
-      ? projectsQuery.eq("org_id", scope.orgId)
-      : projectsQuery.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data: projects } = await projectsQuery.order("name", { ascending: true });
+type ProjectsListRow = { id: string; name: string; workflow_count: number };
+type ProjectRunRow = { project_id: string; started_at: string };
 
-  let runsQuery = supabase.from("workflow_runs").select("started_at, workflows ( project_id )");
-  runsQuery =
-    "orgId" in scope
-      ? runsQuery.eq("org_id", scope.orgId)
-      : runsQuery.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data: runs } = await runsQuery.order("started_at", { ascending: false });
+export async function getProjectsList(withUser: WithUser, scope: WorkspaceScope): Promise<ProjectListItem[]> {
+  // Joins workflows, which has its own org_id/owner_id columns — a bare
+  // workspaceWhere() would be ambiguous, so scope it to p (projects) via
+  // the tableAlias param.
+  const projectsWhere = workspaceWhere(scope, 1, "p");
+  const { rows: projects } = await withUser((db) =>
+    db.query<ProjectsListRow>(
+      `select p.id, p.name, count(w.id)::int as workflow_count
+       from projects p
+       left join workflows w on w.project_id = p.id
+       where ${projectsWhere.sql}
+       group by p.id, p.name
+       order by p.name asc`,
+      projectsWhere.params,
+    ),
+  );
+
+  // workspaceWhere's org_id/owner_id are bare column names, ambiguous
+  // against a join where both workflow_runs and workflows have those
+  // columns — scope via a subquery against the unaliased, unjoined
+  // workflow_runs table.
+  const runsWhere = workspaceWhere(scope, 1);
+  const { rows: runs } = await withUser((db) =>
+    db.query<ProjectRunRow>(
+      `select w.project_id, r.started_at
+       from workflow_runs r
+       join workflows w on w.id = r.workflow_id
+       where r.id in (select id from workflow_runs where ${runsWhere.sql})
+       order by r.started_at desc`,
+      runsWhere.params,
+    ),
+  );
 
   const lastRunByProject = new Map<string, string>();
-  for (const run of runs ?? []) {
-    const workflow = run.workflows as unknown as { project_id: string } | null;
-    if (workflow && !lastRunByProject.has(workflow.project_id)) {
-      lastRunByProject.set(workflow.project_id, run.started_at);
+  for (const run of runs) {
+    if (!lastRunByProject.has(run.project_id)) {
+      lastRunByProject.set(run.project_id, run.started_at);
     }
   }
 
-  return (projects ?? []).map((project) => ({
+  return projects.map((project) => ({
     id: project.id,
     name: project.name,
-    workflowCount: (project.workflows ?? []).length,
+    workflowCount: project.workflow_count,
     lastRunAt: lastRunByProject.get(project.id) ?? null,
   }));
 }
@@ -91,31 +127,43 @@ export async function getProjectsList(
  * plain 404 (no 403 vs 404 distinction leaked), matching the source's
  * comment about callers redirecting rather than differentiating.
  */
+type ProjectDetailRow = {
+  id: string;
+  name: string;
+  workflows: { id: string; name: string; status: WorkflowStatus; updated_at: string }[];
+};
+
 export async function getProjectDetail(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   projectId: string,
   scope: WorkspaceScope,
 ): Promise<ProjectDetail | null> {
-  let query = supabase
-    .from("projects")
-    .select("id, name, workflows ( id, name, status, updated_at )")
-    .eq("id", projectId);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.maybeSingle();
+  // workspaceWhere's org_id/owner_id are bare column names, ambiguous
+  // against a join where both projects and workflows have those columns —
+  // scope via a subquery against the unaliased, unjoined projects table.
+  const where = workspaceWhere(scope, 2);
+  const { rows } = await withUser((db) =>
+    db.query<ProjectDetailRow>(
+      `select p.id, p.name,
+         coalesce(
+           json_agg(json_build_object('id', w.id, 'name', w.name, 'status', w.status, 'updated_at', w.updated_at)) filter (where w.id is not null),
+           '[]'
+         ) as workflows
+       from projects p
+       left join workflows w on w.project_id = p.id
+       where p.id = $1 and p.id in (select id from projects where ${where.sql})
+       group by p.id, p.name`,
+      [projectId, ...where.params],
+    ),
+  );
 
+  const data = rows[0];
   if (!data) return null;
-
-  const workflows = (data.workflows ?? []) as {
-    id: string;
-    name: string;
-    status: WorkflowStatus;
-    updated_at: string;
-  }[];
 
   return {
     id: data.id,
     name: data.name,
-    workflows: workflows
+    workflows: data.workflows
       .map((w) => ({ id: w.id, name: w.name, status: w.status, updatedAt: w.updated_at }))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
   };

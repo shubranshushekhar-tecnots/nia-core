@@ -1,8 +1,9 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { GraphDoc, parseNodeConfig, type GraphDoc as GraphDocType } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
+import type { WithUser } from "../lib/withUser.js";
 import { AppError } from "../lib/appError.js";
 import { computeStepsHash } from "../lib/cleanStepsHash.js";
+import { assertWorkflowInScope } from "./checks.js";
 
 export type WorkflowGraphResult = { graph: GraphDocType; version: number };
 
@@ -21,9 +22,19 @@ export type WorkflowGraphResult = { graph: GraphDocType; version: number };
  * next save or until runEtl.ts's drift check (cleanPlanDrift.ts) catches
  * it by hash/schema/profile mismatch some other way. Logged, not thrown.
  */
-async function unbindStaleCleanPlans(supabase: SupabaseClient, workflowId: string, graph: GraphDocType): Promise<void> {
-  const { data: bindings, error } = await supabase.from("clean_plans").select("node_id, steps_hash").eq("workflow_id", workflowId);
-  if (error || !bindings || bindings.length === 0) return;
+async function unbindStaleCleanPlans(withUser: WithUser, workflowId: string, graph: GraphDocType): Promise<void> {
+  let bindings: { node_id: string; steps_hash: string }[];
+  try {
+    const { rows } = await withUser((db) =>
+      db.query<{ node_id: string; steps_hash: string }>(`select node_id, steps_hash from clean_plans where workflow_id = $1`, [
+        workflowId,
+      ]),
+    );
+    bindings = rows;
+  } catch {
+    return;
+  }
+  if (bindings.length === 0) return;
 
   const nodesById = new Map(graph.nodes.map((n) => [n.id, n]));
   const staleNodeIds: string[] = [];
@@ -40,9 +51,13 @@ async function unbindStaleCleanPlans(supabase: SupabaseClient, workflowId: strin
   }
   if (staleNodeIds.length === 0) return;
 
-  const { error: deleteError } = await supabase.from("clean_plans").delete().eq("workflow_id", workflowId).in("node_id", staleNodeIds);
-  if (deleteError) {
-    console.error(`unbindStaleCleanPlans: failed to delete stale clean_plans rows for workflow ${workflowId}:`, deleteError.message);
+  try {
+    await withUser((db) =>
+      db.query(`delete from clean_plans where workflow_id = $1 and node_id = any($2::text[])`, [workflowId, staleNodeIds]),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`unbindStaleCleanPlans: failed to delete stale clean_plans rows for workflow ${workflowId}:`, message);
   }
 }
 
@@ -55,21 +70,13 @@ async function unbindStaleCleanPlans(supabase: SupabaseClient, workflowId: strin
  */
 const EMPTY_GRAPH: GraphDocType = { nodes: [], edges: [] };
 
-async function assertWorkflowInScope(supabase: SupabaseClient, scope: WorkspaceScope, workflowId: string): Promise<void> {
-  let query = supabase.from("workflows").select("id", { count: "exact", head: true }).eq("id", workflowId);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { count } = await query;
-  if (!count) throw new AppError(404, "NOT_FOUND", "Workflow not found.");
-}
+export async function getWorkflowGraph(withUser: WithUser, scope: WorkspaceScope, workflowId: string): Promise<WorkflowGraphResult> {
+  await assertWorkflowInScope(withUser, scope, workflowId);
 
-export async function getWorkflowGraph(
-  supabase: SupabaseClient,
-  scope: WorkspaceScope,
-  workflowId: string,
-): Promise<WorkflowGraphResult> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
-
-  const { data } = await supabase.from("workflow_graphs").select("graph, version").eq("workflow_id", workflowId).maybeSingle();
+  const { rows } = await withUser((db) =>
+    db.query<{ graph: unknown; version: number }>(`select graph, version from workflow_graphs where workflow_id = $1`, [workflowId]),
+  );
+  const data = rows[0];
   if (!data) return { graph: EMPTY_GRAPH, version: 0 };
   return { graph: GraphDoc.parse(data.graph), version: data.version };
 }
@@ -88,23 +95,32 @@ export async function getWorkflowGraph(
  * for the caller.
  */
 export async function putWorkflowGraph(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   input: { graph: GraphDocType; expectedVersion: number },
 ): Promise<WorkflowGraphResult> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
+  await assertWorkflowInScope(withUser, scope, workflowId);
 
   if (input.expectedVersion === 0) {
-    const { data: inserted, error: insertError } = await supabase
-      .from("workflow_graphs")
-      .upsert({ workflow_id: workflowId, graph: input.graph }, { onConflict: "workflow_id", ignoreDuplicates: true })
-      .select("graph, version")
-      .maybeSingle();
-    if (insertError) throw new AppError(500, "GRAPH_WRITE_FAILED", insertError.message);
+    let inserted: { graph: unknown; version: number } | undefined;
+    try {
+      const { rows } = await withUser((db) =>
+        db.query<{ graph: unknown; version: number }>(
+          `insert into workflow_graphs (workflow_id, graph) values ($1, $2)
+           on conflict (workflow_id) do nothing
+           returning graph, version`,
+          [workflowId, input.graph],
+        ),
+      );
+      inserted = rows[0];
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new AppError(500, "GRAPH_WRITE_FAILED", message);
+    }
     if (inserted) {
       const parsedGraph = GraphDoc.parse(inserted.graph);
-      await unbindStaleCleanPlans(supabase, workflowId, parsedGraph);
+      await unbindStaleCleanPlans(withUser, workflowId, parsedGraph);
       return { graph: parsedGraph, version: inserted.version };
     }
     // Conflict — someone else's INSERT won. Fall through to the standard
@@ -116,18 +132,23 @@ export async function putWorkflowGraph(
   // trigger is what guarantees the increment, not this statement. This
   // WHERE clause is the 409 decision: 0 rows affected means another
   // session's save already moved the row past expectedVersion.
-  const { data, error } = await supabase
-    .from("workflow_graphs")
-    .update({ graph: input.graph })
-    .eq("workflow_id", workflowId)
-    .eq("version", input.expectedVersion)
-    .select("graph, version")
-    .maybeSingle();
+  let data: { graph: unknown; version: number } | undefined;
+  try {
+    const { rows } = await withUser((db) =>
+      db.query<{ graph: unknown; version: number }>(
+        `update workflow_graphs set graph = $1 where workflow_id = $2 and version = $3 returning graph, version`,
+        [input.graph, workflowId, input.expectedVersion],
+      ),
+    );
+    data = rows[0];
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "GRAPH_WRITE_FAILED", message);
+  }
 
-  if (error) throw new AppError(500, "GRAPH_WRITE_FAILED", error.message);
   if (!data) throw new AppError(409, "VERSION_CONFLICT", "This workflow was saved by another session. Reload and retry.");
 
   const parsedGraph = GraphDoc.parse(data.graph);
-  await unbindStaleCleanPlans(supabase, workflowId, parsedGraph);
+  await unbindStaleCleanPlans(withUser, workflowId, parsedGraph);
   return { graph: parsedGraph, version: data.version };
 }

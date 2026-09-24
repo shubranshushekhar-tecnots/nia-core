@@ -1,4 +1,5 @@
-import { supabase } from "./supabaseClient.js";
+import { withServiceRole } from "@nia/db";
+import { dbPool } from "./dbPool.js";
 import type { DispatchResult } from "./errors.js";
 
 export type ResolvedWriteGrant = {
@@ -29,15 +30,17 @@ type WriteGrantRow = {
  * already-revoked one lingering earlier in the table.
  */
 export async function resolveWriteGrant(connectionId: string, namespace: string): Promise<DispatchResult<ResolvedWriteGrant>> {
-  const { data } = await supabase
-    .from("write_grants")
-    .select("id, cred_version, write_credential_vault_ref, scope")
-    .eq("connection_id", connectionId)
-    .not("confirmed_at", "is", null)
-    .is("revoked_at", null)
-    .order("granted_at", { ascending: false });
+  const result = await withServiceRole(dbPool, (db) =>
+    db.query<WriteGrantRow>(
+      `select id, cred_version, write_credential_vault_ref, scope
+       from public.write_grants
+       where connection_id = $1 and confirmed_at is not null and revoked_at is null
+       order by granted_at desc`,
+      [connectionId],
+    ),
+  );
 
-  const rows = (data ?? []) as WriteGrantRow[];
+  const rows = result.rows;
   const match = rows.find((row) => {
     const schemas = (row.scope as { schemas?: unknown } | null)?.schemas;
     return Array.isArray(schemas) && schemas.includes(namespace);

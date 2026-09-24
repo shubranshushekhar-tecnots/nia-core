@@ -35,6 +35,17 @@ describe("resolveTableFieldState", () => {
     expect(state).toEqual({ kind: "error", message: "Connection refused" });
   });
 
+  it("surfaces the error even if isLoading is still stale/true (error takes priority over loading)", () => {
+    const state = resolveTableFieldState({
+      connectionId: "conn-1",
+      newTargetMode: false,
+      isLoading: true,
+      isError: true,
+      errorMessage: "vault secret not found",
+    });
+    expect(state).toEqual({ kind: "error", message: "vault secret not found" });
+  });
+
   it("prompts for a connection before any fetch has started", () => {
     const state = resolveTableFieldState({
       connectionId: undefined,

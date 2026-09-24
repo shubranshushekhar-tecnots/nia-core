@@ -6,8 +6,8 @@ import {
   type EntityRef,
   type ProfileRunJob,
 } from "@nia/schemas";
-import type { WorkspaceScope } from "../workspaceScope.js";
-import { supabase } from "../supabaseClient.js";
+import { withServiceRole, type WorkspaceScope } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 import { profileEntity } from "../profile/profileEntity.js";
 import { computeSchemaHash } from "../profile/signature.js";
 
@@ -45,12 +45,27 @@ export async function checkCleanPlanDrift(args: {
 }): Promise<CleanPlanDriftResult> {
   const { scope, workflowId, nodeId, sourceConnectionId, entity, triggeredByUserId } = args;
 
-  const { data: row, error } = await supabase
-    .from("clean_plans")
-    .select("source_schema_hash, profile_hash, op_catalog_version, adapter_version, profile_signature_version")
-    .eq("workflow_id", workflowId)
-    .eq("node_id", nodeId)
-    .maybeSingle();
+  type CleanPlanRow = {
+    source_schema_hash: string;
+    profile_hash: string;
+    op_catalog_version: number;
+    adapter_version: number;
+    profile_signature_version: number;
+  };
+  let row: CleanPlanRow | null;
+  try {
+    const result = await withServiceRole(dbPool, (db) =>
+      db.query<CleanPlanRow>(
+        `select source_schema_hash, profile_hash, op_catalog_version, adapter_version, profile_signature_version
+         from public.clean_plans
+         where workflow_id = $1 and node_id = $2`,
+        [workflowId, nodeId],
+      ),
+    );
+    row = result.rows[0] ?? null;
+  } catch {
+    row = null;
+  }
 
   // A read error (not "no row") is treated the same as "no binding" —
   // this check is a refusal gate, not the source of truth for whether a
@@ -58,7 +73,7 @@ export async function checkCleanPlanDrift(args: {
   // that Step 7's own apply path is responsible for keeping consistent,
   // never mask an actual drift (the query itself is unconditional select
   // by primary-key-equivalent unique columns, not a permission check).
-  if (error || !row) return { ok: true };
+  if (!row) return { ok: true };
 
   const profileJob: ProfileRunJob = {
     kind: "profile_run",

@@ -1,5 +1,6 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { workspaceWhere } from "@nia/db";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
+import type { WithUser } from "../lib/withUser.js";
 
 /**
  * Chat now supports org-less "individual" actors (see
@@ -28,6 +29,7 @@ type ConversationRow = {
 };
 
 const CONVERSATION_COLUMNS = "id, title, created_by, workflow_id, created_at, updated_at";
+const MESSAGE_COLUMNS = "id, role, content, citations, status, created_at";
 
 function toConversation(row: ConversationRow): Conversation {
   return {
@@ -69,22 +71,26 @@ function toMessage(row: MessageRow): ChatMessage {
   };
 }
 
-export async function listConversations(supabase: SupabaseClient, scope: WorkspaceScope): Promise<Conversation[]> {
-  let query = supabase.from("conversations").select(CONVERSATION_COLUMNS);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.order("updated_at", { ascending: false });
-  return (data ?? []).map((row) => toConversation(row as ConversationRow));
+export async function listConversations(withUser: WithUser, scope: WorkspaceScope): Promise<Conversation[]> {
+  const where = workspaceWhere(scope, 1);
+  const { rows } = await withUser((db) =>
+    db.query<ConversationRow>(
+      `select ${CONVERSATION_COLUMNS} from conversations where ${where.sql} order by updated_at desc`,
+      where.params,
+    ),
+  );
+  return rows.map(toConversation);
 }
 
-export async function getConversation(
-  supabase: SupabaseClient,
-  scope: WorkspaceScope,
-  id: string,
-): Promise<Conversation | null> {
-  let query = supabase.from("conversations").select(CONVERSATION_COLUMNS).eq("id", id);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.maybeSingle();
-  return data ? toConversation(data as ConversationRow) : null;
+export async function getConversation(withUser: WithUser, scope: WorkspaceScope, id: string): Promise<Conversation | null> {
+  const where = workspaceWhere(scope, 2);
+  const { rows } = await withUser((db) =>
+    db.query<ConversationRow>(
+      `select ${CONVERSATION_COLUMNS} from conversations where id = $1 and ${where.sql}`,
+      [id, ...where.params],
+    ),
+  );
+  return rows[0] ? toConversation(rows[0]) : null;
 }
 
 /**
@@ -94,14 +100,21 @@ export async function getConversation(
  * fresh workflow, or one only ever used via /app/chat's own selector).
  */
 export async function getLatestConversationForWorkflow(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
 ): Promise<Conversation | null> {
-  let query = supabase.from("conversations").select(CONVERSATION_COLUMNS).eq("workflow_id", workflowId);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.order("updated_at", { ascending: false }).limit(1).maybeSingle();
-  return data ? toConversation(data as ConversationRow) : null;
+  const where = workspaceWhere(scope, 2);
+  const { rows } = await withUser((db) =>
+    db.query<ConversationRow>(
+      `select ${CONVERSATION_COLUMNS} from conversations
+       where workflow_id = $1 and ${where.sql}
+       order by updated_at desc
+       limit 1`,
+      [workflowId, ...where.params],
+    ),
+  );
+  return rows[0] ? toConversation(rows[0]) : null;
 }
 
 /** Title derived from the first message — matches the design's citation-chip truncation style (14 chars + ellipsis) at a slightly longer, title-appropriate length. */
@@ -111,59 +124,61 @@ function deriveTitle(message: string): string {
 }
 
 export async function createConversation(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   userId: string,
   firstMessage: string,
   workflowId?: string,
 ): Promise<Conversation> {
-  const { data, error } = await supabase
-    .from("conversations")
-    .insert({
-      org_id: "orgId" in scope ? scope.orgId : null,
-      owner_id: "orgId" in scope ? null : scope.ownerId,
-      created_by: userId,
-      title: deriveTitle(firstMessage),
-      workflow_id: workflowId ?? null,
-    })
-    .select(CONVERSATION_COLUMNS)
-    .single();
-  if (error || !data) throw error ?? new Error("Failed to create conversation.");
-  return toConversation(data as ConversationRow);
+  const orgId = "orgId" in scope ? scope.orgId : null;
+  const ownerId = "orgId" in scope ? null : scope.ownerId;
+  const { rows } = await withUser((db) =>
+    db.query<ConversationRow>(
+      `insert into conversations (org_id, owner_id, created_by, title, workflow_id)
+       values ($1, $2, $3, $4, $5)
+       returning ${CONVERSATION_COLUMNS}`,
+      [orgId, ownerId, userId, deriveTitle(firstMessage), workflowId ?? null],
+    ),
+  );
+  const data = rows[0];
+  if (!data) throw new Error("Failed to create conversation.");
+  return toConversation(data);
 }
 
 export async function listMessages(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   conversationId: string,
 ): Promise<ChatMessage[]> {
-  let query = supabase
-    .from("messages")
-    .select("id, role, content, citations, status, created_at")
-    .eq("conversation_id", conversationId);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.order("created_at", { ascending: true });
-  return (data ?? []).map((row) => toMessage(row as MessageRow));
+  const where = workspaceWhere(scope, 2);
+  const { rows } = await withUser((db) =>
+    db.query<MessageRow>(
+      `select ${MESSAGE_COLUMNS} from messages
+       where conversation_id = $1 and ${where.sql}
+       order by created_at asc`,
+      [conversationId, ...where.params],
+    ),
+  );
+  return rows.map(toMessage);
 }
 
 export async function insertUserMessage(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   conversationId: string,
   content: string,
 ): Promise<ChatMessage> {
-  const { data, error } = await supabase
-    .from("messages")
-    .insert({
-      org_id: "orgId" in scope ? scope.orgId : null,
-      owner_id: "orgId" in scope ? null : scope.ownerId,
-      conversation_id: conversationId,
-      role: "user",
-      content,
-      citations: [],
-    })
-    .select("id, role, content, citations, status, created_at")
-    .single();
-  if (error || !data) throw error ?? new Error("Failed to persist user message.");
-  return toMessage(data as MessageRow);
+  const orgId = "orgId" in scope ? scope.orgId : null;
+  const ownerId = "orgId" in scope ? null : scope.ownerId;
+  const { rows } = await withUser((db) =>
+    db.query<MessageRow>(
+      `insert into messages (org_id, owner_id, conversation_id, role, content, citations)
+       values ($1, $2, $3, 'user', $4, '[]'::jsonb)
+       returning ${MESSAGE_COLUMNS}`,
+      [orgId, ownerId, conversationId, content],
+    ),
+  );
+  const data = rows[0];
+  if (!data) throw new Error("Failed to persist user message.");
+  return toMessage(data);
 }

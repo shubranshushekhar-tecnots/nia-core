@@ -1,6 +1,7 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
+import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
 import { requireCapability } from "../middleware/requireCapability.js";
 import { validate } from "../middleware/validate.js";
@@ -16,7 +17,7 @@ import {
 
 export const connectorsRouter: ExpressRouter = Router();
 
-connectorsRouter.use(requireAuth, attachActor);
+connectorsRouter.use(requireAuth, attachDb, attachActor);
 
 // Static manifest catalog — a read, ungated like every other read in this app.
 connectorsRouter.get("/", (_req, res) => {
@@ -26,8 +27,8 @@ connectorsRouter.get("/", (_req, res) => {
 connectorsRouter.get(
   "/installs",
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await listConnectorInstalls(req.supabase, scopeFromActor(req.actor));
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await listConnectorInstalls(req.withUser, scopeFromActor(req.actor));
     res.json(data);
   }),
 );
@@ -39,9 +40,9 @@ connectorsRouter.post(
   requireCapability("connectors.install"),
   validate({ body: installBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await installConnector(
-      req.supabase,
+      req.withUser,
       scopeFromActor(req.actor),
       req.actor.userId,
       req.body.connectorId,
@@ -57,8 +58,8 @@ connectorsRouter.delete(
   requireCapability("connectors.uninstall"),
   validate({ params: installParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    await uninstallConnector(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    await uninstallConnector(req.withUser, scopeFromActor(req.actor), req.params.id!);
     res.status(204).end();
   }),
 );

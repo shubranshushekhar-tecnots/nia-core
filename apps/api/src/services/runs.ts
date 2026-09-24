@@ -1,7 +1,7 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
+import { workspaceWhere, type WorkspaceScope } from "@nia/db";
 import { EtlRunJob, GraphDoc } from "@nia/schemas";
-import type { WorkspaceScope } from "../lib/workspaceScope.js";
+import type { WithUser } from "../lib/withUser.js";
 import { AppError } from "../lib/appError.js";
 import { enqueueEtlRun, getEtlRunJobData } from "../lib/runQueue.js";
 import { assertWorkflowInScope } from "./checks.js";
@@ -17,21 +17,28 @@ import { assertWorkflowInScope } from "./checks.js";
  * RunApiError -> the existing run-status-card error path unchanged — no
  * new client code needed for this to surface.
  */
-async function assertGraphConnectionsExist(supabase: SupabaseClient, scope: WorkspaceScope, workflowId: string): Promise<void> {
-  const { data } = await supabase.from("workflow_graphs").select("graph").eq("workflow_id", workflowId).maybeSingle();
-  if (!data) return;
+async function assertGraphConnectionsExist(withUser: WithUser, scope: WorkspaceScope, workflowId: string): Promise<void> {
+  const { rows: graphRows } = await withUser((db) =>
+    db.query<{ graph: unknown }>("select graph from workflow_graphs where workflow_id = $1", [workflowId]),
+  );
+  const graph = graphRows[0]?.graph;
+  if (!graph) return;
 
-  const parsed = GraphDoc.safeParse(data.graph);
+  const parsed = GraphDoc.safeParse(graph);
   if (!parsed.success) return;
 
   const referencedNodes = parsed.data.nodes.filter((n) => n.connectionId);
   if (referencedNodes.length === 0) return;
 
   const connectionIds = [...new Set(referencedNodes.map((n) => n.connectionId as string))];
-  let query = supabase.from("connections").select("id").in("id", connectionIds);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data: existingConnections } = await query;
-  const existingIds = new Set((existingConnections ?? []).map((c) => c.id as string));
+  const where = workspaceWhere(scope, 2);
+  const { rows: existingConnections } = await withUser((db) =>
+    db.query<{ id: string }>(`select id from connections where id = any($1::uuid[]) and ${where.sql}`, [
+      connectionIds,
+      ...where.params,
+    ]),
+  );
+  const existingIds = new Set(existingConnections.map((c) => c.id));
 
   const missingNode = referencedNodes.find((n) => !existingIds.has(n.connectionId as string));
   if (missingNode) {
@@ -75,14 +82,14 @@ async function assertGraphConnectionsExist(supabase: SupabaseClient, scope: Work
  * destNodeId maps to which runId so it can track each stream separately.
  */
 export async function startWorkflowRun(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   destNodeIds: string[],
   triggeredByUserId: string,
 ): Promise<{ runs: { destNodeId: string; runId: string }[] }> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
-  await assertGraphConnectionsExist(supabase, scope, workflowId);
+  await assertWorkflowInScope(withUser, scope, workflowId);
+  await assertGraphConnectionsExist(withUser, scope, workflowId);
 
   const runs: { destNodeId: string; runId: string }[] = [];
   for (const destNodeId of destNodeIds) {
@@ -150,34 +157,51 @@ function toRunSummary(row: {
  * note for get_run_result/explain_last_error.
  */
 export async function listRunsForWorkflow(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   limit = 20,
 ): Promise<WorkflowRunSummary[]> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
-  const { data } = await supabase
-    .from("workflow_runs")
-    .select("id, workflow_id, status, rows_processed, duration_ms, started_at, finished_at")
-    .eq("workflow_id", workflowId)
-    .order("started_at", { ascending: false })
-    .limit(limit);
-  return (data ?? []).map(toRunSummary);
+  await assertWorkflowInScope(withUser, scope, workflowId);
+  const { rows } = await withUser((db) =>
+    db.query<{
+      id: string;
+      workflow_id: string;
+      status: string;
+      rows_processed: number;
+      duration_ms: number | null;
+      started_at: string;
+      finished_at: string | null;
+    }>(
+      "select id, workflow_id, status, rows_processed, duration_ms, started_at, finished_at from workflow_runs where workflow_id = $1 order by started_at desc limit $2",
+      [workflowId, limit],
+    ),
+  );
+  return rows.map(toRunSummary);
 }
 
 export async function getRunStatus(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   runId: string,
 ): Promise<WorkflowRunSummary> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
-  const { data } = await supabase
-    .from("workflow_runs")
-    .select("id, workflow_id, status, rows_processed, duration_ms, started_at, finished_at")
-    .eq("id", runId)
-    .eq("workflow_id", workflowId)
-    .maybeSingle();
+  await assertWorkflowInScope(withUser, scope, workflowId);
+  const { rows } = await withUser((db) =>
+    db.query<{
+      id: string;
+      workflow_id: string;
+      status: string;
+      rows_processed: number;
+      duration_ms: number | null;
+      started_at: string;
+      finished_at: string | null;
+    }>(
+      "select id, workflow_id, status, rows_processed, duration_ms, started_at, finished_at from workflow_runs where id = $1 and workflow_id = $2",
+      [runId, workflowId],
+    ),
+  );
+  const data = rows[0];
   if (!data) throw new AppError(404, "NOT_FOUND", "No run found for that id on this workflow.");
   return toRunSummary(data);
 }
@@ -207,11 +231,7 @@ function sameScope(a: WorkspaceScope, b: WorkspaceScope): boolean {
  *     are mutually exclusive on that row (org_xor_owner check constraint),
  *     so exactly one of them is set.
  */
-export async function resolveRunOwnership(
-  supabase: SupabaseClient,
-  actorScope: WorkspaceScope,
-  runId: string,
-): Promise<WorkspaceScope> {
+export async function resolveRunOwnership(withUser: WithUser, actorScope: WorkspaceScope, runId: string): Promise<WorkspaceScope> {
   const job = await getEtlRunJobData(runId);
   if (job) {
     if (!sameScope(job.scope, actorScope)) {
@@ -220,8 +240,11 @@ export async function resolveRunOwnership(
     return job.scope;
   }
 
-  const { data } = await supabase.from("workflow_runs").select("org_id, owner_id").eq("id", runId).maybeSingle();
-  if (data?.org_id) return { orgId: data.org_id as string };
-  if (data?.owner_id) return { ownerId: data.owner_id as string };
+  const { rows } = await withUser((db) =>
+    db.query<{ org_id: string | null; owner_id: string | null }>("select org_id, owner_id from workflow_runs where id = $1", [runId]),
+  );
+  const data = rows[0];
+  if (data?.org_id) return { orgId: data.org_id };
+  if (data?.owner_id) return { ownerId: data.owner_id };
   throw new AppError(404, "NOT_FOUND", "No run found for that id.");
 }

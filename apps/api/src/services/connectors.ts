@@ -1,7 +1,12 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { workspaceWhere } from "@nia/db";
 import { CONNECTOR_MANIFESTS, getConnectorManifest, type Operation, type Capability } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
+import type { WithUser } from "../lib/withUser.js";
+
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "23505";
+}
 
 export type ConnectorCatalogEntry = {
   id: string;
@@ -37,17 +42,21 @@ export type ConnectorInstall = {
   installedAt: string;
 };
 
-export async function listConnectorInstalls(
-  supabase: SupabaseClient,
-  scope: WorkspaceScope,
-): Promise<ConnectorInstall[]> {
-  let query = supabase
-    .from("connector_installs")
-    .select("id, connector_id, installed_by_user_id, installed_at");
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.order("installed_at", { ascending: false });
+type ConnectorInstallRow = { id: string; connector_id: string; installed_by_user_id: string; installed_at: string };
 
-  return (data ?? []).map((row) => ({
+export async function listConnectorInstalls(withUser: WithUser, scope: WorkspaceScope): Promise<ConnectorInstall[]> {
+  const where = workspaceWhere(scope, 1);
+  const { rows } = await withUser((db) =>
+    db.query<ConnectorInstallRow>(
+      `select id, connector_id, installed_by_user_id, installed_at
+       from connector_installs
+       where ${where.sql}
+       order by installed_at desc`,
+      where.params,
+    ),
+  );
+
+  return rows.map((row) => ({
     id: row.id,
     connectorId: row.connector_id,
     installedByUserId: row.installed_by_user_id,
@@ -56,7 +65,7 @@ export async function listConnectorInstalls(
 }
 
 export async function installConnector(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   installedByUserId: string,
   connectorId: string,
@@ -65,32 +74,32 @@ export async function installConnector(
     throw new AppError(400, "UNKNOWN_CONNECTOR", `No manifest for connector "${connectorId}".`);
   }
 
-  const { data, error } =
-    "orgId" in scope
-      ? await supabase
-          .from("connector_installs")
-          .insert({ org_id: scope.orgId, owner_id: null, connector_id: connectorId, installed_by_user_id: installedByUserId })
-          .select("id, connector_id, installed_by_user_id, installed_at")
-          .single()
-      : await supabase
-          .from("connector_installs")
-          .insert({ org_id: null, owner_id: scope.ownerId, connector_id: connectorId, installed_by_user_id: installedByUserId })
-          .select("id, connector_id, installed_by_user_id, installed_at")
-          .single();
+  const orgId = "orgId" in scope ? scope.orgId : null;
+  const ownerId = "orgId" in scope ? null : scope.ownerId;
 
-  if (error) {
-    if (error.code === "23505") {
+  try {
+    const { rows } = await withUser((db) =>
+      db.query<ConnectorInstallRow>(
+        `insert into connector_installs (org_id, owner_id, connector_id, installed_by_user_id)
+         values ($1, $2, $3, $4)
+         returning id, connector_id, installed_by_user_id, installed_at`,
+        [orgId, ownerId, connectorId, installedByUserId],
+      ),
+    );
+    const data = rows[0]!;
+    return {
+      id: data.id,
+      connectorId: data.connector_id,
+      installedByUserId: data.installed_by_user_id,
+      installedAt: data.installed_at,
+    };
+  } catch (err) {
+    if (isUniqueViolation(err)) {
       throw new AppError(409, "ALREADY_INSTALLED", `"${connectorId}" is already installed.`);
     }
-    throw new AppError(500, "INSTALL_FAILED", error.message);
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "INSTALL_FAILED", message);
   }
-
-  return {
-    id: data.id,
-    connectorId: data.connector_id,
-    installedByUserId: data.installed_by_user_id,
-    installedAt: data.installed_at,
-  };
 }
 
 /**
@@ -100,25 +109,26 @@ export async function installConnector(
  * see 0007's header comment), so RLS has no way to enforce this; a missing
  * guard here is a real bug, not a nicety.
  */
-export async function uninstallConnector(
-  supabase: SupabaseClient,
-  scope: WorkspaceScope,
-  installId: string,
-): Promise<void> {
-  let installQuery = supabase.from("connector_installs").select("id, connector_id").eq("id", installId);
-  installQuery =
-    "orgId" in scope ? installQuery.eq("org_id", scope.orgId) : installQuery.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data: install } = await installQuery.maybeSingle();
+export async function uninstallConnector(withUser: WithUser, scope: WorkspaceScope, installId: string): Promise<void> {
+  const installWhere = workspaceWhere(scope, 2);
+  const { rows: installRows } = await withUser((db) =>
+    db.query<{ id: string; connector_id: string }>(
+      `select id, connector_id from connector_installs where id = $1 and ${installWhere.sql}`,
+      [installId, ...installWhere.params],
+    ),
+  );
+  const install = installRows[0];
   if (!install) throw new AppError(404, "NOT_FOUND", "Connector install not found.");
 
-  let inUseQuery = supabase
-    .from("connections")
-    .select("id", { count: "exact", head: true })
-    .eq("connector_id", install.connector_id);
-  inUseQuery =
-    "orgId" in scope ? inUseQuery.eq("org_id", scope.orgId) : inUseQuery.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { count } = await inUseQuery;
-  if (count && count > 0) {
+  const inUseWhere = workspaceWhere(scope, 2);
+  const { rows: inUseRows } = await withUser((db) =>
+    db.query<{ count: number }>(
+      `select count(*)::int as count from connections where connector_id = $1 and ${inUseWhere.sql}`,
+      [install.connector_id, ...inUseWhere.params],
+    ),
+  );
+  const count = inUseRows[0]?.count ?? 0;
+  if (count > 0) {
     throw new AppError(
       409,
       "CONNECTOR_IN_USE",
@@ -126,9 +136,13 @@ export async function uninstallConnector(
     );
   }
 
-  let deleteQuery = supabase.from("connector_installs").delete().eq("id", installId);
-  deleteQuery =
-    "orgId" in scope ? deleteQuery.eq("org_id", scope.orgId) : deleteQuery.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { error } = await deleteQuery;
-  if (error) throw new AppError(500, "UNINSTALL_FAILED", error.message);
+  try {
+    const deleteWhere = workspaceWhere(scope, 2);
+    await withUser((db) =>
+      db.query(`delete from connector_installs where id = $1 and ${deleteWhere.sql}`, [installId, ...deleteWhere.params]),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "UNINSTALL_FAILED", message);
+  }
 }

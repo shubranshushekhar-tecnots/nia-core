@@ -28,8 +28,8 @@ const tool: ToolDefinition<Input, Output> = {
   inputSchema: InputSchema,
   handler: async (ctx, input) => {
     const [connection, schema] = await Promise.all([
-      getConnection(ctx.supabase, ctx.user.scope, input.connectionId),
-      getConnectionSchema(ctx.supabase, ctx.user.scope, input.connectionId),
+      getConnection(ctx.withUser, ctx.user.scope, input.connectionId),
+      getConnectionSchema(ctx.withUser, ctx.user.scope, input.connectionId),
     ]);
     if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
     const entity = schema.entities.find((e) => e.namespace === input.entity.namespace && e.name === input.entity.name);

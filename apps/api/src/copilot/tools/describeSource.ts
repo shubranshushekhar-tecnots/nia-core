@@ -19,7 +19,7 @@ const tool: ToolDefinition<Input, Output> = {
   description: "Describes a connection's introspected schema: entities (tables/collections), their fields, and read/write access.",
   tier: "read",
   inputSchema: InputSchema,
-  handler: async (ctx, input) => getConnectionSchema(ctx.supabase, ctx.user.scope, input.connectionId),
+  handler: async (ctx, input) => getConnectionSchema(ctx.withUser, ctx.user.scope, input.connectionId),
   summarize: (output) => {
     if (output.entities.length === 0) return "This connection's schema has no entities.";
     const lines = output.entities.map((e) => {

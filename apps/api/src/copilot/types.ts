@@ -1,7 +1,7 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { z } from "zod";
 import type { UserContext } from "../lib/actorTypes.js";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
+import type { WithUser } from "../lib/withUser.js";
 
 /**
  * Copilot agent (docs/plans/copilot-agent.md, Part 1). Risk tier a tool
@@ -26,14 +26,15 @@ export type ActingUser = {
 };
 
 /**
- * What a tool handler gets to act with. `supabase` is always the caller's
- * own per-request, RLS-scoped client — never a service-role client (Part
- * 1: "Copilot never uses the service-role key"). `pendingActionId` is only
- * present on an execute-tier call and is threaded through to the handler
- * so it can call consume_pending_action itself (see startRun.ts).
+ * What a tool handler gets to act with. `withUser` is the caller's own
+ * per-request identity reached via direct SQL (docs/plans/data-access.md's
+ * Step 3) — never a service-role client (Part 1: "Copilot never uses the
+ * service-role key"). `pendingActionId` is only present on an execute-tier
+ * call and is threaded through to the handler so it can call
+ * consume_pending_action itself (see startRun.ts).
  */
 export type ToolContext = {
-  supabase: SupabaseClient;
+  withUser: WithUser;
   user: ActingUser;
   pendingActionId?: string;
 };

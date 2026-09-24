@@ -1,8 +1,8 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { getTool } from "./registry.js";
 import { auditToolCall } from "./audit.js";
 import { AppError } from "../lib/appError.js";
 import type { ActingUser, ToolRender } from "./types.js";
+import type { WithUser } from "../lib/withUser.js";
 
 export type ToolCallResult = { summary: string; render: ToolRender };
 
@@ -10,9 +10,9 @@ export type ToolCallResult = { summary: string; render: ToolRender };
  * Copilot agent (Part 1/3) — the one place every tool call actually runs
  * through, whether invoked by the agent loop or by the confirm-and-execute
  * path. Validates input against the tool's own schema (never trusts the
- * model's raw JSON), calls the handler with the caller's own RLS-scoped
- * supabase client (never service-role), then unconditionally audits the
- * call (Part 1: "Every tool call is written to the audit log").
+ * model's raw JSON), calls the handler with the caller's own identity via
+ * withUser (never service-role), then unconditionally audits the call
+ * (Part 1: "Every tool call is written to the audit log").
  *
  * `pendingActionId` is only ever supplied by the dedicated confirm-and-
  * execute path (routes/copilotAgent.ts), never by the agent loop itself —
@@ -23,7 +23,7 @@ export type ToolCallResult = { summary: string; render: ToolRender };
  * anything yet" branch.
  */
 export async function executeTool(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   user: ActingUser,
   name: string,
   rawArgs: unknown,
@@ -33,12 +33,12 @@ export async function executeTool(
   if (!tool) throw new AppError(400, "UNKNOWN_TOOL", `No such tool "${name}".`);
 
   const input = tool.inputSchema.parse(rawArgs);
-  const output = await tool.handler({ supabase, user, pendingActionId: opts.pendingActionId }, input);
+  const output = await tool.handler({ withUser, user, pendingActionId: opts.pendingActionId }, input);
   const summary = tool.summarize(output, input);
   const render = tool.render(output, input);
 
   const workflowId = typeof (input as { workflowId?: unknown }).workflowId === "string" ? (input as { workflowId: string }).workflowId : null;
-  await auditToolCall(supabase, user, { tool: name, tier: tool.tier, workflowId, summary });
+  await auditToolCall(withUser, user, { tool: name, tier: tool.tier, workflowId, summary });
 
   return { summary, render };
 }

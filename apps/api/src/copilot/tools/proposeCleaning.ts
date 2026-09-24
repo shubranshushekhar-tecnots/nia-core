@@ -21,7 +21,7 @@ const tool: ToolDefinition<Input, Output> = {
   description: "Proposes a data-cleaning plan for a node's source data. Returns a diff for the user to review; does not apply anything.",
   tier: "edit",
   inputSchema: InputSchema,
-  handler: async (ctx, input) => proposeCleaningForWorkflow(ctx.supabase, ctx.user.scope, input.workflowId, input.nodeId, ctx.user.userId),
+  handler: async (ctx, input) => proposeCleaningForWorkflow(ctx.withUser, ctx.user.scope, input.workflowId, input.nodeId, ctx.user.userId),
   summarize: (output) => `Cleaning proposal: ${output.diff.summary} (specialists: ${[...new Set(output.columns.map((c) => c.specialist))].join(", ")}).`,
   render: (output) => ({ kind: "cleaning_proposal", payload: output }),
 };

@@ -97,3 +97,52 @@ export const eyebrowStyle: CSSProperties = {
   textTransform: 'uppercase',
   color: 'var(--hl-ink-3)',
 };
+
+// Form primitives for the "Talk to sales" dialog (TalkToSalesDialog.tsx) —
+// the only form in the hairline system, so these live here rather than a
+// dedicated Field.tsx. Same 8px radius / hairline-border language as
+// Button.tsx and .hl-pill.
+export const hlFieldLabelStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 500,
+  color: 'var(--hl-ink-2)',
+};
+
+export function hlFieldStyle(hasError: boolean): CSSProperties {
+  return {
+    boxSizing: 'border-box',
+    width: '100%',
+    height: 44,
+    padding: '0 14px',
+    borderRadius: 8,
+    border: `1px solid ${hasError ? '#c23b3b' : 'var(--hl-rule-hairline)'}`,
+    background: 'var(--hl-ground)',
+    color: 'var(--hl-ink)',
+    fontFamily: 'inherit',
+    fontSize: 15,
+    outline: 'none',
+  };
+}
+
+export function hlTextareaStyle(hasError: boolean): CSSProperties {
+  return {
+    boxSizing: 'border-box',
+    width: '100%',
+    minHeight: 96,
+    padding: '12px 14px',
+    borderRadius: 8,
+    border: `1px solid ${hasError ? '#c23b3b' : 'var(--hl-rule-hairline)'}`,
+    background: 'var(--hl-ground)',
+    color: 'var(--hl-ink)',
+    fontFamily: 'inherit',
+    fontSize: 15,
+    lineHeight: '22px',
+    resize: 'vertical',
+    outline: 'none',
+  };
+}
+
+export const hlErrorTextStyle: CSSProperties = {
+  fontSize: 13,
+  color: '#c23b3b',
+};

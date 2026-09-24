@@ -18,7 +18,7 @@ const tool: ToolDefinition<Input, Output> = {
   description: "Lists every connection in the current workspace (org or personal), with connector, display name, and last test status.",
   tier: "read",
   inputSchema: InputSchema,
-  handler: async (ctx) => listConnections(ctx.supabase, ctx.user.scope),
+  handler: async (ctx) => listConnections(ctx.withUser, ctx.user.scope),
   summarize: (output) =>
     output.length === 0
       ? "No connections exist in this workspace yet."

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WriteEntityRef } from "@nia/schemas";
-import { supabase } from "../supabaseClient.js";
+import { withServiceRole } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 
 /**
  * Phase 11 — worker-side bookkeeping for the staging lifecycle
@@ -51,55 +52,48 @@ export async function registerStagingObject(
   destColumns: string[],
   destUpsertKeys: string[],
 ): Promise<void> {
-  const { data } = await supabase
-    .from("staging_objects")
-    .select("id")
-    .eq("run_id", runId)
-    .eq("kind", "staging")
-    .eq("status", "active")
-    .maybeSingle();
-  if (data) return;
-  await supabase.from("staging_objects").insert({
-    run_id: runId,
-    connection_id: connectionId,
-    schema_name: entity.namespace,
-    object_name: entity.name,
-    kind: "staging",
-    status: "active",
-    dest_namespace: destEntity.namespace,
-    dest_name: destEntity.name,
-    dest_columns: destColumns,
-    dest_upsert_keys: destUpsertKeys,
-  });
+  const existing = await withServiceRole(dbPool, (db) =>
+    db.query(
+      "select id from public.staging_objects where run_id = $1 and kind = 'staging' and status = 'active'",
+      [runId],
+    ),
+  );
+  if (existing.rows.length > 0) return;
+  await withServiceRole(dbPool, (db) =>
+    db.query(
+      `insert into public.staging_objects
+        (run_id, connection_id, schema_name, object_name, kind, status, dest_namespace, dest_name, dest_columns, dest_upsert_keys)
+       values ($1, $2, $3, $4, 'staging', 'active', $5, $6, $7, $8)`,
+      [runId, connectionId, entity.namespace, entity.name, destEntity.namespace, destEntity.name, destColumns, destUpsertKeys],
+    ),
+  );
 }
 
 /** Idempotent, same shape as registerStagingObject — see staging_objects_connection_quarantine_idx for the one-active-row-per-connection invariant this mirrors (best-effort on the worker side; the DB constraint is the real backstop). */
 export async function registerQuarantineObject(connectionId: string, entity: WriteEntityRef): Promise<void> {
-  const { data } = await supabase
-    .from("staging_objects")
-    .select("id")
-    .eq("connection_id", connectionId)
-    .eq("kind", "quarantine")
-    .eq("status", "active")
-    .maybeSingle();
-  if (data) return;
-  await supabase.from("staging_objects").insert({
-    run_id: null,
-    connection_id: connectionId,
-    schema_name: entity.namespace,
-    object_name: entity.name,
-    kind: "quarantine",
-    status: "active",
-  });
+  const existing = await withServiceRole(dbPool, (db) =>
+    db.query(
+      "select id from public.staging_objects where connection_id = $1 and kind = 'quarantine' and status = 'active'",
+      [connectionId],
+    ),
+  );
+  if (existing.rows.length > 0) return;
+  await withServiceRole(dbPool, (db) =>
+    db.query(
+      `insert into public.staging_objects (run_id, connection_id, schema_name, object_name, kind, status)
+       values (null, $1, $2, $3, 'quarantine', 'active')`,
+      [connectionId, entity.namespace, entity.name],
+    ),
+  );
 }
 
 export async function markStagingDropped(runId: string): Promise<void> {
-  await supabase
-    .from("staging_objects")
-    .update({ status: "dropped", dropped_at: new Date().toISOString() })
-    .eq("run_id", runId)
-    .eq("kind", "staging")
-    .eq("status", "active");
+  await withServiceRole(dbPool, (db) =>
+    db.query(
+      "update public.staging_objects set status = 'dropped', dropped_at = $1 where run_id = $2 and kind = 'staging' and status = 'active'",
+      [new Date().toISOString(), runId],
+    ),
+  );
 }
 
 /**
@@ -119,23 +113,20 @@ export async function registerDestinationObject(
   entity: WriteEntityRef,
   columns: string[],
 ): Promise<void> {
-  const { data } = await supabase
-    .from("staging_objects")
-    .select("id")
-    .eq("run_id", runId)
-    .eq("kind", "destination")
-    .eq("status", "active")
-    .maybeSingle();
-  if (data) return;
-  await supabase.from("staging_objects").insert({
-    run_id: runId,
-    connection_id: connectionId,
-    schema_name: entity.namespace,
-    object_name: entity.name,
-    kind: "destination",
-    status: "active",
-    dest_columns: columns,
-  });
+  const existing = await withServiceRole(dbPool, (db) =>
+    db.query(
+      "select id from public.staging_objects where run_id = $1 and kind = 'destination' and status = 'active'",
+      [runId],
+    ),
+  );
+  if (existing.rows.length > 0) return;
+  await withServiceRole(dbPool, (db) =>
+    db.query(
+      `insert into public.staging_objects (run_id, connection_id, schema_name, object_name, kind, status, dest_columns)
+       values ($1, $2, $3, $4, 'destination', 'active', $5)`,
+      [runId, connectionId, entity.namespace, entity.name, columns],
+    ),
+  );
 }
 
 export type ActiveDestinationObject = { entity: WriteEntityRef; columns: string[] };
@@ -147,31 +138,33 @@ export type ActiveDestinationObject = { entity: WriteEntityRef; columns: string[
  * to drop", same as dropStaging finding no staging row.
  */
 export async function findActiveDestinationObject(runId: string): Promise<ActiveDestinationObject | null> {
-  const { data } = await supabase
-    .from("staging_objects")
-    .select("schema_name, object_name, dest_columns")
-    .eq("run_id", runId)
-    .eq("kind", "destination")
-    .eq("status", "active")
-    .maybeSingle();
+  const result = await withServiceRole(dbPool, (db) =>
+    db.query<{ schema_name: string; object_name: string; dest_columns: string[] | null }>(
+      "select schema_name, object_name, dest_columns from public.staging_objects where run_id = $1 and kind = 'destination' and status = 'active'",
+      [runId],
+    ),
+  );
+  const data = result.rows[0];
   if (!data) return null;
   return {
-    entity: { namespace: data.schema_name as string, name: data.object_name as string },
-    columns: (data.dest_columns as string[] | null) ?? [],
+    entity: { namespace: data.schema_name, name: data.object_name },
+    columns: data.dest_columns ?? [],
   };
 }
 
 export async function markDestinationDropped(runId: string): Promise<void> {
-  await supabase
-    .from("staging_objects")
-    .update({ status: "dropped", dropped_at: new Date().toISOString() })
-    .eq("run_id", runId)
-    .eq("kind", "destination")
-    .eq("status", "active");
+  await withServiceRole(dbPool, (db) =>
+    db.query(
+      "update public.staging_objects set status = 'dropped', dropped_at = $1 where run_id = $2 and kind = 'destination' and status = 'active'",
+      [new Date().toISOString(), runId],
+    ),
+  );
 }
 
 export async function persistStagingTable(runId: string, entity: WriteEntityRef): Promise<void> {
-  await supabase.from("workflow_runs").update({ staging_table: `${entity.namespace}.${entity.name}` }).eq("id", runId);
+  await withServiceRole(dbPool, (db) =>
+    db.query("update public.workflow_runs set staging_table = $1 where id = $2", [`${entity.namespace}.${entity.name}`, runId]),
+  );
 }
 
 export type StaleStagingObject = {
@@ -192,27 +185,37 @@ export type StaleStagingObject = {
  * 0022_staging_objects_dest_info.sql — the sweeper skips those rather than
  * guessing (see that migration's header comment).
  */
+type StagingObjectRow = {
+  id: string;
+  run_id: string | null;
+  connection_id: string;
+  schema_name: string;
+  object_name: string;
+  dest_namespace: string | null;
+  dest_name: string | null;
+  dest_columns: string[] | null;
+  dest_upsert_keys: string[] | null;
+};
+
 export async function listStaleStagingObjects(olderThanMs: number): Promise<StaleStagingObject[]> {
   const cutoff = new Date(Date.now() - olderThanMs).toISOString();
-  const { data } = await supabase
-    .from("staging_objects")
-    .select("id, run_id, connection_id, schema_name, object_name, dest_namespace, dest_name, dest_columns, dest_upsert_keys")
-    .eq("kind", "staging")
-    .eq("status", "active")
-    .lt("created_at", cutoff);
-  if (!data) return [];
-  return data
-    .filter((row): row is typeof row & { run_id: string } => row.run_id !== null)
+  const result = await withServiceRole(dbPool, (db) =>
+    db.query<StagingObjectRow>(
+      `select id, run_id, connection_id, schema_name, object_name, dest_namespace, dest_name, dest_columns, dest_upsert_keys
+       from public.staging_objects
+       where kind = 'staging' and status = 'active' and created_at < $1`,
+      [cutoff],
+    ),
+  );
+  return result.rows
+    .filter((row): row is StagingObjectRow & { run_id: string } => row.run_id !== null)
     .map((row) => ({
-      id: row.id as string,
+      id: row.id,
       runId: row.run_id,
-      connectionId: row.connection_id as string,
-      stagingEntity: { namespace: row.schema_name as string, name: row.object_name as string },
-      destEntity:
-        row.dest_namespace && row.dest_name
-          ? { namespace: row.dest_namespace as string, name: row.dest_name as string }
-          : null,
-      destColumns: (row.dest_columns as string[] | null) ?? null,
-      destUpsertKeys: (row.dest_upsert_keys as string[] | null) ?? null,
+      connectionId: row.connection_id,
+      stagingEntity: { namespace: row.schema_name, name: row.object_name },
+      destEntity: row.dest_namespace && row.dest_name ? { namespace: row.dest_namespace, name: row.dest_name } : null,
+      destColumns: row.dest_columns ?? null,
+      destUpsertKeys: row.dest_upsert_keys ?? null,
     }));
 }

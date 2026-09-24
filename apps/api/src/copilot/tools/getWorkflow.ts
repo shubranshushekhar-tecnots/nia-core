@@ -24,9 +24,9 @@ const tool: ToolDefinition<Input, Output> = {
   tier: "read",
   inputSchema: InputSchema,
   handler: async (ctx, input) => {
-    const detail = await getWorkflowDetail(ctx.supabase, input.workflowId, ctx.user.scope);
+    const detail = await getWorkflowDetail(ctx.withUser, input.workflowId, ctx.user.scope);
     if (!detail) throw new AppError(404, "NOT_FOUND", "Workflow not found.");
-    const graph = await getWorkflowGraph(ctx.supabase, ctx.user.scope, input.workflowId);
+    const graph = await getWorkflowGraph(ctx.withUser, ctx.user.scope, input.workflowId);
     return { detail, graph };
   },
   summarize: (output) => {

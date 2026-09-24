@@ -7,8 +7,8 @@ type Ground = 'light' | 'dark';
 // (solid, outline) x two grounds (light, dark) = the four combinations
 // used across Connectors.dc.html and Pricing.dc.html (hero CTAs, the
 // closing CTA band's white-fill + #4a4d55-outline pair, plan CTAs, etc).
-// 52px tall, 8px radius, 15px/500 label — values extracted verbatim from
-// the design files. Hover uses the shared .hl-btn class (opacity .78,
+// 52px tall, sharp corners, 15px/500 label — values extracted verbatim
+// from the design files. Hover uses the shared .hl-btn class (opacity .78,
 // 140ms linear) from theme.css.
 const base: CSSProperties = {
   boxSizing: 'border-box',
@@ -17,7 +17,7 @@ const base: CSSProperties = {
   justifyContent: 'center',
   height: 52,
   padding: '0 28px',
-  borderRadius: 8,
+  borderRadius: 0,
   fontSize: 15,
   fontWeight: 500,
   fontFamily: 'inherit',
@@ -44,6 +44,7 @@ export default function Button({
   onClick,
   style,
   type = 'button',
+  disabled,
 }: {
   children: ReactNode;
   variant?: Variant;
@@ -52,8 +53,14 @@ export default function Button({
   onClick?: MouseEventHandler;
   style?: CSSProperties;
   type?: 'button' | 'submit';
+  disabled?: boolean;
 }) {
-  const combinedStyle: CSSProperties = { ...base, ...variantStyles[ground][variant], ...style };
+  const combinedStyle: CSSProperties = {
+    ...base,
+    ...variantStyles[ground][variant],
+    ...(disabled ? { opacity: 0.6, cursor: 'not-allowed' } : null),
+    ...style,
+  };
 
   if (href) {
     return (
@@ -64,7 +71,7 @@ export default function Button({
   }
 
   return (
-    <button type={type} className="hl-btn" style={combinedStyle} onClick={onClick}>
+    <button type={type} className="hl-btn" style={combinedStyle} onClick={onClick} disabled={disabled}>
       {children}
     </button>
   );

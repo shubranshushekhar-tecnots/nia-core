@@ -18,7 +18,7 @@ import {
   markStagingDropped,
   persistStagingTable,
 } from "./stagingRegistry.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 import type { DispatchResult } from "../errors.js";
 
 /**

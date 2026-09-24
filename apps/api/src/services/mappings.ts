@@ -1,14 +1,15 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { workspaceWhere, type WorkspaceScope } from "@nia/db";
 import type { ProposalSchema } from "@nia/schemas";
-import type { WorkspaceScope } from "../lib/workspaceScope.js";
+import type { WithUser } from "../lib/withUser.js";
 import { AppError } from "../lib/appError.js";
 import { runProposeMappingJob } from "../lib/mappingsQueue.js";
 
-async function assertWorkflowInScope(supabase: SupabaseClient, scope: WorkspaceScope, workflowId: string): Promise<void> {
-  let query = supabase.from("workflows").select("id", { count: "exact", head: true }).eq("id", workflowId);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { count } = await query;
-  if (!count) throw new AppError(404, "NOT_FOUND", "Workflow not found.");
+async function assertWorkflowInScope(withUser: WithUser, scope: WorkspaceScope, workflowId: string): Promise<void> {
+  const where = workspaceWhere(scope, 2);
+  const { rowCount } = await withUser((db) =>
+    db.query(`select 1 from workflows where id = $1 and ${where.sql} limit 1`, [workflowId, ...where.params]),
+  );
+  if (!rowCount) throw new AppError(404, "NOT_FOUND", "Workflow not found.");
 }
 
 /**
@@ -23,12 +24,12 @@ async function assertWorkflowInScope(supabase: SupabaseClient, scope: WorkspaceS
  * goes through, not a new persistence mechanism.
  */
 export async function proposeMappingForWorkflow(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   destNodeId: string,
   triggeredByUserId: string,
 ): Promise<ProposalSchema> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
+  await assertWorkflowInScope(withUser, scope, workflowId);
   return runProposeMappingJob({ scope, workflowId, destNodeId, triggeredByUserId });
 }

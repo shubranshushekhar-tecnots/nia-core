@@ -1,9 +1,9 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { getConnectorManifest } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 import { dispatchInvalidate, dispatchTest } from "../lib/connectorDispatch.js";
 import { getSecretStore, toSecretScope } from "../lib/secretStore.js";
+import type { WithUser } from "../lib/withUser.js";
 import { getConnection } from "./connections.js";
 
 export type WriteGrant = {
@@ -63,43 +63,51 @@ function toWriteGrant(row: WriteGrantRow): WriteGrant {
  * silently broke this file's original direct .insert()/.update() calls
  * (predated 0016; fixed here as part of Block 2). Each RPC is SECURITY
  * DEFINER and re-derives its own auth check from auth.uid() against the
- * connection's org/owner, so req.supabase must stay the caller's own
- * (user-JWT) client, never a service-role one, for that check to mean
- * anything — and the actor is no longer a caller-supplied param (unlike
- * the old direct insert), it's whatever auth.uid() resolves to inside the
- * RPC.
+ * connection's org/owner, so the acting-user `withUser` (Step 3 of
+ * docs/plans/data-access.md's migration) must stay the caller's own,
+ * never a service-role one, for that check to mean anything — and the
+ * actor is no longer a caller-supplied param (unlike the old direct
+ * insert), it's whatever auth.uid() resolves to inside the RPC.
+ *
  */
 export async function listWriteGrants(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   connectionId: string,
 ): Promise<WriteGrant[]> {
-  const connection = await getConnection(supabase, scope, connectionId);
+  const connection = await getConnection(withUser, scope, connectionId);
   if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
-  const { data } = await supabase
-    .from("write_grants")
-    .select(GRANTS_SELECT)
-    .eq("connection_id", connectionId)
-    .order("granted_at", { ascending: false });
-  return (data ?? []).map((row) => toWriteGrant(row as WriteGrantRow));
+  const { rows } = await withUser((db) =>
+    db.query<WriteGrantRow>(
+      `select ${GRANTS_SELECT} from write_grants where connection_id = $1 order by granted_at desc`,
+      [connectionId],
+    ),
+  );
+  return rows.map(toWriteGrant);
 }
 
 export async function createWriteGrant(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   connectionId: string,
   grantScope: Record<string, unknown>,
 ): Promise<WriteGrant> {
-  const connection = await getConnection(supabase, scope, connectionId);
+  const connection = await getConnection(withUser, scope, connectionId);
   if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
-  const { data, error } = await supabase.rpc("create_write_grant", {
-    p_connection_id: connectionId,
-    p_scope: grantScope,
-  });
-  if (error) throw new AppError(500, "CREATE_FAILED", error.message);
-  return toWriteGrant(data as WriteGrantRow);
+  try {
+    const { rows } = await withUser((db) =>
+      db.query<WriteGrantRow>("select * from public.create_write_grant($1, $2)", [connectionId, grantScope]),
+    );
+    const row = rows[0];
+    if (!row) throw new AppError(500, "CREATE_FAILED", "Failed to create write grant.");
+    return toWriteGrant(row);
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "CREATE_FAILED", message);
+  }
 }
 
 /**
@@ -129,27 +137,25 @@ export async function createWriteGrant(
  * bad) credential can never become the confirmed one.
  */
 export async function confirmWriteGrant(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   connectionId: string,
   grantId: string,
   credential: { user: string; password: string },
 ): Promise<WriteGrant> {
-  const connection = await getConnection(supabase, scope, connectionId);
+  const connection = await getConnection(withUser, scope, connectionId);
   if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
   const manifest = getConnectorManifest(connection.connectorId);
   if (!manifest) throw new AppError(500, "UNKNOWN_CONNECTOR", `No manifest for connector "${connection.connectorId}".`);
 
-  const secretStore = getSecretStore(supabase);
+  const secretStore = getSecretStore(withUser);
   const vaultRef = await secretStore.put(credential, toSecretScope(scope));
 
-  const { data: existingGrants } = await supabase
-    .from("write_grants")
-    .select("cred_version")
-    .eq("connection_id", connectionId);
-  const predictedCredVersion =
-    (existingGrants ?? []).reduce((max, row) => Math.max(max, (row as { cred_version: number }).cred_version), 0) + 1;
+  const { rows: existingGrants } = await withUser((db) =>
+    db.query<{ cred_version: number }>("select cred_version from write_grants where connection_id = $1", [connectionId]),
+  );
+  const predictedCredVersion = existingGrants.reduce((max, row) => Math.max(max, row.cred_version), 0) + 1;
 
   const testResult = await dispatchTest(
     manifest,
@@ -167,26 +173,38 @@ export async function confirmWriteGrant(
     );
   }
 
-  const { data, error } = await supabase.rpc("confirm_write_grant", {
-    p_grant_id: grantId,
-    p_write_credential_vault_ref: vaultRef,
-    p_write_role_name: credential.user,
-  });
-  if (error) throw new AppError(409, "CONFIRM_FAILED", error.message);
-  return toWriteGrant(data as WriteGrantRow);
+  try {
+    const { rows } = await withUser((db) =>
+      db.query<WriteGrantRow>("select * from public.confirm_write_grant($1, $2, $3)", [grantId, vaultRef, credential.user]),
+    );
+    const row = rows[0];
+    if (!row) throw new AppError(409, "CONFIRM_FAILED", "Could not confirm this write grant.");
+    return toWriteGrant(row);
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(409, "CONFIRM_FAILED", message);
+  }
 }
 
 /** Revocation is a soft-delete (revoked_at set) — see 0007_connectors.sql's header comment. */
 export async function revokeWriteGrant(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   connectionId: string,
   grantId: string,
 ): Promise<WriteGrant> {
-  const connection = await getConnection(supabase, scope, connectionId);
+  const connection = await getConnection(withUser, scope, connectionId);
   if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
-  const { data, error } = await supabase.rpc("revoke_write_grant", { p_grant_id: grantId });
-  if (error) throw new AppError(409, "REVOKE_FAILED", error.message);
-  return toWriteGrant(data as WriteGrantRow);
+  try {
+    const { rows } = await withUser((db) => db.query<WriteGrantRow>("select * from public.revoke_write_grant($1)", [grantId]));
+    const row = rows[0];
+    if (!row) throw new AppError(409, "REVOKE_FAILED", "Could not revoke this write grant.");
+    return toWriteGrant(row);
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(409, "REVOKE_FAILED", message);
+  }
 }

@@ -81,7 +81,7 @@ export default function Pricing() {
           <Eyebrow>Three plans &middot; {cycleLabel}</Eyebrow>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <span style={{ fontSize: 13, fontWeight: 500, color: saveColor }}>Two months free on annual</span>
-            <div role="radiogroup" aria-label="Billing cycle" style={{ display: 'flex', borderRadius: 8, border: '1px solid var(--hl-rule-hairline)', overflow: 'hidden' }}>
+            <div role="radiogroup" aria-label="Billing cycle" style={{ display: 'flex', borderRadius: 0, border: '1px solid var(--hl-rule-hairline)', overflow: 'hidden' }}>
               <button
                 type="button"
                 role="radio"

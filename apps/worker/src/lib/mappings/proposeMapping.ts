@@ -4,7 +4,7 @@ import { resolveConnection } from "../resolveConnection.js";
 import { getSchema } from "../introspection.js";
 import { completeJson, JsonExtractionError } from "../llm/parseHelpers.js";
 import { findSourcePath } from "../preview/runPreview.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 
 /**
  * Failure modes specific to proposing a mapping — deliberately a separate

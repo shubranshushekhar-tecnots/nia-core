@@ -1,6 +1,6 @@
 import { mysqlAdapter, postgresAdapter, type QueryPayload, type SourceDialect, type SqlDialectAdapter, type SampleMethod } from "@nia/schemas";
 import { dispatch } from "../dispatch.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 import type { DispatchResult } from "../errors.js";
 import type { TabularResult } from "@nia/schemas";
 

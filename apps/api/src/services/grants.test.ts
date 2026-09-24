@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { WithUser } from "../lib/withUser.js";
 import { confirmWriteGrant } from "./grants.js";
 
 /**
@@ -37,68 +37,57 @@ vi.mock("./connections.js", () => ({
 import { dispatchTest, dispatchInvalidate } from "../lib/connectorDispatch.js";
 
 /**
- * Also backs a minimal in-memory nia_secrets table for getSecretStore's
- * put/delete (packages/secrets/src/store.ts) — confirmWriteGrant only ever
- * writes a brand-new credential here (never reads an existing one), so no
- * select/get support is needed, unlike connections.test.ts's fake.
+ * Fake WithUser backing both grants.ts's raw SQL AND lib/secretStore.ts's
+ * getSecretStore (now withUser-based too). Also backs a minimal in-memory
+ * nia_secrets table for getSecretStore's put/delete — confirmWriteGrant
+ * only ever writes a brand-new credential here (never reads an existing
+ * one), so no select support is needed, unlike connections.test.ts's fake.
  */
 function createFakeClient(existingGrantCredVersions: number[]) {
-  const rpcCalls: { name: string; args: unknown }[] = [];
   const secretRows = new Map<string, Record<string, unknown>>();
   let nextSecretId = 1;
 
-  const supabase = {
-    from: (table: string) => {
-      if (table === "nia_secrets") {
-        return {
-          insert: (secretRow: Record<string, unknown>) => ({
-            select: () => ({
-              single: async () => {
-                const id = `secret-${nextSecretId++}`;
-                secretRows.set(id, secretRow);
-                return { data: { id }, error: null };
+  const queries: { text: string; params: readonly unknown[] }[] = [];
+  const withUser: WithUser = (async (fn) =>
+    fn({
+      query: async (text: string, params: readonly unknown[] = []) => {
+        queries.push({ text, params });
+        if (text.includes("select cred_version from write_grants")) {
+          return { rows: existingGrantCredVersions.map((cred_version) => ({ cred_version })) } as never;
+        }
+        if (text.includes("insert into nia_secrets")) {
+          const [ciphertext, encrypted_data_key, iv, auth_tag, algorithm, key_version] = params;
+          const id = `secret-${nextSecretId++}`;
+          secretRows.set(id, { ciphertext, encrypted_data_key, iv, auth_tag, algorithm, key_version });
+          return { rows: [{ id }] } as never;
+        }
+        if (text.includes("delete from nia_secrets where id")) {
+          secretRows.delete(params[0] as string);
+          return { rows: [] } as never;
+        }
+        if (text.includes("confirm_write_grant")) {
+          return {
+            rows: [
+              {
+                id: "grant-1",
+                connection_id: "conn-1",
+                granted_by_user_id: "user-1",
+                scope: {},
+                granted_at: "2024-01-01T00:00:00Z",
+                revoked_at: null,
+                confirmed_at: "2024-01-02T00:00:00Z",
+                cred_version: 2,
+                write_credential_vault_ref: "new-vault-ref",
+                write_role_name: "writer",
               },
-            }),
-          }),
-          delete: () => ({
-            eq: async (_col: string, id: string) => {
-              secretRows.delete(id);
-              return { error: null };
-            },
-          }),
-        };
-      }
-      if (table !== "write_grants") throw new Error(`unexpected table "${table}" in fake`);
-      return {
-        select: () => ({
-          eq: async () => ({ data: existingGrantCredVersions.map((cred_version) => ({ cred_version })), error: null }),
-        }),
-      };
-    },
-    rpc: async (name: string, args: unknown) => {
-      rpcCalls.push({ name, args });
-      if (name === "confirm_write_grant") {
-        return {
-          data: {
-            id: "grant-1",
-            connection_id: "conn-1",
-            granted_by_user_id: "user-1",
-            scope: {},
-            granted_at: "2024-01-01T00:00:00Z",
-            revoked_at: null,
-            confirmed_at: "2024-01-02T00:00:00Z",
-            cred_version: 2,
-            write_credential_vault_ref: "new-vault-ref",
-            write_role_name: "writer",
-          },
-          error: null,
-        };
-      }
-      throw new Error(`unexpected rpc "${name}" in fake`);
-    },
-  } as unknown as SupabaseClient;
+            ],
+          } as never;
+        }
+        throw new Error(`unexpected query: ${text}`);
+      },
+    })) as WithUser;
 
-  return { supabase, rpcCalls, secretRows };
+  return { withUser, queries, secretRows };
 }
 
 describe("confirmWriteGrant — test-connects before confirming", () => {
@@ -108,9 +97,9 @@ describe("confirmWriteGrant — test-connects before confirming", () => {
   });
 
   it("test-connects the new credential and confirms on success", async () => {
-    const { supabase, rpcCalls, secretRows } = createFakeClient([1]);
+    const { withUser, queries, secretRows } = createFakeClient([1]);
 
-    const result = await confirmWriteGrant(supabase, { orgId: "org-A" }, "conn-1", "grant-1", {
+    const result = await confirmWriteGrant(withUser, { orgId: "org-A" }, "conn-1", "grant-1", {
       user: "writer",
       password: "secret",
     });
@@ -124,26 +113,23 @@ describe("confirmWriteGrant — test-connects before confirming", () => {
     );
     expect(dispatchInvalidate).toHaveBeenCalledTimes(1);
     expect(secretRows.size).toBe(1);
-    expect(rpcCalls.map((c) => c.name)).toEqual(["confirm_write_grant"]);
-    expect(rpcCalls.find((c) => c.name === "confirm_write_grant")?.args).toMatchObject({
-      p_write_role_name: "writer",
-      p_write_credential_vault_ref: "secret-1",
-    });
+    const confirmQuery = queries.find((q) => q.text.includes("confirm_write_grant"));
+    expect(confirmQuery?.params).toEqual(["grant-1", "secret-1", "writer"]);
     expect(result.confirmedAt).not.toBeNull();
     expect(result.writeRoleName).toBe("writer");
   });
 
   it("rolls back the Vault write and never confirms when the test fails", async () => {
     vi.mocked(dispatchTest).mockResolvedValueOnce({ ok: false, error: { message: "ECONNREFUSED", details: "ECONNREFUSED" } });
-    const { supabase, rpcCalls, secretRows } = createFakeClient([]);
+    const { withUser, queries, secretRows } = createFakeClient([]);
 
     await expect(
-      confirmWriteGrant(supabase, { orgId: "org-A" }, "conn-1", "grant-1", { user: "writer", password: "wrong" }),
+      confirmWriteGrant(withUser, { orgId: "org-A" }, "conn-1", "grant-1", { user: "writer", password: "wrong" }),
     ).rejects.toMatchObject({ code: "WRITE_GRANT_TEST_FAILED" });
 
     // Written then rolled back via secretStore.delete(vaultRef) — nothing
     // left behind, and confirm_write_grant is never reached.
     expect(secretRows.size).toBe(0);
-    expect(rpcCalls.map((c) => c.name)).toEqual([]);
+    expect(queries.some((q) => q.text.includes("confirm_write_grant"))).toBe(false);
   });
 });

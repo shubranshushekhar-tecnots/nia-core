@@ -20,6 +20,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@nia/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@nia/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
@@ -53,6 +56,9 @@ importers:
       openai:
         specifier: ^4.77.0
         version: 4.104.0(zod@3.25.76)
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -69,6 +75,9 @@ importers:
       '@types/node':
         specifier: ^22.9.0
         version: 22.20.2
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.23.1
       tsx:
         specifier: ^4.19.2
         version: 4.23.13
@@ -90,6 +99,9 @@ importers:
       '@fontsource/schibsted-grotesk':
         specifier: ^5.3.0
         version: 5.3.0
+      '@nia/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@nia/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
@@ -111,6 +123,9 @@ importers:
       next:
         specifier: ^15.0.3
         version: 15.5.25(@playwright/test@1.63.0)(@types/node@22.20.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -133,6 +148,9 @@ importers:
       '@types/node':
         specifier: ^22.9.0
         version: 22.20.2
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.23.1
       '@types/react':
         specifier: ^18.3.12
         version: 18.3.31
@@ -169,6 +187,9 @@ importers:
       '@langchain/langgraph':
         specifier: ^0.2.44
         version: 0.2.74(@langchain/core@0.3.80(openai@4.104.0(zod@3.25.76)))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(zod-to-json-schema@3.25.2(zod@3.25.76))
+      '@nia/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@nia/guardrails':
         specifier: workspace:*
         version: link:../../packages/guardrails
@@ -196,6 +217,9 @@ importers:
       openai:
         specifier: ^4.77.0
         version: 4.104.0(zod@3.25.76)
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -209,12 +233,25 @@ importers:
       mysql2:
         specifier: ^3.11.4
         version: 3.24.4(@types/node@22.20.2)
-      pg:
-        specifier: ^8.13.1
-        version: 8.23.0
       tsx:
         specifier: ^4.19.2
         version: 4.23.13
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^5.0.0
+        version: 5.0.0(@types/node@22.20.2)(vite@8.3.0(@types/node@22.20.2)(esbuild@0.28.2)(jiti@1.21.7)(tsx@4.23.13))
+
+  packages/db:
+    dependencies:
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
+    devDependencies:
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.23.1
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
@@ -257,6 +294,9 @@ importers:
         specifier: ^2.46.1
         version: 2.116.0
     devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.20.2
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

@@ -25,6 +25,14 @@ const EnvSchema = z
     NODE_ENV: z.string().default("development"),
     SUPABASE_URL: z.string().url(),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+    /**
+     * Direct Postgres for @nia/db (docs/plans/data-access.md) — replaces
+     * the service-role Supabase client (supabaseClient.ts) for data access.
+     * Same connection apps/api uses; the worker always calls
+     * withServiceRole (never withActingUser — it has no live user JWT, see
+     * this file's header comment).
+     */
+    DATABASE_URL: z.string().min(1),
     REDIS_URL: z.string().default("redis://localhost:6379"),
     CONNECTOR_DEV_HOST: z.string().optional(),
     /**

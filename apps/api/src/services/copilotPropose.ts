@@ -1,16 +1,10 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PlanProposeOutcome } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
+import type { WithUser } from "../lib/withUser.js";
 import { AppError } from "../lib/appError.js";
 import { runPlanProposeJob } from "../lib/planQueue.js";
 import { getConversation, createConversation } from "./chat.js";
-
-async function assertWorkflowInScope(supabase: SupabaseClient, scope: WorkspaceScope, workflowId: string): Promise<void> {
-  let query = supabase.from("workflows").select("id", { count: "exact", head: true }).eq("id", workflowId);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { count } = await query;
-  if (!count) throw new AppError(404, "NOT_FOUND", "Workflow not found.");
-}
+import { assertWorkflowInScope } from "./checks.js";
 
 export type ProposePlanResult = { conversationId: string; outcome: PlanProposeOutcome };
 
@@ -31,21 +25,21 @@ export type ProposePlanResult = { conversationId: string; outcome: PlanProposeOu
  * built message-persistence for plan turns either.
  */
 export async function proposePlanForWorkflow(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   userId: string,
   message: string,
   conversationId?: string,
 ): Promise<ProposePlanResult> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
+  await assertWorkflowInScope(withUser, scope, workflowId);
 
   let resolvedConversationId = conversationId;
   if (resolvedConversationId) {
-    const existing = await getConversation(supabase, scope, resolvedConversationId);
+    const existing = await getConversation(withUser, scope, resolvedConversationId);
     if (!existing) throw new AppError(404, "NOT_FOUND", "Conversation not found.");
   } else {
-    const created = await createConversation(supabase, scope, userId, message, workflowId);
+    const created = await createConversation(withUser, scope, userId, message, workflowId);
     resolvedConversationId = created.id;
   }
 

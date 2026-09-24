@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { confirmPendingAction, consumePendingAction, hashToolArgs } from "./pendingActions.js";
+import type { WithUser } from "../lib/withUser.js";
 
 /**
  * Required test (docs/plans/copilot-agent.md, "Tests" section): "every
@@ -32,38 +33,45 @@ function makeFakeDb() {
     rows.set(row.id, row);
   }
 
-  const supabase = {
-    rpc(fn: string, args: Record<string, unknown>) {
-      return {
-        single: async () => {
-          const row = rows.get(args.p_id as string);
-          if (!row) return { data: null, error: { message: "not found" } };
-          const now = Date.now();
+  const withUser: WithUser = (async (fn) =>
+    fn({
+      query: async (text: string, params: readonly unknown[] = []) => {
+        const now = Date.now();
+
+        // Mirrors the real confirm_pending_action/consume_pending_action
+        // Postgres functions (0031_copilot_agent.sql): they never return
+        // zero rows, they `raise exception` on any ineligible row, which
+        // pg surfaces as a rejected query — so this fake throws too,
+        // with the exact same message text.
+        if (text.includes("confirm_pending_action")) {
+          const [id] = params as [string];
+          const row = rows.get(id);
+          if (!row) throw new Error(`pending action ${id} not found`);
           const notExpired = new Date(row.expiresAt).getTime() > now;
-
-          if (fn === "confirm_pending_action") {
-            if (row.confirmedAt !== null || row.consumedAt !== null || !notExpired) {
-              return { data: null, error: { message: "cannot be confirmed (already confirmed, consumed, or expired)" } };
-            }
-            row.confirmedAt = new Date().toISOString();
-            return { data: { ...toDbRow(row) }, error: null };
+          if (row.confirmedAt !== null || row.consumedAt !== null || !notExpired) {
+            throw new Error(`pending action ${id} cannot be confirmed (already confirmed, consumed, or expired)`);
           }
+          row.confirmedAt = new Date().toISOString();
+          return { rows: [toDbRow(row)] } as never;
+        }
 
-          if (fn === "consume_pending_action") {
-            const hashMatches = row.tool === args.p_tool && row.argsHash === args.p_args_hash;
-            const eligible = row.confirmedAt !== null && row.consumedAt === null && notExpired && hashMatches;
-            if (!eligible) {
-              return { data: null, error: { message: "not confirmed, already consumed, expired, or its arguments no longer match" } };
-            }
-            row.consumedAt = new Date().toISOString();
-            return { data: { ...toDbRow(row) }, error: null };
+        if (text.includes("consume_pending_action")) {
+          const [id, tool, argsHash] = params as [string, string, string];
+          const row = rows.get(id);
+          if (!row) throw new Error(`pending action ${id} not found`);
+          const notExpired = new Date(row.expiresAt).getTime() > now;
+          const hashMatches = row.tool === tool && row.argsHash === argsHash;
+          const eligible = row.confirmedAt !== null && row.consumedAt === null && notExpired && hashMatches;
+          if (!eligible) {
+            throw new Error(`pending action ${id} is not confirmed, already consumed, expired, or its arguments no longer match`);
           }
+          row.consumedAt = new Date().toISOString();
+          return { rows: [toDbRow(row)] } as never;
+        }
 
-          throw new Error(`unexpected rpc: ${fn}`);
-        },
-      };
-    },
-  };
+        throw new Error(`unexpected query: ${text}`);
+      },
+    })) as WithUser;
 
   function toDbRow(row: FakeRow) {
     return {
@@ -80,7 +88,7 @@ function makeFakeDb() {
     };
   }
 
-  return { supabase, insert };
+  return { withUser, insert };
 }
 
 const TEN_MIN_FROM_NOW = new Date(Date.now() + 10 * 60_000).toISOString();
@@ -117,7 +125,7 @@ describe("consumePendingAction: matching hash + confirmed + not expired", () => 
   it("succeeds when confirmed, not expired, and the args hash matches exactly what was confirmed", async () => {
     db.insert({ id: "p1", tool: "start_run", argsHash: hashToolArgs("start_run", args), confirmedAt: new Date().toISOString(), consumedAt: null, expiresAt: TEN_MIN_FROM_NOW });
 
-    const result = await consumePendingAction(db.supabase as never, "p1", "start_run", args);
+    const result = await consumePendingAction(db.withUser, "p1", "start_run", args);
     expect(result.id).toBe("p1");
     expect(result.consumedAt).not.toBeNull();
   });
@@ -125,7 +133,7 @@ describe("consumePendingAction: matching hash + confirmed + not expired", () => 
   it("refuses when the pending action was never confirmed", async () => {
     db.insert({ id: "p1", tool: "start_run", argsHash: hashToolArgs("start_run", args), confirmedAt: null, consumedAt: null, expiresAt: TEN_MIN_FROM_NOW });
 
-    await expect(consumePendingAction(db.supabase as never, "p1", "start_run", args)).rejects.toThrow(/not confirmed/i);
+    await expect(consumePendingAction(db.withUser, "p1", "start_run", args)).rejects.toThrow(/not confirmed/i);
   });
 
   it("refuses when the execution-time arguments differ from what was confirmed (hash mismatch)", async () => {
@@ -135,7 +143,7 @@ describe("consumePendingAction: matching hash + confirmed + not expired", () => 
     db.insert({ id: "p1", tool: "start_run", argsHash: hashToolArgs("start_run", args), confirmedAt: new Date().toISOString(), consumedAt: null, expiresAt: TEN_MIN_FROM_NOW });
 
     const tamperedArgs = { workflowId: "wf-1", destNodeIds: ["d2"] };
-    await expect(consumePendingAction(db.supabase as never, "p1", "start_run", tamperedArgs)).rejects.toThrow(
+    await expect(consumePendingAction(db.withUser, "p1", "start_run", tamperedArgs)).rejects.toThrow(
       /not confirmed|arguments no longer match/i,
     );
   });
@@ -143,14 +151,14 @@ describe("consumePendingAction: matching hash + confirmed + not expired", () => 
   it("refuses when the pending action has expired, even though it was confirmed with a matching hash", async () => {
     db.insert({ id: "p1", tool: "start_run", argsHash: hashToolArgs("start_run", args), confirmedAt: new Date().toISOString(), consumedAt: null, expiresAt: ONE_MIN_AGO });
 
-    await expect(consumePendingAction(db.supabase as never, "p1", "start_run", args)).rejects.toThrow(/not confirmed/i);
+    await expect(consumePendingAction(db.withUser, "p1", "start_run", args)).rejects.toThrow(/not confirmed/i);
   });
 
   it("refuses on replay: a pending action already consumed once cannot be consumed again", async () => {
     db.insert({ id: "p1", tool: "start_run", argsHash: hashToolArgs("start_run", args), confirmedAt: new Date().toISOString(), consumedAt: null, expiresAt: TEN_MIN_FROM_NOW });
 
-    await consumePendingAction(db.supabase as never, "p1", "start_run", args);
-    await expect(consumePendingAction(db.supabase as never, "p1", "start_run", args)).rejects.toThrow(/not confirmed/i);
+    await consumePendingAction(db.withUser, "p1", "start_run", args);
+    await expect(consumePendingAction(db.withUser, "p1", "start_run", args)).rejects.toThrow(/not confirmed/i);
   });
 });
 
@@ -159,13 +167,13 @@ describe("confirmPendingAction", () => {
     const db = makeFakeDb();
     db.insert({ id: "p1", tool: "start_run", argsHash: "irrelevant", confirmedAt: null, consumedAt: null, expiresAt: ONE_MIN_AGO });
 
-    await expect(confirmPendingAction(db.supabase as never, "p1")).rejects.toThrow(/already confirmed, consumed, or expired/i);
+    await expect(confirmPendingAction(db.withUser, "p1")).rejects.toThrow(/already confirmed, consumed, or expired/i);
   });
 
   it("refuses to confirm an already-consumed pending action", async () => {
     const db = makeFakeDb();
     db.insert({ id: "p1", tool: "start_run", argsHash: "irrelevant", confirmedAt: new Date().toISOString(), consumedAt: new Date().toISOString(), expiresAt: TEN_MIN_FROM_NOW });
 
-    await expect(confirmPendingAction(db.supabase as never, "p1")).rejects.toThrow(/already confirmed, consumed, or expired/i);
+    await expect(confirmPendingAction(db.withUser, "p1")).rejects.toThrow(/already confirmed, consumed, or expired/i);
   });
 });

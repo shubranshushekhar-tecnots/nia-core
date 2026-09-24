@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   PlanDiff,
   type PlanDiff as PlanDiffType,
@@ -17,6 +16,7 @@ import {
   PROFILE_SIGNATURE_VERSION,
 } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
+import type { WithUser } from "../lib/withUser.js";
 import { AppError } from "../lib/appError.js";
 import { computeStepsHash } from "../lib/cleanStepsHash.js";
 import { getWorkflowGraph, putWorkflowGraph, type WorkflowGraphResult } from "./workflowGraphs.js";
@@ -98,7 +98,7 @@ function parseRow(row: RawAppliedPlanRow): AppliedPlanRow {
  * revertible.
  */
 export async function applyPlanDiff(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   input: { diff: unknown; prompt?: string; cleanBinding?: { nodeId: string } & CleanBindingInputType },
@@ -106,7 +106,7 @@ export async function applyPlanDiff(
   const diff = PlanDiff.parse(input.diff);
 
   // Fresh fetch — never trust a client-cached graph as the apply base.
-  const current = await getWorkflowGraph(supabase, scope, workflowId);
+  const current = await getWorkflowGraph(withUser, scope, workflowId);
 
   if (current.version !== diff.baseGraphVersion) {
     throw new AppError(
@@ -135,40 +135,43 @@ export async function applyPlanDiff(
 
   const nextGraph = applyDiffToGraph(stamped, backfilled);
 
-  const written = await putWorkflowGraph(supabase, scope, workflowId, {
+  const written = await putWorkflowGraph(withUser, scope, workflowId, {
     graph: nextGraph,
     expectedVersion: current.version,
   });
 
-  const { data: appliedRow, error: insertError } = await supabase
-    .from("copilot_applied_plans")
-    .insert({
-      id: appliedPlanId,
-      workflow_id: workflowId,
-      summary: stamped.summary,
-      prompt: input.prompt ?? "",
-      diff: stamped,
-      graph_version_after: written.version,
-    })
-    .select("id")
-    .single();
-  if (insertError || !appliedRow) {
-    throw new AppError(500, "APPLIED_PLAN_WRITE_FAILED", insertError?.message ?? "Failed to record the applied plan.");
+  try {
+    await withUser((db) =>
+      db.query(
+        `insert into copilot_applied_plans (id, workflow_id, summary, prompt, diff, graph_version_after)
+         values ($1, $2, $3, $4, $5, $6)`,
+        [appliedPlanId, workflowId, stamped.summary, input.prompt ?? "", stamped, written.version],
+      ),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "APPLIED_PLAN_WRITE_FAILED", message);
   }
 
   // Same "second, best-effort-after-the-main-write, but throws (never
   // swallows) on failure" precedent as copilotApply.ts's own audit call —
   // the audit log is load-bearing (CONVENTIONS.md), so a failed audit write
   // must surface as a distinct error, not disappear silently.
-  const { error: auditError } = await supabase.rpc("log_plan_diff_applied", {
-    p_workflow_id: workflowId,
-    p_applied_plan_id: appliedPlanId,
-    p_summary: stamped.summary,
-    p_prompt: input.prompt ?? null,
-    p_op_kinds: stamped.ops.map((op) => op.kind),
-    p_graph_version: written.version,
-  });
-  if (auditError) throw new AppError(500, "AUDIT_WRITE_FAILED", auditError.message);
+  try {
+    await withUser((db) =>
+      db.query(`select public.log_plan_diff_applied($1, $2, $3, $4, $5, $6)`, [
+        workflowId,
+        appliedPlanId,
+        stamped.summary,
+        input.prompt ?? null,
+        stamped.ops.map((op) => op.kind),
+        written.version,
+      ]),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "AUDIT_WRITE_FAILED", message);
+  }
 
   // Phase 13, Step 6 — the write side of a CleanPlan binding (cleanPlan.ts's
   // header comment; read side is runEtl.ts's checkCleanPlanDrift). Only
@@ -180,12 +183,13 @@ export async function applyPlanDiff(
   // comment). onConflict on (workflow_id, node_id) means re-proposing and
   // re-applying against the same node replaces its prior binding.
   if (input.cleanBinding) {
-    const node = written.graph.nodes.find((n) => n.id === input.cleanBinding!.nodeId);
+    const cleanBinding = input.cleanBinding;
+    const node = written.graph.nodes.find((n) => n.id === cleanBinding.nodeId);
     if (!node) {
       throw new AppError(
         422,
         "CLEAN_BINDING_NODE_NOT_FOUND",
-        `Node "${input.cleanBinding.nodeId}" was not found in the applied graph.`,
+        `Node "${cleanBinding.nodeId}" was not found in the applied graph.`,
       );
     }
     const parsed = parseNodeConfig("transform", node.config);
@@ -193,25 +197,42 @@ export async function applyPlanDiff(
       throw new AppError(
         422,
         "CLEAN_BINDING_NODE_NOT_TRANSFORM",
-        `Node "${input.cleanBinding.nodeId}" is not a valid transform node.`,
+        `Node "${cleanBinding.nodeId}" is not a valid transform node.`,
       );
     }
     const stepsHash = computeStepsHash(parsed.value.steps);
-    const { error: bindingError } = await supabase.from("clean_plans").upsert(
-      {
-        workflow_id: workflowId,
-        node_id: input.cleanBinding.nodeId,
-        applied_plan_id: appliedPlanId,
-        steps_hash: stepsHash,
-        source_schema_hash: input.cleanBinding.sourceSchemaHash,
-        profile_hash: input.cleanBinding.profileHash,
-        op_catalog_version: OP_CATALOG_VERSION,
-        adapter_version: ADAPTER_VERSION,
-        profile_signature_version: PROFILE_SIGNATURE_VERSION,
-      },
-      { onConflict: "workflow_id,node_id" },
-    );
-    if (bindingError) throw new AppError(500, "CLEAN_PLAN_WRITE_FAILED", bindingError.message);
+    try {
+      await withUser((db) =>
+        db.query(
+          `insert into clean_plans
+             (workflow_id, node_id, applied_plan_id, steps_hash, source_schema_hash, profile_hash, op_catalog_version, adapter_version, profile_signature_version)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           on conflict (workflow_id, node_id)
+           do update set
+             applied_plan_id = excluded.applied_plan_id,
+             steps_hash = excluded.steps_hash,
+             source_schema_hash = excluded.source_schema_hash,
+             profile_hash = excluded.profile_hash,
+             op_catalog_version = excluded.op_catalog_version,
+             adapter_version = excluded.adapter_version,
+             profile_signature_version = excluded.profile_signature_version`,
+          [
+            workflowId,
+            cleanBinding.nodeId,
+            appliedPlanId,
+            stepsHash,
+            cleanBinding.sourceSchemaHash,
+            cleanBinding.profileHash,
+            OP_CATALOG_VERSION,
+            ADAPTER_VERSION,
+            PROFILE_SIGNATURE_VERSION,
+          ],
+        ),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new AppError(500, "CLEAN_PLAN_WRITE_FAILED", message);
+    }
   }
 
   return { ...written, appliedPlanId };
@@ -219,21 +240,22 @@ export async function applyPlanDiff(
 
 /** Newest first — same ordering as checks.ts's listCheckRuns (Logs-tab-style history feed). */
 export async function listAppliedPlans(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   limit = 20,
 ): Promise<AppliedPlanRow[]> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
+  await assertWorkflowInScope(withUser, scope, workflowId);
 
-  const { data } = await supabase
-    .from("copilot_applied_plans")
-    .select("id, workflow_id, summary, prompt, diff, graph_version_after, applied_at, applied_by, reverted_at, reverted_by, revert_plan_id, reverts_plan_id")
-    .eq("workflow_id", workflowId)
-    .order("applied_at", { ascending: false })
-    .limit(limit);
+  const { rows } = await withUser((db) =>
+    db.query<RawAppliedPlanRow>(
+      `select id, workflow_id, summary, prompt, diff, graph_version_after, applied_at, applied_by, reverted_at, reverted_by, revert_plan_id, reverts_plan_id
+       from copilot_applied_plans where workflow_id = $1 order by applied_at desc limit $2`,
+      [workflowId, limit],
+    ),
+  );
 
-  return (data ?? []).map((row) => parseRow(row as RawAppliedPlanRow));
+  return rows.map(parseRow);
 }
 
 /**
@@ -249,24 +271,31 @@ export async function listAppliedPlans(
  * revert and lists what changed (phase12.md: "No automatic merging").
  */
 export async function revertPlan(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   appliedPlanId: string,
   input: { prompt?: string },
 ): Promise<ApplyPlanDiffResult> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
+  await assertWorkflowInScope(withUser, scope, workflowId);
 
-  const { data: row, error: fetchError } = await supabase
-    .from("copilot_applied_plans")
-    .select("id, workflow_id, summary, prompt, diff, graph_version_after, applied_at, applied_by, reverted_at, reverted_by, revert_plan_id, reverts_plan_id")
-    .eq("id", appliedPlanId)
-    .eq("workflow_id", workflowId)
-    .maybeSingle();
-  if (fetchError) throw new AppError(500, "APPLIED_PLAN_READ_FAILED", fetchError.message);
+  let row: RawAppliedPlanRow | undefined;
+  try {
+    const { rows } = await withUser((db) =>
+      db.query<RawAppliedPlanRow>(
+        `select id, workflow_id, summary, prompt, diff, graph_version_after, applied_at, applied_by, reverted_at, reverted_by, revert_plan_id, reverts_plan_id
+         from copilot_applied_plans where id = $1 and workflow_id = $2`,
+        [appliedPlanId, workflowId],
+      ),
+    );
+    row = rows[0];
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "APPLIED_PLAN_READ_FAILED", message);
+  }
   if (!row) throw new AppError(404, "NOT_FOUND", "Applied plan not found.");
 
-  const plan = parseRow(row as RawAppliedPlanRow);
+  const plan = parseRow(row);
   if (plan.revertedAt) {
     throw new AppError(409, "PLAN_ALREADY_REVERTED", "This plan was already reverted.");
   }
@@ -274,7 +303,7 @@ export async function revertPlan(
   // Fresh fetch — a revert always targets the graph's current (live)
   // version, never the version the original plan happened to leave it at
   // (see invertDiff's doc comment).
-  const current = await getWorkflowGraph(supabase, scope, workflowId);
+  const current = await getWorkflowGraph(withUser, scope, workflowId);
 
   const conflictCheck = checkRevertConflicts(plan.diff, current.graph);
   if (!conflictCheck.ok) {
@@ -296,48 +325,55 @@ export async function revertPlan(
 
   const nextGraph = applyDiffToGraph(revertDiff, current.graph);
 
-  const written = await putWorkflowGraph(supabase, scope, workflowId, {
+  const written = await putWorkflowGraph(withUser, scope, workflowId, {
     graph: nextGraph,
     expectedVersion: current.version,
   });
 
-  const { data: revertRow, error: insertError } = await supabase
-    .from("copilot_applied_plans")
-    .insert({
-      workflow_id: workflowId,
-      summary: revertDiff.summary,
-      prompt: input.prompt ?? "",
-      diff: revertDiff,
-      graph_version_after: written.version,
-      reverts_plan_id: plan.id,
-    })
-    .select("id")
-    .single();
-  if (insertError || !revertRow) {
-    throw new AppError(500, "APPLIED_PLAN_WRITE_FAILED", insertError?.message ?? "Failed to record the revert plan.");
+  let revertPlanId: string;
+  try {
+    const { rows } = await withUser((db) =>
+      db.query<{ id: string }>(
+        `insert into copilot_applied_plans (workflow_id, summary, prompt, diff, graph_version_after, reverts_plan_id)
+         values ($1, $2, $3, $4, $5, $6)
+         returning id`,
+        [workflowId, revertDiff.summary, input.prompt ?? "", revertDiff, written.version, plan.id],
+      ),
+    );
+    const revertRow = rows[0];
+    if (!revertRow) throw new Error("Failed to record the revert plan.");
+    revertPlanId = revertRow.id;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "APPLIED_PLAN_WRITE_FAILED", message);
   }
-  const revertPlanId = (revertRow as { id: string }).id;
 
-  const { error: auditError } = await supabase.rpc("log_plan_diff_applied", {
-    p_workflow_id: workflowId,
-    p_applied_plan_id: revertPlanId,
-    p_summary: revertDiff.summary,
-    p_prompt: input.prompt ?? null,
-    p_op_kinds: revertDiff.ops.map((op) => op.kind),
-    p_graph_version: written.version,
-  });
-  if (auditError) throw new AppError(500, "AUDIT_WRITE_FAILED", auditError.message);
+  try {
+    await withUser((db) =>
+      db.query(`select public.log_plan_diff_applied($1, $2, $3, $4, $5, $6)`, [
+        workflowId,
+        revertPlanId,
+        revertDiff.summary,
+        input.prompt ?? null,
+        revertDiff.ops.map((op) => op.kind),
+        written.version,
+      ]),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "AUDIT_WRITE_FAILED", message);
+  }
 
   // Marks the ORIGINAL plan reverted and writes the "own audit entry
   // referencing the original plan" (phase12.md Design C) atomically —
   // see mark_plan_reverted's header comment (0023) for why this can't be
   // a plain client UPDATE.
-  const { error: markError } = await supabase.rpc("mark_plan_reverted", {
-    p_plan_id: plan.id,
-    p_revert_plan_id: revertPlanId,
-    p_prompt: input.prompt ?? null,
-  });
-  if (markError) throw new AppError(500, "AUDIT_WRITE_FAILED", markError.message);
+  try {
+    await withUser((db) => db.query(`select public.mark_plan_reverted($1, $2, $3)`, [plan.id, revertPlanId, input.prompt ?? null]));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "AUDIT_WRITE_FAILED", message);
+  }
 
   return { ...written, appliedPlanId: revertPlanId };
 }

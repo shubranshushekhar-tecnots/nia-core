@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { workspaceWhere } from "@nia/db";
 import {
   getConnectorManifest,
   EntityProfile,
@@ -17,6 +17,11 @@ import { getSecretStore, toSecretScope } from "../lib/secretStore.js";
 import { getCachedSchema, setCachedSchema, invalidateCachedSchema } from "../lib/schemaCache.js";
 import { runSchemaRefreshJob } from "../lib/schemaRefreshQueue.js";
 import { runProfileJob } from "../lib/profileQueue.js";
+import type { WithUser } from "../lib/withUser.js";
+
+function isUniqueViolation(err: unknown): err is { code: string; message: string } {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "23505";
+}
 
 export type Connection = {
   id: string;
@@ -71,22 +76,23 @@ function toConnection(row: ConnectionRow): Connection {
   };
 }
 
-export async function listConnections(supabase: SupabaseClient, scope: WorkspaceScope): Promise<Connection[]> {
-  let query = supabase.from("connections").select(CONNECTIONS_SELECT);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.order("created_at", { ascending: false });
-  return (data ?? []).map((row) => toConnection(row as ConnectionRow));
+export async function listConnections(withUser: WithUser, scope: WorkspaceScope): Promise<Connection[]> {
+  const where = workspaceWhere(scope, 1);
+  const { rows } = await withUser((db) =>
+    db.query<ConnectionRow>(
+      `select ${CONNECTIONS_SELECT} from connections where ${where.sql} order by created_at desc`,
+      where.params,
+    ),
+  );
+  return rows.map(toConnection);
 }
 
-export async function getConnection(
-  supabase: SupabaseClient,
-  scope: WorkspaceScope,
-  id: string,
-): Promise<Connection | null> {
-  let query = supabase.from("connections").select(CONNECTIONS_SELECT).eq("id", id);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.maybeSingle();
-  return data ? toConnection(data as ConnectionRow) : null;
+export async function getConnection(withUser: WithUser, scope: WorkspaceScope, id: string): Promise<Connection | null> {
+  const where = workspaceWhere(scope, 2);
+  const { rows } = await withUser((db) =>
+    db.query<ConnectionRow>(`select ${CONNECTIONS_SELECT} from connections where id = $1 and ${where.sql}`, [id, ...where.params]),
+  );
+  return rows[0] ? toConnection(rows[0]) : null;
 }
 
 function slugify(input: string): string {
@@ -173,7 +179,7 @@ function splitFieldsForEdit(
 const MAX_HANDLE_ATTEMPTS = 20;
 
 export async function createConnection(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   ownerUserId: string,
   input: { connectorId: string; displayName: string; fields: Record<string, unknown> },
@@ -184,67 +190,54 @@ export async function createConnection(
   // Guard: install-before-connect. No FK enforces this (connector_id is a
   // free-text slug, not a foreign key — manifests are files, not rows), so
   // this is a route-level check, not RLS.
-  let installQuery = supabase
-    .from("connector_installs")
-    .select("id", { count: "exact", head: true })
-    .eq("connector_id", input.connectorId);
-  installQuery =
-    "orgId" in scope ? installQuery.eq("org_id", scope.orgId) : installQuery.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { count: installCount } = await installQuery;
-  if (!installCount) {
+  const installWhere = workspaceWhere(scope, 2);
+  const { rows: installRows } = await withUser((db) =>
+    db.query<{ count: number }>(
+      `select count(*)::int as count from connector_installs where connector_id = $1 and ${installWhere.sql}`,
+      [input.connectorId, ...installWhere.params],
+    ),
+  );
+  if (!installRows[0]?.count) {
     throw new AppError(409, "NOT_INSTALLED", `"${input.connectorId}" must be installed before connecting.`);
   }
 
   const { config, secret } = splitFields(manifest.configSchema, input.fields);
 
-  const vaultRef = await getSecretStore(supabase).put(secret, toSecretScope(scope));
+  const vaultRef = await getSecretStore(withUser).put(secret, toSecretScope(scope));
+
+  const orgId = "orgId" in scope ? scope.orgId : null;
+  const ownerId = "orgId" in scope ? null : scope.ownerId;
 
   const base = `@${manifest.id}-${slugify(input.displayName)}`;
   for (let attempt = 0; attempt < MAX_HANDLE_ATTEMPTS; attempt++) {
     const handle = attempt === 0 ? base : `${base}-${attempt + 1}`;
-    const { data, error } =
-      "orgId" in scope
-        ? await supabase
-            .from("connections")
-            .insert({
-              org_id: scope.orgId,
-              owner_id: null,
-              connector_id: manifest.id,
-              handle,
-              display_name: input.displayName,
-              owner_user_id: ownerUserId,
-              config,
-              vault_secret_ref: vaultRef as string,
-            })
-            .select(CONNECTIONS_SELECT)
-            .single()
-        : await supabase
-            .from("connections")
-            .insert({
-              org_id: null,
-              owner_id: scope.ownerId,
-              connector_id: manifest.id,
-              handle,
-              display_name: input.displayName,
-              owner_user_id: ownerUserId,
-              config,
-              vault_secret_ref: vaultRef as string,
-            })
-            .select(CONNECTIONS_SELECT)
-            .single();
-    if (!error) return toConnection(data as ConnectionRow);
-    if (error.code !== "23505") throw new AppError(500, "CREATE_FAILED", error.message);
-    // Two distinct unique constraints can raise 23505 here: the handle
-    // uniqueness this retry loop is built to work around, and
-    // connections_scope_display_name_unique_idx (0029, Item 6.1) on
-    // display_name — a display_name collision won't go away by retrying
-    // with a new handle suffix (display_name doesn't change across
-    // attempts), so it must be surfaced immediately rather than exhausting
-    // every attempt only to report the wrong error (HANDLE_EXHAUSTED).
-    if (error.message.includes("connections_scope_display_name_unique_idx")) {
-      throw new AppError(409, "NAME_TAKEN", `A connection named "${input.displayName}" already exists.`);
+    try {
+      const { rows } = await withUser((db) =>
+        db.query<ConnectionRow>(
+          `insert into connections (org_id, owner_id, connector_id, handle, display_name, owner_user_id, config, vault_secret_ref)
+           values ($1, $2, $3, $4, $5, $6, $7, $8)
+           returning ${CONNECTIONS_SELECT}`,
+          [orgId, ownerId, manifest.id, handle, input.displayName, ownerUserId, config, vaultRef as string],
+        ),
+      );
+      return toConnection(rows[0]!);
+    } catch (err) {
+      if (!isUniqueViolation(err)) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new AppError(500, "CREATE_FAILED", message);
+      }
+      // Two distinct unique constraints can raise 23505 here: the handle
+      // uniqueness this retry loop is built to work around, and
+      // connections_scope_display_name_unique_idx (0029, Item 6.1) on
+      // display_name — a display_name collision won't go away by retrying
+      // with a new handle suffix (display_name doesn't change across
+      // attempts), so it must be surfaced immediately rather than exhausting
+      // every attempt only to report the wrong error (HANDLE_EXHAUSTED).
+      if (err.message.includes("connections_scope_display_name_unique_idx")) {
+        throw new AppError(409, "NAME_TAKEN", `A connection named "${input.displayName}" already exists.`);
+      }
+      // Unique violation on handle — try the next suffix.
     }
-    // Unique violation on handle — try the next suffix.
   }
   throw new AppError(409, "HANDLE_EXHAUSTED", `Could not mint a unique handle from "${base}" after ${MAX_HANDLE_ATTEMPTS} attempts.`);
 }
@@ -263,38 +256,44 @@ export type ConnectionUsage = { id: string; name: string; nodeCount: number; cle
  * and updateConnection's host/database-change warning.
  */
 export async function listConnectionUsages(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   connectionId: string,
 ): Promise<{ workflows: ConnectionUsage[] }> {
-  let workflowsQuery = supabase.from("workflows").select("id, name");
-  workflowsQuery =
-    "orgId" in scope ? workflowsQuery.eq("org_id", scope.orgId) : workflowsQuery.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data: workflows } = await workflowsQuery;
-  if (!workflows || workflows.length === 0) return { workflows: [] };
+  const workflowsWhere = workspaceWhere(scope, 1);
+  const { rows: workflows } = await withUser((db) =>
+    db.query<{ id: string; name: string }>(`select id, name from workflows where ${workflowsWhere.sql}`, workflowsWhere.params),
+  );
+  if (workflows.length === 0) return { workflows: [] };
 
-  const workflowIds = workflows.map((w) => w.id as string);
-  const { data: graphRows } = await supabase.from("workflow_graphs").select("workflow_id, graph").in("workflow_id", workflowIds);
+  const workflowIds = workflows.map((w) => w.id);
+  const { rows: graphRows } = await withUser((db) =>
+    db.query<{ workflow_id: string; graph: unknown }>(
+      `select workflow_id, graph from workflow_graphs where workflow_id = any($1::uuid[])`,
+      [workflowIds],
+    ),
+  );
 
   const usages: ConnectionUsage[] = [];
-  for (const row of graphRows ?? []) {
+  for (const row of graphRows) {
     const parsed = GraphDoc.safeParse(row.graph);
     if (!parsed.success) continue;
     const matchingNodeIds = parsed.data.nodes.filter((n) => n.connectionId === connectionId).map((n) => n.id);
     if (matchingNodeIds.length === 0) continue;
 
-    const { count: cleanPlanCount } = await supabase
-      .from("clean_plans")
-      .select("id", { count: "exact", head: true })
-      .eq("workflow_id", row.workflow_id)
-      .in("node_id", matchingNodeIds);
+    const { rows: cleanPlanRows } = await withUser((db) =>
+      db.query<{ count: number }>(
+        `select count(*)::int as count from clean_plans where workflow_id = $1 and node_id = any($2::text[])`,
+        [row.workflow_id, matchingNodeIds],
+      ),
+    );
 
     const workflow = workflows.find((w) => w.id === row.workflow_id);
     usages.push({
-      id: row.workflow_id as string,
-      name: (workflow?.name as string | undefined) ?? "Untitled workflow",
+      id: row.workflow_id,
+      name: workflow?.name ?? "Untitled workflow",
       nodeCount: matchingNodeIds.length,
-      cleanPlanCount: cleanPlanCount ?? 0,
+      cleanPlanCount: cleanPlanRows[0]?.count ?? 0,
     });
   }
   return { workflows: usages };
@@ -313,15 +312,20 @@ type ConnectionRowWithSecret = ConnectionRow & { vault_secret_ref: string };
  * gated on config/credential changes.
  */
 export async function updateConnection(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   id: string,
   actorUserId: string,
   input: { displayName?: string; fields?: Record<string, unknown>; confirmed?: boolean },
 ): Promise<Connection> {
-  let existingQuery = supabase.from("connections").select(`${CONNECTIONS_SELECT}, vault_secret_ref`).eq("id", id);
-  existingQuery = "orgId" in scope ? existingQuery.eq("org_id", scope.orgId) : existingQuery.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data: existingRow } = await existingQuery.maybeSingle<ConnectionRowWithSecret>();
+  const existingWhere = workspaceWhere(scope, 2);
+  const { rows: existingRows } = await withUser((db) =>
+    db.query<ConnectionRowWithSecret>(
+      `select ${CONNECTIONS_SELECT}, vault_secret_ref from connections where id = $1 and ${existingWhere.sql}`,
+      [id, ...existingWhere.params],
+    ),
+  );
+  const existingRow = existingRows[0];
   if (!existingRow) throw new AppError(404, "NOT_FOUND", "Connection not found.");
   const existing = toConnection(existingRow);
 
@@ -336,7 +340,7 @@ export async function updateConnection(
   const displayNameChanged = input.displayName !== undefined && input.displayName !== existing.displayName;
 
   if ((changedConfigKeys.includes("host") || changedConfigKeys.includes("database")) && !input.confirmed) {
-    const usages = await listConnectionUsages(supabase, scope, id);
+    const usages = await listConnectionUsages(withUser, scope, id);
     if (usages.workflows.length > 0) {
       throw new AppError(409, "USAGE_WARNING_REQUIRED", "This connection is used by other workflows.", usages);
     }
@@ -350,7 +354,7 @@ export async function updateConnection(
   // decrypt_connector_secret_for_edit for a ref that predates nia_secrets.
   let newVaultRef: string | undefined;
   if (Object.keys(secretPatch).length > 0) {
-    const secretStore = getSecretStore(supabase);
+    const secretStore = getSecretStore(withUser);
     const existingSecret = await secretStore.get(existingRow.vault_secret_ref);
     if (!existingSecret) {
       throw new AppError(500, "VAULT_READ_FAILED", `Secret not found for ref ${existingRow.vault_secret_ref}.`);
@@ -366,7 +370,7 @@ export async function updateConnection(
   };
   const testResult = await dispatchTest(manifest, credential, mergedConfig);
   if (!testResult.ok) {
-    if (newVaultRef) await getSecretStore(supabase).delete(newVaultRef);
+    if (newVaultRef) await getSecretStore(withUser).delete(newVaultRef);
     throw new AppError(
       422,
       "TEST_FAILED",
@@ -375,41 +379,70 @@ export async function updateConnection(
     );
   }
 
-  const patch: Record<string, unknown> = {};
-  if (displayNameChanged) patch.display_name = input.displayName;
   const credentialsRotated = changedConfigKeys.length > 0 || Object.keys(secretPatch).length > 0;
+
+  const setClauses: string[] = [];
+  const setParams: unknown[] = [];
+  if (displayNameChanged) {
+    setParams.push(input.displayName);
+    setClauses.push(`display_name = $${setParams.length}`);
+  }
   if (credentialsRotated) {
-    patch.config = mergedConfig;
-    patch.vault_secret_ref = newVaultRef ?? existingRow.vault_secret_ref;
-    patch.cred_version = existing.credVersion + 1;
+    setParams.push(mergedConfig);
+    setClauses.push(`config = $${setParams.length}`);
+    setParams.push(newVaultRef ?? existingRow.vault_secret_ref);
+    setClauses.push(`vault_secret_ref = $${setParams.length}`);
+    setParams.push(existing.credVersion + 1);
+    setClauses.push(`cred_version = $${setParams.length}`);
   }
 
-  let updateQuery = supabase.from("connections").update(patch).eq("id", id);
-  updateQuery = "orgId" in scope ? updateQuery.eq("org_id", scope.orgId) : updateQuery.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data, error } = await updateQuery.select(CONNECTIONS_SELECT).single();
-  if (error) {
-    // Same connections_scope_display_name_unique_idx collision as
-    // createConnection (Item 6.1) — a renamed connection colliding with an
-    // existing one in the same scope.
-    if (error.code === "23505" && error.message.includes("connections_scope_display_name_unique_idx")) {
-      throw new AppError(409, "NAME_TAKEN", `A connection named "${input.displayName}" already exists.`);
+  let updatedRow: ConnectionRow;
+  if (setClauses.length === 0) {
+    // Nothing actually changed (a no-op save) — PostgREST's `.update({})`
+    // has no real column list to write either; the visible outcome is the
+    // same unchanged row, so just re-read it rather than issue an empty SQL SET.
+    updatedRow = existingRow;
+  } else {
+    setParams.push(id);
+    const idParamIndex = setParams.length;
+    const scopeWhere = workspaceWhere(scope, setParams.length + 1);
+    try {
+      const { rows } = await withUser((db) =>
+        db.query<ConnectionRow>(
+          `update connections set ${setClauses.join(", ")}
+           where id = $${idParamIndex} and ${scopeWhere.sql}
+           returning ${CONNECTIONS_SELECT}`,
+          [...setParams, ...scopeWhere.params],
+        ),
+      );
+      updatedRow = rows[0]!;
+    } catch (err) {
+      // Same connections_scope_display_name_unique_idx collision as
+      // createConnection (Item 6.1) — a renamed connection colliding with an
+      // existing one in the same scope.
+      if (isUniqueViolation(err) && err.message.includes("connections_scope_display_name_unique_idx")) {
+        throw new AppError(409, "NAME_TAKEN", `A connection named "${input.displayName}" already exists.`);
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      throw new AppError(500, "UPDATE_FAILED", message);
     }
-    throw new AppError(500, "UPDATE_FAILED", error.message);
   }
 
   if (credentialsRotated) await dispatchInvalidate(manifest, id);
 
   const changedFields = [...changedConfigKeys, ...Object.keys(secretPatch), ...(displayNameChanged ? ["displayName"] : [])];
   if (changedFields.length > 0) {
-    await supabase.rpc("log_connection_audit", {
-      p_connection_id: id,
-      p_action: "connection.updated",
-      p_detail: { changedFields },
-      p_actor_user_id: actorUserId,
-    });
+    await withUser((db) =>
+      db.query(`select public.log_connection_audit($1, $2, $3, $4)`, [
+        id,
+        "connection.updated",
+        { changedFields },
+        actorUserId,
+      ]),
+    );
   }
 
-  return toConnection(data as ConnectionRow);
+  return toConnection(updatedRow);
 }
 
 /**
@@ -419,17 +452,17 @@ export async function updateConnection(
  * shown the user the usage list to proceed anyway.
  */
 export async function deleteConnection(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   id: string,
   actorUserId: string,
   confirmed: boolean,
 ): Promise<void> {
-  const existing = await getConnection(supabase, scope, id);
+  const existing = await getConnection(withUser, scope, id);
   if (!existing) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
   if (!confirmed) {
-    const usages = await listConnectionUsages(supabase, scope, id);
+    const usages = await listConnectionUsages(withUser, scope, id);
     if (usages.workflows.length > 0) {
       throw new AppError(409, "IN_USE", "This connection is used by other workflows.", usages);
     }
@@ -438,42 +471,50 @@ export async function deleteConnection(
   // Logged before the row is deleted — log_connection_audit looks up
   // org_id/owner_id from the connections row itself, same as
   // log_execution_audit, so it must run while the row still exists.
-  await supabase.rpc("log_connection_audit", {
-    p_connection_id: id,
-    p_action: "connection.deleted",
-    p_detail: { connectorId: existing.connectorId, handle: existing.handle },
-    p_actor_user_id: actorUserId,
-  });
+  await withUser((db) =>
+    db.query(`select public.log_connection_audit($1, $2, $3, $4)`, [
+      id,
+      "connection.deleted",
+      { connectorId: existing.connectorId, handle: existing.handle },
+      actorUserId,
+    ]),
+  );
 
-  let query = supabase.from("connections").delete().eq("id", id);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { error } = await query;
-  if (error) throw new AppError(500, "DELETE_FAILED", error.message);
+  const deleteWhere = workspaceWhere(scope, 2);
+  try {
+    await withUser((db) => db.query(`delete from connections where id = $1 and ${deleteWhere.sql}`, [id, ...deleteWhere.params]));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "DELETE_FAILED", message);
+  }
 
   const manifest = getConnectorManifest(existing.connectorId);
   if (manifest) await dispatchInvalidate(manifest, id);
 }
 
 export async function testConnection(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   id: string,
   actorUserId: string,
 ): Promise<{ ok: boolean; latencyMs?: number; error?: string; details?: string }> {
-  let query = supabase
-    .from("connections")
-    .select("id, connector_id, handle, config, vault_secret_ref, cred_version, owner_user_id")
-    .eq("id", id);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.maybeSingle<{
-    id: string;
-    connector_id: string;
-    handle: string;
-    config: Record<string, unknown>;
-    vault_secret_ref: string;
-    cred_version: number;
-    owner_user_id: string;
-  }>();
+  const where = workspaceWhere(scope, 2);
+  const { rows } = await withUser((db) =>
+    db.query<{
+      id: string;
+      connector_id: string;
+      handle: string;
+      config: Record<string, unknown>;
+      vault_secret_ref: string;
+      cred_version: number;
+      owner_user_id: string;
+    }>(
+      `select id, connector_id, handle, config, vault_secret_ref, cred_version, owner_user_id
+       from connections where id = $1 and ${where.sql}`,
+      [id, ...where.params],
+    ),
+  );
+  const data = rows[0];
   if (!data) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
   const manifest = getConnectorManifest(data.connector_id);
@@ -489,7 +530,7 @@ export async function testConnection(
 
   // Mirrors connector-mysql's fixed /test probe (services/connector-mysql/
   // src/index.ts) — the only query this connector's /test ever runs.
-  await logExecutionAudit(supabase, {
+  await logExecutionAudit(withUser, {
     connectionId: data.id,
     connectionOwnerUserId: data.owner_user_id,
     connectorId: data.connector_id,
@@ -499,14 +540,14 @@ export async function testConnection(
     actorUserId,
   });
 
-  await supabase
-    .from("connections")
-    .update({
-      last_test_status: result.ok ? "ok" : "error",
-      last_test_latency_ms: result.latencyMs ?? null,
-      last_test_at: new Date().toISOString(),
-    })
-    .eq("id", id);
+  await withUser((db) =>
+    db.query(`update connections set last_test_status = $1, last_test_latency_ms = $2, last_test_at = $3 where id = $4`, [
+      result.ok ? "ok" : "error",
+      result.latencyMs ?? null,
+      new Date().toISOString(),
+      id,
+    ]),
+  );
 
   return { ok: result.ok, latencyMs: result.latencyMs, error: result.error?.message, details: result.error?.details };
 }
@@ -518,23 +559,21 @@ export async function testConnection(
  * connections.ts function; cached (schemaCache.ts) so opening the editor
  * repeatedly doesn't re-hit the connector service on every drawer open.
  */
-export async function getConnectionSchema(
-  supabase: SupabaseClient,
-  scope: WorkspaceScope,
-  id: string,
-): Promise<IntrospectResponse> {
-  let query = supabase
-    .from("connections")
-    .select("id, connector_id, config, vault_secret_ref, cred_version")
-    .eq("id", id);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.maybeSingle<{
-    id: string;
-    connector_id: string;
-    config: Record<string, unknown>;
-    vault_secret_ref: string;
-    cred_version: number;
-  }>();
+export async function getConnectionSchema(withUser: WithUser, scope: WorkspaceScope, id: string): Promise<IntrospectResponse> {
+  const where = workspaceWhere(scope, 2);
+  const { rows } = await withUser((db) =>
+    db.query<{
+      id: string;
+      connector_id: string;
+      config: Record<string, unknown>;
+      vault_secret_ref: string;
+      cred_version: number;
+    }>(`select id, connector_id, config, vault_secret_ref, cred_version from connections where id = $1 and ${where.sql}`, [
+      id,
+      ...where.params,
+    ]),
+  );
+  const data = rows[0];
   if (!data) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
   const manifest = getConnectorManifest(data.connector_id);
@@ -570,23 +609,25 @@ export async function getConnectionSchema(
  * immediately see live (post-drift) field names.
  */
 export async function refreshConnectionSchema(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   id: string,
   triggeredByUserId: string,
 ): Promise<IntrospectResponse> {
-  let query = supabase
-    .from("connections")
-    .select("id, connector_id, config, vault_secret_ref, cred_version")
-    .eq("id", id);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.maybeSingle<{
-    id: string;
-    connector_id: string;
-    config: Record<string, unknown>;
-    vault_secret_ref: string;
-    cred_version: number;
-  }>();
+  const where = workspaceWhere(scope, 2);
+  const { rows } = await withUser((db) =>
+    db.query<{
+      id: string;
+      connector_id: string;
+      config: Record<string, unknown>;
+      vault_secret_ref: string;
+      cred_version: number;
+    }>(`select id, connector_id, config, vault_secret_ref, cred_version from connections where id = $1 and ${where.sql}`, [
+      id,
+      ...where.params,
+    ]),
+  );
+  const data = rows[0];
   if (!data) throw new AppError(404, "NOT_FOUND", "Connection not found.");
 
   const credential: CredentialRef = {
@@ -600,12 +641,14 @@ export async function refreshConnectionSchema(
 
   setCachedSchema(credential, schema);
 
-  await supabase.rpc("log_connection_audit", {
-    p_connection_id: id,
-    p_action: "connection.schema_refreshed",
-    p_detail: {},
-    p_actor_user_id: triggeredByUserId,
-  });
+  await withUser((db) =>
+    db.query(`select public.log_connection_audit($1, $2, $3, $4)`, [
+      id,
+      "connection.schema_refreshed",
+      {},
+      triggeredByUserId,
+    ]),
+  );
 
   return schema;
 }
@@ -656,28 +699,29 @@ function findSchemaEntity(schema: IntrospectResponse, entity: EntityRef): Intros
  * keep only in memory).
  */
 export async function getConnectionProfile(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   id: string,
   entity: EntityRef,
   triggeredByUserId: string,
 ): Promise<EntityProfile> {
-  const schema = await getConnectionSchema(supabase, scope, id);
+  const schema = await getConnectionSchema(withUser, scope, id);
   const schemaHash = computeSchemaHash(findSchemaEntity(schema, entity));
 
-  const { data } = await supabase
-    .from("source_profiles")
-    .select("schema_hash, sample_method, sample_size, stats, signature, profile_hash, profiled_at")
-    .eq("connection_id", id)
-    .eq("entity_namespace", entity.namespace)
-    .eq("entity_name", entity.name)
-    .maybeSingle<SourceProfileRow>();
+  const { rows } = await withUser((db) =>
+    db.query<SourceProfileRow>(
+      `select schema_hash, sample_method, sample_size, stats, signature, profile_hash, profiled_at
+       from source_profiles where connection_id = $1 and entity_namespace = $2 and entity_name = $3`,
+      [id, entity.namespace, entity.name],
+    ),
+  );
+  const data = rows[0];
 
   if (data && data.schema_hash === schemaHash && Date.now() - new Date(data.profiled_at).getTime() < PROFILE_CACHE_TTL_MS) {
     return rowToProfile(data);
   }
 
-  return refreshConnectionProfile(supabase, scope, id, entity, triggeredByUserId);
+  return refreshConnectionProfile(withUser, scope, id, entity, triggeredByUserId);
 }
 
 /**
@@ -689,34 +733,52 @@ export async function getConnectionProfile(
  * this can be a real upsert, not a delete+insert.
  */
 export async function refreshConnectionProfile(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   id: string,
   entity: EntityRef,
   triggeredByUserId: string,
 ): Promise<EntityProfile> {
-  const schema = await getConnectionSchema(supabase, scope, id);
+  const schema = await getConnectionSchema(withUser, scope, id);
   const schemaHash = computeSchemaHash(findSchemaEntity(schema, entity));
 
   const profile = await runProfileJob({ scope, connectionId: id, entity, triggeredByUserId });
 
-  const { error } = await supabase.from("source_profiles").upsert(
-    {
-      connection_id: id,
-      entity_namespace: entity.namespace,
-      entity_name: entity.name,
-      schema_hash: schemaHash,
-      sample_method: profile.sampleMethod,
-      sample_size: profile.sampleSize,
-      stats: profile.columns,
-      signature: profile.signature,
-      profile_hash: profile.profileHash,
-      profiled_at: profile.profiledAt,
-      profiled_by_user_id: triggeredByUserId,
-    },
-    { onConflict: "connection_id,entity_namespace,entity_name" },
-  );
-  if (error) throw new AppError(500, "PROFILE_UPSERT_FAILED", error.message);
+  try {
+    await withUser((db) =>
+      db.query(
+        `insert into source_profiles
+           (connection_id, entity_namespace, entity_name, schema_hash, sample_method, sample_size, stats, signature, profile_hash, profiled_at, profiled_by_user_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         on conflict (connection_id, entity_namespace, entity_name)
+         do update set
+           schema_hash = excluded.schema_hash,
+           sample_method = excluded.sample_method,
+           sample_size = excluded.sample_size,
+           stats = excluded.stats,
+           signature = excluded.signature,
+           profile_hash = excluded.profile_hash,
+           profiled_at = excluded.profiled_at,
+           profiled_by_user_id = excluded.profiled_by_user_id`,
+        [
+          id,
+          entity.namespace,
+          entity.name,
+          schemaHash,
+          profile.sampleMethod,
+          profile.sampleSize,
+          profile.columns,
+          profile.signature,
+          profile.profileHash,
+          profile.profiledAt,
+          triggeredByUserId,
+        ],
+      ),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "PROFILE_UPSERT_FAILED", message);
+  }
 
   return profile;
 }

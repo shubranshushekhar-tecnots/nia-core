@@ -1,19 +1,20 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ColumnStats } from "@nia/schemas";
 
-// Chainable mock query builder mimicking the subset of the supabase-js
-// fluent API checkCleanPlanDrift actually calls:
-// .from("clean_plans").select().eq().eq().maybeSingle().
-const maybeSingle = vi.fn();
-const builder: Record<string, unknown> = {};
-builder.select = vi.fn(() => builder);
-builder.eq = vi.fn(() => builder);
-builder.maybeSingle = maybeSingle;
-const from = vi.fn((..._args: unknown[]) => builder);
+// Fake db.query dispatched by the caller (cleanPlanDrift.ts) through the
+// real withServiceRole — mocked here to skip the actual transaction/SET
+// LOCAL ROLE machinery, mirroring resolveConnection.test.ts.
+const query = vi.fn();
 
-vi.mock("../supabaseClient.js", () => ({
-  supabase: { from: (...args: unknown[]) => from(...args) },
-}));
+vi.mock("@nia/db", async () => {
+  const actual = await vi.importActual<typeof import("@nia/db")>("@nia/db");
+  return {
+    ...actual,
+    withServiceRole: vi.fn(async (_pool: unknown, fn: (db: { query: typeof query }) => unknown) => fn({ query })),
+  };
+});
+
+vi.mock("../dbPool.js", () => ({ dbPool: {} }));
 
 const profileEntity = vi.fn();
 vi.mock("../profile/profileEntity.js", () => ({
@@ -55,14 +56,13 @@ function callArgs() {
 
 describe("checkCleanPlanDrift", () => {
   beforeEach(() => {
-    maybeSingle.mockReset();
-    from.mockClear();
+    query.mockReset();
     profileEntity.mockReset();
     computeSchemaHash.mockReset();
   });
 
   it("passes through ok when the node has no CleanPlan binding at all", async () => {
-    maybeSingle.mockResolvedValue({ data: null });
+    query.mockResolvedValue({ rows: [] });
 
     const result = await checkCleanPlanDrift(callArgs());
 
@@ -71,7 +71,7 @@ describe("checkCleanPlanDrift", () => {
   });
 
   it("refuses the run and names the binding when the source schema hash has drifted", async () => {
-    maybeSingle.mockResolvedValue({ data: boundRow });
+    query.mockResolvedValue({ rows: [boundRow] });
     profileEntity.mockResolvedValue({ columns: [] as ColumnStats[], profileHash: "profile-hash-a" });
     computeSchemaHash.mockReturnValue("schema-hash-CHANGED");
 
@@ -86,7 +86,7 @@ describe("checkCleanPlanDrift", () => {
   });
 
   it("refuses the run and names the binding when the profile hash has drifted", async () => {
-    maybeSingle.mockResolvedValue({ data: boundRow });
+    query.mockResolvedValue({ rows: [boundRow] });
     profileEntity.mockResolvedValue({ columns: [] as ColumnStats[], profileHash: "profile-hash-CHANGED" });
     computeSchemaHash.mockReturnValue("schema-hash-a");
 
@@ -101,7 +101,7 @@ describe("checkCleanPlanDrift", () => {
   });
 
   it("refuses the run and says the profile format changed (not that the data drifted) when the profile signature version has moved on, even if the profile hash would also mismatch", async () => {
-    maybeSingle.mockResolvedValue({ data: { ...boundRow, profile_signature_version: 0 } });
+    query.mockResolvedValue({ rows: [{ ...boundRow, profile_signature_version: 0 }] });
     profileEntity.mockResolvedValue({ columns: [] as ColumnStats[], profileHash: "profile-hash-CHANGED" });
     computeSchemaHash.mockReturnValue("schema-hash-a");
 
@@ -117,7 +117,7 @@ describe("checkCleanPlanDrift", () => {
   });
 
   it("refuses the run when the op catalog version has moved on", async () => {
-    maybeSingle.mockResolvedValue({ data: { ...boundRow, op_catalog_version: 0 } });
+    query.mockResolvedValue({ rows: [{ ...boundRow, op_catalog_version: 0 }] });
     profileEntity.mockResolvedValue({ columns: [] as ColumnStats[], profileHash: "profile-hash-a" });
     computeSchemaHash.mockReturnValue("schema-hash-a");
 
@@ -131,7 +131,7 @@ describe("checkCleanPlanDrift", () => {
   });
 
   it("refuses the run when the connector adapter version has moved on", async () => {
-    maybeSingle.mockResolvedValue({ data: { ...boundRow, adapter_version: 0 } });
+    query.mockResolvedValue({ rows: [{ ...boundRow, adapter_version: 0 }] });
     profileEntity.mockResolvedValue({ columns: [] as ColumnStats[], profileHash: "profile-hash-a" });
     computeSchemaHash.mockReturnValue("schema-hash-a");
 
@@ -145,7 +145,7 @@ describe("checkCleanPlanDrift", () => {
   });
 
   it("returns ok when every binding still matches", async () => {
-    maybeSingle.mockResolvedValue({ data: boundRow });
+    query.mockResolvedValue({ rows: [boundRow] });
     profileEntity.mockResolvedValue({ columns: [] as ColumnStats[], profileHash: "profile-hash-a" });
     computeSchemaHash.mockReturnValue("schema-hash-a");
 

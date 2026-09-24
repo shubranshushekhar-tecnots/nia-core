@@ -13,32 +13,41 @@ import {
   type TestConnectionFn,
   type WriteGrantLookup,
 } from "@nia/schemas";
-import { supabase } from "../supabaseClient.js";
+import { withServiceRole, workspaceWhere, type WorkspaceScope } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 import { resolveConnection } from "../resolveConnection.js";
 import { resolveWriteGrant } from "../resolveWriteGrant.js";
 import { sendTestRequest } from "../connectorClient.js";
 import { getSchema } from "../introspection.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
 
 /** Mirrors apps/api/src/services/workflowGraphs.ts's "never saved" sentinel. */
 const EMPTY_GRAPH: GraphDoc = { nodes: [], edges: [] };
 
 /**
  * Re-derives the workflow's WorkspaceScope explicitly, same rationale as
- * resolveConnection.ts: `supabase` here is the service_role client, which
+ * resolveConnection.ts: this runs as service_role (withServiceRole), which
  * bypasses RLS entirely, so this scope filter is the only thing standing
  * between "the worker resolved someone else's workflow" and "the worker
  * correctly refused it." A workflow that exists but belongs to a different
  * org/owner is treated identically to one that doesn't exist.
+ *
+ * The original PostgREST existence check used count mode
+ * ({ count: "exact", head: true }) but only ever tested truthiness
+ * (`if (!count) return null`), never the actual number — converted to a
+ * plain existence check (row present or not), not an actual count(*).
  */
 export async function resolveGraph(workflowId: string, scope: WorkspaceScope): Promise<GraphDoc | null> {
-  let workflowQuery = supabase.from("workflows").select("id", { count: "exact", head: true }).eq("id", workflowId);
-  workflowQuery = "orgId" in scope ? workflowQuery.eq("org_id", scope.orgId) : workflowQuery.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { count } = await workflowQuery;
-  if (!count) return null;
+  const where = workspaceWhere(scope, 2);
+  const existsResult = await withServiceRole(dbPool, (db) =>
+    db.query(`select 1 from public.workflows where id = $1 and ${where.sql}`, [workflowId, ...where.params]),
+  );
+  if (existsResult.rows.length === 0) return null;
 
-  const { data } = await supabase.from("workflow_graphs").select("graph").eq("workflow_id", workflowId).maybeSingle();
-  return data ? GraphDoc.parse(data.graph) : EMPTY_GRAPH;
+  const graphResult = await withServiceRole(dbPool, (db) =>
+    db.query<{ graph: unknown }>("select graph from public.workflow_graphs where workflow_id = $1", [workflowId]),
+  );
+  const row = graphResult.rows[0] ?? null;
+  return row ? GraphDoc.parse(row.graph) : EMPTY_GRAPH;
 }
 
 /**

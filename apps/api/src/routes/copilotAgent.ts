@@ -1,6 +1,7 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
 import { requireCookieAuth } from "../middleware/cookieAuth.js";
+import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
 import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
@@ -27,7 +28,7 @@ import type { ChatMessage } from "../copilot/gatewayClient.js";
  */
 export const copilotAgentRouter: ExpressRouter = Router();
 
-copilotAgentRouter.use(requireCookieAuth, attachActor);
+copilotAgentRouter.use(requireCookieAuth, attachDb, attachActor);
 
 const AgentMessage = z.object({
   role: z.enum(["user", "assistant"]),
@@ -45,7 +46,7 @@ copilotAgentRouter.post(
     const user = getActingUser(req);
     const { messages } = req.body as z.infer<typeof AgentTurnBody>;
     const history: ChatMessage[] = messages.map((m) => ({ role: m.role, content: m.content }));
-    const result = await runAgentTurn(req.supabase!, user, history);
+    const result = await runAgentTurn(req.withUser!, user, history);
     res.json(result);
   }),
 );
@@ -66,11 +67,13 @@ copilotAgentRouter.post(
     const user = getActingUser(req);
     const { id } = req.params as unknown as z.infer<typeof ConfirmParams>;
 
-    const pending = await getPendingAction(req.supabase!, id);
+    const pending = await getPendingAction(req.withUser!, id);
     if (!pending) throw new AppError(404, "NOT_FOUND", "No pending action found for that id.");
 
-    await confirmPendingAction(req.supabase!, id);
-    const result = await executeTool(req.supabase!, user, pending.tool, pending.args, { pendingActionId: id });
+    await confirmPendingAction(req.withUser!, id);
+    const result = await executeTool(req.withUser!, user, pending.tool, pending.args, {
+      pendingActionId: id,
+    });
     res.json(result);
   }),
 );

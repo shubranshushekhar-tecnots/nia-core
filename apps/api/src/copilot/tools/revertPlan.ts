@@ -18,7 +18,7 @@ const tool: ToolDefinition<Input, Output> = {
   description: "Reverts a previously applied change_graph/propose_cleaning/set_destination/propose_mapping plan by its applied-plan id.",
   tier: "edit",
   inputSchema: InputSchema,
-  handler: async (ctx, input) => revertPlan(ctx.supabase, ctx.user.scope, input.workflowId, input.appliedPlanId, {}),
+  handler: async (ctx, input) => revertPlan(ctx.withUser, ctx.user.scope, input.workflowId, input.appliedPlanId, {}),
   summarize: (output) => `Reverted, graph is now at version ${output.version}.`,
   render: (output) => ({ kind: "graph_applied", payload: output }),
 };

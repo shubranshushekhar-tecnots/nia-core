@@ -1,6 +1,6 @@
 import { Redis } from "ioredis";
 import type { RunStreamEvent } from "@nia/schemas";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 import { env } from "../../env.js";
 
 /**

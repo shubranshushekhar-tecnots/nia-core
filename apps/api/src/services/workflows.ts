@@ -1,5 +1,5 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
-import type { WorkspaceScope } from "../lib/workspaceScope.js";
+import { workspaceWhere, type WorkspaceScope } from "@nia/db";
+import type { WithUser } from "../lib/withUser.js";
 import type { WorkflowStatus } from "./projects.js";
 
 /** 1:1 port of apps/web/src/lib/dashboard/queries.ts's getWorkflowDetail. */
@@ -26,28 +26,45 @@ export type WorkflowDetail = {
   definition: WorkflowDefinition;
 };
 
+type WorkflowDetailRow = {
+  id: string;
+  name: string;
+  status: WorkflowStatus;
+  updated_at: string;
+  definition: unknown;
+  project_id: string;
+  project_name: string;
+};
+
 export async function getWorkflowDetail(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   workflowId: string,
   scope: WorkspaceScope,
 ): Promise<WorkflowDetail | null> {
-  let query = supabase
-    .from("workflows")
-    .select("id, name, status, updated_at, definition, projects ( id, name )")
-    .eq("id", workflowId);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.maybeSingle();
+  // workspaceWhere's org_id/owner_id are bare column names, ambiguous
+  // against a join where both workflows and projects have those columns —
+  // scope via a subquery against the unaliased, unjoined workflows table
+  // instead of qualifying columns by hand.
+  const where = workspaceWhere(scope, 2);
+  const { rows } = await withUser((db) =>
+    db.query<WorkflowDetailRow>(
+      `select w.id, w.name, w.status, w.updated_at, w.definition, p.id as project_id, p.name as project_name
+       from workflows w
+       join projects p on p.id = w.project_id
+       where w.id = $1 and w.id in (select id from workflows where ${where.sql})`,
+      [workflowId, ...where.params],
+    ),
+  );
 
+  const data = rows[0];
   if (!data) return null;
-  const project = data.projects as unknown as { id: string; name: string } | null;
-  if (!project) return null;
 
   return {
     id: data.id,
     name: data.name,
     status: data.status,
     updatedAt: data.updated_at,
-    project,
+    project: { id: data.project_id, name: data.project_name },
     definition: (data.definition ?? { nodes: [], wires: [] }) as WorkflowDefinition,
   };
 }

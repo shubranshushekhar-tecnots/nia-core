@@ -45,12 +45,12 @@ const tool: ToolDefinition<Input, Output> = {
   inputSchema: InputSchema,
   handler: async (ctx, input) => {
     if (!ctx.pendingActionId) {
-      const graph = await getWorkflowGraph(ctx.supabase, ctx.user.scope, input.workflowId);
+      const graph = await getWorkflowGraph(ctx.withUser, ctx.user.scope, input.workflowId);
       const card: ConfirmationCardEntry[] = [];
       for (const destNodeId of input.destNodeIds) {
         const node = graph.graph.nodes.find((n) => n.id === destNodeId);
         if (!node) throw new AppError(404, "NOT_FOUND", `Node ${destNodeId} not found in this workflow's graph.`);
-        const connection = node.connectionId ? await getConnection(ctx.supabase, ctx.user.scope, node.connectionId) : null;
+        const connection = node.connectionId ? await getConnection(ctx.withUser, ctx.user.scope, node.connectionId) : null;
         const config = node.config as { entity?: { namespace: string; name: string }; writeMode?: string };
         card.push({
           destNodeId,
@@ -60,12 +60,12 @@ const tool: ToolDefinition<Input, Output> = {
           writeMode: config.writeMode ?? "staged",
         });
       }
-      const pending = await createPendingAction(ctx.supabase, input.workflowId, "start_run", input);
+      const pending = await createPendingAction(ctx.withUser, input.workflowId, "start_run", input);
       return { status: "needs_confirmation", pendingActionId: pending.id, card };
     }
 
-    await consumePendingAction(ctx.supabase, ctx.pendingActionId, "start_run", input);
-    const result = await startWorkflowRun(ctx.supabase, ctx.user.scope, input.workflowId, input.destNodeIds, ctx.user.userId);
+    await consumePendingAction(ctx.withUser, ctx.pendingActionId, "start_run", input);
+    const result = await startWorkflowRun(ctx.withUser, ctx.user.scope, input.workflowId, input.destNodeIds, ctx.user.userId);
     return { status: "started", runs: result.runs };
   },
   summarize: (output) =>

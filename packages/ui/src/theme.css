@@ -615,7 +615,7 @@ body.armed .reveal.in { opacity: 1; transform: none; }
   box-sizing: border-box;
   height: 38px;
   padding: 0 18px;
-  border-radius: 8px;
+  border-radius: 0;
   border: 1px solid var(--hl-rule-hairline);
   background: var(--hl-ground);
   color: var(--hl-ink-2);
@@ -783,6 +783,62 @@ body.armed .hl-stats-grid.in .hl-fig:nth-child(4) { transition-delay: .26s; }
 }
 .hl-footer-link:hover { color: var(--hl-ink); }
 .hl-footer-link:focus-visible {
+  outline: 2px solid var(--hl-ink);
+  outline-offset: 2px;
+}
+
+/* Talk to sales dialog — form fields (TalkToSalesDialog.tsx). */
+.hl-field::placeholder { color: var(--hl-ink-4); }
+.hl-field:focus {
+  outline: 2px solid var(--hl-ink);
+  outline-offset: 2px;
+}
+
+.hl-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(16, 16, 20, 0.5);
+}
+
+.hl-dialog-card {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 480px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 40px;
+  border-radius: 12px;
+  background: var(--hl-ground);
+}
+@media (max-width: 640px) {
+  .hl-dialog-card { padding: 28px 24px; }
+}
+
+.hl-dialog-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  color: var(--hl-ink-3);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 140ms linear, color 140ms linear;
+}
+.hl-dialog-close:hover { background: var(--hl-panel); color: var(--hl-ink); }
+.hl-dialog-close:focus-visible {
   outline: 2px solid var(--hl-ink);
   outline-offset: 2px;
 }

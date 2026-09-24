@@ -2,6 +2,7 @@ import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
 import { RunStreamEvent } from "@nia/schemas";
 import { requireCookieAuth } from "../middleware/cookieAuth.js";
+import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
 import { requireCapability } from "../middleware/requireCapability.js";
 import { validate } from "../middleware/validate.js";
@@ -62,13 +63,14 @@ const runBodySchema = z.object({ destNodeIds: z.array(z.string().min(1)).min(1) 
 runsRouter.post(
   "/:id/run",
   requireCookieAuth,
+  attachDb,
   attachActor,
   requireCapability("workflows.run"),
   validate({ params: workflowParamsSchema, body: runBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await startWorkflowRun(
-      req.supabase,
+      req.withUser,
       scopeFromActor(req.actor),
       req.params.id!,
       req.body.destNodeIds,
@@ -85,24 +87,32 @@ const runCancelBodySchema = z.object({ runId: z.string().uuid() });
 // separate "cancel" capability in can.ts, and cancelling a run you could
 // have started needs no finer gate. The actual authorization check is done
 // inside the RPC itself (private.is_member(v_org_id), 0017's
-// cancel_workflow_run) against the caller's own req.supabase session — this
+// cancel_workflow_run) against the caller's own req.withUser session — this
 // route does no separate ownership resolution first, unlike GET
 // /:id/run/stream, since the RPC's own org-membership check already covers
 // it and a stale/foreign runId just surfaces as the RPC's "not authorized"
-// or "not found" exception via Postgres, mapped by asyncHandler like any
-// other supabase-js error. Workflow id in the URL is unused past routing/
-// validation symmetry with the other two routes; the RPC only needs runId.
+// or "not found" exception via Postgres, caught below and mapped to
+// CANCEL_FAILED. Workflow id in the URL is unused past routing/validation
+// symmetry with the other two routes; the RPC only needs runId.
 runsRouter.post(
   "/:id/run/cancel",
   requireCookieAuth,
+  attachDb,
   attachActor,
   requireCapability("workflows.run"),
   validate({ params: workflowParamsSchema, body: runCancelBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const { data, error } = await req.supabase.rpc("cancel_workflow_run", { p_run_id: req.body.runId });
-    if (error) throw new AppError(409, "CANCEL_FAILED", error.message);
-    res.status(200).json({ run: data });
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    try {
+      const { rows } = await req.withUser((db) => db.query("select * from public.cancel_workflow_run($1)", [req.body.runId]));
+      const row = rows[0];
+      if (!row) throw new AppError(409, "CANCEL_FAILED", "Could not cancel this run.");
+      res.status(200).json({ run: row });
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      throw new AppError(409, "CANCEL_FAILED", message);
+    }
   }),
 );
 
@@ -124,13 +134,14 @@ const runStreamQuerySchema = z.object({
 runsRouter.get(
   "/:id/run/stream",
   requireCookieAuth,
+  attachDb,
   attachActor,
   validate({ params: workflowParamsSchema, query: runStreamQuerySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const { runId, after } = req.query as unknown as z.infer<typeof runStreamQuerySchema>;
 
-    const ownerScope = await resolveRunOwnership(req.supabase, scopeFromActor(req.actor), runId);
+    const ownerScope = await resolveRunOwnership(req.withUser, scopeFromActor(req.actor), runId);
     const channel = channelFor(ownerScope, runId);
     const listKey = replayLogKeyFor(ownerScope, runId);
 

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 import { z } from "zod";
 import { registerTool, listTools, __clearRegistryForTests } from "./registry.js";
 import type { ActingUser, ToolDefinition } from "./types.js";
+import type { WithUser } from "../lib/withUser.js";
 
 /**
  * Required test (docs/plans/copilot-agent.md, "Tests" section): "the
@@ -66,25 +67,21 @@ describe("registerTool", () => {
 });
 
 describe("every execute-tier tool refuses without a matching confirmed pending action", () => {
-  // Real supabase mock: any RPC that would represent a confirmed pending
-  // action (consume_pending_action) reports "not confirmed" — mirrors what
-  // the real consume_pending_action RPC returns for an unconfirmed, expired,
-  // or hash-mismatched pending action. Any other supabase call (a `.from()`
-  // write, or any other rpc) means the tool tried to do its real work
-  // *before* successfully consuming a confirmed pending action, which is
-  // exactly what this test must catch.
-  function makeRefusingSupabase() {
-    return {
-      rpc: (fn: string) => {
-        if (fn === "consume_pending_action") {
-          return { single: () => Promise.resolve({ data: null, error: { message: "not confirmed" } }) };
-        }
-        throw new Error(`execute-tier tool called supabase.rpc("${fn}") before a pending action was confirmed`);
-      },
-      from: () => {
-        throw new Error("execute-tier tool called supabase.from() before a pending action was confirmed");
-      },
-    };
+  // Any query other than consume_pending_action means the tool tried to do
+  // its real work *before* successfully consuming a confirmed pending
+  // action, which is exactly what this test must catch. Mirrors what the
+  // real consume_pending_action RPC returns for an unconfirmed, expired, or
+  // hash-mismatched pending action.
+  function makeRefusingWithUser(): WithUser {
+    return (async (fn) =>
+      fn({
+        query: async (text: string) => {
+          if (text.includes("consume_pending_action")) {
+            throw new Error("pending action some-pending-action-id is not confirmed, already consumed, expired, or its arguments no longer match");
+          }
+          throw new Error(`execute-tier tool ran a query before a pending action was confirmed: ${text}`);
+        },
+      })) as WithUser;
   }
 
   const user: ActingUser = {
@@ -122,10 +119,12 @@ describe("every execute-tier tool refuses without a matching confirmed pending a
     it(`${name} refuses to do its real work with a pendingActionId that fails to consume`, async () => {
       const tool = listTools().find((t) => t.name === name);
       expect(tool?.tier).toBe("execute");
-      const supabase = makeRefusingSupabase();
       const input = tool!.inputSchema.parse(inputFixtures[name]);
       await expect(
-        tool!.handler({ supabase: supabase as never, user, pendingActionId: "some-pending-action-id" }, input),
+        tool!.handler(
+          { withUser: makeRefusingWithUser(), user, pendingActionId: "some-pending-action-id" },
+          input,
+        ),
       ).rejects.toThrow(/not confirmed|PENDING_ACTION_NOT_CONFIRMED/i);
     });
   }

@@ -1,6 +1,7 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
+import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
 import { requireCapability } from "../middleware/requireCapability.js";
 import { validate } from "../middleware/validate.js";
@@ -14,7 +15,7 @@ import { listWriteGrants, createWriteGrant, confirmWriteGrant, revokeWriteGrant 
 // parent connection.
 export const grantsRouter: ExpressRouter = Router({ mergeParams: true });
 
-grantsRouter.use(requireAuth, attachActor);
+grantsRouter.use(requireAuth, attachDb, attachActor);
 
 const connectionParamsSchema = z.object({ connectionId: z.string().uuid() });
 
@@ -22,8 +23,8 @@ grantsRouter.get(
   "/",
   validate({ params: connectionParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await listWriteGrants(req.supabase, scopeFromActor(req.actor), req.params.connectionId!);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await listWriteGrants(req.withUser, scopeFromActor(req.actor), req.params.connectionId!);
     res.json(data);
   }),
 );
@@ -35,8 +36,8 @@ grantsRouter.post(
   requireCapability("grants.create"),
   validate({ params: connectionParamsSchema, body: createBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await createWriteGrant(req.supabase, scopeFromActor(req.actor), req.params.connectionId!, req.body.scope);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await createWriteGrant(req.withUser, scopeFromActor(req.actor), req.params.connectionId!, req.body.scope);
     res.status(201).json(data);
   }),
 );
@@ -58,9 +59,9 @@ grantsRouter.post(
   requireCapability("grants.confirm"),
   validate({ params: grantParamsSchema, body: confirmBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await confirmWriteGrant(
-      req.supabase,
+      req.withUser,
       scopeFromActor(req.actor),
       req.params.connectionId!,
       req.params.grantId!,
@@ -75,8 +76,8 @@ grantsRouter.delete(
   requireCapability("grants.revoke"),
   validate({ params: grantParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await revokeWriteGrant(req.supabase, scopeFromActor(req.actor), req.params.connectionId!, req.params.grantId!);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await revokeWriteGrant(req.withUser, scopeFromActor(req.actor), req.params.connectionId!, req.params.grantId!);
     res.json(data);
   }),
 );

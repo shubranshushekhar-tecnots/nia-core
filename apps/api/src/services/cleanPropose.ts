@@ -1,15 +1,8 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CleanProposalResult } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
-import { AppError } from "../lib/appError.js";
+import type { WithUser } from "../lib/withUser.js";
 import { runProposeCleaningJob } from "../lib/cleanQueue.js";
-
-async function assertWorkflowInScope(supabase: SupabaseClient, scope: WorkspaceScope, workflowId: string): Promise<void> {
-  let query = supabase.from("workflows").select("id", { count: "exact", head: true }).eq("id", workflowId);
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { count } = await query;
-  if (!count) throw new AppError(404, "NOT_FOUND", "Workflow not found.");
-}
+import { assertWorkflowInScope } from "./checks.js";
 
 /**
  * Phase 13, Step 7 — "Propose cleaning". Runs the flow via the worker
@@ -31,24 +24,28 @@ async function assertWorkflowInScope(supabase: SupabaseClient, scope: WorkspaceS
  * putWorkflowGraph's unbindStaleCleanPlans.
  */
 export async function proposeCleaningForWorkflow(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   nodeId: string,
   triggeredByUserId: string,
 ): Promise<CleanProposalResult> {
-  await assertWorkflowInScope(supabase, scope, workflowId);
+  await assertWorkflowInScope(withUser, scope, workflowId);
   const result = await runProposeCleaningJob({ scope, workflowId, nodeId, triggeredByUserId });
 
   const specialists = [...new Set(result.columns.map((c) => c.specialist))];
-  const { error } = await supabase.rpc("log_cleaning_proposed", {
-    p_workflow_id: workflowId,
-    p_node_id: nodeId,
-    p_summary: result.diff.summary,
-    p_specialists: specialists,
-  });
-  if (error) {
-    console.error(`proposeCleaningForWorkflow: failed to log audit event for workflow ${workflowId} node ${nodeId}:`, error.message);
+  try {
+    await withUser((db) =>
+      db.query("select public.log_cleaning_proposed($1, $2, $3, $4)", [
+        workflowId,
+        nodeId,
+        result.diff.summary,
+        JSON.stringify(specialists),
+      ]),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`proposeCleaningForWorkflow: failed to log audit event for workflow ${workflowId} node ${nodeId}:`, message);
   }
 
   return result;

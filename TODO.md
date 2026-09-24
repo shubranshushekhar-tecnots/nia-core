@@ -494,3 +494,191 @@
   fallback branch from `SecretStore.get()`, and only then consider
   actually deleting the Vault rows themselves (a separate, later step —
   not bundled with removing the fallback code path).
+- **Local `supabase_vault` extension is missing `vault.delete_secret`
+  (found data-access migration Step 4, added 2026-09-24).**
+  `supabase/tests/rls_probes.sql` probes #45 and #50 both fail locally
+  with `function vault.delete_secret(uuid) does not exist` — the local
+  stack's `supabase_vault` extension is version 0.3.1, which only
+  exposes `create_secret`/`update_secret` (confirmed via `\df vault.*`);
+  `delete_secret` isn't in this version at all. `public.
+  delete_connector_secret(uuid)` (0027_connection_lifecycle_audit.sql)
+  calls `vault.delete_secret` internally, so both probes' cleanup step
+  errors. Confirmed this is a pre-existing local-environment gap, not a
+  regression from the data-access (PostgREST→pg) migration: re-ran both
+  probes against the committed (pre-migration) tree via `git stash` and
+  got the identical error. All 50 other probes pass, including every
+  cross-tenant-isolation probe and the ones added by this migration's
+  own work (`nia_secrets` RLS, probe #49) — tenant isolation is fully
+  proven regardless. Not fixable by app code; needs the local Supabase
+  CLI/`supabase_vault` extension updated to a version that ships
+  `vault.delete_secret` before probes #45/#50 can be verified locally.
+  Unverified whether a real (hosted) Supabase project's Vault extension
+  has this function — check there before assuming this is only a local
+  quirk.
+- **e2e `app.spec.ts:24` ("New workflow" -> "New project" creates a
+  project) is broken, pre-existing, unrelated to the data-access
+  migration (found data-access migration Step 4, added 2026-09-24).**
+  Test does `getByRole('button', { name: 'New workflow' }).first().click()`
+  then `getByRole('button', { name: 'New project', exact: true }).click()`
+  — but the sidebar's actual "+" button (`Sidebar.tsx`) has
+  `aria-label="New"`, not "New workflow"; "New workflow"/"New project"
+  only exist as separate dropdown-menu buttons revealed after clicking
+  "New" first. The test never clicks "New" to open that menu, so it waits
+  30s for a "New workflow" button that isn't on the page yet. Confirmed
+  pre-existing: `e2e/app.spec.ts` and `Sidebar.tsx` are both byte-identical
+  to committed HEAD (`git diff HEAD` empty for both) — nothing in this
+  migration touched either file, so the mismatch predates it. Fix is a
+  one-line test reorder (click "New" first), not attempted here per
+  scope — this is a test bug, not an app bug.
+- **e2e visual-regression diffs on `/login` and `/signup` (1440px
+  baseline) are pre-existing, unrelated to the data-access migration
+  (found data-access migration Step 4, added 2026-09-24).** ~1300-1700px
+  diff (~0.01 ratio) on both, concentrated almost entirely on the logo
+  wordmark and heading glyphs ("Nia Core", "Sign in" / "Create your
+  account") — consistent with the font-antialiasing-jitter class of
+  causes already documented above (Phase 5 Session 5 visual-baseline
+  entry), not layout/app drift. Confirmed pre-existing: `visual.spec.ts`,
+  `app/login/`, and `app/signup/` are all byte-identical to committed
+  HEAD (`git diff HEAD` empty). The one uncommitted change to shared CSS
+  (`packages/ui/src/theme.css`) only touches landing-page dialog/button
+  styles (`.hl-field`, `.hl-dialog-*`) — no `@font-face` or auth-screen
+  rule changed — so it can't be the cause either. Not re-baselined here;
+  needs its own investigation/fix pass (likely a font-load-timing race
+  before the screenshot, same shape as the previously-fixed causes).
+- **`@supabase/supabase-js` deliberately left in `apps/api` and
+  `apps/web` (data-access migration Step 5 close-out, 2026-09-24).**
+  Not removable — both uses are the Auth layer, which was explicitly
+  out of scope for this migration (data access only; a separate
+  "auth via Better Auth" migration is planned later, see memory/
+  decisions). `apps/api`: `src/lib/supabaseClient.ts`
+  (`createRequestSupabaseClient`, per-request bearer-token client) and
+  `src/lib/cookieSupabaseClient.ts` (`createCookieScopedSupabaseClient`
+  via `@supabase/ssr`) back real `supabase.auth.*` calls;
+  `req.supabase` (`src/types/express.d.ts`) is still set by
+  `requireAuth` for this reason. `apps/web`: `src/lib/supabase/server.ts`
+  backs `src/lib/auth/actions.ts` (signInWithPassword, signUp,
+  signInWithOAuth, resetPasswordForEmail, updateUser, signOut) and
+  `src/lib/auth/session.ts` (`getUser`) — all real Auth calls, not data
+  access. `apps/worker`'s production `src/` is fully clean (zero
+  imports) — its `package.json` dependency is kept alive only by
+  `scripts/` (smoke tests: `dispatch-smoke.ts`, `chat-smoke.ts`, etc.,
+  and the Vault→`nia_secrets` backfill/verify tooling in
+  `scripts/lib/secretsMigration.ts`, `secrets-backfill.ts`,
+  `secrets-verify.ts` — see `docs/plans/secret-storage.md` Step 2C).
+  Those scripts would need their own migration/retirement before
+  `apps/worker`'s `package.json` entry can actually be dropped; not
+  attempted here, out of scope for Step 5.
+- **`canvas.spec.ts` isolation double-run (idle dev servers, run twice,
+  data-access migration Step 4, 2026-09-24): same 5 tests failed
+  identically both runs, but root cause is test-fixture/data
+  contamination from this session's own repeated e2e re-runs against
+  the persistent local dev DB, not a code regression.** Failures:
+  line 228 (`drag 2 sources...`), 1108 (`connection-driven sections`),
+  1143 (`zero-connection persona`), 1207 (`destination drawer —
+  empty-database postgres`), 1386 (cascades from 1207). Root-caused via
+  each test's `error-context.md`: (1) **1143 is a duplicate of the
+  already-logged `app.spec.ts:24` bug** — clicks
+  `getByRole('button', {name: 'New workflow'})` directly, same
+  `aria-label="New"` mismatch, not new. (2) **1108** expects exactly 7
+  draggable rail entries (canvasA's org should have exactly 3
+  connections: mysql/mongodb/supabase → 3 sources + 3 destinations + 1
+  transform) but got 15 — implies ~7 connections now exist on that
+  org, i.e. extra connections accumulated from other tests in this
+  session's repeated full-suite re-runs, never torn down between runs
+  against the same persistent DB. (3) **228** times out in `beforeEach`'s
+  self-heal loop: `.react-flow__node.first()` click is intercepted by
+  an overlapping sibling node — the shared "Canvas E2E Workflow"
+  fixture has leftover/overlapping nodes from a previous interrupted
+  run that the self-heal loop couldn't cleanly delete. (4) **1207**
+  times out on the same rail (consistent with the same connection-count
+  contamination changing rail contents/labels); **1386** cascades from
+  1207 (same serial describe block). Not fixed here — needs either a
+  DB/fixture reset (connections on canvasA's org, node cleanup on the
+  shared workflow fixture) before a genuinely clean re-run, or
+  per-test isolation (fresh org/workflow per run) as a longer-term fix.
+  Do not treat this as a data-access-migration regression.
+  **Follow-up (same day): fixture cleanup performed, targeted objects
+  only** — deleted the 5 accumulated postgres connections on canvasA's
+  org (`@postgres-empty-db-e2e` + 4 `@postgres-empty-db-e2e-run-*`
+  duplicates from repeated 1207/1386 runs; `connections` table only,
+  `write_grants`/`source_profiles`/`staging_objects` cascade-deleted
+  with them by FK), restoring it to exactly the 3 canonical
+  mysql/mongodb/supabase connections `dev-bootstrap.ts` creates, and
+  deleted the `workflow_graphs` row for the shared "Canvas E2E
+  Workflow" (3 leftover nodes, none of which `supabase/seed.sql`
+  seeds — that file deliberately gives this workflow no
+  `workflow_graphs` row at all, so deleting it restores the exact
+  as-seeded state). Did not touch `test-supabase-1`/`test-neon-1`
+  connections (confirmed they don't currently exist anywhere in the
+  DB) or run any DB-wide reset. **Re-ran `canvas.spec.ts` once more,
+  isolated/idle, per the stop-rule above: 1108 now passes** (confirms
+  it really was the extra-connections contamination). **228, 1143,
+  1207, 1386 still fail, but three of the four now fail with a
+  DIFFERENT error than the contaminated run** — i.e. they are not
+  fixture pollution, they are real, separate issues:
+  - **1143**: unchanged, still the `app.spec.ts:24` duplicate (test
+    bug, not app bug) — see above.
+  - **228**: the `beforeEach` self-heal no longer times out (fixture
+    cleanup fixed the overlapping-node click-intercept), but the test
+    body now fails later: `connectNodes` produces 0
+    `.react-flow__edge` elements instead of the expected 2. This lines
+    up with an already-existing, already-documented (2026-09-18)
+    comment in `canvas.spec.ts` itself, a few tests below this one in
+    the same `.serial` block, describing "a real, reproducible visual
+    bug... two overlapping node popovers superimposed... as if a
+    leftover node from the prior test's fixture state is still painted
+    underneath" with root cause explicitly noted as "not yet isolated"
+    — very plausibly the same underlying react-flow DOM/unmount timing
+    issue, just manifesting as a failed edge-connect instead of a
+    visual diff here. Not re-investigated further per the stop-rule.
+  - **1207 / 1386**: also a new failure mode — gets much further than
+    before (installs PostgreSQL, creates the connection, drags both
+    nodes, configures the source node's table) but then the
+    destination node's "Loading tables…" spinner never clears within
+    5s. Checked and ruled out two hypotheses: (a) the `empty_e2e`
+    sandbox Postgres database has zero tables (not stale-table
+    accumulation — `ensureEmptyPostgresDatabase()` never drops
+    anything, but nothing had actually landed there); (b) `/schema` is
+    a synchronous `apps/api` route (`connections.ts`, calls
+    `getConnectionSchema` directly), not a BullMQ job routed through
+    `apps/worker` — a worker restart mid-run (tsx watch picked up
+    dist-file changes from this same session's earlier `pnpm
+    build`/`test` runs around the same time) was a plausible confound
+    but doesn't fit the request path. Root cause not yet found — needs
+    its own investigation with a live `apps/api` log captured during
+    the run (the existing `/tmp/api-dev.log` was stale, from a
+    previous day's process). Stopping here per the stop-rule; these 3
+    (228, 1207, 1386) should be treated as open, real bugs, tracked
+    separately from the now-resolved fixture-pollution issue.
+- **Process gap: several `canvas.spec.ts` tests assume fixtures they
+  never create or tear down themselves, so repeated local runs
+  silently pollute shared state and produce failures that look like
+  app regressions but are actually test-data buildup (found/fixed
+  2026-09-24, see the entry above for the specific incident).**
+  Concretely: (1) the "palette purity — connection-driven sections"
+  test (line ~1108) hardcodes an expected rail-entry count that is
+  only correct if canvasA's org has exactly the 3 connections
+  `dev-bootstrap.ts` seeds — any other test that adds a connection to
+  that same org (e.g. the empty-database postgres tests) permanently
+  breaks this assertion until someone manually deletes the extra
+  connection; the test itself never checks or resets the connection
+  set it depends on. (2) The "empty-database postgres" tests (lines
+  ~1207, ~1386) create a `PostgreSQL` connector install + connection
+  (and the `1386` variant mints a brand-new, `Date.now()`-suffixed
+  connection every single run) but never delete either — every local
+  run adds one more. (3) The shared "seeded workflow drag / connect /
+  reload" `.serial` block (line ~168) only self-heals by deleting
+  *nodes* it finds already selected via the UI one at a time in
+  `beforeEach`; it doesn't reset `workflow_graphs` directly, so an
+  interrupted/killed run (a real risk in dev — see the worker-restart
+  note above) can leave it in a state the self-heal loop itself can't
+  cleanly recover from (overlapping node positions breaking the
+  click-driven delete). Recommendation: either (a) each of these tests
+  should create its own scoped fixtures (fresh org/connection per
+  test, like the "zero-connection persona" and cross-org tests already
+  do) instead of reusing canvasA's shared org/connections, or (b) add
+  a global-setup step (`e2e/globalSetup.ts` already exists and runs
+  before the suite) that resets canvasA's connections to exactly the
+  3 seeded ones and clears the shared workflow's `workflow_graphs` row
+  before every run, rather than relying on manual cleanup like the one
+  just done. Not implemented here — flagging for a follow-up pass.

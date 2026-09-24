@@ -1,6 +1,6 @@
 import { Annotation } from "@langchain/langgraph";
 import type { GraphDoc, Plan } from "@nia/schemas";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 import type { VisibleConnection } from "./listConnections.js";
 
 /**

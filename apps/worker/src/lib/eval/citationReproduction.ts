@@ -17,7 +17,7 @@
  */
 import type { QueryPayload } from "@nia/schemas";
 import { dispatch } from "../dispatch.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 
 const MONGO_EXECUTED_QUERY = /^db\.([^.]+)\.aggregate\((.*)\)$/s;
 

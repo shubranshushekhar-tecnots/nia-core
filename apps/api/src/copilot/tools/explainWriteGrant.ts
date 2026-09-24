@@ -35,7 +35,7 @@ const tool: ToolDefinition<Input, Output> = {
   tier: "read",
   inputSchema: InputSchema,
   handler: async (ctx, input) => {
-    const connection = await getConnection(ctx.supabase, ctx.user.scope, input.connectionId);
+    const connection = await getConnection(ctx.withUser, ctx.user.scope, input.connectionId);
     if (!connection) throw new AppError(404, "NOT_FOUND", "Connection not found.");
     const roleUser = randomWriteRoleUser();
     const statement = buildGrantStatementText(connection.connectorId, input.namespace, roleUser, randomWriteRolePassword());

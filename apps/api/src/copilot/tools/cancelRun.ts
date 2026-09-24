@@ -24,9 +24,18 @@ const tool: ToolDefinition<Input, Output> = {
   tier: "edit",
   inputSchema: InputSchema,
   handler: async (ctx, input) => {
-    const { data, error } = await ctx.supabase.rpc("cancel_workflow_run", { p_run_id: input.runId });
-    if (error) throw new AppError(409, "CANCEL_FAILED", error.message);
-    return { run: data };
+    try {
+      const { rows } = await ctx.withUser((db) =>
+        db.query("select * from public.cancel_workflow_run($1)", [input.runId]),
+      );
+      const row = rows[0];
+      if (!row) throw new AppError(409, "CANCEL_FAILED", "Could not cancel this run.");
+      return { run: row };
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      throw new AppError(409, "CANCEL_FAILED", message);
+    }
   },
   summarize: () => "Run cancelled.",
   render: (output) => ({ kind: "run_cancelled", payload: output }),

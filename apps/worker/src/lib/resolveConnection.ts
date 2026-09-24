@@ -1,6 +1,6 @@
+import { withServiceRole, workspaceWhere, type WorkspaceScope } from "@nia/db";
 import { getConnectorManifest, type ConnectorManifest, type CredentialRef } from "@nia/schemas";
-import { supabase } from "./supabaseClient.js";
-import type { WorkspaceScope } from "./workspaceScope.js";
+import { dbPool } from "./dbPool.js";
 import type { DispatchResult } from "./errors.js";
 
 export type ResolvedConnection = {
@@ -31,27 +31,28 @@ type ConnectionRow = {
  * matches the query and comes back as "not found," identical to an id that
  * doesn't exist at all.
  *
- * This is deliberate, not incidental: `supabase` here is the service_role
- * client (see supabaseClient.ts's header comment), which bypasses RLS
- * entirely — this scope filter is the ONLY thing standing between "the
- * worker resolved someone else's connection" and "the worker correctly
- * refused it." `scope` is mandatory, not optional and never defaulted, so
- * this check can never be silently skipped by a caller.
+ * This is deliberate, not incidental: this runs as service_role
+ * (@nia/db's withServiceRole, see supabaseClient.ts's header comment on
+ * what that bypasses), which bypasses RLS entirely — this scope filter
+ * (workspaceWhere) is the ONLY thing standing between "the worker
+ * resolved someone else's connection" and "the worker correctly refused
+ * it." `scope` is mandatory, not optional and never defaulted, so this
+ * check can never be silently skipped by a caller.
  */
 export async function resolveConnection(
   connectionId: string,
   scope: WorkspaceScope,
 ): Promise<DispatchResult<ResolvedConnection>> {
-  let query = supabase
-    .from("connections")
-    .select("id, connector_id, handle, config, vault_secret_ref, cred_version, owner_user_id")
-    .eq("id", connectionId);
-  query =
-    "orgId" in scope
-      ? query.eq("org_id", scope.orgId)
-      : query.is("org_id", null).eq("owner_id", scope.ownerId);
-
-  const { data } = await query.maybeSingle<ConnectionRow>();
+  const where = workspaceWhere(scope, 2);
+  const result = await withServiceRole(dbPool, (db) =>
+    db.query<ConnectionRow>(
+      `select id, connector_id, handle, config, vault_secret_ref, cred_version, owner_user_id
+       from public.connections
+       where id = $1 and ${where.sql}`,
+      [connectionId, ...where.params],
+    ),
+  );
+  const data = result.rows[0] ?? null;
   if (!data) {
     return {
       ok: false,

@@ -19,7 +19,7 @@ const tool: ToolDefinition<Input, Output> = {
   description: "Gets column statistics (types, null/empty counts, distinct counts) for one entity on a connection.",
   tier: "read",
   inputSchema: InputSchema,
-  handler: async (ctx, input) => getConnectionProfile(ctx.supabase, ctx.user.scope, input.connectionId, input.entity, ctx.user.userId),
+  handler: async (ctx, input) => getConnectionProfile(ctx.withUser, ctx.user.scope, input.connectionId, input.entity, ctx.user.userId),
   summarize: (output, input) => {
     const cols = output.columns.map(
       (c) => `${c.name} (${c.declaredType}, ${c.nullCount}/${c.sampleCount} null, ${c.distinctCount} distinct)`,

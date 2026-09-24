@@ -7,42 +7,58 @@ import type { OrgRef, UserWithOrg } from "../lib/actorTypes.js";
 /**
  * Express port of apps/web/src/lib/auth/session.ts's requireUser(). Same
  * two queries, same "oldest membership wins" default org, same
- * "individual" synthetic role for org-less users, same plain RLS-scoped
- * reads (req.supabase, not a service-role client). Must run after
- * requireAuth so req.supabase/req.authUser are set.
+ * "individual" synthetic role for org-less users. Reads go through
+ * req.withUser (docs/plans/data-access.md's Step 3) instead of
+ * req.supabase — withActingUser's SET LOCAL ROLE authenticated +
+ * request.jwt.claims makes every RLS policy apply exactly as it did
+ * through PostgREST, just reached via direct SQL. Must run after
+ * requireAuth + attachDb so req.withUser/req.authUser are set.
  */
 export const attachActor: RequestHandler = asyncHandler(async function attachActor(
   req: Request,
   _res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const supabase = req.supabase;
+  const withUser = req.withUser;
   const authUser = req.authUser;
 
-  if (!supabase || !authUser) {
-    next(new AppError(401, "NOT_AUTHENTICATED", "requireAuth must run before attachActor."));
+  if (!withUser || !authUser) {
+    next(new AppError(401, "NOT_AUTHENTICATED", "requireAuth and attachDb must run before attachActor."));
     return;
   }
 
-  const [{ data: profile }, { data: memberships }] = await Promise.all([
-    supabase.from("profiles").select("full_name").eq("id", authUser.id).single(),
-    supabase
-      .from("organization_members")
-      .select("role, created_at, organizations ( id, name, slug )")
-      .eq("user_id", authUser.id)
-      .order("created_at", { ascending: true })
-      .limit(1),
+  // Two independent PostgREST calls today -> two independent withUser
+  // calls here (client.ts's N-separate-transactions rule), still run in
+  // parallel via Promise.all to match today's behaviour.
+  const [profileResult, membershipResult] = await Promise.all([
+    withUser((db) =>
+      db.query<{ full_name: string | null }>("SELECT full_name FROM profiles WHERE id = $1", [authUser.id]),
+    ),
+    withUser((db) =>
+      db.query<{ role: OrgRole; org_id: string; org_name: string; org_slug: string }>(
+        `SELECT om.role, o.id AS org_id, o.name AS org_name, o.slug AS org_slug
+         FROM organization_members om
+         JOIN organizations o ON o.id = om.org_id
+         WHERE om.user_id = $1
+         ORDER BY om.created_at ASC
+         LIMIT 1`,
+        [authUser.id],
+      ),
+    ),
   ]);
 
-  const membership = memberships?.[0];
-  const org = membership?.organizations as unknown as OrgRef | null;
+  const profile = profileResult.rows[0];
+  const membership = membershipResult.rows[0];
+  const org: OrgRef | null = membership
+    ? { id: membership.org_id, name: membership.org_name, slug: membership.org_slug }
+    : null;
 
   req.actor = {
     userId: authUser.id,
     email: authUser.email,
     fullName: profile?.full_name ?? null,
     org: membership && org ? org : null,
-    role: membership && org ? (membership.role as OrgRole) : "individual",
+    role: membership && org ? membership.role : "individual",
   };
   next();
 });

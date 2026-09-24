@@ -3,7 +3,7 @@ import type { QueryPayload, TabularResult } from "@nia/schemas";
 import { resolveConnection, type ResolvedConnection } from "./resolveConnection.js";
 import { sendToConnector } from "./connectorClient.js";
 import { logExecutionAudit } from "./executionAudit.js";
-import type { WorkspaceScope } from "./workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 import type { DispatchResult } from "./errors.js";
 
 export type DispatchOpts = {

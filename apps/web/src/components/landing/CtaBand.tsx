@@ -1,6 +1,10 @@
+'use client';
+
+import { useState } from 'react';
 import Container from './hairline/Container';
 import Eyebrow from './hairline/Eyebrow';
 import Button from './hairline/Button';
+import TalkToSalesDialog from './hairline/TalkToSalesDialog';
 import { bandH2 } from './hairline/styles';
 
 const APP = 'Nia Core Shell.dc.html';
@@ -15,6 +19,8 @@ const APP = 'Nia Core Shell.dc.html';
 // gradient card + overlapping footer; both are gone with the flat
 // hairline layout, so the ref was dropped along with the effect.)
 export default function CtaBand() {
+  const [salesOpen, setSalesOpen] = useState(false);
+
   return (
     <section className="hl-scope" style={{ background: 'var(--hl-ink)' }}>
       <Container style={{ paddingTop: 104, paddingBottom: 104 }}>
@@ -22,9 +28,10 @@ export default function CtaBand() {
         <h2 style={{ ...bandH2, marginTop: 28, maxWidth: 820 }}>Move your first million rows tonight.</h2>
         <div style={{ marginTop: 44, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <Button href={APP} variant="solid" ground="dark">Start free — no card</Button>
-          <Button href="#sales" variant="outline" ground="dark">Talk to sales</Button>
+          <Button variant="outline" ground="dark" onClick={() => setSalesOpen(true)}>Talk to sales</Button>
         </div>
       </Container>
+      {salesOpen && <TalkToSalesDialog onClose={() => setSalesOpen(false)} />}
     </section>
   );
 }

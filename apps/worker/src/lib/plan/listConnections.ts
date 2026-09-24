@@ -1,6 +1,6 @@
 import { manifestDialect, type SourceDialect } from "@nia/schemas";
-import { supabase } from "../supabaseClient.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import { withServiceRole, workspaceWhere, type WorkspaceScope } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 
 export type VisibleConnection = {
   id: string;
@@ -15,7 +15,7 @@ type ConnectionRow = { id: string; connector_id: string; handle: string };
  * Lists every connection visible in `scope` — the plan engine's equivalent
  * of resolveConnection.ts for a LIST instead of a single fetch, same
  * mandatory WorkspaceScope filter for the same reason (see that file's
- * header comment: `supabase` here is the service_role client, so this
+ * header comment: this runs as service_role (withServiceRole), so this
  * filter is the only thing standing between "the worker listed someone
  * else's connections" and "the worker correctly scoped the list"). Feeds
  * two things: the candidate-connection context generatePlanNode gives the
@@ -24,10 +24,11 @@ type ConnectionRow = { id: string; connector_id: string; handle: string };
  * connectionId just because it looks like a UUID.
  */
 export async function listVisibleConnections(scope: WorkspaceScope): Promise<VisibleConnection[]> {
-  let query = supabase.from("connections").select("id, connector_id, handle");
-  query = "orgId" in scope ? query.eq("org_id", scope.orgId) : query.is("org_id", null).eq("owner_id", scope.ownerId);
-  const { data } = await query.returns<ConnectionRow[]>();
-  return (data ?? []).map((row) => ({
+  const where = workspaceWhere(scope, 1);
+  const result = await withServiceRole(dbPool, (db) =>
+    db.query<ConnectionRow>(`select id, connector_id, handle from public.connections where ${where.sql}`, [...where.params]),
+  );
+  return result.rows.map((row) => ({
     id: row.id,
     handle: row.handle,
     connectorId: row.connector_id,

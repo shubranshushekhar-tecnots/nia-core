@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   Plan,
   type Plan as PlanType,
@@ -11,6 +10,7 @@ import {
   parseNodeConfig,
 } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
+import type { WithUser } from "../lib/withUser.js";
 import { AppError } from "../lib/appError.js";
 import { getWorkflowGraph, putWorkflowGraph, type WorkflowGraphResult } from "./workflowGraphs.js";
 import { listConnections } from "./connections.js";
@@ -36,7 +36,7 @@ export type ApplyPlanResult = WorkflowGraphResult & { appliedNodeIds: string[] }
  * re-run of validatePlanStructure below).
  */
 export async function applyPlan(
-  supabase: SupabaseClient,
+  withUser: WithUser,
   scope: WorkspaceScope,
   workflowId: string,
   input: { plan: unknown; prompt?: string },
@@ -44,7 +44,7 @@ export async function applyPlan(
   const plan: PlanType = Plan.parse(input.plan);
 
   // Fresh fetch — never trust a client-cached graph as the merge base.
-  const current = await getWorkflowGraph(supabase, scope, workflowId);
+  const current = await getWorkflowGraph(withUser, scope, workflowId);
 
   if (current.version !== plan.baseGraphVersion) {
     throw new AppError(
@@ -67,7 +67,7 @@ export async function applyPlan(
 
   const idRemap = new Map<string, string>(plan.nodes.map((n) => [n.id, randomUUID()]));
 
-  const connections = await listConnections(supabase, scope);
+  const connections = await listConnections(withUser, scope);
   const connectorIdByConnectionId = new Map(connections.map((c) => [c.id, c.connectorId]));
 
   const layout = computePlanLayout(
@@ -99,7 +99,7 @@ export async function applyPlan(
     parkedLegacyTriggers: current.graph.parkedLegacyTriggers,
   };
 
-  const written = await putWorkflowGraph(supabase, scope, workflowId, {
+  const written = await putWorkflowGraph(withUser, scope, workflowId, {
     graph: merged,
     expectedVersion: current.version,
   });
@@ -113,14 +113,20 @@ export async function applyPlan(
   // matching logExecutionAudit's own precedent (executionAudit.ts) — the
   // audit log is load-bearing (CONVENTIONS.md), so a failed audit write must
   // surface as a distinct error, not disappear silently.
-  const { error: auditError } = await supabase.rpc("log_plan_applied", {
-    p_workflow_id: workflowId,
-    p_plan_summary: plan.summary,
-    p_prompt: input.prompt ?? null,
-    p_applied_node_ids: appliedNodeIds,
-    p_graph_version: written.version,
-  });
-  if (auditError) throw new AppError(500, "AUDIT_WRITE_FAILED", auditError.message);
+  try {
+    await withUser((db) =>
+      db.query(`select public.log_plan_applied($1, $2, $3, $4, $5)`, [
+        workflowId,
+        plan.summary,
+        input.prompt ?? null,
+        appliedNodeIds,
+        written.version,
+      ]),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new AppError(500, "AUDIT_WRITE_FAILED", message);
+  }
 
   return { ...written, appliedNodeIds };
 }

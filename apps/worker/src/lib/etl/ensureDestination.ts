@@ -19,7 +19,7 @@ import { resolveConnection } from "../resolveConnection.js";
 import { getSchema } from "../introspection.js";
 import { dispatchCreateEntity } from "../stagedWriteDispatch.js";
 import { computeContractHash } from "./destinationContractHash.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 
 /**
  * `created` (orphaned-destination-table lifecycle fix): true only when this

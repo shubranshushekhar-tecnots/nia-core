@@ -26,7 +26,7 @@ import {
 import { signWriteContext } from "./writeSignature.js";
 import { logExecutionAudit } from "./executionAudit.js";
 import { env } from "../env.js";
-import type { WorkspaceScope } from "./workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 import type { DispatchResult } from "./errors.js";
 
 /**

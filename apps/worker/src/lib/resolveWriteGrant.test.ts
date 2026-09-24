@@ -1,21 +1,19 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-// Chainable mock query builder mimicking the subset of the supabase-js
-// fluent API resolveWriteGrant.ts actually calls:
-// .from().select().eq().not().is().order() — the last call resolves the
-// chain, mirroring how resolveConnection.test.ts mocks .maybeSingle().
-let orderResult: { data: unknown };
-const builder: Record<string, unknown> = {};
-builder.select = vi.fn(() => builder);
-builder.eq = vi.fn(() => builder);
-builder.not = vi.fn(() => builder);
-builder.is = vi.fn(() => builder);
-builder.order = vi.fn(() => Promise.resolve(orderResult));
-const from = vi.fn((..._args: unknown[]) => builder);
+// Fake db.query dispatched by the caller (resolveWriteGrant.ts) through the
+// real withServiceRole — mocked here to skip the actual transaction/SET
+// LOCAL ROLE machinery, mirroring resolveConnection.test.ts.
+const query = vi.fn();
 
-vi.mock("./supabaseClient.js", () => ({
-  supabase: { from: (...args: unknown[]) => from(...args) },
-}));
+vi.mock("@nia/db", async () => {
+  const actual = await vi.importActual<typeof import("@nia/db")>("@nia/db");
+  return {
+    ...actual,
+    withServiceRole: vi.fn(async (_pool: unknown, fn: (db: { query: typeof query }) => unknown) => fn({ query })),
+  };
+});
+
+vi.mock("./dbPool.js", () => ({ dbPool: {} }));
 
 const { resolveWriteGrant } = await import("./resolveWriteGrant.js");
 
@@ -33,17 +31,11 @@ function row(overrides: Record<string, unknown> = {}) {
 
 describe("resolveWriteGrant", () => {
   beforeEach(() => {
-    from.mockClear();
-    (builder.select as ReturnType<typeof vi.fn>).mockClear();
-    (builder.eq as ReturnType<typeof vi.fn>).mockClear();
-    (builder.not as ReturnType<typeof vi.fn>).mockClear();
-    (builder.is as ReturnType<typeof vi.fn>).mockClear();
-    (builder.order as ReturnType<typeof vi.fn>).mockClear();
-    orderResult = { data: [] };
+    query.mockReset();
   });
 
   it("resolves a grant whose scope.schemas includes the requested namespace", async () => {
-    orderResult = { data: [row()] };
+    query.mockResolvedValue({ rows: [row()] });
 
     const result = await resolveWriteGrant(CONNECTION_ID, "sales");
 
@@ -51,13 +43,16 @@ describe("resolveWriteGrant", () => {
       ok: true,
       value: { grantId: "grant-1", credVersion: 1, vaultRef: "vault-ref-write-1" },
     });
-    expect(builder.eq).toHaveBeenCalledWith("connection_id", CONNECTION_ID);
-    expect(builder.not).toHaveBeenCalledWith("confirmed_at", "is", null);
-    expect(builder.is).toHaveBeenCalledWith("revoked_at", null);
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("connection_id = $1");
+    expect(sql).toContain("confirmed_at is not null");
+    expect(sql).toContain("revoked_at is null");
+    expect(sql).toContain("order by granted_at desc");
+    expect(params).toEqual([CONNECTION_ID]);
   });
 
   it("returns grant-invalid when no row's scope covers the namespace", async () => {
-    orderResult = { data: [row({ scope: { schemas: ["marketing"] } })] };
+    query.mockResolvedValue({ rows: [row({ scope: { schemas: ["marketing"] } })] });
 
     const result = await resolveWriteGrant(CONNECTION_ID, "sales");
 
@@ -69,7 +64,7 @@ describe("resolveWriteGrant", () => {
   });
 
   it("returns grant-invalid when there are no rows at all", async () => {
-    orderResult = { data: [] };
+    query.mockResolvedValue({ rows: [] });
 
     const result = await resolveWriteGrant(CONNECTION_ID, "sales");
 
@@ -77,21 +72,13 @@ describe("resolveWriteGrant", () => {
     if (!result.ok) expect(result.error.kind).toBe("grant-invalid");
   });
 
-  it("returns grant-invalid when data is null", async () => {
-    orderResult = { data: null };
-
-    const result = await resolveWriteGrant(CONNECTION_ID, "sales");
-
-    expect(result.ok).toBe(false);
-  });
-
   it("picks the first matching row when multiple grants exist (already ordered granted_at desc by the query)", async () => {
-    orderResult = {
-      data: [
+    query.mockResolvedValue({
+      rows: [
         row({ id: "grant-newest", cred_version: 2, write_credential_vault_ref: "vault-ref-2", scope: { schemas: ["sales"] } }),
         row({ id: "grant-oldest", cred_version: 1, write_credential_vault_ref: "vault-ref-1", scope: { schemas: ["sales"] } }),
       ],
-    };
+    });
 
     const result = await resolveWriteGrant(CONNECTION_ID, "sales");
 
@@ -102,7 +89,7 @@ describe("resolveWriteGrant", () => {
   });
 
   it("returns grant-invalid when the matching row has no write_credential_vault_ref", async () => {
-    orderResult = { data: [row({ write_credential_vault_ref: null })] };
+    query.mockResolvedValue({ rows: [row({ write_credential_vault_ref: null })] });
 
     const result = await resolveWriteGrant(CONNECTION_ID, "sales");
 

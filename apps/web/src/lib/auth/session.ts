@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
+import { withActingUser } from "@nia/db";
 import { createClient } from "@/lib/supabase/server";
+import { dbPool } from "@/lib/db/pool";
 import type { ActorRole, OrgRole } from "@nia/schemas";
 
 export type UserContext = {
@@ -45,18 +47,26 @@ export async function requireUser(): Promise<UserContext> {
     redirect("/login");
   }
 
-  const [{ data: profile }, { data: memberships }] = await Promise.all([
-    supabase.from("profiles").select("full_name").eq("id", user.id).single(),
-    supabase
-      .from("organization_members")
-      .select("role, created_at, organizations ( id, name, slug )")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: true })
-      .limit(1),
+  const [profileResult, membershipResult] = await Promise.all([
+    withActingUser(dbPool, user.id, (db) =>
+      db.query<{ full_name: string | null }>("select full_name from public.profiles where id = $1", [user.id]),
+    ),
+    withActingUser(dbPool, user.id, (db) =>
+      db.query<{ role: string; created_at: string; org_id: string; org_name: string; org_slug: string }>(
+        `select m.role, m.created_at, o.id as org_id, o.name as org_name, o.slug as org_slug
+         from public.organization_members m
+         join public.organizations o on o.id = m.org_id
+         where m.user_id = $1
+         order by m.created_at asc
+         limit 1`,
+        [user.id],
+      ),
+    ),
   ]);
 
-  const membership = memberships?.[0];
-  const org = membership?.organizations as unknown as { id: string; name: string; slug: string } | null;
+  const profile = profileResult.rows[0] ?? null;
+  const membership = membershipResult.rows[0];
+  const org = membership ? { id: membership.org_id, name: membership.org_name, slug: membership.org_slug } : null;
 
   return {
     userId: user.id,

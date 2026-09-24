@@ -2,6 +2,7 @@ import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
 import { GraphDoc, Plan, PlanDiff, CleanBindingInput } from "@nia/schemas";
 import { requireAuth } from "../middleware/auth.js";
+import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
 import { requireCapability } from "../middleware/requireCapability.js";
 import { validate } from "../middleware/validate.js";
@@ -21,7 +22,7 @@ import { getLatestConversationForWorkflow, listMessages } from "../services/chat
 
 export const workflowsRouter: ExpressRouter = Router();
 
-workflowsRouter.use(requireAuth, attachActor);
+workflowsRouter.use(requireAuth, attachDb, attachActor);
 
 const workflowParamsSchema = z.object({ id: z.string().uuid() });
 
@@ -29,8 +30,8 @@ workflowsRouter.get(
   "/:id",
   validate({ params: workflowParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await getWorkflowDetail(req.supabase, req.params.id!, scopeFromActor(req.actor));
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getWorkflowDetail(req.withUser, req.params.id!, scopeFromActor(req.actor));
     if (!data) throw new AppError(404, "NOT_FOUND", "Workflow not found.");
     res.json(data);
   }),
@@ -42,8 +43,8 @@ workflowsRouter.get(
   "/:id/graph",
   validate({ params: workflowParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await getWorkflowGraph(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getWorkflowGraph(req.withUser, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
   }),
 );
@@ -58,8 +59,8 @@ workflowsRouter.put(
   requireCapability("workflows.updateDefinition"),
   validate({ params: workflowParamsSchema, body: putGraphBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await putWorkflowGraph(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await putWorkflowGraph(req.withUser, scopeFromActor(req.actor), req.params.id!, req.body);
     res.json(data);
   }),
 );
@@ -84,9 +85,9 @@ workflowsRouter.post(
   requireCapability("workflows.updateDefinition"),
   validate({ params: workflowParamsSchema, body: proposePlanBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await proposePlanForWorkflow(
-      req.supabase,
+      req.withUser,
       scopeFromActor(req.actor),
       req.params.id!,
       req.actor.userId,
@@ -112,8 +113,8 @@ workflowsRouter.post(
   requireCapability("workflows.updateDefinition"),
   validate({ params: workflowParamsSchema, body: applyPlanBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await applyPlan(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await applyPlan(req.withUser, scopeFromActor(req.actor), req.params.id!, req.body);
     res.json(data);
   }),
 );
@@ -138,8 +139,8 @@ workflowsRouter.post(
   requireCapability("workflows.updateDefinition"),
   validate({ params: workflowParamsSchema, body: applyPlanDiffBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await applyPlanDiff(req.supabase, scopeFromActor(req.actor), req.params.id!, req.body);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await applyPlanDiff(req.withUser, scopeFromActor(req.actor), req.params.id!, req.body);
     res.json(data);
   }),
 );
@@ -157,9 +158,9 @@ workflowsRouter.post(
   requireCapability("workflows.updateDefinition"),
   validate({ params: workflowParamsSchema, body: proposeCleaningBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await proposeCleaningForWorkflow(
-      req.supabase,
+      req.withUser,
       scopeFromActor(req.actor),
       req.params.id!,
       req.body.nodeId,
@@ -176,8 +177,8 @@ workflowsRouter.get(
   "/:id/plan/applied",
   validate({ params: workflowParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await listAppliedPlans(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await listAppliedPlans(req.withUser, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
   }),
 );
@@ -195,8 +196,8 @@ workflowsRouter.post(
   requireCapability("workflows.updateDefinition"),
   validate({ params: revertPlanParamsSchema, body: revertPlanBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await revertPlan(req.supabase, scopeFromActor(req.actor), req.params.id!, req.params.planId!, req.body);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await revertPlan(req.withUser, scopeFromActor(req.actor), req.params.id!, req.params.planId!, req.body);
     res.json(data);
   }),
 );
@@ -212,8 +213,8 @@ workflowsRouter.post(
   requireCapability("workflows.run"),
   validate({ params: workflowParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await runAndRecordChecks(req.supabase, scopeFromActor(req.actor), req.params.id!, req.actor.userId);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await runAndRecordChecks(req.withUser, scopeFromActor(req.actor), req.params.id!, req.actor.userId);
     res.status(201).json(data);
   }),
 );
@@ -222,8 +223,8 @@ workflowsRouter.get(
   "/:id/checks/latest",
   validate({ params: workflowParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await getLatestCheckRun(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getLatestCheckRun(req.withUser, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
   }),
 );
@@ -234,8 +235,8 @@ workflowsRouter.get(
   "/:id/checks",
   validate({ params: workflowParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await listCheckRuns(req.supabase, scopeFromActor(req.actor), req.params.id!);
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await listCheckRuns(req.withUser, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
   }),
 );
@@ -247,14 +248,14 @@ workflowsRouter.get(
   "/:id/conversation",
   validate({ params: workflowParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const scope = scopeFromActor(req.actor);
-    const conversation = await getLatestConversationForWorkflow(req.supabase, scope, req.params.id!);
+    const conversation = await getLatestConversationForWorkflow(req.withUser, scope, req.params.id!);
     if (!conversation) {
       res.json(null);
       return;
     }
-    const messages = await listMessages(req.supabase, scope, conversation.id);
+    const messages = await listMessages(req.withUser, scope, conversation.id);
     res.json({ conversation, messages });
   }),
 );
@@ -272,9 +273,9 @@ workflowsRouter.post(
   requireCapability("workflows.updateDefinition"),
   validate({ params: workflowParamsSchema, body: proposeMappingBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await proposeMappingForWorkflow(
-      req.supabase,
+      req.withUser,
       scopeFromActor(req.actor),
       req.params.id!,
       req.body.destNodeId,
@@ -297,9 +298,9 @@ workflowsRouter.post(
   requireCapability("workflows.updateDefinition"),
   validate({ params: workflowParamsSchema, body: previewBodySchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await previewWorkflowDestination(
-      req.supabase,
+      req.withUser,
       scopeFromActor(req.actor),
       req.params.id!,
       req.body.destNodeId,

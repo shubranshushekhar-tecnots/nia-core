@@ -17,7 +17,7 @@ const tool: ToolDefinition<Input, Output> = {
   description: "Gets a single run's current persisted status, rows processed, duration, and timestamps.",
   tier: "read",
   inputSchema: InputSchema,
-  handler: async (ctx, input) => getRunStatus(ctx.supabase, ctx.user.scope, input.workflowId, input.runId),
+  handler: async (ctx, input) => getRunStatus(ctx.withUser, ctx.user.scope, input.workflowId, input.runId),
   summarize: (output) =>
     `Run ${output.id}: ${output.status}, ${output.rowsProcessed} rows processed${output.durationMs != null ? `, ${output.durationMs}ms` : ""}, started ${output.startedAt}${output.finishedAt ? `, finished ${output.finishedAt}` : ""}.`,
   render: (output) => ({ kind: "run_status", payload: output }),

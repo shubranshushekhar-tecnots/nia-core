@@ -23,7 +23,7 @@ const tool: ToolDefinition<Input, Output> = {
   tier: "read",
   inputSchema: InputSchema,
   handler: async (ctx, input) => {
-    const runs = await listRunsForWorkflow(ctx.supabase, ctx.user.scope, input.workflowId);
+    const runs = await listRunsForWorkflow(ctx.withUser, ctx.user.scope, input.workflowId);
     return runs.find((r) => r.status === "failed") ?? null;
   },
   summarize: (output) =>

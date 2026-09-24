@@ -1,9 +1,9 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { completeWithTools, type ChatMessage, type ToolSpec } from "./gatewayClient.js";
 import { listTools } from "./registry.js";
 import { executeTool } from "./executeTool.js";
 import type { ActingUser, ToolRender } from "./types.js";
+import type { WithUser } from "../lib/withUser.js";
 
 const MAX_TOOL_CALLS = 8;
 
@@ -42,7 +42,11 @@ function buildToolSpecs(): ToolSpec[] {
  * pendingActionId — see executeTool.ts's header comment for why that's
  * what makes the confirmation requirement unbypassable by the model.
  */
-export async function runAgentTurn(supabase: SupabaseClient, user: ActingUser, history: ChatMessage[]): Promise<AgentTurnResult> {
+export async function runAgentTurn(
+  withUser: WithUser,
+  user: ActingUser,
+  history: ChatMessage[],
+): Promise<AgentTurnResult> {
   const tools = buildToolSpecs();
   const messages: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }, ...history];
   const toolCalls: AgentToolCallLog[] = [];
@@ -66,7 +70,7 @@ export async function runAgentTurn(supabase: SupabaseClient, user: ActingUser, h
 
       let toolResult: { summary: string; render: ToolRender };
       try {
-        toolResult = await executeTool(supabase, user, call.function.name, args);
+        toolResult = await executeTool(withUser, user, call.function.name, args);
       } catch (error) {
         // Plan Part 4: "Copilot shows the real message ... never a generic
         // fallback." The real AppError/error message goes straight back to

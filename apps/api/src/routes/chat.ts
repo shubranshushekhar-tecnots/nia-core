@@ -3,6 +3,7 @@ import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
 import { ChatStreamEvent, MAX_SOURCES } from "@nia/schemas";
 import { requireCookieAuth } from "../middleware/cookieAuth.js";
+import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
 import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
@@ -28,7 +29,7 @@ import { createConversation, getConversation, insertUserMessage, listConversatio
  */
 export const chatRouter: ExpressRouter = Router();
 
-chatRouter.use(requireCookieAuth, attachActor);
+chatRouter.use(requireCookieAuth, attachDb, attachActor);
 
 /** Structural equality for the org/owner XOR union — no shared discriminant to switch on. */
 function sameScope(a: WorkspaceScope, b: WorkspaceScope): boolean {
@@ -83,16 +84,16 @@ chatRouter.post(
       // existing-but-foreign-or-another-member's id fails there with a
       // clean 500 -> caught by getConversation's null check first for a
       // clearer 404.
-      const existing = await getConversation(req.supabase!, scope, resolvedConversationId);
+      const existing = await getConversation(req.withUser!, scope, resolvedConversationId);
       if (!existing) {
         throw new AppError(404, "NOT_FOUND", "No conversation found for that id.");
       }
     } else {
-      const created = await createConversation(req.supabase!, scope, userId, message, workflowId);
+      const created = await createConversation(req.withUser!, scope, userId, message, workflowId);
       resolvedConversationId = created.id;
     }
 
-    await insertUserMessage(req.supabase!, scope, resolvedConversationId, message);
+    await insertUserMessage(req.withUser!, scope, resolvedConversationId, message);
 
     // Own id, not BullMQ's default — this is what the client later passes
     // back to GET /chat/stream?jobId= to find this exact job.
@@ -113,7 +114,7 @@ chatRouter.post(
 chatRouter.get(
   "/chat/conversations",
   asyncHandler(async (req, res) => {
-    const conversations = await listConversations(req.supabase!, scopeFromActor(req.actor!));
+    const conversations = await listConversations(req.withUser!, scopeFromActor(req.actor!));
     res.json(conversations);
   }),
 );
@@ -126,11 +127,11 @@ chatRouter.get(
   asyncHandler(async (req, res) => {
     const { id } = req.params as unknown as z.infer<typeof ConversationParams>;
     const scope = scopeFromActor(req.actor!);
-    const conversation = await getConversation(req.supabase!, scope, id);
+    const conversation = await getConversation(req.withUser!, scope, id);
     if (!conversation) {
       throw new AppError(404, "NOT_FOUND", "No conversation found for that id.");
     }
-    const messages = await listMessages(req.supabase!, scope, id);
+    const messages = await listMessages(req.withUser!, scope, id);
     res.json(messages);
   }),
 );

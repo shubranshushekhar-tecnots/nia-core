@@ -12,6 +12,11 @@
  * resolver makes the four states mutually exclusive and gives loading/error
  * a real signal (react-query's isLoading/isError) instead of inferring them
  * from the entities array's length.
+ *
+ * isError is checked before isLoading (not the reverse): a failed fetch can
+ * still report isLoading=true while it's mid-retry, and checking isLoading
+ * first would keep showing "Loading tables…" through every retry instead of
+ * surfacing the real error message once one exists.
  */
 export type TableFieldState =
   | { kind: "select-connection" }
@@ -29,7 +34,7 @@ export function resolveTableFieldState(args: {
 }): TableFieldState {
   if (!args.connectionId) return { kind: "select-connection" };
   if (args.newTargetMode) return { kind: "new-target" };
-  if (args.isLoading) return { kind: "loading" };
   if (args.isError) return { kind: "error", message: args.errorMessage ?? "Failed to load tables." };
+  if (args.isLoading) return { kind: "loading" };
   return { kind: "select" };
 }

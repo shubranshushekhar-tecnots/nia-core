@@ -4,10 +4,11 @@
   "packageManager": "pnpm@9.12.0",
   "scripts": {
     "dev": "turbo dev",
-    "build": "turbo build",
+    "build": "bash scripts/check-workspace-scope-guard.sh && turbo build",
     "typecheck": "turbo typecheck",
     "test": "turbo test",
     "lint": "turbo lint",
+    "guard:scope": "bash scripts/check-workspace-scope-guard.sh",
     "migrate:status": "bash scripts/migrate.sh status",
     "migrate:push": "bash scripts/migrate.sh push",
     "migrate:verify": "bash scripts/migrate.sh verify"

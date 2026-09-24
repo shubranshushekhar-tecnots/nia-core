@@ -1,6 +1,7 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
+import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
 import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
@@ -17,13 +18,13 @@ import { getProjectDetail, getProjectsList, getSidebarProjects } from "../servic
  */
 export const projectsRouter: ExpressRouter = Router();
 
-projectsRouter.use(requireAuth, attachActor);
+projectsRouter.use(requireAuth, attachDb, attachActor);
 
 projectsRouter.get(
   "/sidebar",
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await getSidebarProjects(req.supabase, scopeFromActor(req.actor));
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getSidebarProjects(req.withUser, scopeFromActor(req.actor));
     res.json(data);
   }),
 );
@@ -31,8 +32,8 @@ projectsRouter.get(
 projectsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await getProjectsList(req.supabase, scopeFromActor(req.actor));
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getProjectsList(req.withUser, scopeFromActor(req.actor));
     res.json(data);
   }),
 );
@@ -43,8 +44,8 @@ projectsRouter.get(
   "/:id",
   validate({ params: projectParamsSchema }),
   asyncHandler(async (req, res) => {
-    if (!req.supabase || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await getProjectDetail(req.supabase, req.params.id!, scopeFromActor(req.actor));
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getProjectDetail(req.withUser, req.params.id!, scopeFromActor(req.actor));
     if (!data) throw new AppError(404, "NOT_FOUND", "Project not found.");
     res.json(data);
   }),

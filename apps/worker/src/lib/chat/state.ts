@@ -1,7 +1,7 @@
 import { Annotation } from "@langchain/langgraph";
 import type { IntrospectResponse, QueryPayload, TabularResult } from "@nia/schemas";
 import type { ResolvedConnection } from "../resolveConnection.js";
-import type { WorkspaceScope } from "../workspaceScope.js";
+import type { WorkspaceScope } from "@nia/db";
 
 /**
  * Single-source chat pipeline state. `queryGenAttempts`/`answerGenAttempts`

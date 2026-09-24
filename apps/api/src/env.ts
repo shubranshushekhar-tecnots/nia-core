@@ -10,6 +10,17 @@ import { z } from "zod";
 const EnvSchema = z.object({
   SUPABASE_URL: z.string().url(),
   SUPABASE_ANON_KEY: z.string().min(1),
+  /**
+   * Direct Postgres connection for @nia/db (docs/plans/data-access.md,
+   * Step 3) — replaces PostgREST for data access. Connects as the
+   * `postgres` role (see DEPLOYMENT.md's "Database connection pooling"
+   * section for why); per-request privilege narrowing to `authenticated`
+   * happens via withActingUser's SET LOCAL ROLE, not via this connection
+   * string. Auth itself (validating the caller's Bearer token) still goes
+   * through Supabase Auth/GoTrue via SUPABASE_URL above — unaffected by
+   * this migration.
+   */
+  DATABASE_URL: z.string().min(1),
   WEB_ORIGIN: z.string().url(),
   PORT: z.coerce.number().int().positive().default(4001),
   /**

@@ -98,9 +98,9 @@ describe("runAgentTurn confirmation safety", () => {
 
     expect(executeToolMock).toHaveBeenCalledTimes(1);
     const call = executeToolMock.mock.calls[0]!;
-    // executeTool(supabase, user, name, rawArgs, opts?) — the loop must call
-    // it with no 5th argument at all, so opts.pendingActionId can never be
-    // set from inside the loop regardless of what rawArgs contains.
+    // executeTool(withUser, user, name, rawArgs, opts?) — the loop must
+    // call it with no 5th argument at all, so opts.pendingActionId can
+    // never be set from inside the loop regardless of what rawArgs contains.
     expect(call).toHaveLength(4);
     expect(call[2]).toBe("start_run");
   });
