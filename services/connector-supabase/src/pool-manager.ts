@@ -1,5 +1,6 @@
 import pg from "pg";
 import { createClient } from "@supabase/supabase-js";
+import { createEnvKeySecretStore } from "@nia/secrets";
 import type { ConnectorConfig, CredentialRef } from "@nia/schemas";
 
 // Phase 8b-2, Fix 1 finding — node-postgres deliberately does NOT parse
@@ -88,22 +89,35 @@ function parsePostgresConfig(
   return { host, port, database, ssl };
 }
 
-// Service-role client, used for exactly one thing: calling the
-// resolve_connector_secret RPC (0008_connector_secret_rpc.sql). That RPC's
-// EXECUTE grant is restricted to service_role and it returns only the one
-// secret asked for by ref — this client never touches any other table.
+// Service-role client, used for: resolve_connector_secret RPC
+// (0008_connector_secret_rpc.sql, legacy Vault fallback below), reading
+// nia_secrets directly (service_role bypasses its RLS, granted select in
+// 0032_nia_secrets.sql), and write_grants lookups. Never touches any other
+// table.
 const supabase = createClient(
   process.env.SUPABASE_URL ?? "",
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
   { auth: { persistSession: false, autoRefreshToken: false } },
 );
 
+// docs/plans/secret-storage.md — dual-read: nia_secrets checked first,
+// resolve_connector_secret RPC (legacy Vault) as fallback. Mirrors
+// connector-mysql/src/pool-manager.ts's wiring exactly.
+const secretStore = createEnvKeySecretStore({
+  client: supabase,
+  masterKey: process.env.NIA_SECRET_MASTER_KEY ?? "",
+  legacyResolve: async (ref) => {
+    const { data, error } = await supabase.rpc("resolve_connector_secret", { p_ref: ref });
+    if (error) throw new Error(`vault resolution failed for ref ${ref}: ${error.message}`);
+    return (data as Record<string, unknown> | null) ?? null;
+  },
+});
+
 async function resolveVaultSecret(vaultRef: string): Promise<{ user: string; password: string }> {
-  // Fetched from Supabase Vault, here, inside the service — the decrypted
-  // value never crosses back over the Express -> service boundary, and
-  // Express never sees it: it only ever forwards the opaque vaultRef.
-  const { data, error } = await supabase.rpc("resolve_connector_secret", { p_ref: vaultRef });
-  if (error) throw new Error(`vault resolution failed for ref ${vaultRef}: ${error.message}`);
+  // Resolved here, inside the service — the decrypted value never crosses
+  // back over the Express -> service boundary, and Express never sees it:
+  // it only ever forwards the opaque vaultRef.
+  const data = await secretStore.get(vaultRef);
   if (
     typeof data !== "object" ||
     data === null ||

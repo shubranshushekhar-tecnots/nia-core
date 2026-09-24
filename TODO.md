@@ -442,3 +442,55 @@
   giving `PlanDiff` a parallel no-`.default()` "strict" variant for this
   one call site. Not done now — scoped as its own follow-up, not folded
   into the Copilot agent plan's v1 delivery.
+- **Delete the old secret on a successful credential edit (added
+  2026-09-24, secret-storage migration).** `updateConnection`'s credential-
+  rotation path (`apps/api/src/services/connections.ts`) writes a brand
+  new secret (`secretStore.put`) and repoints `connections.vault_secret_ref`
+  at it, but never deletes the pre-edit secret it just replaced — every
+  successful credential edit leaves the old row behind permanently. This
+  predates the envelope-encryption migration (it was true of the old
+  Vault-only path too — the live local DB had accumulated 54 Vault rows
+  for only 31 live references before this session's backfill) and is
+  unchanged by it: `nia_secrets` will accumulate the exact same class of
+  orphan going forward unless this is fixed. Fix: once the new secret is
+  written and the connections row update commits successfully, delete the
+  previous `nia_secrets` row (and, during the dual-read migration window,
+  the previous Vault row too, if that's what the pre-edit ref pointed at).
+  Must not delete-before-commit (the existing "delete the *new* secret on
+  a failed `dispatchTest`" rollback right above this path in
+  `updateConnection` is the reverse case, and is already handled).
+- **Equivalent orphan gap for `nia_write_*` roles left behind by grant
+  rotation (added 2026-09-24, secret-storage migration).** Same shape of
+  bug as the credential-edit orphan above, but for write-grant role
+  rotation instead of connection secrets: confirming/rotating a write
+  grant (`apps/api/src/services/grants.ts`) creates a new
+  `nia_write_*` Postgres role/user plus a new secret for it, but nothing
+  today drops the *previous* `nia_write_*` role when a grant is rotated —
+  each rotation leaves the old role behind in the destination database
+  indefinitely, alongside its now-orphaned write-credential secret. Needs
+  its own fix (drop the old role, e.g. via the same `DROP ROLE`/`DROP
+  USER` DDL `write_role_name` already exists to support at connection-
+  delete time — see 0028_write_grant_role_name.sql's header comment) —
+  not automatically covered by fixing the connections-secret orphan above,
+  since it's a different resource class (a live destination-DB role, not
+  just a `nia_secrets`/Vault row) with its own cleanup mechanics.
+- **Azure Key Vault backend for `@nia/secrets`
+  (docs/plans/secret-storage.md, added 2026-09-24).** `SecretStore` is
+  designed with a pluggable backend seam (`createEnvKeySecretStore` is
+  one implementation), but only the envelope-encryption-under-
+  `NIA_SECRET_MASTER_KEY` backend exists today. An Azure Key
+  Vault–backed implementation was scoped in the original plan as a
+  later option (e.g. for self-hosted or enterprise deployments that
+  want a managed HSM-backed store instead of an application-level
+  master key) — not built, not started.
+- **Remove the Vault fallback once every live `vault_secret_ref`/
+  `write_credential_vault_ref` has been migrated (docs/plans/
+  secret-storage.md, added 2026-09-24).** `SecretStore.get()` currently
+  dual-reads: checks `nia_secrets` first, falls back to
+  `resolve_connector_secret`/`decrypt_connector_secret_for_edit` (Vault)
+  for any ref that predates the migration. This is intentionally
+  temporary. Once `secrets-verify` reports zero `vault-only` refs against
+  every real (non-local) environment that matters, remove the Vault
+  fallback branch from `SecretStore.get()`, and only then consider
+  actually deleting the Vault rows themselves (a separate, later step —
+  not bundled with removing the fallback code path).

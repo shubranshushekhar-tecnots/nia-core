@@ -3,6 +3,7 @@ import { getConnectorManifest } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 import { dispatchInvalidate, dispatchTest } from "../lib/connectorDispatch.js";
+import { getSecretStore, toSecretScope } from "../lib/secretStore.js";
 import { getConnection } from "./connections.js";
 
 export type WriteGrant = {
@@ -140,10 +141,8 @@ export async function confirmWriteGrant(
   const manifest = getConnectorManifest(connection.connectorId);
   if (!manifest) throw new AppError(500, "UNKNOWN_CONNECTOR", `No manifest for connector "${connection.connectorId}".`);
 
-  const { data: vaultRef, error: vaultError } = await supabase.rpc("create_connector_secret", { p_secret: credential });
-  if (vaultError || !vaultRef) {
-    throw new AppError(500, "VAULT_WRITE_FAILED", vaultError?.message ?? "Failed to store write credential.");
-  }
+  const secretStore = getSecretStore(supabase);
+  const vaultRef = await secretStore.put(credential, toSecretScope(scope));
 
   const { data: existingGrants } = await supabase
     .from("write_grants")
@@ -154,12 +153,12 @@ export async function confirmWriteGrant(
 
   const testResult = await dispatchTest(
     manifest,
-    { connectionId, credVersion: predictedCredVersion, vaultRef: vaultRef as string },
+    { connectionId, credVersion: predictedCredVersion, vaultRef },
     connection.config,
   );
   await dispatchInvalidate(manifest, connectionId);
   if (!testResult.ok) {
-    await supabase.rpc("delete_connector_secret", { p_ref: vaultRef as string });
+    await secretStore.delete(vaultRef);
     throw new AppError(
       422,
       "WRITE_GRANT_TEST_FAILED",
@@ -170,7 +169,7 @@ export async function confirmWriteGrant(
 
   const { data, error } = await supabase.rpc("confirm_write_grant", {
     p_grant_id: grantId,
-    p_write_credential_vault_ref: vaultRef as string,
+    p_write_credential_vault_ref: vaultRef,
     p_write_role_name: credential.user,
   });
   if (error) throw new AppError(409, "CONFIRM_FAILED", error.message);

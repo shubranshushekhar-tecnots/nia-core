@@ -44,13 +44,17 @@
     "preconformance:fixtures": "pnpm run build:deps",
     "conformance:fixtures": "tsx scripts/ops-db-conformance.ts",
     "preconformance:agreement": "pnpm run build:deps",
-    "conformance:agreement": "tsx scripts/ops-agreement.ts"
+    "conformance:agreement": "tsx scripts/ops-agreement.ts",
+    "secrets:backfill": "tsx scripts/secrets-backfill.ts",
+    "secrets:verify": "tsx scripts/secrets-verify.ts",
+    "secrets:rotate": "tsx scripts/secrets-rotate.ts"
   },
   "dependencies": {
     "@langchain/core": "^0.3.40",
     "@langchain/langgraph": "^0.2.44",
     "@nia/guardrails": "workspace:*",
     "@nia/schemas": "workspace:*",
+    "@nia/secrets": "workspace:*",
     "@supabase/supabase-js": "^2.46.1",
     "bullmq": "^5.28.0",
     "dotenv": "^16.4.5",

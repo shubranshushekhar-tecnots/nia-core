@@ -5059,3 +5059,162 @@ point the user at the existing "Add connection" dialog. This keeps the
 one deliberately-drawn line in this whole feature: `RLS`/service-role
 credentials, and the human act of running privileged DDL, are the two
 things the agent can describe but never itself perform.
+
+## Secret storage migration: Supabase Vault → application-level envelope encryption
+
+Every connection credential and write-grant credential in the product
+lived exclusively in Supabase Vault (`vault.secrets`, resolved via the
+`resolve_connector_secret`/`decrypt_connector_secret_for_edit` RPCs). That
+put the entire product's credential store behind a single boundary this
+team doesn't fully control: Vault's encryption key is managed by Supabase
+project infrastructure, not application code, so there was no way to
+rotate the encrypting key independently of the Supabase project itself,
+and no portable path off Supabase Vault for a future self-hosted
+deployment (README/DEPLOYMENT.md's stated goal). See
+`docs/plans/secret-storage.md` for the original phased plan (Steps 0-4);
+this entry records what actually shipped and the three deviations the
+user approved before Step 2 began.
+
+**What shipped.** A new `packages/secrets` package
+(`createEnvKeySecretStore`) implements envelope encryption: each secret
+gets its own random 256-bit data key, the secret payload is AES-256-GCM
+encrypted under that data key, and the data key itself is encrypted under
+one shared `NIA_SECRET_MASTER_KEY` (32 random bytes, base64, generated
+once per environment, identical across `apps/api` and all three connector
+services — same distribution convention as the existing
+`WRITE_DISPATCH_SIGNING_SECRET`). A random IV per encryption and a GCM
+auth tag stored alongside the ciphertext mean a wrong key or tampered
+ciphertext fails loudly (auth tag mismatch), never silently. The master
+key lives only in each service's process environment and is never sent to
+or stored in Postgres — this is the property Vault couldn't offer (a
+database-managed encryption key necessarily lives, in some form, inside
+the database's own infrastructure).
+
+Secrets are stored in a new `public.nia_secrets` table (migration
+`0032_nia_secrets.sql`): `id uuid primary key` (see the backfill decision
+below for why this matters), ciphertext/encrypted-data-key/iv/auth-tag/
+algorithm/key_version columns, and org_id/owner_id scope columns matching
+every other org-or-personal-scoped table's xor shape. RLS denies all
+direct access; only `service_role` can read/write it (Supabase's default
+service-role privileges cover this — no separate grant needed beyond
+`select`, which was added defensively).
+
+`SecretStore` (the interface both `apps/api` and all three connector
+services import from `@nia/secrets`) dual-reads: `get(ref)` checks
+`nia_secrets` first, and only falls back to the legacy
+`resolve_connector_secret` Vault RPC if the ref isn't found there. Every
+new `put()` (new connection, credential rotation, write-grant
+confirmation) writes only to `nia_secrets`, never to Vault, from the
+moment this shipped. This is what makes the migration a live cutover, not
+a big-bang one: old refs keep working unmodified via the Vault fallback
+until backfilled, and every new write is already on the new store.
+
+**Deviation 1 — moving `merge_connector_secret`'s merge into the API.**
+The old credential-edit path had a `merge_connector_secret` SQL function
+that decrypted the existing Vault secret, merged in the partial update,
+and re-encrypted — entirely inside Postgres. That can't work with
+envelope encryption, because the one thing the new design is built to
+guarantee is that the master key that decrypts a secret never reaches the
+database. The merge moved into `apps/api/src/services/connections.ts`'s
+`updateConnection`: `SecretStore.get()` decrypts the existing secret in
+the API process, the partial update is merged into it in memory
+(`{ ...existingSecret, ...secretPatch }`), and `SecretStore.put()`
+re-encrypts and writes the merged result as a new secret. Reported to the
+user before implementing, per their explicit ask: the update path's
+external behavior (the connection still tests successfully against the
+merged config/credential before anything is persisted, still rolls back
+the newly-written secret if `dispatchTest` fails) is unchanged — only
+*where* the decrypt-merge-encrypt happens moved, from a SQL function to
+TypeScript.
+
+**Deviation 2 — the backfill excludes orphaned Vault secrets.** The old
+credential-edit path never deleted the pre-edit Vault row it replaced
+(same root cause in both the connections and write_grants edit paths —
+now tracked as its own fix in `TODO.md`, not part of this migration's
+scope). The live local dev database had accumulated 54 Vault secrets
+behind only 31 live references before this session reset it (see below);
+migrating orphans would have carried that leak forward into `nia_secrets`
+rather than fixing it. The backfill (`apps/worker/scripts/
+secrets-backfill.ts`) only migrates a Vault secret if it's currently
+referenced by some `connections.vault_secret_ref` or
+`write_grants.write_credential_vault_ref` — collected via a join over
+both tables (`collectSecretRefTasks`) — and reports the orphan count
+(`count_vault_secrets()` RPC total minus distinct referenced refs) rather
+than migrating orphans silently. Vault rows are left fully intact either
+way; deleting them is an explicitly separate, later step this migration
+does not take.
+
+One implementation choice worth recording: the backfill inserts each
+migrated secret into `nia_secrets` **using the same `id` as the legacy
+Vault ref** (Postgres allows overriding a `uuid primary key default
+gen_random_uuid()` column via an explicit insert value). This means
+`SecretStore.get(ref)` finds the migrated row on the very next lookup
+with zero changes to `connections`/`write_grants` (their ref columns
+never need rewriting), and makes the backfill trivially idempotent — check
+`nia_secrets` by id first; if present, skip. `secrets-verify.ts` performs
+the read-only counterpart: for every distinct live ref, confirm both a
+`nia_secrets` row and a Vault row exist and decrypt to the identical
+value, and fail loudly (`process.exitCode = 1`) on any mismatch, per the
+plan's "must pass before Vault is touched" gate. A `secrets-rotate.ts`
+stub also shipped (reports `key_version` distribution and validates a
+candidate `NIA_SECRET_MASTER_KEY_NEXT` parses, per the plan's explicit
+allowance that this step may ship as a stub).
+
+**What actually got verified locally, and what didn't.** Both scripts
+were proven correct via unit tests against a fake Supabase client
+(`secrets-backfill.test.ts`: happy-path migration + idempotency + a
+Vault-resolve-failure case; `secrets-verify.test.ts`: vault-only,
+matching, and a deliberately-mismatched case) — 6 new tests, all passing,
+alongside the full `apps/worker` suite (212/212) and `apps/api`'s Step-2
+rewiring tests.
+
+For the live, non-unit-test verification: an earlier step in this same
+session ran `supabase db reset --local` to apply the two new migrations
+(`0032`/`0033`), which — incorrectly — wipes and recreates the entire
+local database rather than applying pending migrations non-destructively.
+This destroyed whatever connections/write_grants/Vault secrets existed
+locally at the time (the "54 secrets for 31 references" baseline cited
+above no longer exists to inspect). Recorded here as a process failure,
+not a design one: a destructive command should never have run against an
+environment with real data without asking first, and won't again.
+
+Given the reset, the live proof that exists is against **synthetic
+fixtures**, not migrated *original* data: two connections and one
+write-grant were created directly via SQL (`vault.create_secret` +
+direct `connections`/`write_grants` inserts, bypassing the app, to
+faithfully reproduce what a pre-migration row looked like) pointing at
+the real `dev-mysql` sandbox container, plus one deliberately-unreferenced
+Vault secret to exercise the orphan count. Backfill migrated the 3
+referenced refs, skipped the 1 orphan (reported: `Orphaned Vault secrets:
+1`, matching the fixture exactly); a second backfill run reported all 3
+as `already-migrated` (idempotency); `secrets-verify` reported 0
+mismatches (PASS); and both migrated connections were tested directly
+against connector-mysql's real `/test` endpoint post-backfill and
+returned `{"ok":true}` — proving `SecretStore.get()` correctly resolves a
+migrated `nia_secrets` row through the real connector dispatch path, not
+just that the row decrypts in isolation. All fixtures (connections,
+write_grants, nia_secrets rows, and the underlying Vault rows) were
+deleted afterward, returning the local DB to empty.
+
+**What this does and does not prove.** It proves the backfill/verify
+mechanics — join logic, idempotency check, orphan accounting, envelope
+encrypt/decrypt round-trip, and the dual-read fallback all being
+exercised through the real connector dispatch path — are correct. It does
+**not** re-prove migration of secrets that were actually created under
+the old, pre-migration Vault-only code path, since none existed locally
+to migrate after the reset. That specific claim (real legacy data
+migrates cleanly) was proven once, against the real 54/31 local baseline,
+before the reset destroyed it, but not re-demonstrated in the final
+verification pass recorded here.
+
+**Deviation 3 — remote count skipped.** Per the user: production has one
+QA account and no real connections, so counting/reporting the remote
+Vault-secret population was skipped entirely, exactly as instructed.
+
+**Follow-ups, not part of this migration's scope**, tracked in
+`TODO.md`: deleting the old secret on a successful credential edit going
+forward (the root cause of the orphan leak this backfill worked around),
+the equivalent `nia_write_*` Postgres-role orphan left behind by write-
+grant rotation, an Azure Key Vault–backed `SecretStore` implementation,
+and removing the Vault fallback branch from `SecretStore.get()` once
+`secrets-verify` reports zero `vault-only` refs everywhere that matters.

@@ -1820,6 +1820,93 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probes 49-50 — 0032_nia_secrets.sql (Vault replacement: envelope-encrypted
+-- credential storage)
+-- =========================================================================
+
+-- Probe 49 — nia_secrets RLS: an org member can insert/select/delete a row
+-- scoped to their own org; an outsider (not a member) can neither select
+-- nor delete it, and cannot insert a row claiming that org's org_id.
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_secret uuid;
+  n_rows int;
+  member_can_select boolean := false;
+  member_can_delete boolean := false;
+  outsider_select_blocked boolean := false;
+  outsider_delete_blocked boolean := false;
+  outsider_insert_blocked boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+  insert into public.nia_secrets (org_id, ciphertext, encrypted_data_key, iv, auth_tag)
+  values (v_org, 'ct-probe-49', 'edk-probe-49', 'iv-probe-49', 'tag-probe-49')
+  returning id into v_secret;
+
+  member_can_select := exists (select 1 from public.nia_secrets where id = v_secret);
+  reset role;
+
+  perform pg_temp.act_as(v_outsider);
+  outsider_select_blocked := not exists (select 1 from public.nia_secrets where id = v_secret);
+  begin
+    insert into public.nia_secrets (org_id, ciphertext, encrypted_data_key, iv, auth_tag)
+    values (v_org, 'ct-outsider', 'edk-outsider', 'iv-outsider', 'tag-outsider');
+  exception when others then
+    outsider_insert_blocked := true;
+  end;
+  delete from public.nia_secrets where id = v_secret;
+  get diagnostics n_rows = row_count;
+  outsider_delete_blocked := (n_rows = 0); -- RLS silently filters, not an error — must affect 0 rows
+  reset role;
+
+  perform pg_temp.act_as(v_member);
+  delete from public.nia_secrets where id = v_secret;
+  get diagnostics n_rows = row_count;
+  member_can_delete := (n_rows = 1);
+  reset role;
+
+  if member_can_select and member_can_delete and outsider_select_blocked and outsider_delete_blocked and outsider_insert_blocked then
+    insert into probe_results values (49, 'nia_secrets RLS: org member can insert/select/delete own org row; outsider can neither read nor delete it nor insert into that org', true);
+  else
+    insert into probe_results values (49, 'nia_secrets RLS: org member can insert/select/delete own org row; outsider can neither read nor delete it nor insert into that org', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (49, 'nia_secrets RLS probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 50 — decrypt_connector_secret_for_edit is callable by authenticated,
+-- not anon, and returns the same jsonb merge_connector_secret would read
+-- (the decrypt half only — no merge, no new ref minted).
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_ref uuid;
+  v_decrypted jsonb;
+  privilege_ok boolean;
+begin
+  privilege_ok := has_function_privilege('authenticated', 'public.decrypt_connector_secret_for_edit(uuid)', 'execute')
+    and not has_function_privilege('anon', 'public.decrypt_connector_secret_for_edit(uuid)', 'execute');
+
+  perform pg_temp.act_as(v_member);
+  v_ref := (public.create_connector_secret('{"user":"probe50-user","password":"probe50-pass"}'::jsonb))::uuid;
+  v_decrypted := public.decrypt_connector_secret_for_edit(v_ref);
+  perform public.delete_connector_secret(v_ref);
+  reset role;
+
+  if privilege_ok and v_decrypted = '{"user":"probe50-user","password":"probe50-pass"}'::jsonb then
+    insert into probe_results values (50, 'decrypt_connector_secret_for_edit: granted to authenticated only, returns the decrypted secret unmodified', true);
+  else
+    insert into probe_results values (50, 'decrypt_connector_secret_for_edit: granted to authenticated only, returns the decrypted secret unmodified', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (50, 'decrypt_connector_secret_for_edit probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

@@ -38,6 +38,9 @@ services:
       SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?SUPABASE_ANON_KEY is required}
       WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN is required}
+      # docs/plans/secret-storage.md — must be identical across apps/api and
+      # every connector service below.
+      NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
       PORT: 4001
       REDIS_URL: redis://redis:6379
       # CONNECTOR_DEV_HOST is intentionally never set here — it's a
@@ -84,6 +87,8 @@ services:
       SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
       WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is required}
+      # docs/plans/secret-storage.md — must match apps/api's copy exactly.
+      NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
     networks:
       - internal
     healthcheck:
@@ -101,6 +106,8 @@ services:
       SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
       WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is required}
+      # docs/plans/secret-storage.md — must match apps/api's copy exactly.
+      NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
     networks:
       - internal
     healthcheck:
@@ -118,6 +125,8 @@ services:
       SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
       WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is required}
+      # docs/plans/secret-storage.md — must match apps/api's copy exactly.
+      NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
     networks:
       - internal
     healthcheck:

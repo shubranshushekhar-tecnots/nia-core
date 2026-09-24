@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { decryptSecret, parseMasterKey } from "@nia/secrets";
 import { createConnection, updateConnection } from "./connections.js";
+
+// getSecretStore (../lib/secretStore.js) does real envelope encryption
+// against NIA_SECRET_MASTER_KEY (fixed test value from vitest.config.ts) —
+// used below to decrypt what the fakes' nia_secrets table actually stored,
+// rather than inspecting an RPC call's args as the pre-migration tests did.
+const TEST_MASTER_KEY = parseMasterKey(process.env.NIA_SECRET_MASTER_KEY);
 
 /**
  * updateConnection's edit flow (see connections.ts's header comment on the
@@ -65,9 +72,20 @@ function baseRow(overrides: Partial<FakeConnectionRow> = {}): FakeConnectionRow 
   };
 }
 
-/** Records rpc calls and services connections.ts's select-existing / update-and-return chains, matching the real query shape it builds (see updateConnection's body). */
+/**
+ * Records rpc calls and services connections.ts's select-existing /
+ * update-and-return chains, matching the real query shape it builds (see
+ * updateConnection's body). Also backs a minimal in-memory nia_secrets
+ * table for getSecretStore's put/get/delete (packages/secrets/src/store.ts)
+ * — baseRow's "old-ref" is treated as a pre-migration ref never present in
+ * nia_secrets, so a get() on it falls through to legacyResolve
+ * (decrypt_connector_secret_for_edit), mirroring
+ * apps/api/src/lib/secretStore.ts's real wiring exactly.
+ */
 function createFakeClient(row: FakeConnectionRow) {
   const rpcCalls: { name: string; args: unknown }[] = [];
+  const secretRows = new Map<string, Record<string, unknown>>();
+  let nextSecretId = 1;
 
   function chain(kind: "existing" | "update", patch?: Record<string, unknown>): unknown {
     return {
@@ -82,6 +100,33 @@ function createFakeClient(row: FakeConnectionRow) {
 
   const supabase = {
     from: (table: string) => {
+      if (table === "nia_secrets") {
+        return {
+          insert: (secretRow: Record<string, unknown>) => ({
+            select: () => ({
+              single: async () => {
+                const id = `secret-${nextSecretId++}`;
+                secretRows.set(id, secretRow);
+                return { data: { id }, error: null };
+              },
+            }),
+          }),
+          select: () => ({
+            eq: (_col: string, id: string) => ({
+              maybeSingle: async () => {
+                const stored = secretRows.get(id);
+                return { data: stored ? { id, ...stored } : null, error: null };
+              },
+            }),
+          }),
+          delete: () => ({
+            eq: async (_col: string, id: string) => {
+              secretRows.delete(id);
+              return { error: null };
+            },
+          }),
+        };
+      }
       if (table !== "connections") throw new Error(`unexpected table "${table}" in fake`);
       return {
         select: () => chain("existing"),
@@ -90,14 +135,15 @@ function createFakeClient(row: FakeConnectionRow) {
     },
     rpc: async (name: string, args: unknown) => {
       rpcCalls.push({ name, args });
-      if (name === "merge_connector_secret") return { data: "new-vault-ref", error: null };
       if (name === "log_connection_audit") return { data: null, error: null };
-      if (name === "delete_connector_secret") return { data: null, error: null };
+      if (name === "decrypt_connector_secret_for_edit") {
+        return { data: { user: "old-user", password: "old-password" }, error: null };
+      }
       throw new Error(`unexpected rpc "${name}" in fake`);
     },
   } as unknown as SupabaseClient;
 
-  return { supabase, rpcCalls };
+  return { supabase, rpcCalls, secretRows };
 }
 
 describe("updateConnection — edit flow", () => {
@@ -108,31 +154,48 @@ describe("updateConnection — edit flow", () => {
 
   it("leaves the stored secret untouched when user/password are left blank", async () => {
     const row = baseRow();
-    const { supabase, rpcCalls } = createFakeClient(row);
+    const { supabase, secretRows } = createFakeClient(row);
 
     const result = await updateConnection(supabase, { orgId: "org-A" }, "conn-1", "actor-1", {
       fields: { host: "new-host", port: 3306, database: "sandbox", user: "", password: "" },
       confirmed: true,
     });
 
-    expect(rpcCalls.find((c) => c.name === "merge_connector_secret")).toBeUndefined();
+    // An empty secretPatch means updateConnection never touches the
+    // SecretStore at all (see connections.ts's `if (Object.keys(secretPatch).length > 0)` guard).
+    expect(secretRows.size).toBe(0);
     expect(result.config).toMatchObject({ host: "new-host" });
     // config changed (host) -> cred_version still bumps and the pool is invalidated,
     // even though no secret field was touched.
     expect(dispatchInvalidate).toHaveBeenCalledTimes(1);
   });
 
-  it("rotates only the provided secret field via merge_connector_secret and invalidates the pool", async () => {
+  it("rotates only the provided secret field and invalidates the pool", async () => {
     const row = baseRow();
-    const { supabase, rpcCalls } = createFakeClient(row);
+    const { supabase, rpcCalls, secretRows } = createFakeClient(row);
 
     await updateConnection(supabase, { orgId: "org-A" }, "conn-1", "actor-1", {
       fields: { host: "old-host", port: 3306, database: "sandbox", user: "", password: "new-password" },
       confirmed: true,
     });
 
-    const mergeCall = rpcCalls.find((c) => c.name === "merge_connector_secret");
-    expect(mergeCall?.args).toEqual({ p_old_ref: "old-ref", p_partial: { password: "new-password" } });
+    // The merge-in-API path (docs/plans/secret-storage.md's update-path
+    // report): the old secret is read via legacyResolve (asserted via the
+    // decrypt_connector_secret_for_edit rpc call below), merged with the
+    // patch in memory, and written as a brand-new nia_secrets row — decrypt
+    // it to confirm only "password" changed and "user" carried over.
+    expect(secretRows.size).toBe(1);
+    const [storedRow] = [...secretRows.values()] as [Record<string, unknown>];
+    const encrypted = {
+      ciphertext: storedRow.ciphertext as string,
+      encryptedDataKey: storedRow.encrypted_data_key as string,
+      iv: storedRow.iv as string,
+      authTag: storedRow.auth_tag as string,
+      algorithm: storedRow.algorithm as string,
+      keyVersion: storedRow.key_version as number,
+    };
+    expect(decryptSecret(TEST_MASTER_KEY, encrypted)).toEqual({ user: "old-user", password: "new-password" });
+    expect(rpcCalls.find((c) => c.name === "decrypt_connector_secret_for_edit")?.args).toEqual({ p_ref: "old-ref" });
     expect(dispatchInvalidate).toHaveBeenCalledTimes(1);
 
     const auditCall = rpcCalls.find((c) => c.name === "log_connection_audit");
@@ -222,6 +285,18 @@ describe("createConnection — Item 6.1 NAME_TAKEN", () => {
     return {
       from: (table: string) => {
         if (table === "connector_installs") return { select: () => installsStub };
+        if (table === "nia_secrets") {
+          // createConnection's getSecretStore(supabase).put(...) runs before
+          // the connections insert below — this test only cares about the
+          // NAME_TAKEN error path that follows, so a bare insert stub is enough.
+          return {
+            insert: () => ({
+              select: () => ({
+                single: async () => ({ data: { id: "secret-1" }, error: null }),
+              }),
+            }),
+          };
+        }
         if (table === "connections") {
           return {
             insert: () => ({
@@ -240,7 +315,6 @@ describe("createConnection — Item 6.1 NAME_TAKEN", () => {
         throw new Error(`unexpected table "${table}" in fake`);
       },
       rpc: async (name: string) => {
-        if (name === "create_connector_secret") return { data: "vault-ref-1", error: null };
         throw new Error(`unexpected rpc "${name}" in fake`);
       },
     } as unknown as SupabaseClient;

@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@nia/schemas": "workspace:*",
+    "@nia/secrets": "workspace:*",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.46.1",
     "bullmq": "^5.34.4",

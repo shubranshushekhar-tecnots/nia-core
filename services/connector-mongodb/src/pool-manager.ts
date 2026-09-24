@@ -1,5 +1,6 @@
 import { MongoClient, type Db } from "mongodb";
 import { createClient } from "@supabase/supabase-js";
+import { createEnvKeySecretStore } from "@nia/secrets";
 import type { ConnectorConfig, CredentialRef } from "@nia/schemas";
 
 /**
@@ -33,17 +34,30 @@ function parseMongoConfig(config: ConnectorConfig): { host: string; port: number
   return { host, port, database };
 }
 
-// Same role as connector-mysql's: resolve_connector_secret RPC only,
-// nothing else — see that file's comment for the full rationale.
+// Same role as connector-mysql's: resolve_connector_secret RPC (legacy
+// Vault fallback) + nia_secrets reads — see that file's comment for the
+// full rationale.
 const supabase = createClient(
   process.env.SUPABASE_URL ?? "",
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
   { auth: { persistSession: false, autoRefreshToken: false } },
 );
 
+// docs/plans/secret-storage.md — dual-read: nia_secrets checked first,
+// resolve_connector_secret RPC (legacy Vault) as fallback. Mirrors
+// connector-mysql/src/pool-manager.ts's wiring exactly.
+const secretStore = createEnvKeySecretStore({
+  client: supabase,
+  masterKey: process.env.NIA_SECRET_MASTER_KEY ?? "",
+  legacyResolve: async (ref) => {
+    const { data, error } = await supabase.rpc("resolve_connector_secret", { p_ref: ref });
+    if (error) throw new Error(`vault resolution failed for ref ${ref}: ${error.message}`);
+    return (data as Record<string, unknown> | null) ?? null;
+  },
+});
+
 async function resolveVaultSecret(vaultRef: string): Promise<{ user: string; password: string }> {
-  const { data, error } = await supabase.rpc("resolve_connector_secret", { p_ref: vaultRef });
-  if (error) throw new Error(`vault resolution failed for ref ${vaultRef}: ${error.message}`);
+  const data = await secretStore.get(vaultRef);
   if (
     typeof data !== "object" ||
     data === null ||

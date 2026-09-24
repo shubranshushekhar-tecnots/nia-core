@@ -15,6 +15,7 @@ export default defineConfig({
       SUPABASE_URL: "http://localhost:54321",
       SUPABASE_ANON_KEY: "test-anon-key",
       WEB_ORIGIN: "http://localhost:3100",
+      NIA_SECRET_MASTER_KEY: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
     },
     testTimeout: 15_000,
   },

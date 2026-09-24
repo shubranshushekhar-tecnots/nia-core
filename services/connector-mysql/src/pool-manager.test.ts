@@ -1,13 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectorConfig, CredentialRef } from "@nia/schemas";
 
-// Mock the two external dependencies pool-manager.ts talks to over the
-// network: the Supabase RPC (vault secret resolution) and mysql2 itself.
-// Nothing here should ever touch a real socket.
+// Fixed 32-byte test key for @nia/secrets' createEnvKeySecretStore, which
+// pool-manager.ts constructs at module load — must be set before the first
+// dynamic import() below.
+process.env.NIA_SECRET_MASTER_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+
+// Mock the external dependencies pool-manager.ts talks to over the
+// network: the Supabase RPC (legacy vault secret resolution), the
+// nia_secrets table read (dual-read — mocked here to always miss so
+// existing tests keep exercising the legacy RPC fallback path), and
+// mysql2 itself. Nothing here should ever touch a real socket.
 
 const mockRpc = vi.fn();
+const mockMaybeSingle = vi.fn(async () => ({ data: null, error: null }));
 vi.mock("@supabase/supabase-js", () => ({
-  createClient: () => ({ rpc: mockRpc }),
+  createClient: () => ({
+    rpc: mockRpc,
+    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: mockMaybeSingle }) }) }),
+  }),
 }));
 
 const endMock = vi.fn(async () => undefined);

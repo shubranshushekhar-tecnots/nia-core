@@ -126,6 +126,15 @@ const EnvSchema = z.object({
   NIA_GATEWAY_API_KEY: z.string().min(1),
   NIA_GATEWAY_BASE_URL: z.string().url(),
   NIA_GATEWAY_MODEL: z.string().min(1),
+  /**
+   * Vault replacement (docs/plans/secret-storage.md): the master key that
+   * decrypts every connection/write-grant credential's per-secret data key
+   * (packages/secrets). Never stored in the database, never logged — losing
+   * this value makes every stored credential permanently unrecoverable.
+   * Must be a base64-encoded 32-byte key; generate with
+   * `openssl rand -base64 32`. See DEPLOYMENT.md for rotation.
+   */
+  NIA_SECRET_MASTER_KEY: z.string().min(1),
 });
 
 export const env = EnvSchema.parse(process.env);

@@ -20,6 +20,10 @@ export default defineConfig({
       NIA_GATEWAY_API_KEY: "test-gateway-key",
       NIA_GATEWAY_BASE_URL: "https://api.nia.naslabs.ai/v1",
       NIA_GATEWAY_MODEL: "test-model",
+      // Fixed 32-byte test key for @nia/secrets (docs/plans/secret-storage.md)
+      // — never a real key, this is a fully public value used only so
+      // env.ts's fail-fast parse succeeds in the unit suite.
+      NIA_SECRET_MASTER_KEY: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
     },
     testTimeout: 15_000,
     exclude: [

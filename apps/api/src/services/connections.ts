@@ -13,6 +13,7 @@ import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 import { dispatchInvalidate, dispatchIntrospect, dispatchTest } from "../lib/connectorDispatch.js";
 import { logExecutionAudit } from "../lib/executionAudit.js";
+import { getSecretStore, toSecretScope } from "../lib/secretStore.js";
 import { getCachedSchema, setCachedSchema, invalidateCachedSchema } from "../lib/schemaCache.js";
 import { runSchemaRefreshJob } from "../lib/schemaRefreshQueue.js";
 import { runProfileJob } from "../lib/profileQueue.js";
@@ -196,10 +197,7 @@ export async function createConnection(
 
   const { config, secret } = splitFields(manifest.configSchema, input.fields);
 
-  const { data: vaultRef, error: vaultError } = await supabase.rpc("create_connector_secret", { p_secret: secret });
-  if (vaultError || !vaultRef) {
-    throw new AppError(500, "VAULT_WRITE_FAILED", vaultError?.message ?? "Failed to store credential.");
-  }
+  const vaultRef = await getSecretStore(supabase).put(secret, toSecretScope(scope));
 
   const base = `@${manifest.id}-${slugify(input.displayName)}`;
   for (let attempt = 0; attempt < MAX_HANDLE_ATTEMPTS; attempt++) {
@@ -344,14 +342,21 @@ export async function updateConnection(
     }
   }
 
+  // Merge moved into the API (docs/plans/secret-storage.md's update-path
+  // report): the master key that would decrypt an existing secret never
+  // reaches Postgres, so unlike the old merge_connector_secret RPC, the
+  // decrypt + merge + re-encrypt all happen here in TypeScript via
+  // SecretStore. get() transparently falls back to
+  // decrypt_connector_secret_for_edit for a ref that predates nia_secrets.
   let newVaultRef: string | undefined;
   if (Object.keys(secretPatch).length > 0) {
-    const { data: mergedRef, error: mergeError } = await supabase.rpc("merge_connector_secret", {
-      p_old_ref: existingRow.vault_secret_ref,
-      p_partial: secretPatch,
-    });
-    if (mergeError || !mergedRef) throw new AppError(500, "VAULT_WRITE_FAILED", mergeError?.message ?? "Failed to update credential.");
-    newVaultRef = mergedRef as string;
+    const secretStore = getSecretStore(supabase);
+    const existingSecret = await secretStore.get(existingRow.vault_secret_ref);
+    if (!existingSecret) {
+      throw new AppError(500, "VAULT_READ_FAILED", `Secret not found for ref ${existingRow.vault_secret_ref}.`);
+    }
+    const merged = { ...existingSecret, ...secretPatch };
+    newVaultRef = await secretStore.put(merged, toSecretScope(scope));
   }
 
   const credential: CredentialRef = {
@@ -361,7 +366,7 @@ export async function updateConnection(
   };
   const testResult = await dispatchTest(manifest, credential, mergedConfig);
   if (!testResult.ok) {
-    if (newVaultRef) await supabase.rpc("delete_connector_secret", { p_ref: newVaultRef });
+    if (newVaultRef) await getSecretStore(supabase).delete(newVaultRef);
     throw new AppError(
       422,
       "TEST_FAILED",

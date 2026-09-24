@@ -62,6 +62,37 @@ they're documented in each per-service `.env.production.example` for
 reference if you ever need to override one, but the shipped compose file
 relies on the app's own default.
 
+## Secret storage master key (`NIA_SECRET_MASTER_KEY`)
+
+Every connection credential and write-grant credential (`nia_secrets`
+table, `@nia/secrets` package — see `docs/decisions.md`'s secret-storage
+migration entry) is envelope-encrypted under one shared master key,
+`NIA_SECRET_MASTER_KEY`: 32 random bytes, base64-encoded. It must be
+**byte-for-byte identical** across `api`, `connector-mysql`,
+`connector-mongodb`, and `connector-supabase` (not `worker`, which never
+decrypts a secret itself — it only forwards an opaque ref) — same
+distribution rule as `WRITE_DISPATCH_SIGNING_SECRET`.
+
+Generate one with:
+```
+openssl rand -base64 32
+```
+
+**Losing this key permanently loses every stored credential** — there is
+no recovery path, by design (that's the whole point of the master key
+never reaching Postgres). Back it up in whatever secret manager infra
+uses for the other required secrets in `.env.production.example`, with
+the same durability guarantees as a database backup, before ever running
+this in production with real customer connections.
+
+**Rotation** is not yet automated end-to-end — `apps/worker/scripts/
+secrets-rotate.ts` is currently a stub that reports the `key_version`
+distribution across `nia_secrets` and validates a candidate
+`NIA_SECRET_MASTER_KEY_NEXT` parses, but does not yet perform a real
+re-encryption pass. Until that ships, treat `NIA_SECRET_MASTER_KEY` as a
+long-lived, infrequently-rotated secret, generated once per environment
+and stored durably rather than one you can casually cycle.
+
 ## Migrations
 
 A one-off release step — **never** runs on service startup (no service
