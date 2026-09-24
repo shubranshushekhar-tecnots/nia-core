@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { env } from "./env.js";
+import { checkConnectorFreshness } from "./lib/connectorFreshness.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { dashboardRouter } from "./routes/dashboard.js";
@@ -81,4 +82,7 @@ app.use(errorHandler);
 
 app.listen(env.PORT, () => {
   console.log(`[api] listening on :${env.PORT} (web origin: ${env.WEB_ORIGIN})`);
+  // Best-effort, non-blocking: warns if a running connector container's
+  // image predates its current source (see connectorFreshness.ts).
+  void checkConnectorFreshness();
 });

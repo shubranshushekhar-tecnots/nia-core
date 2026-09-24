@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import Fastify from "fastify";
 import {
   TestRequest,
@@ -54,9 +55,20 @@ function entityMatches(a: WriteEntityRef, b: WriteEntityRef): boolean {
 
 const app = Fastify({ logger: true });
 
+// BUILD_HASH is baked in by the Dockerfile (scripts/compute-build-hash.mjs)
+// at image build time. Reading it fails silently outside Docker (local
+// `tsx` runs) since the file only exists inside the built image.
+let buildHash = "dev";
+try {
+  buildHash = readFileSync("BUILD_HASH", "utf8").trim();
+} catch {
+  // Not running from the built image (e.g. local dev via tsx) — leave "dev".
+}
+
 app.get("/health", async () => ({
   status: "ok" as const,
   service: "connector-mysql",
+  buildHash,
   pools: poolCount(),
   routes: ["test", "introspect", "execute", "invalidate", "write", "stage", "preflight", "create-entity", "drop-entity"],
 }));
