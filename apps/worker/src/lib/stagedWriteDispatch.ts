@@ -159,7 +159,9 @@ export type PreflightDispatchInput = {
 };
 
 /**
- * Read-only, unsigned — see this file's header comment. Called once before
+ * Read-only — signed with the lighter ReadContext (sendPreflightRequest
+ * attaches it), not a full WriteContext; see contract.ts's ReadContext doc
+ * comment. Called once before
  * extraction starts a staged run (job.cursor === null), so a missing
  * privilege fails fast with an actionable message instead of partway
  * through staging DDL.
@@ -186,7 +188,7 @@ export async function dispatchPreflight(
   const grant = await resolveWriteGrant(connection.id, input.entity.namespace);
   if (!grant.ok) return grant;
 
-  const request: PreflightRequest = {
+  const request: Omit<PreflightRequest, "context"> = {
     credential: { connectionId: connection.id, credVersion: grant.value.credVersion, vaultRef: grant.value.vaultRef },
     config: connection.config,
     entity: input.entity,

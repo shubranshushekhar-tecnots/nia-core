@@ -1,5 +1,7 @@
-import type { ConnectorManifest, ConnectorConfig, CredentialRef, IntrospectResponse } from "@nia/schemas";
+import type { ConnectorManifest, ConnectorConfig, CredentialRef, IntrospectResponse, ReadContext } from "@nia/schemas";
 import { TestResponse, IntrospectResponse as IntrospectResponseSchema } from "@nia/schemas";
+import { signReadContext } from "./readSignature.js";
+import { env } from "../env.js";
 
 /**
  * Thin HTTP client for the uniform connector-service contract
@@ -12,6 +14,16 @@ import { TestResponse, IntrospectResponse as IntrospectResponseSchema } from "@n
  * credVersion + vaultRef) crosses this boundary. The service resolves the
  * actual secret itself.
  */
+
+/** Builds a fresh, correctly-signed ReadContext for the given route+connectionId — see readSignature.ts's header comment. */
+function buildReadContext(route: "test" | "introspect" | "invalidate", connectionId: string): ReadContext {
+  const issuedAt = Date.now();
+  const signature = signReadContext(
+    { route, connectionId, queryPayload: null, issuedAt },
+    env.WRITE_DISPATCH_SIGNING_SECRET,
+  );
+  return { issuedAt, signature };
+}
 
 function baseUrl(manifest: ConnectorManifest): string {
   // manifest.service.{host,port} is the Docker-internal-network address
@@ -79,7 +91,7 @@ export async function dispatchTest(
   const res = await fetch(`${baseUrl(manifest)}/test`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ credential, config }),
+    body: JSON.stringify({ credential, config, context: buildReadContext("test", credential.connectionId) }),
   });
   if (!res.ok) {
     return { ok: false, error: await connectorErrorMessage(res) };
@@ -102,7 +114,7 @@ export async function dispatchIntrospect(
   const res = await fetch(`${baseUrl(manifest)}/introspect`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ credential, config }),
+    body: JSON.stringify({ credential, config, context: buildReadContext("introspect", credential.connectionId) }),
   });
   if (!res.ok) {
     return { ok: false, error: await connectorErrorMessage(res) };
@@ -121,7 +133,7 @@ export async function dispatchInvalidate(manifest: ConnectorManifest, connection
     await fetch(`${baseUrl(manifest)}/invalidate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ connectionId }),
+      body: JSON.stringify({ connectionId, context: buildReadContext("invalidate", connectionId) }),
     });
   } catch {
     // Best-effort — see comment above.

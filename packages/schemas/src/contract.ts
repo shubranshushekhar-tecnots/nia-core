@@ -39,14 +39,37 @@ export type CredentialRef = z.infer<typeof CredentialRef>;
 export const ConnectorConfig = z.record(z.string(), z.unknown());
 export type ConnectorConfig = z.infer<typeof ConnectorConfig>;
 
-export const TestRequest = z.object({ credential: CredentialRef, config: ConnectorConfig });
+/**
+ * Signed context for the read-only routes (/test, /introspect, /execute,
+ * /invalidate, /preflight) — the read-path counterpart to WriteContext
+ * below. Deliberately minimal: unlike a write, a read has no destination
+ * state to protect from tampering, only "was this call actually issued by
+ * apps/api or apps/worker, recently". `connectionId` is never duplicated
+ * here since every request already carries it (via `credential.connectionId`
+ * or, for /invalidate, the top-level field) — each connector's route
+ * handler binds signature verification to that same value instead. The
+ * caller's own route name is likewise never a client-supplied field: each
+ * handler hardcodes the literal route it verifies against, so a signature
+ * captured for one route can't be replayed against another.
+ */
+export const ReadContext = z.object({
+  issuedAt: z.number().int(),
+  signature: z.string(),
+});
+export type ReadContext = z.infer<typeof ReadContext>;
+
+export const TestRequest = z.object({ credential: CredentialRef, config: ConnectorConfig, context: ReadContext });
 export const TestResponse = z.object({
   ok: z.boolean(),
   latencyMs: z.number().optional(),
   error: z.string().optional(),
 });
 
-export const IntrospectRequest = z.object({ credential: CredentialRef, config: ConnectorConfig });
+export const IntrospectRequest = z.object({
+  credential: CredentialRef,
+  config: ConnectorConfig,
+  context: ReadContext,
+});
 export const IntrospectResponse = z.object({
   /** Schemas/collections → entities → fields, feeding AI-proposed mappings. */
   entities: z.array(
@@ -127,11 +150,13 @@ export const ExecuteRequest = z.object({
   query: QueryPayload,
   rowCap: z.number().int().positive().default(1000),
   timeoutMs: z.number().int().positive().default(15000),
+  context: ReadContext,
 });
 export const ExecuteResponse = TabularResult;
 
 export const InvalidateRequest = z.object({
   connectionId: z.string().uuid(),
+  context: ReadContext,
 });
 export const InvalidateResponse = z.object({ evicted: z.boolean() });
 
@@ -317,18 +342,20 @@ export const StageResponse = z.object({
 export type StageResponse = z.infer<typeof StageResponse>;
 
 /**
- * Phase 11 Block 2D — preflight. Unsigned and read-only (mirrors
- * `/introspect`'s posture: no mutation, so no signed context needed),
- * called once before extraction starts. Each check names the privilege it
- * verified and, on failure, the exact grant SQL an operator needs to run —
- * so a missing-privilege run fails fast with an actionable message instead
- * of partway through staging DDL.
+ * Phase 11 Block 2D — preflight. Read-only (no mutation), called once
+ * before extraction starts. Each check names the privilege it verified
+ * and, on failure, the exact grant SQL an operator needs to run — so a
+ * missing-privilege run fails fast with an actionable message instead of
+ * partway through staging DDL. Signed with ReadContext (Stage 5
+ * production-readiness pass) — see ReadContext's doc comment for why this
+ * uses the lighter read-path signature rather than WriteContext.
  */
 export const PreflightRequest = z.object({
   credential: CredentialRef,
   config: ConnectorConfig,
   entity: WriteEntityRef,
   upsertKeys: z.array(SqlIdentifier).min(1),
+  context: ReadContext,
 });
 export type PreflightRequest = z.infer<typeof PreflightRequest>;
 

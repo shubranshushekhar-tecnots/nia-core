@@ -19,18 +19,21 @@
  *
  * Run with (from apps/worker/):
  *   npx tsx scripts/etl-kill-resume-smoke.ts
- * (reads apps/worker/.env for SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY/
- * CONNECTOR_DEV_HOST/REDIS_URL via dotenv/config, same as env.ts — runEtl
- * publishes real run events over the real Redis connection.)
+ * (reads apps/worker/.env for REDIS_URL/CONNECTOR_DEV_HOST via dotenv/config,
+ * same as env.ts — runEtl publishes real run events over the real Redis
+ * connection. SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY are
+ * NOT in apps/worker/.env.example — this script is one of the known
+ * @supabase/supabase-js dev-tooling exceptions, see
+ * apps/worker/scripts/README.md — set them directly in apps/worker/.env if
+ * you need to run this script.)
  *
  * Prerequisites (not started by this script):
- *   - `supabase start` (applies migrations, incl. 0017's cursor_json column
- *     + 'cancelled' status, + seed.sql's demo org/user)
+ *   - A running Supabase project with this repo's migrations applied
+ *     (incl. 0017's cursor_json column + 'cancelled' status) and a seeded
+ *     demo user (see README's "seed:fixtures" step), reachable via
+ *     SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY.
  *   - `docker compose up -d --build redis dev-mysql dev-postgres
  *     connector-mysql connector-supabase`
- *   - apps/web/.env.local (or supabase status) for SUPABASE_ANON_KEY, used
- *     to sign in as seed.sql's demo user for the write-grant RPCs (same
- *     requirement as write-smoke.ts).
  *
  * This script runs on the HOST: it reaches dev-mysql/dev-postgres via their
  * host-published ports (3307/5433) for direct seeding/verification via

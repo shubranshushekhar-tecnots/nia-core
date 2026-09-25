@@ -17,11 +17,12 @@ import {
   type PreflightResponse,
   type CreateEntityResponse,
   type DropEntityResponse,
+  type ReadContext,
 } from "@nia/schemas";
 import { getDb, getWriteDb, evict, poolCount, verifyActiveWriteGrant, checkSupabaseReachable } from "./pool-manager.js";
 import { flattenDocuments } from "./flatten.js";
 import { resolveColumnType, serializeCellValue } from "./column-types.js";
-import { verifyWriteContext, HttpError } from "./writeSignature.js";
+import { verifyWriteContext, verifyReadContext, HttpError } from "./writeSignature.js";
 import { buildBulkWriteOps } from "./writeOps.js";
 
 /**
@@ -63,6 +64,37 @@ function hydrateObjectIdCursor(pipeline: Record<string, unknown>[]): Record<stri
 
 const SAMPLE_SIZE = 50;
 
+/**
+ * Stage 5 production-readiness pass — verifies the lighter ReadContext
+ * (contract.ts) attached to /test, /introspect, /execute, /invalidate,
+ * /preflight. Mirrors /write's verifyWriteContext+HttpError(401) pattern
+ * below, just against the smaller read-side payload shape. `route` is
+ * always the literal call-site string, never taken from the request body,
+ * so a signature captured for one route can't be replayed against
+ * another. `queryPayload` is only non-null for /execute (binds the signed
+ * context to the exact query text/params, not just the connectionId).
+ */
+function verifyReadRequest(
+  route: "test" | "introspect" | "execute" | "invalidate" | "preflight",
+  connectionId: string,
+  context: ReadContext,
+  queryPayload: unknown = null,
+): void {
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const valid = verifyReadContext(
+    {
+      route,
+      connectionId,
+      queryPayload: queryPayload === null ? null : JSON.stringify(queryPayload),
+      issuedAt: context.issuedAt,
+    },
+    context.signature,
+    secret,
+  );
+  if (!valid) throw new HttpError(401, "read context signature is invalid or expired");
+}
+
 const app = Fastify({ logger: true });
 
 // BUILD_HASH is baked in by the Dockerfile (scripts/compute-build-hash.mjs)
@@ -84,7 +116,8 @@ app.get("/health", async () => ({
 }));
 
 app.post("/test", async (req) => {
-  const { credential, config } = TestRequest.parse(req.body);
+  const { credential, config, context } = TestRequest.parse(req.body);
+  verifyReadRequest("test", credential.connectionId, context);
   const start = Date.now();
   try {
     const db = await getDb(credential, config);
@@ -96,7 +129,8 @@ app.post("/test", async (req) => {
 });
 
 app.post("/introspect", async (req) => {
-  const { credential, config } = IntrospectRequest.parse(req.body);
+  const { credential, config, context } = IntrospectRequest.parse(req.body);
+  verifyReadRequest("introspect", credential.connectionId, context);
   const db = await getDb(credential, config);
   const collections = await db.listCollections({}, { nameOnly: true }).toArray();
   const entities = [];
@@ -122,6 +156,7 @@ app.post("/introspect", async (req) => {
 
 app.post("/execute", async (req): Promise<TabularResult> => {
   const body = ExecuteRequest.parse(req.body);
+  verifyReadRequest("execute", body.credential.connectionId, body.context, body.query);
   if (body.query.kind !== "mongo") {
     throw new Error(`connector-mongodb only accepts mongo queries, got kind: ${body.query.kind}`);
   }
@@ -254,8 +289,11 @@ app.post("/write", async (req): Promise<WriteResponse> => {
  * topology probe with no way to exercise the transactional path in this
  * environment. `/stage` still Zod-parses the request (so malformed
  * payloads fail the same way they would anywhere else) but never opens a
- * connection or touches Mongo — there is nothing to verify a signature
- * against, since no mutation ever happens.
+ * connection or touches Mongo — there is no WriteContext to verify a
+ * write-grant signature against, since no mutation ever happens.
+ * `/preflight` does still verify its ReadContext below (Stage 5) — that
+ * check is about proving the caller is genuinely apps/worker, unrelated
+ * to whether this route mutates anything.
  */
 const STAGED_MODE_UNSUPPORTED_MESSAGE =
   "connector-mongodb does not support staged writes: atomic apply-from-staging requires multi-document " +
@@ -268,7 +306,8 @@ app.post("/stage", async (req): Promise<StageResponse> => {
 });
 
 app.post("/preflight", async (req): Promise<PreflightResponse> => {
-  PreflightRequest.parse(req.body);
+  const body = PreflightRequest.parse(req.body);
+  verifyReadRequest("preflight", body.credential.connectionId, body.context);
   return {
     ok: false,
     checks: [{ name: "stagedModeSupported", ok: false, message: STAGED_MODE_UNSUPPORTED_MESSAGE }],
@@ -414,7 +453,8 @@ app.post("/drop-entity", async (req): Promise<DropEntityResponse> => {
 });
 
 app.post("/invalidate", async (req) => {
-  const { connectionId } = InvalidateRequest.parse(req.body);
+  const { connectionId, context } = InvalidateRequest.parse(req.body);
+  verifyReadRequest("invalidate", connectionId, context);
   return { evicted: await evict(connectionId) };
 });
 

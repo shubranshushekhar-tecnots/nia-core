@@ -162,6 +162,16 @@ const EnvSchema = z.object({
    * `openssl rand -base64 32`. See DEPLOYMENT.md for rotation.
    */
   NIA_SECRET_MASTER_KEY: z.string().min(1),
+  /**
+   * Stage 5 production-readiness pass — signs the ReadContext apps/api
+   * attaches to its own connector-service dispatches (connectorDispatch.ts's
+   * /test, /introspect, /invalidate calls; the analogous /execute and
+   * /preflight calls are apps/worker-only). Must be byte-identical to every
+   * connector service's copy and to apps/worker's, same distribution rule
+   * as WRITE_DISPATCH_SIGNING_SECRET's existing worker/connector usage —
+   * see readSignature.ts's header comment and DEPLOYMENT.md.
+   */
+  WRITE_DISPATCH_SIGNING_SECRET: z.string().min(32),
 }).refine((e) => !(e.NODE_ENV === "production" && e.CONNECTOR_DEV_HOST), {
   message:
     "CONNECTOR_DEV_HOST must not be set when NODE_ENV=production — it overrides the connector service host to a dev-only address.",

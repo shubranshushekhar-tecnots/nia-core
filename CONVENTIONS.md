@@ -1,22 +1,30 @@
 # nia-core
 
 ## Overview
-Data-workflow SaaS. Turborepo + pnpm monorepo, Supabase (Postgres + Auth) as
-the backend, RLS as the sole authorization boundary (server code never
-re-implements access checks — it trusts Postgres RLS).
+Data-workflow SaaS. Turborepo + pnpm monorepo. Backend is a plain Postgres
+host (Docker locally, see `docs/plans/local-dev.md`) — no Supabase CLI, no
+PostgREST, no Supabase Studio for the app's own data. RLS is still the sole
+authorization boundary (server code never re-implements access checks — it
+trusts Postgres RLS), just reached via `@nia/db`'s `withActingUser`/
+`withServiceRole` (`SET LOCAL ROLE` inside an explicit transaction) instead
+of PostgREST. Auth is Better Auth (`@nia/auth`), not Supabase Auth — see
+`docs/plans/auth.md`.
 
-**Stack:** Next.js 15 App Router (`apps/web`), BullMQ/ioredis worker
-(`apps/worker`), Supabase Postgres/Auth, Zustand (client UI state only),
-inline `CSSProperties` design-token styles (no Tailwind, no CSS-in-JS lib).
+**Stack:** Next.js 15 App Router (`apps/web`, FE + BFF), Express BFF
+(`apps/api`), BullMQ/ioredis worker (`apps/worker`), plain Postgres
+(`@nia/db`), Better Auth, Zustand (client UI state only), inline
+`CSSProperties` design-token styles (no Tailwind, no CSS-in-JS lib).
 
 ## Key files
-- `supabase/migrations/*.sql` — forward-only, additive migrations. RLS
-  policies + `SECURITY DEFINER` helpers live in a `private` schema with
+- `supabase/migrations/*.sql` — forward-only, additive migrations (the
+  `supabase/` directory name is legacy — these are plain SQL files, applied
+  via `scripts/migrate.mjs`, not the Supabase CLI). RLS policies +
+  `SECURITY DEFINER` helpers live in a `private` schema with
   `search_path=''` pinned. Never edit a past migration in place — add a new
   one.
 - `supabase/tests/rls_probes.sql` — RLS regression suite. Wrapped in
   `begin; ... rollback;` so it never persists data. Run with
-  `supabase db query --linked --file supabase/tests/rls_probes.sql`.
+  `psql "$DATABASE_URL" -f supabase/tests/rls_probes.sql` (see README).
 - `packages/schemas/src/can.ts` — `ActorRole` (`individual | member | admin |
   owner`) capability matrix. UI-gating convenience only; RLS is the real
   enforcement. Roles separate GOVERNANCE from WORK: every role can do every
@@ -32,7 +40,12 @@ inline `CSSProperties` design-token styles (no Tailwind, no CSS-in-JS lib).
 - `apps/web/src/lib/auth/session.ts` — `requireUser()` (org-optional;
   org-less users are `role: "individual"`, personal workspace) and
   `requireUserWithOrg()` (thin wrapper, redirects org-less users to
-  `/onboarding`; only for routes that truly require an org).
+  `/onboarding`; only for routes that truly require an org). Backed by
+  Better Auth sessions, not Supabase Auth.
+- `apps/api/src/middleware/actor.ts` — the Express port of the above
+  (`attachActor`), reading through `req.withUser` (a request-scoped
+  `@nia/db` closure, see `apps/api/src/lib/withUser.ts`) instead of a
+  PostgREST client.
 - `apps/web/src/lib/dashboard/queries.ts` / `actions.ts` — all take a
   `WorkspaceScope = { orgId: string } | { ownerId: string }` (or
   `orgId: string | null`) and branch org-scoped vs personal-workspace reads
@@ -52,8 +65,10 @@ pnpm --filter @nia/web typecheck
 cd apps/web && ./node_modules/.bin/next dev -p 3100   # see note below
 cd apps/web && PORT=3100 npx playwright test
 ```
-Migrations: `supabase link` once, then `supabase db push` (review the SQL
-first) and `supabase migration list` to confirm remote sync.
+Migrations: `DATABASE_URL=... pnpm run migrate:push` (`scripts/migrate.mjs`
+— status/push/verify/resolve subcommands). See README for the full local
+setup and DEPLOYMENT.md for how the production `apps/api` image
+self-migrates on container start.
 
 **Dev server note:** never start `next dev` with a backgrounded/detached
 process tied to the current session — it dies when the session ends. Run it
@@ -68,14 +83,33 @@ foreground commands to a persistent terminal). Standardized on port 3100.
 - Styles are colocated per feature in a `styles.ts` exporting
   `CSSProperties` objects, using CSS custom properties from `theme.css` —
   never hardcoded hex or literal font names.
-- e2e tests (`apps/web/e2e/`) avoid creating real Supabase auth sessions ad
-  hoc (no service-role key available by design); tests that need one are
-  written but `test.skip`/documented until a seeded test account exists
+- e2e tests (`apps/web/e2e/`) avoid creating real Better Auth sessions ad
+  hoc via direct DB writes (no service-role key available to `apps/web` by
+  design); tests sign in through the real `/login` form (`auth.setup.ts`)
+  or are written but skipped/documented until a seeded test account exists
   out-of-band.
+
+## Known Supabase-client exceptions
+Two places still genuinely use `@supabase/supabase-js` against a running
+Supabase project, by design, not oversight:
+- **`services/connector-mysql|mongodb|supabase/src/pool-manager.ts`** —
+  reads `nia_secrets` (service-role, bypasses its RLS) to resolve
+  connection/write-grant credentials. Not yet migrated to `@nia/db`; the
+  three connector services are the intended long-term home for this
+  dependency (see the audit note in `TODO.md`).
+- **`apps/worker/scripts/*.ts`** (dev-only smoke/verification tooling, not
+  shipped in the built worker image) — predates the PostgREST→`@nia/db`
+  migration and was never migrated along with `src/`. See
+  `apps/worker/scripts/README.md`.
+
+Everywhere else (`apps/web`, `apps/api`, `apps/worker/src`) is fully off
+`@supabase/supabase-js`/PostgREST for data access — see
+`docs/plans/data-access.md`.
 
 ## Common tasks
 - **Add a migration:** new `NNNN_description.sql` in `supabase/migrations/`,
   additive only. Add matching probes to `supabase/tests/rls_probes.sql`.
+  Apply locally with `pnpm run migrate:push`.
 - **Add a capability:** extend the matrix in `packages/schemas/src/can.ts`,
   then mirror the same rule in the relevant table's RLS policy.
 - **Add an `/app` page:** follow `apps/web/src/app/app/connections/page.tsx`

@@ -9,6 +9,7 @@ import type {
   IntrospectResponse,
   PreflightRequest,
   PreflightResponse,
+  ReadContext,
   StageRequest,
   StageResponse,
   TestResponse,
@@ -29,6 +30,7 @@ import type { ValidatedQuery } from "@nia/guardrails";
 import { env } from "../env.js";
 import type { DispatchResult } from "./errors.js";
 import { warnIfRouteMissing } from "./routeAwareness.js";
+import { signReadContext } from "./writeSignature.js";
 
 const DEFAULT_ROW_CAP = 1000;
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -38,6 +40,20 @@ const DEFAULT_WRITE_TIMEOUT_MS = 15000;
 const DEFAULT_STAGE_TIMEOUT_MS = 30000;
 const DEFAULT_PREFLIGHT_TIMEOUT_MS = 15000;
 const DEFAULT_CREATE_ENTITY_TIMEOUT_MS = 30000;
+
+/** Builds a fresh, correctly-signed ReadContext for the given route+connectionId — see writeSignature.ts's ReadSignaturePayload doc comment. */
+function buildReadContext(
+  route: "test" | "introspect" | "execute" | "preflight",
+  connectionId: string,
+  queryPayload: unknown = null,
+): ReadContext {
+  const issuedAt = Date.now();
+  const signature = signReadContext(
+    { route, connectionId, queryPayload: queryPayload === null ? null : JSON.stringify(queryPayload), issuedAt },
+    env.WRITE_DISPATCH_SIGNING_SECRET,
+  );
+  return { issuedAt, signature };
+}
 
 function baseUrl(manifest: ConnectorManifest): string {
   // Same CONNECTOR_DEV_HOST override apps/api/src/lib/connectorDispatch.ts
@@ -85,6 +101,7 @@ export async function sendToConnector(
         query: validated.query,
         rowCap: opts.rowCap ?? DEFAULT_ROW_CAP,
         timeoutMs,
+        context: buildReadContext("execute", credential.connectionId, validated.query),
       }),
       signal: controller.signal,
     });
@@ -155,7 +172,7 @@ export async function sendIntrospectRequest(
     res = await fetch(`${baseUrl(manifest)}/introspect`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ credential, config }),
+      body: JSON.stringify({ credential, config, context: buildReadContext("introspect", credential.connectionId) }),
       signal: controller.signal,
     });
   } catch (err) {
@@ -228,7 +245,7 @@ export async function sendTestRequest(
     res = await fetch(`${baseUrl(manifest)}/test`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ credential, config }),
+      body: JSON.stringify({ credential, config, context: buildReadContext("test", credential.connectionId) }),
       signal: controller.signal,
     });
   } catch (err) {
@@ -424,14 +441,18 @@ export async function sendStageRequest(
 
 /**
  * Calls a connector service's /preflight endpoint (Phase 11 Block 2D).
- * Unsigned and read-only — mirrors sendIntrospectRequest's posture, not
- * sendWriteRequest's (there's no WriteContext to build here). Called once
- * before extraction starts a staged run, so a missing privilege fails fast
- * with an actionable message instead of partway through staging DDL.
+ * Read-only — mirrors sendIntrospectRequest's posture, not
+ * sendWriteRequest's (no destination state to protect, so this signs with
+ * the lighter ReadContext, not a full WriteContext — see contract.ts's
+ * ReadContext doc comment). Called once before extraction starts a staged
+ * run, so a missing privilege fails fast with an actionable message instead
+ * of partway through staging DDL. `request` here is caller-built WITHOUT a
+ * `context` field — this function attaches the signed ReadContext itself,
+ * same split as sendToConnector/sendIntrospectRequest/sendTestRequest.
  */
 export async function sendPreflightRequest(
   manifest: ConnectorManifest,
-  request: PreflightRequest,
+  request: Omit<PreflightRequest, "context">,
   opts: { timeoutMs?: number } = {},
 ): Promise<DispatchResult<PreflightResponse>> {
   warnIfRouteMissing(manifest, "preflight");
@@ -444,7 +465,10 @@ export async function sendPreflightRequest(
     res = await fetch(`${baseUrl(manifest)}/preflight`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(request),
+      body: JSON.stringify({
+        ...request,
+        context: buildReadContext("preflight", request.credential.connectionId),
+      }),
       signal: controller.signal,
     });
   } catch (err) {

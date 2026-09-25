@@ -30,15 +30,16 @@ import { env } from "./env.js";
  * services/connector-mysql/src/pool-manager.ts), reached only via
  * connectionId/vaultRef references carried in job payloads.
  *
- * It does get a scoped service_role Supabase client (not built yet — no
- * real dispatch call site exists until the workflow runner lands), the same
- * precedent workflow_runs already documents: system-authored writes with no
- * live user JWT (workflow_runs itself, and the execution-audit chokepoint's
+ * It does get a scoped service_role DB client (@nia/db's withServiceRole,
+ * never withActingUser — it has no live user JWT), the same precedent
+ * workflow_runs already documents: system-authored writes with no live
+ * user JWT (workflow_runs itself, and the execution-audit chokepoint's
  * log_execution_audit RPC) use service_role, trusted because the worker only
  * ever acts on jobs whose payload already carries an explicit
  * triggeredByUserId/userId — never inferred, never a general-purpose
  * credential store. Express, by contrast, never gets service_role
- * (apps/api/src/env.ts) — it only ever holds the caller's own JWT.
+ * (apps/api/src/env.ts) — it only ever holds the caller's own JWT (via
+ * req.withUser, not service_role).
  *
  * Two queues:
  *  - interactive: chat pipeline (LangGraph), previews, checks
@@ -77,7 +78,7 @@ const interactive = new Worker(
         // service_role client structurally cannot call
         // public.record_check_run itself (no auth.uid()); the Express route
         // that enqueues this job is the one that persists, through its own
-        // req.supabase.
+        // req.withUser.
         console.log(`[interactive] check_run for workflow ${payload.workflowId}`);
         return await runWorkflowChecks(payload);
       case "mappings_propose":
@@ -118,7 +119,7 @@ const interactive = new Worker(
         // never persists it — same no-persistence-in-index.ts shape as
         // schema_refresh/preview_run. apps/api's profile service is the
         // one that upserts into source_profiles, through its own
-        // req.supabase.
+        // req.withUser.
         console.log(`[interactive] profile_run for connection ${payload.connectionId} entity ${payload.entity.namespace}.${payload.entity.name}`);
         return await profileEntity(payload);
       case "clean_propose":

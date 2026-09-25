@@ -507,6 +507,15 @@
   their tests were deleted as purposeless once those RPCs are gone;
   `secrets-rotate.ts` survives (pure `nia_secrets` key-version
   rotation, no Vault dependency).
+- Data access: `apps/worker/scripts/*.ts` (dev-only smoke tests and
+  golden-eval tooling, not shipped in the built worker image) still use
+  `@supabase/supabase-js` against the local sandbox's Supabase project —
+  never migrated to `@nia/db` alongside `src/` when
+  `docs/plans/data-access.md` landed. Known, documented exception (see
+  CONVENTIONS.md's "Known Supabase-client exceptions" and
+  `apps/worker/scripts/README.md`), not a bug — no production code path
+  goes through these scripts. Migrate whenever someone has a reason to
+  touch this tooling anyway; not worth a standalone pass on its own.
 - ~~Local `supabase_vault` extension is missing `vault.delete_secret` —
   probes #45 and #50 both fail locally~~ **RESOLVED, moot rather than
   fixed — in two separate steps, not one.** Both probes tested Vault-era

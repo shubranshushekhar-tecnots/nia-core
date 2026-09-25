@@ -41,13 +41,21 @@ of how the two repos ended up related this way.
 
 ## Prerequisites
 
-- Node.js + [pnpm](https://pnpm.io) (`corepack enable && corepack prepare pnpm@9.15.0 --activate`)
+- Node.js + [pnpm](https://pnpm.io) (`corepack enable && corepack prepare pnpm@9.12.0 --activate` — must match `package.json`'s `packageManager` field)
 - [Docker](https://docs.docker.com/get-docker/) (local Postgres + sandbox DBs + connector services)
 
-No Supabase CLI — Nia Core is a plain Postgres host (see
-`docs/plans/local-dev.md`, `docs/decisions.md`). There's also no Supabase
-Studio anymore; use any Postgres client (`psql`, TablePlus, etc.) pointed
-at `DATABASE_URL` to browse the local database.
+No Supabase CLI is needed for the app's own database — Nia Core's primary
+Postgres is a plain Docker host (see `docs/plans/local-dev.md`,
+`docs/decisions.md`). There's no Supabase Studio for it anymore; use any
+Postgres client (`psql`, TablePlus, etc.) pointed at `DATABASE_URL` to
+browse it.
+
+That said, `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` in the **root**
+`.env` are still required — the three connector services
+(`services/connector-*`) read `nia_secrets` through the Supabase JS client,
+not yet through `@nia/db` (see CONVENTIONS.md's "Known Supabase-client
+exceptions"). Point these at a running Supabase project (local `supabase
+start`, or ask a teammate for the shared dev project's URL/key).
 
 ## Run locally
 
@@ -67,8 +75,7 @@ docker compose up -d postgres redis dev-mysql dev-mongo dev-postgres \
 #    for recovering a FAILED migration via `migrate:resolve`).
 DATABASE_URL="postgresql://postgres:postgres@localhost:5434/postgres" pnpm run migrate:push
 
-# 3. Env files — copy every .env.example, then fill in the values
-#    (DATABASE_URL as above; no SUPABASE_* keys needed anymore)
+# 3. Env files — copy every .env.example
 cp .env.example .env
 cp apps/web/.env.example apps/web/.env.local
 cp apps/api/.env.example apps/api/.env
@@ -81,6 +88,34 @@ pnpm --filter @nia/api seed:fixtures
 pnpm --filter @nia/schemas --filter @nia/guardrails build
 pnpm dev                        # turbo runs dev for every workspace
 ```
+
+### Filling in the env files
+
+Every value below is also documented inline in its own `.env.example` —
+this table is just the "what do I actually need before `pnpm dev` will
+work" summary.
+
+**Required, and must be byte-identical across every file listed:**
+
+| Variable | Files | Where the value comes from |
+| --- | --- | --- |
+| `DATABASE_URL` | root `.env`, `apps/api/.env`, `apps/worker/.env` | `postgresql://postgres:postgres@localhost:5434/postgres` (matches step 2/3's docker-compose `postgres` port) |
+| `BETTER_AUTH_SECRET` | `apps/web/.env.local`, `apps/api/.env` | Generate once: `openssl rand -base64 32` |
+| `NIA_SECRET_MASTER_KEY` | root `.env`, `apps/api/.env`, `apps/worker/.env` | Generate once: `openssl rand -base64 32`. Root's copy is substituted into every `connector-*` container by docker-compose — losing this key makes every stored connection/write-grant credential unrecoverable, see DEPLOYMENT.md before rotating it |
+| `WRITE_DISPATCH_SIGNING_SECRET` | root `.env`, `apps/worker/.env` | Generate once: `openssl rand -hex 32`. Root's copy is substituted into every `connector-*` container the same way |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | root `.env` only | A running Supabase project (local `supabase start`, or a shared team dev project) — substituted into every `connector-*` container; see the Prerequisites note above |
+
+**Optional — safe to leave blank for local dev:**
+
+| Variable | Files | Effect if unset |
+| --- | --- | --- |
+| `LANGFUSE_PUBLIC_KEY`/`SECRET_KEY`/`BASE_URL` | root `.env`, `apps/worker/.env` | Already pre-filled with the dev keypair docker-compose auto-provisions (see "Observability" below) — only touch these for a non-local deployment |
+| `GEMINI_API_KEY` (root `.env.example`) | root `.env` | Currently unused by any code path — safe to leave blank; the chat pipeline's LLM client is `NIA_GATEWAY_API_KEY` in `apps/worker/.env`, which is genuinely required for the chat/copilot pipeline to run but not for the rest of the app |
+
+Everything else in each `.env.example` (`CONNECTOR_DEV_HOST`, `WEB_ORIGIN`,
+`API_URL`, `NEXT_PUBLIC_*`, `SCHEMA_CACHE_TTL_MS`, etc.) already has a
+working default or is dev-only wiring — the inline comment in each file
+explains it.
 
 Services and ports once running:
 

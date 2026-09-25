@@ -20,9 +20,10 @@ import {
   type WriteEntityRef,
   type CreateEntityResponse,
   type DropEntityResponse,
+  type ReadContext,
 } from "@nia/schemas";
 import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant, checkSupabaseReachable } from "./pool-manager.js";
-import { verifyWriteContext, HttpError } from "./writeSignature.js";
+import { verifyWriteContext, verifyReadContext, HttpError } from "./writeSignature.js";
 import { buildUpsertSql, buildCreateTableSql, buildDropTableSql } from "./writeSql.js";
 import {
   buildCreateStagingSql,
@@ -39,6 +40,37 @@ import {
 
 function entityMatches(a: WriteEntityRef, b: WriteEntityRef): boolean {
   return a.namespace === b.namespace && a.name === b.name;
+}
+
+/**
+ * Stage 5 production-readiness pass — verifies the lighter ReadContext
+ * (contract.ts) attached to /test, /introspect, /execute, /invalidate,
+ * /preflight. Mirrors /write's verifyWriteContext+HttpError(401) pattern
+ * above, just against the smaller read-side payload shape. `route` is
+ * always the literal call-site string, never taken from the request body,
+ * so a signature captured for one route can't be replayed against
+ * another. `queryPayload` is only non-null for /execute (binds the signed
+ * context to the exact query text/params, not just the connectionId).
+ */
+function verifyReadRequest(
+  route: "test" | "introspect" | "execute" | "invalidate" | "preflight",
+  connectionId: string,
+  context: ReadContext,
+  queryPayload: unknown = null,
+): void {
+  const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
+  if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
+  const valid = verifyReadContext(
+    {
+      route,
+      connectionId,
+      queryPayload: queryPayload === null ? null : JSON.stringify(queryPayload),
+      issuedAt: context.issuedAt,
+    },
+    context.signature,
+    secret,
+  );
+  if (!valid) throw new HttpError(401, "read context signature is invalid or expired");
 }
 
 /**
@@ -74,7 +106,8 @@ app.get("/health", async () => ({
 }));
 
 app.post("/test", async (req) => {
-  const { credential, config } = TestRequest.parse(req.body);
+  const { credential, config, context } = TestRequest.parse(req.body);
+  verifyReadRequest("test", credential.connectionId, context);
   const start = Date.now();
   try {
     const pool = await getPool(credential, config);
@@ -86,7 +119,8 @@ app.post("/test", async (req) => {
 });
 
 app.post("/introspect", async (req) => {
-  const { credential, config } = IntrospectRequest.parse(req.body);
+  const { credential, config, context } = IntrospectRequest.parse(req.body);
+  verifyReadRequest("introspect", credential.connectionId, context);
   const pool = await getPool(credential, config);
   // information_schema.columns is implemented as a view with uppercase
   // column definitions — MySQL returns TABLE_SCHEMA/TABLE_NAME/etc.
@@ -133,6 +167,7 @@ app.post("/introspect", async (req) => {
 
 app.post("/execute", async (req): Promise<TabularResult> => {
   const body = ExecuteRequest.parse(req.body);
+  verifyReadRequest("execute", body.credential.connectionId, body.context, body.query);
   if (body.query.kind !== "sql") {
     throw new Error(`connector-mysql only accepts sql queries, got kind: ${body.query.kind}`);
   }
@@ -458,8 +493,10 @@ app.post("/stage", async (req): Promise<StageResponse> => {
 });
 
 /**
- * Phase 11 Block 2D — preflight. Unsigned and read-only, checks the
- * credential's role can actually do what staged writes will need: create/
+ * Phase 11 Block 2D — preflight. Read-only, signed with the lighter
+ * ReadContext (see verifyReadRequest above) rather than a full
+ * WriteContext — checks the credential's role can actually do what staged
+ * writes will need: create/
  * drop in the `nia` staging database, and write to the destination
  * entity's database. MySQL has no has_table_privilege() builtin (unlike
  * postgres) — write-destination is checked via information_schema.
@@ -468,6 +505,7 @@ app.post("/stage", async (req): Promise<StageResponse> => {
  */
 app.post("/preflight", async (req): Promise<PreflightResponse> => {
   const body = PreflightRequest.parse(req.body);
+  verifyReadRequest("preflight", body.credential.connectionId, body.context);
   const pool = await getWritePool(body.credential, body.config);
   const checks: PreflightResponse["checks"] = [];
 
@@ -653,7 +691,8 @@ app.post("/drop-entity", async (req): Promise<DropEntityResponse> => {
 });
 
 app.post("/invalidate", async (req) => {
-  const { connectionId } = InvalidateRequest.parse(req.body);
+  const { connectionId, context } = InvalidateRequest.parse(req.body);
+  verifyReadRequest("invalidate", connectionId, context);
   return { evicted: await evict(connectionId) };
 });
 
