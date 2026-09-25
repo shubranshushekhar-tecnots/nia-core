@@ -1,11 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-// These tests exercise the auth UI, client/server Zod validation, and the
-// middleware's redirect boundary without creating persistent Supabase auth
-// users (no service-role key is available to apps/web by design — see
-// lib/supabase/*). A full "real login" happy path requires a seeded,
-// email-confirmed test account provisioned out-of-band via a service-role
-// script, not created ad hoc by this suite.
+// These tests exercise the auth UI and client/server Zod validation, and the
+// middleware's redirect boundary, without creating persistent Better Auth
+// users ad hoc — a full "real login" happy path instead uses a seeded test
+// account (apps/api/src/scripts/seedFixtureUsers.ts), driven by
+// auth.setup.ts / fixtures/personas.ts.
 
 test.describe('middleware redirect boundary', () => {
   test('unauthenticated user hitting a private route is redirected to /login with ?next=', async ({ page }) => {
@@ -14,7 +13,7 @@ test.describe('middleware redirect boundary', () => {
   });
 
   test('public auth routes are reachable without a session', async ({ page }) => {
-    for (const path of ['/login', '/signup', '/forgot-password']) {
+    for (const path of ['/login', '/signup']) {
       await page.goto(path);
       await expect(page).toHaveURL(new RegExp(`${path}$`));
     }
@@ -57,16 +56,6 @@ test.describe('signup form', () => {
     await page.goto('/signup');
     await page.getByRole('link', { name: 'Sign in' }).click();
     await expect(page).toHaveURL(/\/login$/);
-  });
-});
-
-test.describe('forgot password form', () => {
-  test('always shows the success state (never reveals account existence)', async ({ page }) => {
-    await page.goto('/forgot-password');
-    await page.locator('#email').fill('someone-who-may-not-exist@example.com');
-    await page.getByRole('button', { name: 'Send reset link' }).click();
-
-    await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
   });
 });
 

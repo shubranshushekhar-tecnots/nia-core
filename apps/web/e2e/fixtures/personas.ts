@@ -1,14 +1,18 @@
 import path from 'node:path';
 
 /**
- * Real Supabase auth personas for e2e tests, seeded by supabase/seed.sql's
- * "Canvas E2E fixtures" block (+ demo@nia.dev from the original seed block
- * above it) and, for connections, apps/worker/scripts/dev-bootstrap.ts.
+ * Real Better Auth personas for e2e tests. The identities themselves are
+ * created via apps/api/src/scripts/seedFixtureUsers.ts (Better Auth's own
+ * signUpEmail path — run once with `pnpm --filter @nia/api seed:fixtures`),
+ * and the org/project/dataset fixtures around them are seeded by
+ * supabase/seed.sql's "Canvas E2E fixtures" block (+ demo@nia.dev from the
+ * original seed block above it) and, for connections,
+ * apps/worker/scripts/dev-bootstrap.ts.
  *
  * Password is a fixed, documented, non-secret local-fixture value — it is
- * duplicated as a literal in supabase/seed.sql's `crypt('password', ...)`
- * call. If you change it here, change it there too (that file's comment
- * points back at this one).
+ * duplicated as a literal in seedFixtureUsers.ts's FIXTURES list. If you
+ * change it here, change it there too (that file's comment points back at
+ * this one).
  *
  * auth.setup.ts drives the real /login form for each persona and saves the
  * resulting storageState here; specs opt in via

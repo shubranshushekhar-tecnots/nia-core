@@ -1,17 +1,18 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { AppError } from "../lib/appError.js";
-import { createRequestSupabaseClient } from "../lib/supabaseClient.js";
+import { auth } from "../lib/auth.js";
 
 const BEARER_PREFIX = "Bearer ";
 
 /**
- * The one and only place a Bearer token is read off a request. Validates
- * it against Supabase Auth (supabase.auth.getUser(jwt) round-trips to
- * GoTrue rather than trusting a locally-decoded JWT), then builds the
- * per-request client every downstream handler must use for data access —
- * never a shared/service-role client. RLS keeps doing the real enforcement
- * unchanged; this middleware only establishes who is asking.
+ * The one and only place a Bearer token is read off a request. Better
+ * Auth's bearer plugin (packages/auth/src/config.ts) accepts this exact
+ * header shape and resolves it against the real `session` table row (a
+ * database round-trip, never a locally-decoded/trusted token) — same
+ * verification guarantee the old supabase.auth.getUser(jwt) call made.
+ * RLS keeps doing the real enforcement unchanged; this middleware only
+ * establishes who is asking.
  */
 export const requireAuth: RequestHandler = asyncHandler(async function requireAuth(
   req: Request,
@@ -31,15 +32,14 @@ export const requireAuth: RequestHandler = asyncHandler(async function requireAu
     return;
   }
 
-  const supabase = createRequestSupabaseClient(token);
-  const { data, error } = await supabase.auth.getUser(token);
+  const headers = new Headers({ authorization: header });
+  const session = await auth.api.getSession({ headers });
 
-  if (error || !data.user) {
+  if (!session) {
     next(new AppError(401, "NOT_AUTHENTICATED", "Invalid or expired session."));
     return;
   }
 
-  req.supabase = supabase;
-  req.authUser = { id: data.user.id, email: data.user.email ?? "" };
+  req.authUser = { id: session.user.id, email: session.user.email };
   next();
 });

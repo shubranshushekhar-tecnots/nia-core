@@ -1,21 +1,18 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import AuthShell from './AuthShell';
-import GoogleIcon from './GoogleIcon';
-import { login, loginWithGoogle, type ActionState } from '@/lib/auth/actions';
+import { login, type ActionState } from '@/lib/auth/actions';
+import { setStoredBearerToken } from '@/lib/auth/browserSession';
 import {
   createLinkStyle,
   errorTextStyle,
   eyeBtnStyle,
   fieldLabelStyle,
   fieldStyle,
-  forgotLinkStyle,
-  googleBtnStyle,
   signinBtnStyle,
-  ssoLinkStyle,
   subtitleStyle,
   titleStyle,
 } from './styles';
@@ -23,11 +20,23 @@ import {
 const initialState: ActionState = null;
 
 export default function LoginForm() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get('next') ?? '';
   const [state, formAction, pending] = useActionState(login, initialState);
   const [pwShown, setPwShown] = useState(false);
   const hasError = Boolean(state?.error);
+
+  // Better Auth's session cookie is httpOnly (login() can't redirect
+  // itself and hand back a token in the same breath) — store the bearer
+  // token for Client Component API calls (lib/auth/browserSession.ts),
+  // then navigate once the cookie + token are both in place.
+  useEffect(() => {
+    if (state?.success && state.token) {
+      setStoredBearerToken(state.token);
+      router.push(state.next ?? '/app');
+    }
+  }, [state, router]);
 
   return (
     <AuthShell
@@ -58,10 +67,7 @@ export default function LoginForm() {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
-            <label htmlFor="password" style={fieldLabelStyle}>Password</label>
-            <Link href="/forgot-password" style={forgotLinkStyle}>Forgot password?</Link>
-          </div>
+          <label htmlFor="password" style={fieldLabelStyle}>Password</label>
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <input
               id="password"
@@ -91,23 +97,6 @@ export default function LoginForm() {
           {pending ? 'Signing in\u2026' : 'Sign in'}
         </button>
       </form>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '22px 0' }}>
-        <span style={{ flex: 1, height: 1, background: 'var(--line)' }} />
-        <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>or</span>
-        <span style={{ flex: 1, height: 1, background: 'var(--line)' }} />
-      </div>
-
-      <form action={loginWithGoogle}>
-        <button type="submit" style={googleBtnStyle}>
-          <GoogleIcon />
-          Continue with Google
-        </button>
-      </form>
-
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-        <button type="button" style={ssoLinkStyle}>Sign in with SSO instead</button>
-      </div>
     </AuthShell>
   );
 }

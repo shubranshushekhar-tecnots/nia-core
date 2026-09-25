@@ -3,8 +3,8 @@ import { personas } from './fixtures/personas';
 
 /**
  * Playwright "setup" project (see playwright.config.ts): signs in each
- * persona through the real /login form against local Supabase and saves
- * the resulting session cookies to storageState. Runs once per test run,
+ * persona through the real /login form against Better Auth and saves the
+ * resulting session cookies to storageState. Runs once per test run,
  * before the main `chromium` project (which `dependencies: ['setup']` on).
  *
  * Real login, not a manufactured session — proves the actual auth flow

@@ -40,15 +40,20 @@ const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
-const DEMO_USER_ID = "00000000-0000-0000-0000-0000000000d1";
+// Fixture users now come from Better Auth's real signUpEmail path
+// (pnpm --filter @nia/api seed:fixtures), which mints its own generated
+// ids — the old fixed 00000000-...-000d1-style sentinel ids only worked
+// back when these rows were inserted directly into auth.users by raw SQL.
+// Looked up by email below (getUserId) instead of hardcoded.
+const DEMO_USER_EMAIL = "demo@nia.dev";
 const ORG_SLUG = "icecream-co";
 
 // canvas-e2e-a@nia.dev — see supabase/seed.sql's "Canvas E2E fixtures" block.
-const CANVAS_E2E_USER_ID = "00000000-0000-0000-0000-0000000000e1";
+const CANVAS_E2E_USER_EMAIL = "canvas-e2e-a@nia.dev";
 const CANVAS_E2E_ORG_SLUG = "canvas-e2e";
 
 // canvas-e2e-c@nia.dev — org-less personal workspace, same fixtures block.
-const CANVAS_E2E_C_USER_ID = "00000000-0000-0000-0000-0000000000e3";
+const CANVAS_E2E_C_USER_EMAIL = "canvas-e2e-c@nia.dev";
 
 // Dialed by the connector SERVICE containers, not this script — see
 // dispatch-smoke.ts's header comment for the full host-vs-container rationale.
@@ -74,6 +79,16 @@ async function getOrgId(slug: string): Promise<string> {
   if (error || !data) {
     throw new Error(
       `Could not find seed.sql's org (slug=${slug}). Run \`supabase db reset\` first. (${error?.message})`,
+    );
+  }
+  return data.id as string;
+}
+
+async function getUserId(email: string): Promise<string> {
+  const { data, error } = await supabase.from("user").select("id").eq("email", email).single();
+  if (error || !data) {
+    throw new Error(
+      `Could not find Better Auth user (email=${email}). Run \`pnpm --filter @nia/api seed:fixtures\` first. (${error?.message})`,
     );
   }
   return data.id as string;
@@ -137,15 +152,17 @@ async function seedConnection(scope: Scope, connectorId: ConnectorId, installedB
 }
 
 async function main(): Promise<void> {
+  const demoUserId = await getUserId(DEMO_USER_EMAIL);
   const orgId = await getOrgId(ORG_SLUG);
   log(`Demo org: ${ORG_SLUG} (${orgId})`);
 
   const connectionIds: Partial<Record<ConnectorId, string>> = {
-    mysql: await seedConnection({ orgId }, "mysql", DEMO_USER_ID),
-    mongodb: await seedConnection({ orgId }, "mongodb", DEMO_USER_ID),
+    mysql: await seedConnection({ orgId }, "mysql", demoUserId),
+    mongodb: await seedConnection({ orgId }, "mongodb", demoUserId),
   };
   log(`Connections ready: ${JSON.stringify(connectionIds, null, 2)}`);
 
+  const canvasUserId = await getUserId(CANVAS_E2E_USER_EMAIL);
   const canvasOrgId = await getOrgId(CANVAS_E2E_ORG_SLUG);
   log(`Canvas E2E org: ${CANVAS_E2E_ORG_SLUG} (${canvasOrgId})`);
 
@@ -154,15 +171,16 @@ async function main(): Promise<void> {
   // see canvas.spec.ts's "palette purity" describe block, which asserts on
   // this exact connection set, and mapping-smoke's mysql -> supabase pairing.
   const canvasConnectionIds: Record<ConnectorId, string> = {
-    mysql: await seedConnection({ orgId: canvasOrgId }, "mysql", CANVAS_E2E_USER_ID),
-    mongodb: await seedConnection({ orgId: canvasOrgId }, "mongodb", CANVAS_E2E_USER_ID),
-    supabase: await seedConnection({ orgId: canvasOrgId }, "supabase", CANVAS_E2E_USER_ID),
+    mysql: await seedConnection({ orgId: canvasOrgId }, "mysql", canvasUserId),
+    mongodb: await seedConnection({ orgId: canvasOrgId }, "mongodb", canvasUserId),
+    supabase: await seedConnection({ orgId: canvasOrgId }, "supabase", canvasUserId),
   };
   log(`Canvas E2E connections ready: ${JSON.stringify(canvasConnectionIds, null, 2)}`);
 
   // canvas-e2e-c: org-less personal workspace — one connection (mysql only,
   // enough for a real chat round-trip) owned via owner_id, not org_id.
-  const canvasCConnectionId = await seedConnection({ ownerId: CANVAS_E2E_C_USER_ID }, "mysql", CANVAS_E2E_C_USER_ID);
+  const canvasCUserId = await getUserId(CANVAS_E2E_C_USER_EMAIL);
+  const canvasCConnectionId = await seedConnection({ ownerId: canvasCUserId }, "mysql", canvasCUserId);
   log(`Canvas E2E personal connection ready: ${canvasCConnectionId}`);
 
   log("Sign in as demo@nia.dev / password to use them.");

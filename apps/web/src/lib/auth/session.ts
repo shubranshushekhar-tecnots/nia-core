@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { withActingUser } from "@nia/db";
-import { createClient } from "@/lib/supabase/server";
+import { auth } from "@/lib/auth/auth";
 import { dbPool } from "@/lib/db/pool";
 import type { ActorRole, OrgRole } from "@nia/schemas";
 
@@ -22,13 +23,25 @@ export type UserWithOrg = {
 };
 
 /**
+ * Returns the current session's user id/email, or null if signed out. Thin
+ * wrapper over auth.api.getSession so every Server Action/Component shares
+ * one code path for "who is asking" — a real DB round-trip against the
+ * `session` table (packages/auth/src/config.ts), never a locally-decoded
+ * token.
+ */
+export async function getSessionUser(): Promise<{ id: string; email: string } | null> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  return session ? { id: session.user.id, email: session.user.email } : null;
+}
+
+/**
  * Server Component / Server Action guard for every authenticated route.
  *
- * Only requires an authenticated Supabase user (middleware already
- * redirects unauthenticated requests to /login, but a Server Component
- * checks again rather than trusting that as its only boundary) — it does
- * NOT require an organization. A user with no membership row is a valid
- * "individual" actor operating in their own personal workspace (see
+ * Only requires an authenticated session (middleware already redirects
+ * unauthenticated requests to /login, but a Server Component checks again
+ * rather than trusting that as its only boundary) — it does NOT require an
+ * organization. A user with no membership row is a valid "individual"
+ * actor operating in their own personal workspace (see
  * 0005_individual_workspace.sql).
  *
  * A user can belong to multiple orgs later (switcher is a stub for now),
@@ -37,11 +50,7 @@ export type UserWithOrg = {
  * bypassing the same policies a real client hits.
  */
 export async function requireUser(): Promise<UserContext> {
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser();
 
   if (!user) {
     redirect("/login");

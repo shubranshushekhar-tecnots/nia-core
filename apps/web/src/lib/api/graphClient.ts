@@ -1,5 +1,5 @@
 import type { GraphDoc } from '@nia/schemas';
-import { createClient } from '@/lib/supabase/client';
+import { ensureBearerToken } from '@/lib/auth/browserSession';
 
 /**
  * Browser-side calls for the builder canvas's graph persistence
@@ -28,11 +28,9 @@ export class GraphApiError extends Error {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const {
-    data: { session },
-  } = await createClient().auth.getSession();
-  if (!session) throw new GraphApiError(401, 'NOT_AUTHENTICATED', 'No active session.');
-  return { Authorization: `Bearer ${session.access_token}` };
+  const token = await ensureBearerToken();
+  if (!token) throw new GraphApiError(401, 'NOT_AUTHENTICATED', 'No active session.');
+  return { Authorization: `Bearer ${token}` };
 }
 
 export type WorkflowGraphResult = { graph: GraphDoc; version: number };

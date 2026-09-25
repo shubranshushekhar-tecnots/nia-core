@@ -1,5 +1,5 @@
 import type { PreviewValue } from '@nia/schemas';
-import { createClient } from '@/lib/supabase/client';
+import { ensureBearerToken } from '@/lib/auth/browserSession';
 
 /**
  * Browser-side call for the destination-node read preview (Block 1, Phase 5
@@ -24,11 +24,9 @@ export class PreviewApiError extends Error {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const {
-    data: { session },
-  } = await createClient().auth.getSession();
-  if (!session) throw new PreviewApiError(401, 'NOT_AUTHENTICATED', 'No active session.');
-  return { Authorization: `Bearer ${session.access_token}` };
+  const token = await ensureBearerToken();
+  if (!token) throw new PreviewApiError(401, 'NOT_AUTHENTICATED', 'No active session.');
+  return { Authorization: `Bearer ${token}` };
 }
 
 /**

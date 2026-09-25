@@ -7,10 +7,21 @@
 --
 -- Only runs during `supabase db reset` / `supabase start` against the LOCAL
 -- database — never applied to the linked remote project.
+--
+-- User identities are NOT created here. Every fixture user (demo@nia.dev +
+-- the 3 canvas-e2e-* personas) is created through Better Auth's own
+-- signUpEmail path, not raw SQL, since the password hash format is internal
+-- (docs/plans/auth.md Step 2, requirement 4). Run this first, once per
+-- database:
+--   pnpm --filter @nia/api seed:fixtures
+-- This file just looks those users up by email and builds the rest of the
+-- demo dataset on top — if it hasn't been run yet, each block below raises
+-- a NOTICE naming the missing user and skips itself instead of failing the
+-- whole `supabase db reset`.
 
 do $$
 declare
-  v_demo_user uuid := '00000000-0000-0000-0000-0000000000d1';
+  v_demo_user uuid;
   v_org       uuid;
   v_proj_sales   uuid;
   v_proj_support uuid;
@@ -22,34 +33,11 @@ declare
   v_wf_campaign  uuid;
   v_wf_attribution uuid;
 begin
-  -- GoTrue's Go structs scan confirmation_token/recovery_token/etc as
-  -- plain strings, not nullable ones — a NULL here (the column default)
-  -- makes every auth request against this user 500 with "Database error
-  -- querying schema". Real signups never hit this because GoTrue's own
-  -- insert path always writes '', not NULL; a raw SQL insert must match
-  -- that explicitly.
-  insert into auth.users
-    (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at,
-     raw_app_meta_data, raw_user_meta_data, confirmation_token, recovery_token, email_change_token_new,
-     email_change, email_change_token_current, phone_change, phone_change_token)
-  values
-    ('00000000-0000-0000-0000-000000000000', v_demo_user, 'authenticated', 'authenticated', 'demo@nia.dev',
-     crypt('password', gen_salt('bf')), now(), now(), now(),
-     '{"provider":"email","providers":["email"]}', '{"full_name":"Demo User"}',
-     '', '', '', '', '', '', '')
-  on conflict (id) do nothing;
-
-  -- password-grant login also requires a matching auth.identities row
-  -- (GoTrue resolves the user through the identity, not auth.users
-  -- directly) — a real /auth/v1/signup always creates one, a raw insert
-  -- must add it explicitly too.
-  insert into auth.identities (provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
-  values (
-    v_demo_user::text, v_demo_user,
-    jsonb_build_object('sub', v_demo_user::text, 'email', 'demo@nia.dev', 'email_verified', true),
-    'email', now(), now(), now()
-  )
-  on conflict (provider_id, provider) do nothing;
+  select id into v_demo_user from public."user" where email = 'demo@nia.dev';
+  if v_demo_user is null then
+    raise notice 'seed.sql: demo@nia.dev not found — run `pnpm --filter @nia/api seed:fixtures` first, then re-run this file. Skipping demo org/project/workflow data.';
+    return;
+  end if;
 
   insert into public.organizations (name, slug, created_by)
   values ('Ice Cream Co', 'icecream-co', v_demo_user)
@@ -110,47 +98,22 @@ end $$;
 -- =========================================================================
 do $$
 declare
-  v_password_hash text := crypt('password', gen_salt('bf'));
-  v_user_a uuid := '00000000-0000-0000-0000-0000000000e1'; -- canvas-e2e-a@nia.dev — member of canvas-e2e org
-  v_user_b uuid := '00000000-0000-0000-0000-0000000000e2'; -- canvas-e2e-b@nia.dev — owner of canvas-e2e-b org
-  v_user_c uuid := '00000000-0000-0000-0000-0000000000e3'; -- canvas-e2e-c@nia.dev — personal workspace
+  v_user_a uuid; -- canvas-e2e-a@nia.dev — member of canvas-e2e org
+  v_user_b uuid; -- canvas-e2e-b@nia.dev — owner of canvas-e2e-b org
+  v_user_c uuid; -- canvas-e2e-c@nia.dev — personal workspace
   v_org_a uuid;
   v_org_b uuid;
   v_proj_a uuid;
   v_proj_c uuid;
   v_wf_unknown uuid;
 begin
-  insert into auth.users
-    (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at,
-     raw_app_meta_data, raw_user_meta_data, confirmation_token, recovery_token, email_change_token_new,
-     email_change, email_change_token_current, phone_change, phone_change_token)
-  values
-    ('00000000-0000-0000-0000-000000000000', v_user_a, 'authenticated', 'authenticated', 'canvas-e2e-a@nia.dev',
-     v_password_hash, now(), now(), now(),
-     '{"provider":"email","providers":["email"]}', '{"full_name":"Canvas E2E A"}',
-     '', '', '', '', '', '', ''),
-    ('00000000-0000-0000-0000-000000000000', v_user_b, 'authenticated', 'authenticated', 'canvas-e2e-b@nia.dev',
-     v_password_hash, now(), now(), now(),
-     '{"provider":"email","providers":["email"]}', '{"full_name":"Canvas E2E B"}',
-     '', '', '', '', '', '', ''),
-    ('00000000-0000-0000-0000-000000000000', v_user_c, 'authenticated', 'authenticated', 'canvas-e2e-c@nia.dev',
-     v_password_hash, now(), now(), now(),
-     '{"provider":"email","providers":["email"]}', '{"full_name":"Canvas E2E C"}',
-     '', '', '', '', '', '', '')
-  on conflict (id) do nothing;
-
-  insert into auth.identities (provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
-  values
-    (v_user_a::text, v_user_a,
-     jsonb_build_object('sub', v_user_a::text, 'email', 'canvas-e2e-a@nia.dev', 'email_verified', true),
-     'email', now(), now(), now()),
-    (v_user_b::text, v_user_b,
-     jsonb_build_object('sub', v_user_b::text, 'email', 'canvas-e2e-b@nia.dev', 'email_verified', true),
-     'email', now(), now(), now()),
-    (v_user_c::text, v_user_c,
-     jsonb_build_object('sub', v_user_c::text, 'email', 'canvas-e2e-c@nia.dev', 'email_verified', true),
-     'email', now(), now(), now())
-  on conflict (provider_id, provider) do nothing;
+  select id into v_user_a from public."user" where email = 'canvas-e2e-a@nia.dev';
+  select id into v_user_b from public."user" where email = 'canvas-e2e-b@nia.dev';
+  select id into v_user_c from public."user" where email = 'canvas-e2e-c@nia.dev';
+  if v_user_a is null or v_user_b is null or v_user_c is null then
+    raise notice 'seed.sql: one or more canvas-e2e-*@nia.dev users not found — run `pnpm --filter @nia/api seed:fixtures` first, then re-run this file. Skipping canvas e2e fixtures.';
+    return;
+  end if;
 
   insert into public.organizations (name, slug, created_by)
   values ('Canvas E2E Org', 'canvas-e2e', v_user_a)

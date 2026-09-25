@@ -2,9 +2,12 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { z } from "zod";
+import { APIError } from "better-auth/api";
 import { withActingUser } from "@nia/db";
-import { createClient } from "@/lib/supabase/server";
+import { auth } from "@/lib/auth/auth";
+import { getSessionUser } from "@/lib/auth/session";
 import { dbPool } from "@/lib/db/pool";
 
 export type ActionState = {
@@ -17,6 +20,15 @@ export type ActionState = {
   errorDetails?: string;
   fieldErrors?: Record<string, string[]>;
   success?: boolean;
+  // Set by login/signup only: the raw session token (docs/plans/auth.md) —
+  // Better Auth's session cookie is httpOnly, so the client can't read it
+  // itself. LoginForm/SignupForm store this via lib/auth/browserSession.ts
+  // then navigate to `next`, instead of the Server Action redirecting
+  // directly — the cookie is already set by then (nextCookies() plugin,
+  // lib/auth/auth.ts), this is purely for the Bearer-token client
+  // fetches (lib/api/*Client.ts).
+  token?: string;
+  next?: string;
 } | null;
 
 function safeNext(next: FormDataEntryValue | null): string {
@@ -37,15 +49,20 @@ export async function login(_prevState: ActionState, formData: FormData): Promis
     return { fieldErrors: parsed.error.flatten().fieldErrors };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword(parsed.data);
-  if (error) {
-    // Deliberately vague: never reveal whether the account exists.
-    return { error: "Invalid email or password." };
+  let token: string;
+  try {
+    const result = await auth.api.signInEmail({ body: parsed.data, headers: await headers() });
+    token = result.token;
+  } catch (err) {
+    if (err instanceof APIError) {
+      // Deliberately vague: never reveal whether the account exists.
+      return { error: "Invalid email or password." };
+    }
+    throw err;
   }
 
   revalidatePath("/", "layout");
-  redirect(safeNext(formData.get("next")));
+  return { success: true, token, next: safeNext(formData.get("next")) };
 }
 
 const signupSchema = z.object({
@@ -64,88 +81,32 @@ export async function signup(_prevState: ActionState, formData: FormData): Promi
     return { fieldErrors: parsed.error.flatten().fieldErrors };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signUp({
-    email: parsed.data.email,
-    password: parsed.data.password,
-    options: {
-      data: { full_name: parsed.data.fullName },
-      emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/confirm`,
-    },
-  });
-  if (error) {
-    return { error: error.message };
+  let token: string;
+  try {
+    const result = await auth.api.signUpEmail({
+      body: { email: parsed.data.email, password: parsed.data.password, name: parsed.data.fullName },
+      headers: await headers(),
+    });
+    // autoSignIn (packages/auth/src/config.ts) means this is only null if
+    // email verification were required (it isn't — see config), so this
+    // should never happen in practice; typed as nullable regardless.
+    if (!result.token) return { error: "Something went wrong. Try again." };
+    token = result.token;
+  } catch (err) {
+    if (err instanceof APIError) {
+      return { error: err.message || "Something went wrong. Try again." };
+    }
+    throw err;
   }
 
-  redirect("/login?confirm=1");
-}
-
-export async function loginWithGoogle(): Promise<void> {
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: {
-      redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`,
-    },
-  });
-
-  if (error || !data.url) {
-    redirect("/login?error=oauth");
-  }
-
-  redirect(data.url);
-}
-
-const forgotPasswordSchema = z.object({
-  email: z.string().email("Enter a valid email address"),
-});
-
-export async function forgotPassword(_prevState: ActionState, formData: FormData): Promise<ActionState> {
-  const parsed = forgotPasswordSchema.safeParse({ email: formData.get("email") });
-  if (!parsed.success) {
-    return { fieldErrors: parsed.error.flatten().fieldErrors };
-  }
-
-  const supabase = await createClient();
-  await supabase.auth.resetPasswordForEmail(parsed.data.email, {
-    redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/confirm?type=recovery`,
-  });
-
-  // Always report success, whether or not the email is registered.
-  return { success: true };
-}
-
-const resetPasswordSchema = z
-  .object({
-    password: z.string().min(8, "Password must be at least 8 characters"),
-    confirmPassword: z.string(),
-  })
-  .refine((data) => data.password === data.confirmPassword, {
-    message: "Passwords do not match",
-    path: ["confirmPassword"],
-  });
-
-export async function resetPassword(_prevState: ActionState, formData: FormData): Promise<ActionState> {
-  const parsed = resetPasswordSchema.safeParse({
-    password: formData.get("password"),
-    confirmPassword: formData.get("confirmPassword"),
-  });
-  if (!parsed.success) {
-    return { fieldErrors: parsed.error.flatten().fieldErrors };
-  }
-
-  const supabase = await createClient();
-  const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
-  if (error) {
-    return { error: error.message };
-  }
-
-  redirect("/login?reset=1");
+  // autoSignIn (packages/auth/src/config.ts) means this is already a real
+  // session, and there's no email-confirmation step — signup behaves like
+  // an immediate login straight into the app.
+  return { success: true, token, next: "/app" };
 }
 
 export async function logout(): Promise<void> {
-  const supabase = await createClient();
-  await supabase.auth.signOut();
+  await auth.api.signOut({ headers: await headers() });
   revalidatePath("/", "layout");
   redirect("/login");
 }
@@ -166,10 +127,7 @@ export async function createOrganization(_prevState: ActionState, formData: Form
     return { fieldErrors: parsed.error.flatten().fieldErrors };
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
   let orgId: string;

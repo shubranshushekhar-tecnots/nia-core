@@ -1,5 +1,5 @@
 import type { CleanBindingInput, GraphDoc, Plan, PlanDiff, PlanProposeOutcome } from '@nia/schemas';
-import { createClient } from '@/lib/supabase/client';
+import { ensureBearerToken } from '@/lib/auth/browserSession';
 
 /**
  * Browser-side call for Copilot's Apply step (Phase 7 Session 2.2's
@@ -23,11 +23,9 @@ export class CopilotApiError extends Error {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const {
-    data: { session },
-  } = await createClient().auth.getSession();
-  if (!session) throw new CopilotApiError(401, 'NOT_AUTHENTICATED', 'No active session.');
-  return { Authorization: `Bearer ${session.access_token}` };
+  const token = await ensureBearerToken();
+  if (!token) throw new CopilotApiError(401, 'NOT_AUTHENTICATED', 'No active session.');
+  return { Authorization: `Bearer ${token}` };
 }
 
 export type ApplyPlanResult = { graph: GraphDoc; version: number; appliedNodeIds: string[] };

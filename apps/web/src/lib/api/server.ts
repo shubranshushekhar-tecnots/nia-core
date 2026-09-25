@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
-import { createClient } from '@/lib/supabase/server';
+import { headers } from 'next/headers';
+import { getSessionCookie } from 'better-auth/cookies';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL!;
 
@@ -20,19 +21,20 @@ export class ApiError extends Error {
 /**
  * Server Component / Server Action equivalent of lib/api/client.ts's
  * apiFetch — same Express origin, same error shape, but the token comes
- * off the cookie-derived server-side Supabase client (kept fresh by
- * middleware) instead of the browser client. No 401-refresh-retry: by the
- * time a Server Component runs, middleware has already revalidated/
- * refreshed the session for this request, so a 401 here means a real
+ * straight off the incoming request's httpOnly session cookie via
+ * getSessionCookie() (better-auth/cookies) — a pure cookie-parse, no DB
+ * round-trip. apps/api's bearer plugin accepts this value as-is (it's
+ * already a valid session token, signed or not — see packages/auth's
+ * bearer() config and better-auth's bearer plugin, which self-signs an
+ * unsigned token using the same secret). No 401-refresh-retry: by the
+ * time a Server Component runs, middleware has already redirected any
+ * request with no session cookie at all, so a 401 here means a real
  * server-to-server problem, not a stale-token race.
  */
 export async function apiFetchServer<T>(path: string, init?: RequestInit): Promise<T> {
-  const supabase = await createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const token = getSessionCookie(await headers());
 
-  if (!session) {
+  if (!token) {
     redirect('/login');
   }
 
@@ -41,7 +43,7 @@ export async function apiFetchServer<T>(path: string, init?: RequestInit): Promi
     headers: {
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       ...init?.headers,
-      Authorization: `Bearer ${session.access_token}`,
+      Authorization: `Bearer ${token}`,
     },
     cache: 'no-store',
   });

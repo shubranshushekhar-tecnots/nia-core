@@ -5334,3 +5334,157 @@ Auth itself (`apps/api`'s two client files, `apps/web`'s
 `lib/supabase/server.ts`) is intentionally still on `@supabase/supabase-js`
 — the plan's stated boundary was data access, not auth; a Better Auth (or
 equivalent) migration is a separate, later step.
+
+## Auth migration: Supabase Auth (GoTrue) → Better Auth — close-out
+
+`docs/plans/auth.md`, Step 4. `apps/api`'s `lib/supabaseClient.ts` and
+`lib/cookieSupabaseClient.ts`, and `apps/web`'s `lib/supabase/{client,
+server,middleware}.ts`, are deleted. Both apps now issue/verify sessions
+through their own `createAuth()` instance (`packages/auth/src/config.ts`),
+a thin factory over `better-auth` backed directly by the same `pg.Pool`
+`@nia/db` already uses — no separate auth service, no GoTrue, no Supabase
+project dependency for auth at all. This closes the item the prior
+data-access close-out entry flagged as "not removable" for exactly this
+reason.
+
+**How sessions work.** `better-auth`'s own tables (`public.user`,
+`session`, `account`, `verification` — migration `0035_better_auth.sql`)
+replace `auth.users`/`auth.sessions`. Sessions are **database-backed, not
+JWT** (per the plan's explicit requirement, so a session can be revoked
+instantly by deleting its row) — `session.expiresIn` 30 days,
+`updateAge` 1 day, i.e. the same rolling-refresh behavior the old GoTrue
+access token had, just implemented as an update to the session row's
+`expiresAt` instead of minting a new signed token. Two transports, both
+resolved through the exact same `auth.api.getSession()` call (a real DB
+round-trip against the `session` table every time — never a locally-
+decoded/trusted token):
+- **Cookie** (`apps/web`'s Server Components/Actions, and `apps/api`'s
+  `middleware/cookieAuth.ts` for the chat/runs/copilot-agent routes
+  reached same-origin through Next's `/api/backend/:path*` rewrite,
+  since `EventSource` can't attach a custom header). `nextCookies()`
+  (last plugin in apps/web's instance only) auto-forwards `Set-Cookie`
+  via `next/headers`; `cookieAuth.ts` forwards it manually via
+  `returnHeaders: true` since apps/api has no Next request context.
+- **Bearer** (`apps/api`'s `middleware/auth.ts`, for every other route —
+  Client Components hold the token from `lib/auth/browserSession.ts`'s
+  localStorage copy, set once at login/signup since the httpOnly cookie
+  itself is unreadable from JS). Better Auth's `bearer()` plugin
+  (`packages/auth/src/config.ts`) accepts the header and resolves it
+  against the same `session` row — same verification guarantee, just a
+  different transport for the same underlying session.
+
+Both middlewares set exactly one thing on success: `req.authUser = {id,
+email}` (`session.user.id`, a real-database UUID Better Auth's
+`advanced.database.generateId: "uuid"` config mints on every insert).
+Unit-tested directly: `apps/api/src/middleware/auth.test.ts` — valid
+session resolves `req.authUser` to the session's user id for both
+transports, an invalid/expired one (`getSession` resolving `null`) is
+rejected with a 401 and `req.authUser` left unset, and a missing
+`Authorization` header is rejected without even calling `getSession`.
+
+**How the id reaches `auth.uid()`.** Nothing changed here — this was the
+migration's hard constraint (`auth.md`'s "contract that must not break").
+`middleware/db.ts`'s `attachDb` wires `req.authUser.id` into
+`req.withUser = (fn) => withActingUser(dbPool, authUser.id, fn)`, the same
+`@nia/db` entry point every other route already used post the PostgREST
+migration. `withActingUser` still does `SET LOCAL ROLE authenticated` +
+`set_config('request.jwt.claims', '{"sub": "<id>", "role":
+"authenticated"}', true)` inside the request's transaction — `auth.uid()`
+still just reads that `sub` claim, unaware anything about how `<id>` was
+authenticated has changed. The only thing that changed upstream of
+`attachDb` is *how* `req.authUser.id` gets populated (Better Auth's
+`getSession()` instead of `supabase.auth.getUser(jwt)`) — the contract
+`attachDb` → `withActingUser` → `auth.uid()` is byte-for-byte the same
+UUID, same shape, same call.
+
+**Why RLS policies were untouched.** Because of the above: every policy
+still reads `auth.uid()`/`auth.role()` against `request.jwt.claims`, and
+nothing changed what gets written into that claim or when. The migration
+only replaced the identity provider feeding `attachDb`, not the
+session-state contract RLS depends on. The 50 RLS probes
+(`supabase/tests/rls_probes.sql` — originally 52 per the plan's estimate,
+2 fewer after dropping dead code, see below) are the proof: they all pass
+unchanged, using the exact same policies, against users created through
+Better Auth's real `signUpEmail`/`seedFixtureUsers.ts` instead of raw
+`auth.users` inserts.
+
+**Two pre-existing probes had to be trimmed, not the count "held at
+52."** Probes 44/45/50 tested `merge_connector_secret`/
+`delete_connector_secret`/`decrypt_connector_secret_for_edit` — three
+Vault-era RPCs from the *secret-storage* migration (`vault.delete_secret`
+doesn't exist post-envelope-encryption). `merge_connector_secret` and
+`delete_connector_secret` had zero real callers left (confirmed before
+touching anything); `decrypt_connector_secret_for_edit` is alive
+(`apps/api/src/lib/secretStore.ts`). Migration
+`0036_drop_dead_vault_secret_rpcs.sql` drops the two dead functions;
+probe 44 was narrowed to only assert `log_connection_audit`'s privilege
+(its other assertions were on the now-dropped functions), probe 45 was
+removed outright (its sole subject no longer exists), and probe 50 kept
+its real assertion (`decrypt_connector_secret_for_edit` still returns the
+decrypted secret unmodified) minus a cleanup call to the now-dropped
+`delete_connector_secret` (harmless to drop — the whole probe file runs
+in one `begin;...rollback;` transaction). Net: 50 probes, all passing,
+`RESULT: ALL PROBES PASSED`. No policy was modified to make anything
+pass, per the plan's stop-rule.
+
+**Fixture/dev-seed scripts had a second, unrelated fallout worth
+recording.** `apps/worker/scripts/dev-bootstrap.ts` hardcoded the old
+fixed `auth.users` sentinel UUIDs (`00000000-...-000d1` etc.) from when
+fixture users were raw-SQL inserts with pinned ids. Real Better-Auth-
+minted ids are random, so every FK write referencing those old sentinels
+started failing (`connector_installs_installed_by_user_id_fkey`). Fixed
+by looking the real id up by email (`getUserId()`, mirrors the existing
+`getOrgId()` pattern) instead of hardcoding it — this is a dev/e2e
+tooling fix, not a production code path.
+
+**Admin set-password command.** `apps/api/src/scripts/setUserPassword.ts`
+(`pnpm --filter @nia/api set-password <email> <newPassword>`) — uses
+Better Auth's own `auth.$context.password.hash()` +
+`internalAdapter.{updatePassword,createAccount}`, never a hand-rolled
+hash, since the hash format/params are internal to Better Auth. Exists
+because there's no password-reset flow yet (see `TODO.md`).
+
+**e2e suite: no failures traced to this migration.** Every auth-specific
+test passed (all 4 personas' real login through the `/login` form,
+redirect boundaries, session/cross-org isolation, the `chat.spec.ts`
+403-for-wrong-user-on-`/chat/stream` case — which is itself a positive
+proof that the cookie-transport path, not the Bearer path, is what
+`requireCookieAuth` gates). Of the 14 failures in the full run: 6 (all of
+`chat.spec.ts`'s/`copilot.spec.ts`'s content-dependent assertions) are an
+external LLM-gateway `402 A positive credit balance is required` billing
+outage, not a code path this migration touches; the remainder (`app.spec.ts`'s/
+`canvas.spec.ts`'s "New workflow" button/`gotoWorkflow` mismatches, the
+destination-drawer `<select>` count, `command-bar.spec.ts`'s duplicate-
+label strict-mode violation, and the 2 visual-regression diffs) are
+pre-existing, already-tracked issues — `canvas.spec.ts`, `app.spec.ts`,
+and `command-bar.spec.ts` are byte-identical to the initial commit (no
+diff at all), and `TODO.md`'s "process gap" entry (dated 2026-09-24,
+predates this migration) already documents the exact test-data-pollution
+mechanism (canvas.spec.ts's empty-database-postgres tests never clean up
+the connections/installs they create) that best explains the remaining
+UI-state mismatches. None of these were introduced by this migration.
+
+**Live check (real HTTP, real Better Auth API, no hand-rolled hashing):**
+signup → `GET /app` 200 → logout (`auth.api.signOut`) → `GET /app` 307 to
+`/login` → login (`auth.api.signInEmail`) → `GET /app` 200 with the hour-
+greeting rendered → opened a real seeded workflow
+(`/app/workflows/<uuid>`) 200 → `GET` a cookie-gated streaming route
+(`apps/api`'s `/chat/stream`) with no cookie → 401 `NOT_AUTHENTICATED`;
+same route with a valid session cookie → past auth (404 "no job found for
+that id", not 401) — proving the cookie transport, not Bearer, is what
+gates that route, exactly the thing Bearer-only testing can't exercise.
+
+**Verification:** full `turbo run typecheck` (16/16) and `turbo run test`
+(15/15 tasks, 1,321 tests, 0 failures — fixed one incidental gap found
+during this pass: `@nia/auth`'s `package.json` had a `test` script but no
+test files, which made `vitest run` exit 1 and abort the whole turbo
+pipeline for every other package; removed the dead script rather than add
+a placeholder test, per "keep tests lean"). All 50 RLS probes pass. E2e:
+25 passed / 14 failed (none traced to this migration, see above) / 2
+skipped / 9 did not run (cascaded from a `describe` block's failing setup
+test). Live check: 9/9 steps passed.
+
+`@supabase/supabase-js` is now fully removed from both `apps/api` and
+`apps/web` — no `package.json` entry, no remaining import anywhere in
+either app. `apps/worker` is unchanged from the prior migration (still
+kept alive only by dev/ops scripts, not `src/`).

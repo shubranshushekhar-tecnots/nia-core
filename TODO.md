@@ -1,5 +1,17 @@
 # TODO
 
+- Auth: email verification — not built. `emailAndPassword.autoSignIn: true`
+  (`packages/auth/src/config.ts`) means signup logs a user straight in
+  today with no confirmation step; deferred per `docs/plans/auth.md`'s
+  explicit scope (no email service needed for this version).
+- Auth: password reset — not built. `apps/api/src/scripts/setUserPassword.ts`
+  (admin-only, direct DB access) is the only way to change a forgotten
+  password today; a real self-serve reset flow needs an email service,
+  deferred with email verification above.
+- Auth: Google sign-in — not built. `emailAndPassword` is the only
+  enabled method in `createAuth()`; adding an OAuth provider is additive
+  (better-auth supports it natively) but out of this migration's scope.
+- Auth: SSO — not built, same reasoning as Google sign-in above.
 - ~~Chore: visual-baseline pixel-diffs (`/login`, `/signup`,
   `command-bar-thread-open-1440`, plus `command-bar-resting-1440` and
   `checks-dock-logs-populated-1440`, discovered during the same

@@ -1,5 +1,5 @@
 import type { EntityProfile, EntityRef, IntrospectResponse } from '@nia/schemas';
-import { createClient } from '@/lib/supabase/client';
+import { ensureBearerToken } from '@/lib/auth/browserSession';
 import type { Connection } from '@/lib/connections/types';
 
 /**
@@ -25,11 +25,9 @@ export class ConnectionsApiError extends Error {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const {
-    data: { session },
-  } = await createClient().auth.getSession();
-  if (!session) throw new ConnectionsApiError(401, 'NOT_AUTHENTICATED', 'No active session.');
-  return { Authorization: `Bearer ${session.access_token}` };
+  const token = await ensureBearerToken();
+  if (!token) throw new ConnectionsApiError(401, 'NOT_AUTHENTICATED', 'No active session.');
+  return { Authorization: `Bearer ${token}` };
 }
 
 /**

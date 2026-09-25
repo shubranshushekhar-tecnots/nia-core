@@ -4,9 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { withActingUser } from "@nia/db";
-import { createClient } from "@/lib/supabase/server";
 import { dbPool } from "@/lib/db/pool";
-import { requireUser } from "@/lib/auth/session";
+import { getSessionUser, requireUser } from "@/lib/auth/session";
 import type { ActionState } from "@/lib/auth/actions";
 import type { WorkflowDefinition } from "./types";
 
@@ -35,12 +34,6 @@ export async function createProject(
     return { fieldErrors: parsed.error.flatten().fieldErrors };
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Your session expired — sign in again." };
-
   const ctx = await requireUser();
 
   // orgId null means an individual (org-less) workspace — insert with
@@ -49,9 +42,9 @@ export async function createProject(
     if (ctx.role !== "individual") return { error: "Choose an organization first." };
 
     try {
-      await withActingUser(dbPool, user.id, (db) =>
+      await withActingUser(dbPool, ctx.userId, (db) =>
         db.query("insert into public.projects (org_id, owner_id, name, created_by) values (null, $1, $2, $1)", [
-          user.id,
+          ctx.userId,
           parsed.data.name,
         ]),
       );
@@ -72,11 +65,11 @@ export async function createProject(
   }
 
   try {
-    await withActingUser(dbPool, user.id, (db) =>
+    await withActingUser(dbPool, ctx.userId, (db) =>
       db.query("insert into public.projects (org_id, name, created_by) values ($1, $2, $3)", [
         orgId,
         parsed.data.name,
-        user.id,
+        ctx.userId,
       ]),
     );
   } catch {
@@ -105,12 +98,6 @@ export async function createWorkflow(
     return { fieldErrors: parsed.error.flatten().fieldErrors };
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Your session expired — sign in again." };
-
   const ctx = await requireUser();
 
   // orgId null means an individual (org-less) workspace — insert with
@@ -119,10 +106,10 @@ export async function createWorkflow(
     if (ctx.role !== "individual") return { error: "Choose an organization first." };
 
     try {
-      await withActingUser(dbPool, user.id, (db) =>
+      await withActingUser(dbPool, ctx.userId, (db) =>
         db.query(
           "insert into public.workflows (org_id, owner_id, project_id, name, created_by) values (null, $1, $2, $3, $1)",
-          [user.id, parsed.data.projectId, parsed.data.name],
+          [ctx.userId, parsed.data.projectId, parsed.data.name],
         ),
       );
     } catch {
@@ -139,12 +126,12 @@ export async function createWorkflow(
   }
 
   try {
-    await withActingUser(dbPool, user.id, (db) =>
+    await withActingUser(dbPool, ctx.userId, (db) =>
       db.query("insert into public.workflows (org_id, project_id, name, created_by) values ($1, $2, $3, $4)", [
         orgId,
         parsed.data.projectId,
         parsed.data.name,
-        user.id,
+        ctx.userId,
       ]),
     );
   } catch {
@@ -173,10 +160,7 @@ export async function renameProject(
     return { fieldErrors: parsed.error.flatten().fieldErrors };
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
   const result = await withActingUser(dbPool, user.id, (db) =>
@@ -204,10 +188,7 @@ export async function renameWorkflow(
     return { fieldErrors: parsed.error.flatten().fieldErrors };
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
   const result = await withActingUser(dbPool, user.id, (db) =>
@@ -237,10 +218,7 @@ export async function deleteProject(_prevState: ActionState, formData: FormData)
   // updated list — callers opt into that via a hidden `redirectTo` field.
   const redirectTo = String(formData.get("redirectTo") || "/app");
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
   const result = await withActingUser(dbPool, user.id, (db) =>
@@ -258,10 +236,7 @@ export async function deleteWorkflow(_prevState: ActionState, formData: FormData
   const workflowId = String(formData.get("workflowId"));
   const projectId = String(formData.get("projectId"));
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
   const result = await withActingUser(dbPool, user.id, (db) =>
@@ -279,10 +254,7 @@ export async function updateWorkflowDefinition(
   workflowId: string,
   definition: WorkflowDefinition,
 ): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
   const result = await withActingUser(dbPool, user.id, (db) =>

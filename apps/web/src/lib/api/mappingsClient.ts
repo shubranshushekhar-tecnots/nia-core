@@ -1,5 +1,5 @@
 import type { ProposalSchema } from '@nia/schemas';
-import { createClient } from '@/lib/supabase/client';
+import { ensureBearerToken } from '@/lib/auth/browserSession';
 
 /**
  * Browser-side call for the builder canvas's AI-proposed field mapping flow
@@ -25,11 +25,9 @@ export class MappingsApiError extends Error {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const {
-    data: { session },
-  } = await createClient().auth.getSession();
-  if (!session) throw new MappingsApiError(401, 'NOT_AUTHENTICATED', 'No active session.');
-  return { Authorization: `Bearer ${session.access_token}` };
+  const token = await ensureBearerToken();
+  if (!token) throw new MappingsApiError(401, 'NOT_AUTHENTICATED', 'No active session.');
+  return { Authorization: `Bearer ${token}` };
 }
 
 /**

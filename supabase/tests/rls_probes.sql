@@ -31,22 +31,30 @@ create temporary table probe_results (n int, name text, passed boolean) on commi
 
 do $$
 declare
-  v_owner    uuid := gen_random_uuid(); -- owner, org creator
-  v_admin2   uuid := gen_random_uuid(); -- second owner
-  v_admin    uuid := gen_random_uuid(); -- plain admin
-  v_member   uuid := gen_random_uuid(); -- plain member
-  v_outsider uuid := gen_random_uuid(); -- not a member of the org
+  v_owner    uuid; -- owner, org creator
+  v_admin2   uuid; -- second owner
+  v_admin    uuid; -- plain admin
+  v_member   uuid; -- plain member
+  v_outsider uuid; -- not a member of the org
   v_org      uuid;
 begin
-  insert into auth.users
-    (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
-  values
-    ('00000000-0000-0000-0000-000000000000', v_owner,    'authenticated', 'authenticated', 'owner@rls-probe.test',    crypt('password', gen_salt('bf')), now(), now(), now(), '{"provider":"email","providers":["email"]}', '{}'),
-    ('00000000-0000-0000-0000-000000000000', v_admin2,   'authenticated', 'authenticated', 'admin2@rls-probe.test',   crypt('password', gen_salt('bf')), now(), now(), now(), '{"provider":"email","providers":["email"]}', '{}'),
-    ('00000000-0000-0000-0000-000000000000', v_admin,    'authenticated', 'authenticated', 'admin@rls-probe.test',    crypt('password', gen_salt('bf')), now(), now(), now(), '{"provider":"email","providers":["email"]}', '{}'),
-    ('00000000-0000-0000-0000-000000000000', v_member,   'authenticated', 'authenticated', 'member@rls-probe.test',   crypt('password', gen_salt('bf')), now(), now(), now(), '{"provider":"email","providers":["email"]}', '{}'),
-    ('00000000-0000-0000-0000-000000000000', v_outsider, 'authenticated', 'authenticated', 'outsider@rls-probe.test', crypt('password', gen_salt('bf')), now(), now(), now(), '{"provider":"email","providers":["email"]}', '{}');
-  -- handle_new_user() trigger auto-creates matching public.profiles rows.
+  -- Fixture identities are created ahead of time through Better Auth's own
+  -- signUpEmail path (never raw SQL — the password hash format is internal
+  -- to Better Auth), by:
+  --   pnpm --filter @nia/api seed:fixtures
+  -- Looked up here by email rather than inserted, since this whole script
+  -- runs inside one transaction that gets rolled back at the end, but these
+  -- users must persist across runs for that command to stay idempotent.
+  select id into v_owner    from public."user" where email = 'owner@rls-probe.test';
+  select id into v_admin2   from public."user" where email = 'admin2@rls-probe.test';
+  select id into v_admin    from public."user" where email = 'admin@rls-probe.test';
+  select id into v_member   from public."user" where email = 'member@rls-probe.test';
+  select id into v_outsider from public."user" where email = 'outsider@rls-probe.test';
+  if v_owner is null or v_admin2 is null or v_admin is null or v_member is null or v_outsider is null then
+    raise exception 'rls_probes.sql: fixture users not found — run `pnpm --filter @nia/api seed:fixtures` against this database first.';
+  end if;
+  -- databaseHooks.user.create.after (packages/auth/src/config.ts) already
+  -- created matching public.profiles rows at signup time.
 
   insert into public.organizations (name, slug, created_by)
   values ('RLS Probe Org', 'rls-probe-org', v_owner)
@@ -132,12 +140,15 @@ do $$
 declare
   v_org uuid := (select id from test_ids where key = 'org');
   v_admin uuid := (select id from test_ids where key = 'admin');
-  v_new uuid := gen_random_uuid();
+  v_new uuid;
   denied boolean := false;
 begin
-  -- Fixture: give the target user a profile-less row is fine; FK only needs auth.users.
-  insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
-  values ('00000000-0000-0000-0000-000000000000', v_new, 'authenticated', 'authenticated', 'newperson@rls-probe.test', crypt('password', gen_salt('bf')), now(), now(), now(), '{"provider":"email","providers":["email"]}', '{}');
+  -- Fixture identity created ahead of time via `pnpm --filter @nia/api
+  -- seed:fixtures` (see the main fixture block above for why).
+  select id into v_new from public."user" where email = 'newperson@rls-probe.test';
+  if v_new is null then
+    raise exception 'rls_probes.sql: fixture user not found — run `pnpm --filter @nia/api seed:fixtures` against this database first.';
+  end if;
 
   perform pg_temp.act_as(v_admin);
   begin
@@ -284,12 +295,14 @@ end $$;
 -- =========================================================================
 do $$
 declare
-  v_individual uuid := gen_random_uuid();
+  v_individual uuid;
 begin
-  insert into auth.users
-    (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
-  values
-    ('00000000-0000-0000-0000-000000000000', v_individual, 'authenticated', 'authenticated', 'individual@rls-probe.test', crypt('password', gen_salt('bf')), now(), now(), now(), '{"provider":"email","providers":["email"]}', '{}');
+  -- Fixture identity created ahead of time via `pnpm --filter @nia/api
+  -- seed:fixtures` (see the main fixture block above for why).
+  select id into v_individual from public."user" where email = 'individual@rls-probe.test';
+  if v_individual is null then
+    raise exception 'rls_probes.sql: fixture user not found — run `pnpm --filter @nia/api seed:fixtures` against this database first.';
+  end if;
 
   insert into test_ids values ('individual', v_individual);
 end $$;
@@ -420,7 +433,7 @@ end $$;
 -- =========================================================================
 do $$
 declare
-  v_org_b_owner uuid := gen_random_uuid();
+  v_org_b_owner uuid;
   v_org_b uuid;
   v_project_a uuid;
   v_project_b uuid;
@@ -428,10 +441,12 @@ declare
   v_workflow_b uuid;
   v_member uuid := (select id from test_ids where key = 'member');
 begin
-  insert into auth.users
-    (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
-  values
-    ('00000000-0000-0000-0000-000000000000', v_org_b_owner, 'authenticated', 'authenticated', 'orgb-owner@rls-probe.test', crypt('password', gen_salt('bf')), now(), now(), now(), '{"provider":"email","providers":["email"]}', '{}');
+  -- Fixture identity created ahead of time via `pnpm --filter @nia/api
+  -- seed:fixtures` (see the main fixture block above for why).
+  select id into v_org_b_owner from public."user" where email = 'orgb-owner@rls-probe.test';
+  if v_org_b_owner is null then
+    raise exception 'rls_probes.sql: fixture user not found — run `pnpm --filter @nia/api seed:fixtures` against this database first.';
+  end if;
 
   insert into public.organizations (name, slug, created_by)
   values ('RLS Probe Org B', 'rls-probe-org-b', v_org_b_owner)
@@ -1588,60 +1603,25 @@ end $$;
 -- RPCs + generic connection-audit RPC)
 -- =========================================================================
 
--- Probe 44 — merge_connector_secret/delete_connector_secret/
--- log_connection_audit are callable by authenticated, not by anon/public
--- (privilege check only — no anon-role probe exists elsewhere in this
--- file to mirror for an actual call-attempt).
+-- Probe 44 — log_connection_audit is callable by authenticated, not by
+-- anon/public (privilege check only — no anon-role probe exists elsewhere
+-- in this file to mirror for an actual call-attempt).
+--
+-- merge_connector_secret/delete_connector_secret (0027) were dropped in
+-- migration 0036 as dead code (see that migration's header) — they had
+-- zero real callers left after the envelope-encryption secret-store
+-- migration, and their privilege/behavior checks were removed from this
+-- probe (formerly probe 44) and probe 45 (removed entirely) accordingly.
 do $$
 declare
   ok boolean;
 begin
-  ok := has_function_privilege('authenticated', 'public.merge_connector_secret(uuid, jsonb)', 'execute')
-    and has_function_privilege('authenticated', 'public.delete_connector_secret(uuid)', 'execute')
-    and has_function_privilege('authenticated', 'public.log_connection_audit(uuid, text, jsonb, uuid)', 'execute')
-    and not has_function_privilege('anon', 'public.merge_connector_secret(uuid, jsonb)', 'execute')
-    and not has_function_privilege('anon', 'public.delete_connector_secret(uuid)', 'execute')
+  ok := has_function_privilege('authenticated', 'public.log_connection_audit(uuid, text, jsonb, uuid)', 'execute')
     and not has_function_privilege('anon', 'public.log_connection_audit(uuid, text, jsonb, uuid)', 'execute');
 
-  insert into probe_results values (44, 'merge/delete_connector_secret + log_connection_audit: granted to authenticated, not anon', ok);
+  insert into probe_results values (44, 'log_connection_audit: granted to authenticated, not anon', ok);
 exception when others then
   insert into probe_results values (44, 'connection-lifecycle RPC privilege probe (errored: ' || sqlerrm || ')', false);
-end $$;
-
--- Probe 45 — merge_connector_secret shallow-merges a partial over the
--- decrypted existing secret (blank/omitted fields keep their stored
--- value) and mints a NEW vault row rather than mutating the old one;
--- delete_connector_secret then removes a ref by id.
-do $$
-declare
-  v_member uuid := (select id from test_ids where key = 'member');
-  v_ref1 uuid;
-  v_ref2 uuid;
-  v_merged jsonb;
-  n_old_remains int;
-  merge_ok boolean := false;
-begin
-  perform pg_temp.act_as(v_member);
-  v_ref1 := (public.create_connector_secret('{"user":"orig-user","password":"orig-pass"}'::jsonb))::uuid;
-  v_ref2 := public.merge_connector_secret(v_ref1, '{"password":"new-pass"}'::jsonb);
-  perform public.delete_connector_secret(v_ref1);
-  reset role;
-
-  select decrypted_secret::jsonb into v_merged from vault.decrypted_secrets where id = v_ref2;
-  select count(*) into n_old_remains from vault.decrypted_secrets where id = v_ref1;
-
-  merge_ok := v_ref2 <> v_ref1
-    and v_merged = '{"user":"orig-user","password":"new-pass"}'::jsonb
-    and n_old_remains = 0;
-
-  if merge_ok then
-    insert into probe_results values (45, 'merge_connector_secret keeps unset fields, overwrites given ones, mints a new ref; delete_connector_secret removes the old one', true);
-  else
-    insert into probe_results values (45, 'merge_connector_secret keeps unset fields, overwrites given ones, mints a new ref; delete_connector_secret removes the old one', false);
-  end if;
-exception when others then
-  reset role;
-  insert into probe_results values (45, 'merge/delete_connector_secret probe (errored: ' || sqlerrm || ')', false);
 end $$;
 
 -- Probe 46 — log_connection_audit: an authenticated caller's action is
@@ -1878,8 +1858,8 @@ exception when others then
 end $$;
 
 -- Probe 50 — decrypt_connector_secret_for_edit is callable by authenticated,
--- not anon, and returns the same jsonb merge_connector_secret would read
--- (the decrypt half only — no merge, no new ref minted).
+-- not anon, and returns the secret's decrypted jsonb unmodified (no merge,
+-- no new ref minted — that's the only behavior this RPC has).
 do $$
 declare
   v_member uuid := (select id from test_ids where key = 'member');
@@ -1893,7 +1873,6 @@ begin
   perform pg_temp.act_as(v_member);
   v_ref := (public.create_connector_secret('{"user":"probe50-user","password":"probe50-pass"}'::jsonb))::uuid;
   v_decrypted := public.decrypt_connector_secret_for_edit(v_ref);
-  perform public.delete_connector_secret(v_ref);
   reset role;
 
   if privilege_ok and v_decrypted = '{"user":"probe50-user","password":"probe50-pass"}'::jsonb then

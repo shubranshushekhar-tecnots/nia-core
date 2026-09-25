@@ -17,10 +17,8 @@ import { test, expect } from '@playwright/test';
 //      references but doesn't inline. Opening it via file:// (or any static
 //      server) never produces the real layout, so there's no pixel-accurate
 //      reference image on disk to diff against.
-//   2. The /app home screen itself requires a real, email-confirmed Supabase
-//      session — the same precondition already documented in app.spec.ts
-//      ("no service-role key is available to apps/web by design"). Without
-//      one, /app redirects to /login before anything is rendered.
+//   2. The /app home screen itself requires a real, logged-in session.
+//      Without one, /app redirects to /login before anything is rendered.
 //
 // Once either constraint is lifted (a static PNG/JPEG export of the design
 // is provided, and/or a seeded test account exists), add a case here the

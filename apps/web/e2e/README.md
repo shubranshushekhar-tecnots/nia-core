@@ -1,17 +1,21 @@
 # e2e (Playwright)
 
-Real authenticated e2e against local Supabase — no mocked sessions. The
-`setup` Playwright project (`auth.setup.ts`) logs each persona in through
-the real `/login` form and saves its session to
-`apps/web/playwright/.auth/*.json`; the main `chromium` project depends on
-`setup` and specs opt into a persona via
+Real authenticated e2e against local Postgres (Supabase CLI hosts it) — no
+mocked sessions. The `setup` Playwright project (`auth.setup.ts`) logs each
+persona in through the real `/login` form (Better Auth) and saves its
+session to `apps/web/playwright/.auth/*.json`; the main `chromium` project
+depends on `setup` and specs opt into a persona via
 `test.use({ storageState: personas.demo.storageStatePath })`.
 
 ## Personas
 
-Seeded by `supabase/seed.sql`'s "Canvas E2E fixtures" block (+ the original
-demo block above it) and, for connections, `apps/worker/scripts/dev-bootstrap.ts`.
-Password for all of them: `password`.
+The identities themselves are created via Better Auth's own signUpEmail
+path — `pnpm --filter @nia/api seed:fixtures` (see
+`apps/api/src/scripts/seedFixtureUsers.ts`) — never raw SQL, since the
+password hash format is internal to Better Auth. The org/project/dataset
+fixtures around them are seeded by `supabase/seed.sql`'s "Canvas E2E
+fixtures" block (+ the original demo block above it) and, for connections,
+`apps/worker/scripts/dev-bootstrap.ts`. Password for all of them: `password`.
 
 | Persona   | Email                    | Workspace                                    |
 |-----------|--------------------------|-----------------------------------------------|
@@ -28,7 +32,9 @@ Password for all of them: `password`.
 ```
 supabase start
 docker compose up -d dev-mysql dev-mongo
-supabase db reset                              # applies migrations + seed.sql
+supabase db reset                              # applies migrations; seed.sql no-ops until fixtures exist
+pnpm --filter @nia/api seed:fixtures           # creates fixture users via Better Auth
+psql "$DATABASE_URL" -f supabase/seed.sql      # now populates demo/e2e org data
 pnpm --filter @nia/worker bootstrap            # seeds connections (Vault RPC, not plain SQL)
 pnpm --filter @nia/web test:e2e
 ```

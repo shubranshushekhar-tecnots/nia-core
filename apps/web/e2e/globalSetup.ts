@@ -1,7 +1,7 @@
 import path from 'node:path';
 import dotenv from 'dotenv';
 import { Queue } from 'bullmq';
-import { createClient } from '@supabase/supabase-js';
+import { Pool } from 'pg';
 import { personas } from './fixtures/personas';
 
 // Not imported from @nia/schemas — that package only publishes an ESM
@@ -58,41 +58,41 @@ async function assertWorkerRunning(): Promise<void> {
   }
 }
 
+/**
+ * Reads canvasC's connection count directly off Postgres rather than
+ * signing in through Better Auth first — this check only ever cared about
+ * seeded data, not about proving auth works (auth.setup.ts's real /login
+ * runs cover that), so a superuser-role dbPool read is simpler and doesn't
+ * need a live session. canvasC is an individual (org-less) persona, so its
+ * connections are scoped by owner_id, not org_id (0005_individual_workspace.sql).
+ */
 async function assertCanvasCHasConnections(): Promise<void> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) {
-    throw new Error(
-      'e2e preflight: NEXT_PUBLIC_SUPABASE_URL/NEXT_PUBLIC_SUPABASE_ANON_KEY are missing ' +
-        '(apps/web/.env.local) — cannot check seeded connections.',
-    );
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('e2e preflight: DATABASE_URL is missing (apps/web/.env.local) — cannot check seeded connections.');
   }
 
-  const supabase = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const pool = new Pool({ connectionString });
   const canvasC = personas.canvasC;
 
-  const { error: authError } = await supabase.auth.signInWithPassword({
-    email: canvasC.email,
-    password: canvasC.password,
-  });
-  if (authError) {
-    throw new Error(
-      `e2e preflight: could not sign in as ${canvasC.email} to check seeded connections ` +
-        `(${authError.message}). Is local Supabase running and seeded ("supabase db reset")?`,
+  try {
+    const { rows } = await pool.query<{ count: string }>(
+      `select count(c.id)::text as count
+       from public.connections c
+       join public."user" u on u.id = c.owner_id
+       where u.email = $1`,
+      [canvasC.email],
     );
-  }
+    const count = Number(rows[0]?.count ?? 0);
 
-  const { count, error } = await supabase.from('connections').select('id', { count: 'exact', head: true });
-  await supabase.auth.signOut();
-
-  if (error) {
-    throw new Error(`e2e preflight: failed to check ${canvasC.email}'s connections (${error.message}).`);
-  }
-  if (!count) {
-    throw new Error(
-      `e2e preflight: ${canvasC.email} has no seeded connections. copilot.spec.ts needs at least ` +
-        'one (it drives the LLM to propose a plan against a real mysql connection). Seed it with:\n' +
-        '  pnpm --filter @nia/worker bootstrap',
-    );
+    if (!count) {
+      throw new Error(
+        `e2e preflight: ${canvasC.email} has no seeded connections. copilot.spec.ts needs at least ` +
+          'one (it drives the LLM to propose a plan against a real mysql connection). Seed it with:\n' +
+          '  pnpm --filter @nia/worker bootstrap',
+      );
+    }
+  } finally {
+    await pool.end();
   }
 }

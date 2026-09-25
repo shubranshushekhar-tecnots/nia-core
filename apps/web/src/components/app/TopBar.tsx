@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { logout } from '@/lib/auth/actions';
+import { clearStoredBearerToken } from '@/lib/auth/browserSession';
 import {
   breadcrumbSepStyle,
   dropdownItemStyle,
@@ -114,7 +115,15 @@ export default function TopBar({
             </div>
             <div style={{ height: 1, background: 'var(--line)', margin: '4px 0' }} />
             <form action={logout}>
-              <button type="submit" style={{ ...dropdownItemStyle, color: 'var(--bad)' }}>
+              {/* The server action clears the httpOnly session cookie;
+                  this clears the localStorage bearer token (lib/auth/
+                  browserSession.ts) used for Client Component API calls,
+                  which the server action has no way to reach. */}
+              <button
+                type="submit"
+                onClick={() => clearStoredBearerToken()}
+                style={{ ...dropdownItemStyle, color: 'var(--bad)' }}
+              >
                 Sign out
               </button>
             </form>

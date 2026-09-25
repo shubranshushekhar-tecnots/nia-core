@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { createClient } from '@supabase/supabase-js';
+import { Pool } from 'pg';
 import { personas } from './fixtures/personas';
 
 /**
@@ -54,68 +54,102 @@ async function gotoWorkflow(page: Page, projectName: string, workflowName: strin
 }
 
 /**
- * apps/web's Supabase browser client (lib/supabase/client.ts) persists the
- * session as a single `sb-<ref>-auth-token` cookie (base64-prefixed JSON),
- * not localStorage — confirmed against this suite's own saved storageState
- * fixtures (playwright/.auth/*.json only carry a cookies array, no origins/
- * localStorage entries). Decode it and hand the access/refresh token pair
- * to a plain node-side @supabase/supabase-js client via setSession() so the
- * query below runs through the exact same RLS the browser session would —
- * this project has no service-role key available to apps/web by design
- * (CONVENTIONS.md), so this is the only faithful way to assert a row exists.
- */
-async function readOwnAuditRows(page: Page, action: string) {
-  const cookies = await page.context().cookies();
-  const authCookie = cookies.find((c) => /^sb-.+-auth-token$/.test(c.name));
-  if (!authCookie) throw new Error('No sb-*-auth-token cookie on this context — is the persona logged in?');
-  const raw = authCookie.value.startsWith('base64-') ? authCookie.value.slice('base64-'.length) : authCookie.value;
-  const session = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')) as {
-    access_token: string;
-    refresh_token: string;
-  };
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'http://127.0.0.1:54321';
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!anonKey) throw new Error('NEXT_PUBLIC_SUPABASE_ANON_KEY not set in the test process env.');
-
-  const supabase = createClient(supabaseUrl, anonKey);
-  const { error: sessionError } = await supabase.auth.setSession({
-    access_token: session.access_token,
-    refresh_token: session.refresh_token,
-  });
-  if (sessionError) throw sessionError;
-
-  const { data, error } = await supabase
-    .from('audit_log')
-    .select('action, detail, created_at, actor, org_id, owner_id')
-    .eq('action', action)
-    .order('created_at', { ascending: false })
-    .limit(5);
-  if (error) throw error;
-  return data ?? [];
-}
-
-/** JWT payload's `sub` claim (the auth.uid() the RPC's `actor` column should match). */
-function decodeUserId(accessToken: string): string {
-  const payloadSegment = accessToken.split('.')[1];
-  if (!payloadSegment) throw new Error('Access token is not a well-formed JWT (missing payload segment).');
-  const payload = JSON.parse(Buffer.from(payloadSegment, 'base64').toString('utf8')) as { sub: string };
-  return payload.sub;
-}
-
-/**
- * Just the bearer token half of readOwnAuditRows' cookie decode, for tests
- * that need to call apps/api directly (bypassing the UI) rather than query
- * Supabase. Deliberately not shared with readOwnAuditRows — that function
- * is exercised by the passing happy-path test above and is left untouched.
+ * apps/web's Better Auth session cookie (`better-auth.session_token`, set
+ * by lib/auth/auth.ts's nextCookies() plugin) is a signed compound value
+ * `<rawToken>.<signature>` — confirmed against this suite's own saved
+ * storageState fixtures (playwright/.auth/*.json only carry a cookies
+ * array, no origins/localStorage entries). apps/api's bearer() plugin
+ * (packages/auth/src/config.ts) accepts this whole compound value directly
+ * as `Authorization: Bearer <value>`, treating it as pre-signed — no need
+ * to split off the signature to call apps/api.
  */
 async function getAccessToken(page: Page): Promise<string> {
   const cookies = await page.context().cookies();
-  const authCookie = cookies.find((c) => /^sb-.+-auth-token$/.test(c.name));
-  if (!authCookie) throw new Error('No sb-*-auth-token cookie on this context — is the persona logged in?');
-  const raw = authCookie.value.startsWith('base64-') ? authCookie.value.slice('base64-'.length) : authCookie.value;
-  const session = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')) as { access_token: string };
-  return session.access_token;
+  const authCookie = cookies.find((c) => /(^|\.)session_token$/.test(c.name));
+  if (!authCookie) throw new Error('No better-auth session cookie on this context — is the persona logged in?');
+  return decodeURIComponent(authCookie.value);
+}
+
+/**
+ * The raw half (before the `.<signature>`) is exactly what's stored in
+ * public.session.token — DB lookups keyed on the cookie value use this,
+ * not the full compound value the Bearer header uses.
+ */
+function rawSessionToken(compoundToken: string): string {
+  const idx = compoundToken.lastIndexOf('.');
+  return idx === -1 ? compoundToken : compoundToken.slice(0, idx);
+}
+
+/**
+ * Better Auth sessions are opaque DB rows, not JWTs — there's no payload to
+ * decode locally. Looks up public.session.token directly (bypassing RLS —
+ * this pool connects as the same superuser role apps/web's own dbPool
+ * uses) to resolve the userId the RPC's `actor` column should match.
+ */
+async function decodeUserId(accessToken: string): Promise<string> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('DATABASE_URL not set in the test process env.');
+  const pool = new Pool({ connectionString });
+  try {
+    const { rows } = await pool.query<{ userId: string }>(
+      'select "userId" from public.session where token = $1',
+      [rawSessionToken(accessToken)],
+    );
+    if (!rows[0]) throw new Error('No public.session row found for this access token.');
+    return rows[0].userId;
+  } finally {
+    await pool.end();
+  }
+}
+
+interface AuditLogRow {
+  action: string;
+  detail: unknown;
+  created_at: string;
+  actor: string;
+  org_id: string | null;
+  owner_id: string | null;
+}
+
+/**
+ * This project has no service-role key available to apps/web by design
+ * (CONVENTIONS.md), and there's no Supabase client to hand a session to
+ * anymore — instead this runs the exact same RLS-scoping primitive
+ * withActingUser (packages/db/src/client.ts) uses (SET LOCAL ROLE
+ * authenticated + request.jwt.claims), by hand, on a plain pg connection,
+ * so the query below runs through the exact same RLS the browser session
+ * would.
+ */
+async function readOwnAuditRows(page: Page, action: string): Promise<AuditLogRow[]> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('DATABASE_URL not set in the test process env.');
+  const userId = await decodeUserId(await getAccessToken(page));
+
+  const pool = new Pool({ connectionString });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL ROLE authenticated');
+    await client.query("SELECT set_config('request.jwt.claims', $1, true)", [
+      JSON.stringify({ sub: userId, role: 'authenticated' }),
+    ]);
+    const { rows } = await client.query<AuditLogRow>(
+      `select action, detail, created_at, actor, org_id, owner_id
+       from audit_log
+       where action = $1
+       order by created_at desc
+       limit 5`,
+      [action],
+    );
+    await client.query('COMMIT');
+    return rows;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+    await pool.end();
+  }
 }
 
 test.describe('copilot: propose -> ghost preview -> apply', () => {
@@ -208,7 +242,7 @@ test.describe('copilot: propose -> ghost preview -> apply', () => {
     const matching = rows.find((r) => (r.detail as { workflowId?: string })?.workflowId === workflowId);
     expect(matching, `expected a copilot_plan.applied audit_log row for workflow ${workflowId}`).toBeTruthy();
     // Full ledgered shape (0019's log_plan_applied RPC), not just workflowId.
-    const userId = decodeUserId(await getAccessToken(page));
+    const userId = await decodeUserId(await getAccessToken(page));
     const detail = matching!.detail as {
       planSummary?: string;
       prompt?: string | null;

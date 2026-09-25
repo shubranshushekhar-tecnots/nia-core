@@ -1,20 +1,19 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import AuthShell from './AuthShell';
-import GoogleIcon from './GoogleIcon';
-import { signup, loginWithGoogle, type ActionState } from '@/lib/auth/actions';
+import { signup, type ActionState } from '@/lib/auth/actions';
+import { setStoredBearerToken } from '@/lib/auth/browserSession';
 import {
   createLinkStyle,
   errorTextStyle,
   eyeBtnStyle,
   fieldLabelStyle,
   fieldStyle,
-  googleBtnStyle,
   noteStyle,
   signinBtnStyle,
-  ssoLinkStyle,
   subtitleStyle,
   titleStyle,
 } from './styles';
@@ -22,9 +21,20 @@ import {
 const initialState: ActionState = null;
 
 export default function SignupForm() {
+  const router = useRouter();
   const [state, formAction, pending] = useActionState(signup, initialState);
   const [pwShown, setPwShown] = useState(false);
   const hasError = Boolean(state?.error);
+
+  // Same reasoning as LoginForm: httpOnly session cookie means the token
+  // for Client Component API calls has to be handed back explicitly and
+  // stored here, before navigating.
+  useEffect(() => {
+    if (state?.success && state.token) {
+      setStoredBearerToken(state.token);
+      router.push(state.next ?? '/app');
+    }
+  }, [state, router]);
 
   return (
     <AuthShell
@@ -88,23 +98,6 @@ export default function SignupForm() {
           {pending ? 'Creating account\u2026' : 'Create account'}
         </button>
       </form>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '22px 0' }}>
-        <span style={{ flex: 1, height: 1, background: 'var(--line)' }} />
-        <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>or</span>
-        <span style={{ flex: 1, height: 1, background: 'var(--line)' }} />
-      </div>
-
-      <form action={loginWithGoogle}>
-        <button type="submit" style={googleBtnStyle}>
-          <GoogleIcon />
-          Continue with Google
-        </button>
-      </form>
-
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
-        <button type="button" style={ssoLinkStyle}>Sign up with SSO instead</button>
-      </div>
     </AuthShell>
   );
 }

@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { createClient } from "@/lib/supabase/server";
+import { dbPool } from "@/lib/db/pool";
 import type { ActionState } from "@/lib/auth/actions";
 
 const talkToSalesSchema = z.object({
@@ -24,15 +24,17 @@ export async function submitTalkToSales(_prevState: ActionState, formData: FormD
     return { fieldErrors: parsed.error.flatten().fieldErrors };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.from("sales_leads").insert({
-    name: parsed.data.name,
-    work_email: parsed.data.workEmail,
-    company: parsed.data.company,
-    team_size: parsed.data.teamSize ?? null,
-    message: parsed.data.message ?? null,
-  });
-  if (error) {
+  // Unauthenticated (no session yet, this is the public landing page) —
+  // insert directly via dbPool, which connects as the `postgres` role and
+  // so bypasses RLS the same way the old anon-key Supabase client's
+  // `with check (true)` policy (0034_sales_leads.sql) allowed anyway.
+  try {
+    await dbPool.query(
+      `insert into public.sales_leads (name, work_email, company, team_size, message)
+       values ($1, $2, $3, $4, $5)`,
+      [parsed.data.name, parsed.data.workEmail, parsed.data.company, parsed.data.teamSize ?? null, parsed.data.message ?? null],
+    );
+  } catch {
     return { error: "Something went wrong sending your request. Please try again." };
   }
 

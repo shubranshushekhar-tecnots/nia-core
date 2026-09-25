@@ -3,24 +3,37 @@ import { z } from "zod";
 
 /**
  * Fail fast on boot rather than surfacing a confusing runtime error the
- * first time a route touches Supabase. Deliberately has NO
- * SUPABASE_SERVICE_ROLE_KEY entry — see CONVENTIONS.md: this service only ever
- * builds per-request clients from the caller's own access token.
+ * first time a route touches auth.
  */
 const EnvSchema = z.object({
-  SUPABASE_URL: z.string().url(),
-  SUPABASE_ANON_KEY: z.string().min(1),
   /**
    * Direct Postgres connection for @nia/db (docs/plans/data-access.md,
-   * Step 3) — replaces PostgREST for data access. Connects as the
-   * `postgres` role (see DEPLOYMENT.md's "Database connection pooling"
-   * section for why); per-request privilege narrowing to `authenticated`
-   * happens via withActingUser's SET LOCAL ROLE, not via this connection
-   * string. Auth itself (validating the caller's Bearer token) still goes
-   * through Supabase Auth/GoTrue via SUPABASE_URL above — unaffected by
-   * this migration.
+   * Step 3) and for @nia/auth's Better Auth instance (docs/plans/auth.md,
+   * Step 2) — both share this service's one pool (lib/dbPool.ts). Connects
+   * as the `postgres` role (see DEPLOYMENT.md's "Database connection
+   * pooling" section for why); per-request privilege narrowing to
+   * `authenticated` for data access happens via withActingUser's SET LOCAL
+   * ROLE, not via this connection string. Better Auth reads/writes its own
+   * user/session/account/verification tables on this same unprivileged-by-
+   * RLS connection, same as the old handle_new_user trigger did.
    */
   DATABASE_URL: z.string().min(1),
+  /**
+   * Public origin of apps/api itself. Passed to Better Auth as `baseURL`
+   * (packages/auth/src/config.ts) — this instance never issues cookies of
+   * its own (login/signup happens in apps/web), it only ever verifies
+   * sessions via auth.api.getSession(), but Better Auth still wants a
+   * baseURL to avoid a startup warning and to reason about secure-cookie
+   * defaults.
+   */
+  API_URL: z.string().url(),
+  /**
+   * Must be byte-identical to apps/web's BETTER_AUTH_SECRET — it signs the
+   * session token embedded in both the Set-Cookie value and the
+   * `set-auth-token` bearer value apps/web forwards, and this instance
+   * verifies that signature independently of whichever app issued it.
+   */
+  BETTER_AUTH_SECRET: z.string().min(1),
   WEB_ORIGIN: z.string().url(),
   PORT: z.coerce.number().int().positive().default(4001),
   /**
@@ -128,11 +141,10 @@ const EnvSchema = z.object({
    * LLM gateway client (copilot/gatewayClient.ts), a thin duplicate of
    * apps/worker's lib/llm/gatewayClient.ts. A separate client (not a
    * shared package, not a reuse of the worker's) specifically so every
-   * Copilot tool call stays on this service's own per-request req.supabase
+   * Copilot tool call stays on this service's own per-request req.withUser
    * client — apps/worker only ever has a service-role client, which the
    * plan requires Copilot never uses. Same three vars as the worker's,
-   * deliberately not defaulted (fail fast on boot if unset, same
-   * SUPABASE_URL/ANON_KEY precedent above).
+   * deliberately not defaulted (fail fast on boot if unset).
    */
   NIA_GATEWAY_API_KEY: z.string().min(1),
   NIA_GATEWAY_BASE_URL: z.string().url(),

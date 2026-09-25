@@ -9,14 +9,15 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "seed:fixtures": "tsx src/scripts/seedFixtureUsers.ts",
+    "set-password": "tsx src/scripts/setUserPassword.ts"
   },
   "dependencies": {
+    "@nia/auth": "workspace:*",
     "@nia/db": "workspace:*",
     "@nia/schemas": "workspace:*",
     "@nia/secrets": "workspace:*",
-    "@supabase/ssr": "^0.5.2",
-    "@supabase/supabase-js": "^2.46.1",
     "bullmq": "^5.34.4",
     "cookie": "^1.0.2",
     "cors": "^2.8.5",
