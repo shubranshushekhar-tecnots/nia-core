@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
 import { ApiError, apiFetchServer } from './server';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL!;
+// See lib/api/server.ts's identical constant for why this isn't NEXT_PUBLIC_-prefixed.
+const API_URL = process.env.API_INTERNAL_URL ?? 'http://localhost:4001';
 
 export type Conversation = {
   id: string;

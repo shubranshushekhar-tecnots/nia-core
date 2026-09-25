@@ -333,7 +333,7 @@ test.describe('copilot: propose -> ghost preview -> apply', () => {
     // session cookie — a path the wait-for-save guard cannot observe, since
     // that guard only watches this page's own saveState/"Saved" text.
     const accessToken = await getAccessToken(page);
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
+    const apiUrl = process.env.API_INTERNAL_URL ?? 'http://localhost:4001';
     const authHeaders = { Authorization: `Bearer ${accessToken}` };
 
     const currentRes = await page.request.get(`${apiUrl}/workflows/${workflowId}/graph`, { headers: authHeaders });
@@ -451,7 +451,7 @@ test.describe('copilot: agent tool-use loop (Part 3/4)', () => {
     expect(workflowId).toBeTruthy();
 
     const accessToken = await getAccessToken(page);
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
+    const apiUrl = process.env.API_INTERNAL_URL ?? 'http://localhost:4001';
     const authHeaders = { Authorization: `Bearer ${accessToken}` };
 
     // canvasC has exactly one seeded connection (mysql, dev sandbox) — look

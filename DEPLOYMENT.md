@@ -7,7 +7,9 @@ publishes images; infra owns hosting, orchestration, TLS, DNS, and scaling.
 
 | Service | Image / Dockerfile | Build context | Start command | Port | Health check | Internal-only |
 |---|---|---|---|---|---|---|
-| `niacore-api` | `apps/api/Dockerfile` → `${API_IMAGE_VERSION}` | repo root | `docker-entrypoint.sh` (migrates, then `node dist/index.js`) | 4001 | `GET /health` | No — the only service that should be publicly reachable |
+| `niacore-proxy` | `nginx:alpine` (upstream, not built) | — | — | `${PROXY_PORT:-80}` | — (nginx itself; no app-level check) | No — the only publicly reachable service |
+| `niacore-web` | `apps/web/Dockerfile` → `${WEB_IMAGE_VERSION}` | repo root | `node apps/web/server.js` (Next.js standalone output) | 3000 | `GET /api/health-web` | Yes |
+| `niacore-api` | `apps/api/Dockerfile` → `${API_IMAGE_VERSION}` | repo root | `docker-entrypoint.sh` (migrates, then `node dist/index.js`) | 4001 | `GET /health` | Yes |
 | `niacore-worker` | `apps/worker/Dockerfile` → `${WORKER_IMAGE_VERSION}` | repo root | `node dist/index.js` | — (no HTTP server; pure BullMQ consumer) | none (no HTTP surface) | Yes |
 | `niacore-connector-mysql` | `services/connector-mysql/Dockerfile` → `${CONNECTOR_MYSQL_IMAGE_VERSION}` | repo root | `node services/connector-mysql/dist/index.js` | 4010 | `GET /health` | Yes |
 | `niacore-connector-mongodb` | `services/connector-mongodb/Dockerfile` → `${CONNECTOR_MONGODB_IMAGE_VERSION}` | repo root | `node services/connector-mongodb/dist/index.js` | 4020 | `GET /health` | Yes |
@@ -22,6 +24,52 @@ hostname contract, see below, and must not be renamed.
 "Internal-only" means: no `ports:` published in `docker-compose.prod.yml`,
 so the service is unreachable from outside the Docker host. It does
 **not** mean no internet egress — see "Network requirements" below.
+
+### Request routing (apps/web on docker-compose.prod.yml)
+
+See `docs/plans/web-container.md` for the full design discussion. The path
+a browser request takes:
+
+```
+browser
+  → niacore-proxy (nginx, public port)     — TLS/front door only, no
+                                              path-based routing; forwards
+                                              everything to niacore-web:3000
+  → niacore-web (Next.js, standalone)      — serves pages directly; for
+                                              /api/backend/*, Next's own
+                                              rewrite (next.config.mjs)
+                                              proxies to the internal
+                                              API_INTERNAL_URL
+  → niacore-api (Express, no public port)  — reached ONLY via niacore-web's
+                                              rewrite, never directly
+```
+
+Two separate proxy hops, two separate jobs:
+- **`niacore-proxy`** is a swappable front door — infra may replace it with
+  their own TLS-terminating proxy/load balancer without touching app code,
+  since it does nothing but forward to `niacore-web`.
+- **Next.js's own `rewrites()`** (already existed before this migration,
+  originally proxying to a publicly-reachable `niacore-api`) is the one and
+  only browser→api path and must not be duplicated in nginx — routing
+  `/api/` at the nginx layer as well would double-proxy and was rejected
+  during this migration (see `docs/decisions.md`).
+
+`API_INTERNAL_URL` (`http://niacore-api:4001`) is hardcoded directly in
+`docker-compose.prod.yml`'s `niacore-web` service `environment:`, the same
+way connector hostnames are hardcoded — it's a fixed Docker-network
+contract, not a user-supplied var in `.env`.
+
+`API_URL` (apps/api) and `WEB_ORIGIN`/`SITE_URL` (niacore-web) must all be
+set to the exact same public https origin — Better Auth derives its
+`__Secure-` cookie prefix independently per instance from that instance's
+own base URL, so a mismatch breaks session lookups. See the `API_URL`/
+`WEB_ORIGIN` comment in the root `.env.production.example`.
+
+Both the Next.js rewrite's `experimental.proxyTimeout` and
+`deploy/nginx/nginx.conf`'s `proxy_read_timeout`/`proxy_send_timeout` are
+set to 1800s to match `RUN_SSE_MAX_DURATION_MS` (apps/api's longest-lived
+SSE stream, workflow runs) — raise all three together if that timeout ever
+changes.
 
 **Connector service hostnames are a contract, not a naming convenience.**
 `apps/api` and `apps/worker` never learn a connector's address from env or
@@ -52,13 +100,17 @@ tries to run a workflow.
 
 Build each image from the repo root and push it, tagging however your
 registry expects — these tags are exactly what you'll set as
-`API_IMAGE_VERSION` / `WORKER_IMAGE_VERSION` / etc. below, e.g.:
+`API_IMAGE_VERSION` / `WEB_IMAGE_VERSION` / `WORKER_IMAGE_VERSION` / etc.
+below. These are pushed to and run on an x86 server, so build with
+`--platform linux/amd64` (see CONVENTIONS.md's "Local testing (Docker boot
+tests)" section for why local boot tests must NOT use this flag), e.g.:
 ```
-docker build -f apps/api/Dockerfile                     -t ghcr.io/your-org/nia-api:1.4.0                .
-docker build -f apps/worker/Dockerfile                  -t ghcr.io/your-org/nia-worker:1.4.0             .
-docker build -f services/connector-mysql/Dockerfile     -t ghcr.io/your-org/nia-connector-mysql:1.4.0    .
-docker build -f services/connector-mongodb/Dockerfile   -t ghcr.io/your-org/nia-connector-mongodb:1.4.0  .
-docker build -f services/connector-supabase/Dockerfile  -t ghcr.io/your-org/nia-connector-supabase:1.4.0 .
+docker build --platform linux/amd64 -f apps/api/Dockerfile                     -t ghcr.io/your-org/niacore-api:1.4.0                .
+docker build --platform linux/amd64 -f apps/web/Dockerfile                     -t ghcr.io/your-org/niacore-web:1.4.0                .
+docker build --platform linux/amd64 -f apps/worker/Dockerfile                  -t ghcr.io/your-org/niacore-worker:1.4.0             .
+docker build --platform linux/amd64 -f services/connector-mysql/Dockerfile     -t ghcr.io/your-org/niacore-connector-mysql:1.4.0    .
+docker build --platform linux/amd64 -f services/connector-mongodb/Dockerfile   -t ghcr.io/your-org/niacore-connector-mongodb:1.4.0  .
+docker build --platform linux/amd64 -f services/connector-supabase/Dockerfile  -t ghcr.io/your-org/niacore-connector-supabase:1.4.0 .
 ```
 Push each, then copy `.env.production.example` to `.env` in the deploy
 directory, fill it in, and run the stack:
@@ -77,6 +129,7 @@ didn't change them.
 
 Full reference, one file per container, in this repo:
 - `apps/api/.env.production.example`
+- `apps/web/.env.production.example`
 - `apps/worker/.env.production.example`
 - `services/connector-mysql/.env.production.example`
 - `services/connector-mongodb/.env.production.example`
@@ -320,7 +373,7 @@ schedule — for instance to decouple it from `worker`'s own uptime, or to
 get its own retry/alerting independent of the long-running process — the
 same sweep logic is available as a one-shot command:
 ```
-docker run --rm --env-file .env $REGISTRY/nia-worker:$TAG node dist/cli/stagingSweep.js
+docker run --rm --env-file .env $REGISTRY/niacore-worker:$TAG node dist/cli/stagingSweep.js
 ```
 (or, from a repo checkout with deps installed: `pnpm --filter @nia/worker
 run sweep:staging`). It exits `0` once the sweep completes (per-row

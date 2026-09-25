@@ -7,14 +7,16 @@ WORKDIR /repo
 FROM base AS build
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/schemas/package.json packages/schemas/
+COPY packages/db/package.json packages/db/
 COPY packages/secrets/package.json packages/secrets/
 COPY services/connector-mongodb/package.json services/connector-mongodb/
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
 COPY packages/schemas packages/schemas
+COPY packages/db packages/db
 COPY packages/secrets packages/secrets
 COPY services/connector-mongodb services/connector-mongodb
-RUN pnpm -r --filter @nia/schemas --filter @nia/secrets --filter @nia/connector-mongodb build
+RUN pnpm -r --filter @nia/schemas --filter @nia/db --filter @nia/secrets --filter @nia/connector-mongodb build
 # BUILD_HASH: content hash of this image's source, used by apps/api's
 # connectorFreshness check to detect stale running containers. Must cover
 # the exact same paths as the COPY list above — see scripts/
@@ -22,6 +24,7 @@ RUN pnpm -r --filter @nia/schemas --filter @nia/secrets --filter @nia/connector-
 COPY scripts/compute-build-hash.mjs scripts/compute-build-hash.mjs
 RUN node scripts/compute-build-hash.mjs \
       packages/schemas/package.json packages/schemas/src \
+      packages/db/package.json packages/db/src \
       packages/secrets/package.json packages/secrets/src \
       services/connector-mongodb/package.json services/connector-mongodb/src \
       > BUILD_HASH

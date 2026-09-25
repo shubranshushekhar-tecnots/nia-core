@@ -75,6 +75,25 @@ process tied to the current session — it dies when the session ends. Run it
 as a plain foreground command from `apps/web/` (the IDE routes long-running
 foreground commands to a persistent terminal). Standardized on port 3100.
 
+## Local testing (Docker boot tests)
+This machine's Docker Desktop crashes from memory pressure (~4.6 GB). Rules
+for any local prod-compose boot test (`docker-compose.prod.yml` against a
+throwaway Postgres, etc.):
+- Build images for the native platform — no `--platform linux/amd64`.
+  `amd64` is only for images actually pushed to a registry.
+- Build one image at a time. Never build in parallel (parallel builds are
+  what crash buildkit/Docker Desktop on this machine).
+- Before booting a boot-test stack, ask the user to stop the dev sandbox
+  first — never stop it yourself.
+- Boot only the services the specific test needs (e.g. a connector/secrets
+  check needs just throwaway Postgres, redis, api, and the three
+  connectors — no web, no proxy, no worker unless the test actually
+  exercises them).
+- After boot, run `docker stats --no-stream` and report memory per
+  container.
+- Always tear everything down (containers, throwaway images, networks)
+  when the test is done.
+
 ## Conventions
 - Server-side RLS is the only trust boundary. `can()`/`assertCan()` in
   `can.ts` is a UI/DX convenience, never the last line of defense.

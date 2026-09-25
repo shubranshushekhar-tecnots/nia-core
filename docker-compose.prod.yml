@@ -20,9 +20,10 @@ services:
       - NIA_GATEWAY_MODEL=${NIA_GATEWAY_MODEL}
       - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
 
-    ports:
-      - "${API_PORT:-4001}:4001"
-
+    # No public port: niacore-proxy is the only publicly reachable service
+    # (docs/plans/web-container.md). apps/web reaches this container
+    # directly over niacore-network at http://niacore-api:4001
+    # (API_INTERNAL_URL, set on niacore-web below).
     networks:
       - niacore-network
 
@@ -35,6 +36,59 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  niacore-web:
+    image: ${WEB_IMAGE_VERSION}
+    container_name: niacore-web
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      - PORT=3000
+      - DATABASE_URL=${DATABASE_URL}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - SITE_URL=${WEB_ORIGIN}
+      # Fixed Docker-network address, not env-configurable by infra — same
+      # hostname contract as the connector aliases below (DEPLOYMENT.md).
+      - API_INTERNAL_URL=http://niacore-api:4001
+
+    networks:
+      - niacore-network
+
+    depends_on:
+      - niacore-api
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health-web').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  niacore-proxy:
+    image: nginx:alpine
+    container_name: niacore-proxy
+    restart: unless-stopped
+
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+    # Public entry point (docs/plans/web-container.md) — front door only,
+    # TLS termination point for infra to configure. Routes everything to
+    # niacore-web:3000; apps/web's own /api/backend/:path* rewrite (not
+    # this proxy) is what reaches niacore-api. Infra may swap this service
+    # for its own reverse proxy as long as it forwards to niacore-web:3000
+    # the same way and sets X-Forwarded-* headers (see deploy/nginx/nginx.conf).
+    ports:
+      - "${PROXY_PORT:-80}:80"
+
+    networks:
+      - niacore-network
+
+    depends_on:
+      - niacore-web
 
   niacore-worker:
     image: ${WORKER_IMAGE_VERSION}

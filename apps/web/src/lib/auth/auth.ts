@@ -17,7 +17,7 @@ import { dbPool } from "@/lib/db/pool";
  * need to manually parse/set the cookie themselves.
  */
 export const auth = createAuth(dbPool, {
-  baseURL: process.env.NEXT_PUBLIC_SITE_URL!,
+  baseURL: process.env.SITE_URL!,
   secret: process.env.BETTER_AUTH_SECRET!,
   plugins: [nextCookies()],
 });

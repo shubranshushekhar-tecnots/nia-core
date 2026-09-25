@@ -36,6 +36,8 @@ function sourceRootsFor(serviceDir: string): string[] {
   return [
     path.join(REPO_ROOT, "packages/schemas/package.json"),
     path.join(REPO_ROOT, "packages/schemas/src"),
+    path.join(REPO_ROOT, "packages/db/package.json"),
+    path.join(REPO_ROOT, "packages/db/src"),
     path.join(REPO_ROOT, "packages/secrets/package.json"),
     path.join(REPO_ROOT, "packages/secrets/src"),
     path.join(REPO_ROOT, "services", serviceDir, "package.json"),

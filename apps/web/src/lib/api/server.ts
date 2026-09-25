@@ -2,7 +2,11 @@ import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { getSessionCookie } from 'better-auth/cookies';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL!;
+// Internal, Docker-network address of apps/api — same var next.config.mjs's
+// rewrite target and chatServer.ts read. Not NEXT_PUBLIC_-prefixed: must
+// stay a real runtime env var, never inlined into the client bundle at
+// build time (docs/plans/web-container.md's revised design).
+const API_URL = process.env.API_INTERNAL_URL ?? 'http://localhost:4001';
 
 export class ApiError extends Error {
   status: number;

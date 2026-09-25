@@ -5748,3 +5748,104 @@ look back at the original 72-commit shape of `main`. The final
 inherently destructive to `origin`'s ref history (old `main`'s commit-by-
 commit shape stops being reachable from any branch tip there) — done by hand
 after checking GitHub branch protection, not run automatically.
+
+## apps/web into docker-compose.prod.yml: nginx is a dumb front door, not a router
+
+Full design and execution log: `docs/plans/web-container.md`. The
+first-drafted "decided" design (nginx routes `/` → `niacore-web`,
+`/api/` → `niacore-api` directly, browser calls a same-origin `/api`)
+was rejected in favor of this one:
+
+- **`niacore-proxy` (nginx) forwards everything to `niacore-web:3000`.
+  No path-based routing in nginx at all.** It exists purely as the public
+  TLS/front-door entry point, replaceable by infra's own proxy without
+  touching app code.
+- **Next.js's pre-existing `/api/backend/*` `rewrites()` stays the one and
+  only browser→api path**, now targeting the internal
+  `http://niacore-api:4001` via a new runtime var, `API_INTERNAL_URL`.
+- **`niacore-api` gets no public port at all** — it's reachable only
+  through `niacore-web`'s rewrite.
+
+Why not the original design: apps/web already had its own `/api/backend/*`
+same-origin rewrite as the sole browser→api path, predating this
+migration. Also routing `/api/` at nginx would have meant two independent
+proxy layers both claiming ownership of the same path prefix — a request
+could get proxied by nginx to `niacore-api` directly in some
+configurations and by Next's rewrite in others, depending on which
+`/api/*` sub-path it hit, which is exactly the kind of routing ambiguity
+that's invisible until something breaks in a specific environment. Keeping
+exactly one browser→api path, with nginx never touching `/api/`, removes
+that ambiguity entirely — nginx literally cannot get it wrong because it
+doesn't look at the path.
+
+Two vars were renamed off `NEXT_PUBLIC_` to plain runtime vars, since
+Next.js inlines `NEXT_PUBLIC_*` at build time (into both client and server
+compiled output) which fights the goal of one image working across
+environments: `NEXT_PUBLIC_API_URL` → `API_INTERNAL_URL` (server-only
+consumers: `next.config.mjs`'s rewrite target, `lib/api/server.ts`,
+`lib/api/chatServer.ts`) and `NEXT_PUBLIC_SITE_URL` → `SITE_URL` (one
+consumer, `lib/auth/auth.ts`'s Better Auth `baseURL`, also server-only).
+Confirmed via repo-wide grep that neither had any browser-side consumer
+before renaming — the `NEXT_PUBLIC_` prefix on both was unnecessary
+carry-over from an earlier Vercel-hosted setup, not a real client-side
+dependency.
+
+`API_URL` (apps/api), and `WEB_ORIGIN`/`SITE_URL` (niacore-web) must all
+resolve to the exact same public https origin: Better Auth's `__Secure-`
+cookie-name prefix is derived independently per instance from that
+instance's own `baseURL` scheme (`better-auth/dist/cookies/index.mjs`), so
+any mismatch between the two instances would make apps/api's session
+lookup miss the cookie apps/web issues. This was verified as a real
+constraint (Check 2 in `docs/plans/web-container.md`), not assumed.
+
+Also found and fixed along the way: `next.config.mjs`'s
+`experimental.proxyTimeout` (120s, sized for the copilot tool loop) was
+too short for `RUN_SSE_MAX_DURATION_MS` (apps/api's 30-minute
+workflow-run SSE default) — both also proxy through the same
+`/api/backend/*` rewrite. Raised to `1_800_000` and matched with
+`deploy/nginx/nginx.conf`'s `proxy_read_timeout`/`proxy_send_timeout
+1800s` (plus `proxy_buffering off`, required for SSE to stream through
+nginx rather than buffer until the response ends).
+
+### Boot-test addendum: two more production-only bugs
+
+Running the actual `docker compose -f docker-compose.prod.yml` stack
+end-to-end (not just typecheck/design review) surfaced two more bugs,
+neither reproducible under `next dev`:
+
+1. **`API_INTERNAL_URL` is effectively build-time-baked, not
+   runtime-configurable, for the `/api/backend/*` rewrite.** Next.js's
+   `output: "standalone"` build calls `next.config.mjs`'s `rewrites()`
+   exactly once during `next build` and freezes the resolved destination
+   as a literal string in the generated `server.js`; setting the env var
+   on the running container has no effect on it. (Plain runtime
+   `process.env` reads elsewhere in the app, e.g. `lib/api/server.ts`,
+   `lib/api/chatServer.ts`, are unaffected — only `next.config.mjs`'s
+   own rewrite table is serialized at build time.) Decision: keep the
+   existing rewrite and its `process.env.API_INTERNAL_URL ??
+   'http://localhost:4001'` fallback unchanged, and instead set
+   `ENV API_INTERNAL_URL=http://niacore-api:4001` as a hard value in
+   `apps/web/Dockerfile`'s build stage, before `next build`. This is
+   safe specifically because the value is a fixed Docker-network
+   hostname, identical in every environment — the same contract as the
+   connector service aliases — not a real per-deployment config value,
+   so baking it doesn't compromise "build once, deploy anywhere." A
+   route-handler-based reimplementation of the proxy was considered and
+   rejected: it would mean re-implementing header/cookie/body/
+   streaming/abort forwarding for no benefit over the existing rewrite.
+
+2. **nginx's `proxy_set_header Host $host;` silently drops the port**,
+   even when the client's original `Host` header had one — `$host`
+   never includes it, unlike `$http_host`. On a non-default port this
+   desyncs the `Host` (and therefore `x-forwarded-host`) that
+   `niacore-web` sees from the browser's `Origin` header, which does
+   include the port. Next.js's Server Actions same-origin check then
+   aborts every action (`login`, `signup`, ...) with `Invalid Server
+   Actions request.` Fixed by changing `deploy/nginx/nginx.conf` to
+   `proxy_set_header Host $http_host;`, which forwards the original
+   `Host` header byte-for-byte.
+
+Both were only caught because the boot test ran the real production
+build/proxy stack and drove an actual sign-up through it — a reminder
+that `next dev` and a design read-through both silently pass on
+standalone-build-only and non-default-port-only behavior.

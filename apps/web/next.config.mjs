@@ -3,12 +3,22 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Server-side only (never exposed to the browser bundle) — used purely as
-// the rewrite target below. Deliberately NOT the NEXT_PUBLIC_ var of the
-// same value: that one is inlined client-side for the (Bearer-token)
-// Server Component -> apps/api calls in lib/api/server.ts, a separate,
-// unrelated call path from this same-origin proxy.
-const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001';
+// Internal, Docker-network address of apps/api — same var lib/api/server.ts
+// and lib/api/chatServer.ts read for their own direct (bearer/cookie)
+// calls. Deliberately not NEXT_PUBLIC_-prefixed: never inlined into the
+// client bundle.
+//
+// Unlike server.ts/chatServer.ts (plain runtime process.env reads), this
+// one IS effectively baked at build time: Next's standalone output calls
+// rewrites() once during `next build` and freezes the resolved destination
+// as a literal string in the generated server.js — setting this env var at
+// container start has no effect here. apps/web/Dockerfile sets it before
+// `next build` accordingly. That's fine: the value is a fixed Docker-
+// network hostname (niacore-api), identical in every environment, not a
+// real per-deployment config value — same contract as the connector
+// aliases. The 'http://localhost:4001' fallback below only matters for
+// local `next dev`.
+const API_ORIGIN = process.env.API_INTERNAL_URL ?? 'http://localhost:4001';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -19,15 +29,19 @@ const nextConfig = {
   transpilePackages: ['@nia/ui'],
   outputFileTracingRoot: path.join(__dirname, '../..'),
   experimental: {
-    // Next's dev-server rewrite proxy caps proxied requests at 30s by
-    // default (next/dist/server/lib/router-utils/proxy-request.js). The
-    // copilot-agent tool-use loop (up to MAX_TOOL_CALLS sequential LLM
-    // round-trips through apps/api's /copilot-agent, proxied same-origin
-    // via the rewrite below) can legitimately take longer than that on a
-    // multi-tool turn, which otherwise surfaces as a client-visible
-    // ECONNRESET/"socket hang up" partway through — not a real failure,
-    // just this proxy giving up early.
-    proxyTimeout: 120_000,
+    // Next's rewrite proxy caps proxied requests at 30s by default
+    // (next/dist/server/lib/router-utils/proxy-request.js). Several routes
+    // proxied same-origin via the rewrite below legitimately run longer:
+    // the copilot-agent tool-use loop (up to MAX_TOOL_CALLS sequential LLM
+    // round-trips through apps/api's /copilot-agent), and — the longest —
+    // GET /workflows/:id/run/stream, whose server-side bound is apps/api's
+    // own RUN_SSE_MAX_DURATION_MS (default 1_800_000ms/30min, env.ts). Set
+    // to match that upper bound so the proxy never cuts a run stream off
+    // before apps/api's own SSE lifecycle would; keep in sync if that
+    // default ever changes. Below the real bound, this otherwise surfaces
+    // as a client-visible ECONNRESET/"socket hang up" partway through —
+    // not a real failure, just this proxy giving up early.
+    proxyTimeout: 1_800_000,
   },
   async rewrites() {
     return [
