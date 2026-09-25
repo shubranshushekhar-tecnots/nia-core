@@ -68,8 +68,7 @@ services:
     environment:
       - PORT=4010
       - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - DATABASE_URL=${DATABASE_URL}
       - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
 
     # alias "connector-mysql" is a hard contract, not cosmetic: the worker/
@@ -102,8 +101,7 @@ services:
     environment:
       - PORT=4020
       - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - DATABASE_URL=${DATABASE_URL}
       - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
 
     # alias contract — see niacore-connector-mysql's comment above.
@@ -130,8 +128,7 @@ services:
     environment:
       - PORT=4030
       - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - DATABASE_URL=${DATABASE_URL}
       - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
 
     # alias contract — see niacore-connector-mysql's comment above.

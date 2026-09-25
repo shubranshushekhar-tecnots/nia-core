@@ -1,5 +1,5 @@
 import pg from "pg";
-import { createClient } from "@supabase/supabase-js";
+import { createDbPool, withServiceRole } from "@nia/db";
 import { createEnvKeySecretStore } from "@nia/secrets";
 import type { ConnectorConfig, CredentialRef } from "@nia/schemas";
 
@@ -89,23 +89,22 @@ function parsePostgresConfig(
   return { host, port, database, ssl };
 }
 
-// Service-role client, used for: reading nia_secrets directly
-// (service_role bypasses its RLS, granted select in 0032_nia_secrets.sql)
-// and write_grants lookups. Never touches any other table. Vault's
-// resolve_connector_secret RPC (legacy fallback) was dropped once every
-// live ref was confirmed backfilled into nia_secrets — see
-// docs/decisions.md's Vault-removal entry.
-const supabase = createClient(
-  process.env.SUPABASE_URL ?? "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
-  { auth: { persistSession: false, autoRefreshToken: false } },
-);
+// App-database pool, used via withServiceRole for: reading nia_secrets
+// directly (service_role bypasses its RLS, granted select in
+// 0032_nia_secrets.sql) and write_grants lookups. Never touches any other
+// table. Vault's resolve_connector_secret RPC (legacy fallback) was
+// dropped once every live ref was confirmed backfilled into nia_secrets —
+// see docs/decisions.md's Vault-removal entry. Deliberately a separate
+// pool from the customer-target pools this file otherwise manages (below,
+// keyed by connectionId) — this one talks to Nia's own app database, not
+// a customer's.
+const dbPool = createDbPool({ connectionString: process.env.DATABASE_URL ?? "", max: 5 });
 
 // docs/plans/secret-storage.md — nia_secrets (envelope-encrypted under
 // NIA_SECRET_MASTER_KEY). Mirrors connector-mysql/src/pool-manager.ts's
 // wiring exactly.
 const secretStore = createEnvKeySecretStore({
-  client: supabase,
+  pool: dbPool,
   masterKey: process.env.NIA_SECRET_MASTER_KEY ?? "",
 });
 
@@ -183,38 +182,29 @@ export async function getPool(cred: CredentialRef, config: ConnectorConfig): Pro
 
 /**
  * Fail-fast startup probe — every credential resolution on this service
- * goes through `resolveSecret()` above, which reaches Supabase over
- * `process.env.SUPABASE_URL`. If that URL isn't reachable from inside this
- * container (wrong host — e.g. a host-only `127.0.0.1`/`localhost` value
- * copied from a native `.env`, which inside a Docker container's network
- * namespace never routes to the host), every single `/introspect`,
+ * goes through `resolveSecret()` above, which reaches the app database
+ * over `process.env.DATABASE_URL`. If that URL isn't reachable from inside
+ * this container (wrong host — e.g. a host-only `127.0.0.1`/`localhost`
+ * value copied from a native `.env`, which inside a Docker container's
+ * network namespace never routes to the host), every single `/introspect`,
  * `/test`, `/execute`, `/stage`, `/write` call would individually fail
- * with a generic `TypeError: fetch failed` — often minutes into a run,
- * once the nia_secrets lookup is finally attempted. Calling this once at
- * process start turns that into one clear, immediate failure instead. Hits
- * Auth's `/auth/v1/health` (no API key required, cheap, present on every
- * Supabase deployment — hosted or local) purely as a network-reachability
- * probe; it says nothing about the service-role key's validity, which is
- * only ever exercised by a real nia_secrets/write_grants query.
+ * with a generic connection error — often minutes into a run, once the
+ * nia_secrets lookup is finally attempted. Calling this once at process
+ * start turns that into one clear, immediate failure instead.
  */
-export async function checkSupabaseReachable(): Promise<void> {
-  const base = process.env.SUPABASE_URL ?? "";
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
+export async function checkDbReachable(): Promise<void> {
   try {
-    await fetch(`${base}/auth/v1/health`, { signal: controller.signal });
+    await dbPool.query("select 1");
   } catch (err) {
     throw new Error(
       // Never interpolate the raw URL into a thrown/logged message — it's
       // a connection URL, one of the categories the production-readiness
       // pass requires stay out of logs, even though this particular one
       // carries no embedded credentials.
-      `Cannot reach Supabase at SUPABASE_URL (value redacted from logs): ${err instanceof Error ? err.message : String(err)}. ` +
-        `If this service runs in Docker and SUPABASE_URL points at 127.0.0.1/localhost, that address resolves to ` +
-        `the container itself, not the host — use host.docker.internal (or a reachable network address) instead.`,
+      `Cannot reach the database at DATABASE_URL (value redacted from logs): ${err instanceof Error ? err.message : String(err)}. ` +
+        `If this service runs in Docker and DATABASE_URL points at 127.0.0.1/localhost, that address resolves to ` +
+        `the container itself, not the host — use the database's internal Docker network name (or host.docker.internal) instead.`,
     );
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -248,15 +238,16 @@ export async function verifyActiveWriteGrant(
   connectionId: string,
   namespace: string,
 ): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("write_grants")
-    .select("scope, confirmed_at, revoked_at")
-    .eq("id", grantId)
-    .eq("connection_id", connectionId)
-    .maybeSingle();
-  if (error || !data) return false;
+  const { rows } = await withServiceRole(dbPool, (db) =>
+    db.query<{ scope: { schemas?: unknown } | null; confirmed_at: Date | null; revoked_at: Date | null }>(
+      `select scope, confirmed_at, revoked_at from write_grants where id = $1 and connection_id = $2`,
+      [grantId, connectionId],
+    ),
+  );
+  const data = rows[0];
+  if (!data) return false;
   if (!data.confirmed_at || data.revoked_at) return false;
-  const schemas = (data.scope as { schemas?: unknown } | null)?.schemas;
+  const schemas = data.scope?.schemas;
   return Array.isArray(schemas) && schemas.includes(namespace);
 }
 

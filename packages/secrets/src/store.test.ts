@@ -4,31 +4,21 @@ import { encryptSecret } from "./crypto.js";
 import { createEnvKeySecretStore } from "./store.js";
 
 /**
- * Minimal fake of the slice of SupabaseClient's fluent query builder this
- * store actually calls (`.from().select().eq().maybeSingle()`,
- * `.from().insert().select().single()`, `.from().delete().eq()`) — a real
- * SupabaseClient needs a live Postgres connection, and this logic doesn't
- * depend on anything Postgres-specific.
+ * withServiceRole just runs its callback against a Queryable — this store's
+ * logic doesn't depend on anything Postgres-specific, so a fake `query` is
+ * enough; no real pg.Pool/transaction is needed.
  */
-function fakeClient(row: Record<string, unknown> | null) {
-  const client = {
-    from: vi.fn(() => ({
-      select: vi.fn(() => ({
-        eq: vi.fn(() => ({
-          maybeSingle: vi.fn(async () => ({ data: row, error: null })),
-        })),
-      })),
-      insert: vi.fn(() => ({
-        select: vi.fn(() => ({
-          single: vi.fn(async () => ({ data: { id: "new-id" }, error: null })),
-        })),
-      })),
-      delete: vi.fn(() => ({
-        eq: vi.fn(async () => ({ error: null })),
-      })),
-    })),
-  };
-  return client;
+vi.mock("@nia/db", () => ({
+  withServiceRole: vi.fn((_pool: unknown, fn: (db: { query: ReturnType<typeof vi.fn> }) => unknown) =>
+    fn(mockDb),
+  ),
+}));
+
+let mockDb: { query: ReturnType<typeof vi.fn> };
+
+function fakePool(row: Record<string, unknown> | null) {
+  mockDb = { query: vi.fn(async () => ({ rows: row ? [row] : [] })) };
+  return {} as never;
 }
 
 describe("createEnvKeySecretStore", () => {
@@ -47,7 +37,7 @@ describe("createEnvKeySecretStore", () => {
       key_version: encrypted.keyVersion,
     };
 
-    const store = createEnvKeySecretStore({ client: fakeClient(row) as never, masterKey });
+    const store = createEnvKeySecretStore({ pool: fakePool(row), masterKey });
 
     const result = await store.get("abc");
 
@@ -55,7 +45,7 @@ describe("createEnvKeySecretStore", () => {
   });
 
   it("returns null when absent from nia_secrets", async () => {
-    const store = createEnvKeySecretStore({ client: fakeClient(null) as never, masterKey });
+    const store = createEnvKeySecretStore({ pool: fakePool(null), masterKey });
 
     const result = await store.get("missing-ref");
 

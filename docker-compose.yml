@@ -43,14 +43,19 @@ services:
       dockerfile: services/connector-mysql/Dockerfile
     environment:
       PORT: 4010
-      # nia_secrets (docs/plans/secret-storage.md) plus write_grants lookups.
-      SUPABASE_URL: ${SUPABASE_URL}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # nia_secrets (docs/plans/secret-storage.md) plus write_grants lookups,
+      # direct against the app database — `postgres` (above), reachable by
+      # its Docker-internal service name since both share the `default`
+      # network here.
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
       # Phase 6 Block 5 — must match apps/worker/.env's copy exactly (worker
       # signs the write-dispatch context, this service re-verifies it).
       WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET}
       # docs/plans/secret-storage.md — must match apps/api/.env's copy exactly.
       NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "4010:4010"   # exposed for local curl; internal-network-only in prod
     networks:
@@ -63,13 +68,19 @@ services:
       dockerfile: services/connector-mongodb/Dockerfile
     environment:
       PORT: 4020
-      SUPABASE_URL: ${SUPABASE_URL}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # nia_secrets (docs/plans/secret-storage.md) plus write_grants lookups,
+      # direct against the app database — `postgres` (above), reachable by
+      # its Docker-internal service name since both share the `default`
+      # network here.
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
       # Phase 6 Block 5 — must match apps/worker/.env's copy exactly (worker
       # signs the write-dispatch context, this service re-verifies it).
       WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET}
       # docs/plans/secret-storage.md — must match apps/api/.env's copy exactly.
       NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "4020:4020"   # exposed for local curl; internal-network-only in prod
     networks:
@@ -82,13 +93,19 @@ services:
       dockerfile: services/connector-supabase/Dockerfile
     environment:
       PORT: 4030
-      SUPABASE_URL: ${SUPABASE_URL}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # nia_secrets (docs/plans/secret-storage.md) plus write_grants lookups,
+      # direct against the app database — `postgres` (above), reachable by
+      # its Docker-internal service name since both share the `default`
+      # network here.
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
       # Phase 6 Block 2 — must match apps/worker/.env's copy exactly (worker
       # signs the write-dispatch context, this service re-verifies it).
       WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET}
       # docs/plans/secret-storage.md — must match apps/api/.env's copy exactly.
       NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "4030:4030"   # exposed for local curl; internal-network-only in prod
     networks:

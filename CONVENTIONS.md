@@ -90,19 +90,15 @@ foreground commands to a persistent terminal). Standardized on port 3100.
   out-of-band.
 
 ## Known Supabase-client exceptions
-Two places still genuinely use `@supabase/supabase-js` against a running
+One place still genuinely uses `@supabase/supabase-js` against a running
 Supabase project, by design, not oversight:
-- **`services/connector-mysql|mongodb|supabase/src/pool-manager.ts`** —
-  reads `nia_secrets` (service-role, bypasses its RLS) to resolve
-  connection/write-grant credentials. Not yet migrated to `@nia/db`; the
-  three connector services are the intended long-term home for this
-  dependency (see the audit note in `TODO.md`).
 - **`apps/worker/scripts/*.ts`** (dev-only smoke/verification tooling, not
   shipped in the built worker image) — predates the PostgREST→`@nia/db`
   migration and was never migrated along with `src/`. See
   `apps/worker/scripts/README.md`.
 
-Everywhere else (`apps/web`, `apps/api`, `apps/worker/src`) is fully off
+Everywhere else (`apps/web`, `apps/api`, `apps/worker/src`,
+`packages/secrets`, and all three connector services) is fully off
 `@supabase/supabase-js`/PostgREST for data access — see
 `docs/plans/data-access.md`.
 

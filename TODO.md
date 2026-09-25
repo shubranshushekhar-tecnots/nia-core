@@ -595,24 +595,19 @@
   need their own migration/retirement before `apps/worker`'s
   `package.json` entry can actually be dropped; not attempted here, out
   of scope for Step 5.
-- **`@supabase/supabase-js` is the last Supabase dependency left in the
-  repo, and removing it is now small (added 2026-09-25, local-dev
-  migration).** `packages/secrets`'s `createEnvKeySecretStore` and all
-  three connector services (`connector-mysql`/`connector-mongodb`/
-  `connector-supabase`) still reach `nia_secrets` (and, for the
-  connectors, `write_grants`) through PostgREST via `supabase-js`'s
-  `.from().select().eq().maybeSingle()`, rather than the direct-pg path
-  (`@nia/db`'s `createDbPool`/`withServiceRole`) already used everywhere
-  else in the repo. This was deliberately left out of scope during the
-  Vault-removal work — but `nia_secrets` is a single simple table with
-  no RLS-recursion helpers or PostgREST-specific behavior to replicate,
-  and the direct-pg pattern is already proven (`apps/api/src/lib/
-  secretStore.ts`, `apps/worker/src/lib/secretStore.ts`). Follow-up:
-  give `createEnvKeySecretStore` (and the connectors' `write_grants`
-  lookup) a `pg.Pool`-based implementation, swap all 4 call sites over,
-  and only then drop `@supabase/supabase-js` from `packages/secrets`'s
-  and the 3 connector services' `package.json`s — the change that
-  finally removes the package from the repo entirely.
+- ~~`@supabase/supabase-js` was the last Supabase dependency left in the
+  repo besides the documented `apps/worker/scripts` exception (closed
+  2026-09-25, local-dev migration follow-up).~~ `packages/secrets`'s
+  `createEnvKeySecretStore` and all three connector services
+  (`connector-mysql`/`connector-mongodb`/`connector-supabase`) now reach
+  `nia_secrets`/`write_grants` through `@nia/db`'s `createDbPool`/
+  `withServiceRole` (direct pg), same pattern as `apps/api`/`apps/worker`.
+  `@supabase/supabase-js` is removed from `packages/secrets`'s and all 3
+  connector services' `package.json`s; `docker-compose*.yml` and every
+  `.env(.production).example` now wire `DATABASE_URL` instead of
+  `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` for these services. See
+  CONVENTIONS.md's "Known Supabase-client exceptions" (now down to just
+  `apps/worker/scripts`).
 - ~~Local dev still depends on the Supabase CLI (`scripts/migrate.sh`
   shells out to `supabase migration list`/`supabase db push`, app
   `DATABASE_URL`s point at `supabase start`'s fixed port)~~ **DONE

@@ -7,6 +7,7 @@ import { encryptSecret } from "@nia/secrets";
 // dynamic import() below.
 const MASTER_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
 process.env.NIA_SECRET_MASTER_KEY = MASTER_KEY;
+process.env.DATABASE_URL = "postgres://test";
 
 function encryptedRow(secret: Record<string, unknown>) {
   const encrypted = encryptSecret(Buffer.from(MASTER_KEY, "base64"), 1, secret);
@@ -23,14 +24,13 @@ function encryptedRow(secret: Record<string, unknown>) {
 
 // Mock the external dependencies pool-manager.ts talks to over the
 // network: the nia_secrets read (@nia/secrets's createEnvKeySecretStore,
-// via .from().select().eq().maybeSingle()) and the mongodb driver itself.
-// Nothing here should ever touch a real socket.
+// via @nia/db's withServiceRole) and the mongodb driver itself. Nothing
+// here should ever touch a real socket.
 
-const mockMaybeSingle = vi.fn(async () => ({ data: encryptedRow({ user: "u", password: "p" }), error: null }));
-vi.mock("@supabase/supabase-js", () => ({
-  createClient: () => ({
-    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: mockMaybeSingle }) }) }),
-  }),
+const mockQuery = vi.fn(async () => ({ rows: [encryptedRow({ user: "u", password: "p" })] }));
+vi.mock("@nia/db", () => ({
+  createDbPool: () => ({}),
+  withServiceRole: (_pool: unknown, fn: (db: { query: typeof mockQuery }) => unknown) => fn({ query: mockQuery }),
 }));
 
 const connectMock = vi.fn(async () => undefined);
@@ -70,7 +70,7 @@ async function freshPoolManager() {
 
 describe("connector-mongodb pool-manager", () => {
   beforeEach(() => {
-    mockMaybeSingle.mockReset().mockResolvedValue({ data: encryptedRow({ user: "u", password: "p" }), error: null });
+    mockQuery.mockReset().mockResolvedValue({ rows: [encryptedRow({ user: "u", password: "p" })] });
     connectMock.mockClear();
     closeMock.mockClear();
     constructedOptions.length = 0;
@@ -134,14 +134,14 @@ describe("connector-mongodb pool-manager", () => {
 
   it("removes the cache entry on a rejected resolve so the next call retries cleanly", async () => {
     const { getDb, poolCount } = await freshPoolManager();
-    mockMaybeSingle.mockReset().mockResolvedValueOnce({ data: null, error: { message: "network unreachable" } });
+    mockQuery.mockReset().mockRejectedValueOnce(new Error("network unreachable"));
     const c = cred();
 
-    await expect(getDb(c, config)).rejects.toThrow("nia_secrets read failed");
+    await expect(getDb(c, config)).rejects.toThrow("network unreachable");
     expect(poolCount()).toBe(0);
 
     // Next call should retry from scratch, not replay the cached rejection.
-    mockMaybeSingle.mockResolvedValue({ data: encryptedRow({ user: "u", password: "p" }), error: null });
+    mockQuery.mockResolvedValue({ rows: [encryptedRow({ user: "u", password: "p" })] });
     const db = await getDb(c, config);
     expect(db).toBeTruthy();
     expect(instanceCount).toBe(1);

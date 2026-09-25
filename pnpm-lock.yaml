@@ -123,9 +123,6 @@ importers:
       next:
         specifier: ^15.0.3
         version: 15.5.25(@playwright/test@1.63.0)(@types/node@22.20.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      pg:
-        specifier: ^8.13.1
-        version: 8.23.0
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -160,12 +157,9 @@ importers:
       autoprefixer:
         specifier: ^10.4.20
         version: 10.5.6(postcss@8.5.28)
-      bullmq:
-        specifier: ^5.28.0
-        version: 5.81.5
-      dotenv:
-        specifier: ^16.4.5
-        version: 16.6.1
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
       postcss:
         specifier: ^8.4.47
         version: 8.5.28
@@ -309,13 +303,19 @@ importers:
 
   packages/secrets:
     dependencies:
-      '@supabase/supabase-js':
-        specifier: ^2.46.1
-        version: 2.116.0
+      '@nia/db':
+        specifier: workspace:*
+        version: link:../db
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
     devDependencies:
       '@types/node':
         specifier: ^22.9.0
         version: 22.20.2
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.23.1
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
@@ -327,15 +327,15 @@ importers:
 
   services/connector-mongodb:
     dependencies:
+      '@nia/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@nia/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
       '@nia/secrets':
         specifier: workspace:*
         version: link:../../packages/secrets
-      '@supabase/supabase-js':
-        specifier: ^2.46.1
-        version: 2.116.0
       fastify:
         specifier: ^5.1.0
         version: 5.12.3
@@ -355,15 +355,15 @@ importers:
 
   services/connector-mysql:
     dependencies:
+      '@nia/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@nia/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
       '@nia/secrets':
         specifier: workspace:*
         version: link:../../packages/secrets
-      '@supabase/supabase-js':
-        specifier: ^2.46.1
-        version: 2.116.0
       fastify:
         specifier: ^5.1.0
         version: 5.12.3
@@ -383,15 +383,15 @@ importers:
 
   services/connector-supabase:
     dependencies:
+      '@nia/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@nia/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
       '@nia/secrets':
         specifier: workspace:*
         version: link:../../packages/secrets
-      '@supabase/supabase-js':
-        specifier: ^2.46.1
-        version: 2.116.0
       fastify:
         specifier: ^5.1.0
         version: 5.12.3

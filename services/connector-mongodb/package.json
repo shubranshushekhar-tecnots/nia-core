@@ -11,9 +11,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@nia/db": "workspace:*",
     "@nia/schemas": "workspace:*",
     "@nia/secrets": "workspace:*",
-    "@supabase/supabase-js": "^2.46.1",
     "fastify": "^5.1.0",
     "mongodb": "^7.6.0"
   },

@@ -22,7 +22,7 @@ import {
   type DropEntityResponse,
   type ReadContext,
 } from "@nia/schemas";
-import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant, checkSupabaseReachable } from "./pool-manager.js";
+import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant, checkDbReachable } from "./pool-manager.js";
 import { verifyWriteContext, verifyReadContext, HttpError } from "./writeSignature.js";
 import { buildUpsertSql, buildCreateTableSql, buildDropTableSql } from "./writeSql.js";
 import {
@@ -700,7 +700,7 @@ app.post("/invalidate", async (req) => {
 // drives routes via app.inject()) doesn't also try to bind a real socket.
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 4010);
-  checkSupabaseReachable()
+  checkDbReachable()
     .then(() => app.listen({ port, host: "0.0.0.0" }))
     .catch((err) => {
       app.log.error(err);

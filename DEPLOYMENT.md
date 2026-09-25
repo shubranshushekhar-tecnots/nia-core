@@ -287,12 +287,21 @@ pool still impersonating a role.
 Each service that imports `@nia/db` creates its own pool via
 `createDbPool({ connectionString, max })`. Size `max` per service like any
 other Postgres client pool — as a starting point, mirror what
-`services/connector-supabase`'s pool manager already uses (a small pool per
-process, not one shared across processes) and adjust from real connection-
-count metrics once `api`/`worker` are actually migrated onto this module
-(Step 3 of the plan above). TLS is auto-detected from the hostname (no TLS
-for `localhost`/`127.0.0.1`/Docker-internal hosts, TLS otherwise) — no
-separate `PGSSLMODE`-style env var to configure.
+`services/connector-supabase`'s pool manager already uses for its
+control-plane pool (a small pool per process, not one shared across
+processes) and adjust from real connection-count metrics once `api`/
+`worker` are actually migrated onto this module (Step 3 of the plan
+above). TLS is auto-detected from the hostname (no TLS for `localhost`/
+`127.0.0.1`/Docker-internal hosts, TLS otherwise) — no separate
+`PGSSLMODE`-style env var to configure.
+
+Note `services/connector-supabase` specifically ends up with **two**
+separate pools per process: the `@nia/db` control-plane pool above (for
+`nia_secrets`/`write_grants` lookups against Nia's own app database) and
+a second, unrelated pool of plain `pg.Pool`s keyed by `connectionId` for
+customer-target databases (the actual ETL source/destination
+connections) — the two must never be confused, and the customer pools
+deliberately don't go through `@nia/db` at all.
 
 ## Scheduled jobs
 

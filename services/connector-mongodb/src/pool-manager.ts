@@ -1,5 +1,5 @@
 import { MongoClient, type Db } from "mongodb";
-import { createClient } from "@supabase/supabase-js";
+import { createDbPool, withServiceRole } from "@nia/db";
 import { createEnvKeySecretStore } from "@nia/secrets";
 import type { ConnectorConfig, CredentialRef } from "@nia/schemas";
 
@@ -39,14 +39,10 @@ function parseMongoConfig(config: ConnectorConfig): { host: string; port: number
 // resolve_connector_secret RPC (legacy fallback) was dropped once every
 // live ref was confirmed backfilled into nia_secrets — see
 // docs/decisions.md's Vault-removal entry.
-const supabase = createClient(
-  process.env.SUPABASE_URL ?? "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
-  { auth: { persistSession: false, autoRefreshToken: false } },
-);
+const dbPool = createDbPool({ connectionString: process.env.DATABASE_URL ?? "", max: 5 });
 
 const secretStore = createEnvKeySecretStore({
-  client: supabase,
+  pool: dbPool,
   masterKey: process.env.NIA_SECRET_MASTER_KEY ?? "",
 });
 
@@ -95,31 +91,25 @@ export async function getDb(cred: CredentialRef, config: ConnectorConfig): Promi
 
 /**
  * Fail-fast startup probe — mirrors connector-supabase/connector-mysql's
- * pool-manager.ts checkSupabaseReachable() exactly (same rationale: every
+ * pool-manager.ts checkDbReachable() exactly (same rationale: every
  * credential resolution here goes through resolveSecret() above, over
- * SUPABASE_URL; an unreachable URL would otherwise only surface as a
- * generic `TypeError: fetch failed` on the first real request, often
- * minutes into a run). Hits Auth's `/auth/v1/health` purely as a network-
- * reachability probe.
+ * DATABASE_URL; an unreachable database would otherwise only surface as a
+ * generic connection error on the first real request, often minutes into
+ * a run).
  */
-export async function checkSupabaseReachable(): Promise<void> {
-  const base = process.env.SUPABASE_URL ?? "";
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
+export async function checkDbReachable(): Promise<void> {
   try {
-    await fetch(`${base}/auth/v1/health`, { signal: controller.signal });
+    await dbPool.query("select 1");
   } catch (err) {
     throw new Error(
       // Never interpolate the raw URL into a thrown/logged message — it's
       // a connection URL, one of the categories the production-readiness
       // pass requires stay out of logs, even though this particular one
       // carries no embedded credentials.
-      `Cannot reach Supabase at SUPABASE_URL (value redacted from logs): ${err instanceof Error ? err.message : String(err)}. ` +
-        `If this service runs in Docker and SUPABASE_URL points at 127.0.0.1/localhost, that address resolves to ` +
-        `the container itself, not the host — use host.docker.internal (or a reachable network address) instead.`,
+      `Cannot reach the database at DATABASE_URL (value redacted from logs): ${err instanceof Error ? err.message : String(err)}. ` +
+        `If this service runs in Docker and DATABASE_URL points at 127.0.0.1/localhost, that address resolves to ` +
+        `the container itself, not the host — use the database's internal Docker network name (or host.docker.internal) instead.`,
     );
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -147,15 +137,16 @@ export async function verifyActiveWriteGrant(
   connectionId: string,
   namespace: string,
 ): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("write_grants")
-    .select("scope, confirmed_at, revoked_at")
-    .eq("id", grantId)
-    .eq("connection_id", connectionId)
-    .maybeSingle();
-  if (error || !data) return false;
+  const { rows } = await withServiceRole(dbPool, (db) =>
+    db.query<{ scope: { schemas?: unknown } | null; confirmed_at: Date | null; revoked_at: Date | null }>(
+      `select scope, confirmed_at, revoked_at from write_grants where id = $1 and connection_id = $2`,
+      [grantId, connectionId],
+    ),
+  );
+  const data = rows[0];
+  if (!data) return false;
   if (!data.confirmed_at || data.revoked_at) return false;
-  const schemas = (data.scope as { schemas?: unknown } | null)?.schemas;
+  const schemas = data.scope?.schemas;
   return Array.isArray(schemas) && schemas.includes(namespace);
 }
 
