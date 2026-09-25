@@ -53,6 +53,8 @@ import {
   appliedPlansSectionStyle,
   appliedPlansTitleStyle,
 } from './styles';
+import { MicIcon } from './navIcons';
+import Logo from '@/components/Logo';
 
 /**
  * "Ask or command…" chat surface for the canvas (Phase 5 Session 4) — reuses
@@ -299,6 +301,34 @@ const threadTitleStyle: CSSProperties = {
 };
 
 const threadActionsStyle: CSSProperties = { display: 'flex', gap: 12 };
+
+// Fills the remaining panel height whenever there's no thread to show yet
+// (fresh conversation), so the input bar below it lands flush against the
+// panel's bottom edge instead of floating right under the scope row.
+const emptyStateStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  padding: '0 24px',
+  textAlign: 'center',
+};
+
+const emptyStateGreetingStyle: CSSProperties = {
+  fontSize: 15,
+  fontWeight: 600,
+  color: 'var(--ink)',
+};
+
+const emptyStateSubtextStyle: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--ink4)',
+  maxWidth: 240,
+  lineHeight: 1.5,
+};
 
 const threadActionBtnStyle: CSSProperties = {
   fontFamily: 'inherit',
@@ -708,6 +738,16 @@ export default function CommandBar({
         </div>
       )}
 
+      {!(threadOpen && allMessages.length > 0) && (
+        <div style={emptyStateStyle} data-testid="command-bar-empty-state">
+          <Logo size={28} showWordmark={false} />
+          <span style={emptyStateGreetingStyle}>Hi, I&apos;m Nia AI</span>
+          <span style={emptyStateSubtextStyle}>
+            Ask anything about your workflow, mention a node with @, or start a message with / to propose a change.
+          </span>
+        </div>
+      )}
+
       {appliedPlans.length > 0 && (
         <div style={appliedPlansSectionStyle} data-testid="applied-plans-section">
           <span style={appliedPlansTitleStyle}>Applied changes</span>
@@ -822,7 +862,7 @@ export default function CommandBar({
             }}
           />
           <button type="button" style={disabledIconBtnStyle} disabled title="Voice input isn't available yet">
-            🎤
+            <MicIcon size={15} />
           </button>
           <button
             type="button"

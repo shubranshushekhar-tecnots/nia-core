@@ -35,12 +35,22 @@ services:
       redis:
         condition: service_healthy
     environment:
-      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
-      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?SUPABASE_ANON_KEY is required}
+      # Direct Postgres for @nia/db (docs/plans/data-access.md) — apps/api
+      # migrates itself against this on container start (see
+      # apps/api/docker-entrypoint.sh); must be a direct/session connection,
+      # not a transaction pooler (scripts/migrate.mjs refuses those).
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      API_URL: ${API_URL:?API_URL is required}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
       WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN is required}
       # docs/plans/secret-storage.md — must be identical across apps/api and
       # every connector service below.
       NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
+      # Nia Gateway (OpenAI-compatible AI gateway) — apps/api has no default
+      # for base URL/model (unlike apps/worker), so both are required here.
+      NIA_GATEWAY_API_KEY: ${NIA_GATEWAY_API_KEY:?NIA_GATEWAY_API_KEY is required}
+      NIA_GATEWAY_BASE_URL: ${NIA_GATEWAY_BASE_URL:?NIA_GATEWAY_BASE_URL is required}
+      NIA_GATEWAY_MODEL: ${NIA_GATEWAY_MODEL:?NIA_GATEWAY_MODEL is required}
       PORT: 4001
       REDIS_URL: redis://redis:6379
       # CONNECTOR_DEV_HOST is intentionally never set here — it's a
@@ -66,6 +76,11 @@ services:
         condition: service_healthy
     environment:
       NODE_ENV: production
+      # Direct Postgres for @nia/db (docs/plans/data-access.md) — same
+      # connection apps/api uses. The worker does NOT migrate itself (only
+      # apps/api does, see docker-entrypoint.sh); this is just its own data
+      # access connection.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       # docs/plans/secret-storage.md — must be identical across apps/api and
       # every connector service. Only used by lib/eval/sandbox.ts's
       # golden-eval seeding (the worker's one secret-writing call site).

@@ -7,7 +7,7 @@ publishes images; infra owns hosting, orchestration, TLS, DNS, and scaling.
 
 | Service | Image / Dockerfile | Build context | Start command | Port | Health check | Internal-only |
 |---|---|---|---|---|---|---|
-| `api` | `apps/api/Dockerfile` → `${REGISTRY}/nia-api:${TAG}` | repo root | `node dist/index.js` | 4001 | `GET /health` | No — the only service that should be publicly reachable |
+| `api` | `apps/api/Dockerfile` → `${REGISTRY}/nia-api:${TAG}` | repo root | `docker-entrypoint.sh` (migrates, then `node dist/index.js`) | 4001 | `GET /health` | No — the only service that should be publicly reachable |
 | `worker` | `apps/worker/Dockerfile` → `${REGISTRY}/nia-worker:${TAG}` | repo root | `node dist/index.js` | — (no HTTP server; pure BullMQ consumer) | none (no HTTP surface) | Yes |
 | `connector-mysql` | `services/connector-mysql/Dockerfile` → `${REGISTRY}/nia-connector-mysql:${TAG}` | repo root | `node services/connector-mysql/dist/index.js` | 4010 | `GET /health` | Yes |
 | `connector-mongodb` | `services/connector-mongodb/Dockerfile` → `${REGISTRY}/nia-connector-mongodb:${TAG}` | repo root | `node services/connector-mongodb/dist/index.js` | 4020 | `GET /health` | Yes |
@@ -95,12 +95,29 @@ and stored durably rather than one you can casually cycle.
 
 ## Migrations
 
-A one-off release step — **never** runs on service startup (no service
-`CMD`/entrypoint touches it).
+Migrations run automatically at **`api` container start** —
+`apps/api/docker-entrypoint.sh` runs `node scripts/migrate.mjs push` and
+only `exec`s the actual server (`node dist/index.js`) if that exits `0`.
+A half-migrated or blocked database can never serve traffic: a failed
+`push` aborts the entrypoint before `exec`, so the container exits
+non-zero and never becomes healthy. `worker` deliberately does **not**
+migrate itself — only `api` does, so there's exactly one migrator, and
+`push` additionally takes a Postgres session-level advisory lock for the
+duration of the run so that multiple `api` replicas starting concurrently
+(a rolling deploy, a crash-loop restart racing a fresh start, etc.)
+serialize instead of racing each other's DDL.
 
+Because `push` needs a real session (for the advisory lock and for
+multi-statement DDL as one transaction), `DATABASE_URL` must be a
+**direct/session connection** — `scripts/migrate.mjs` refuses to even
+connect if the URL looks like a transaction pooler (port `6543`, or a
+hostname containing `pooler`), with a clear error naming why.
+
+The standalone image/scripts below remain available for manual or CI use
+(`status`/`verify`/`resolve`) — `api`'s entrypoint only ever calls `push`:
 ```
-DATABASE_URL="postgresql://...(percent-encoded)..." pnpm run migrate:status  # applied vs pending
-DATABASE_URL="postgresql://...(percent-encoded)..." pnpm run migrate:push    # apply pending migrations
+DATABASE_URL="postgresql://...(percent-encoded, direct/session)..." pnpm run migrate:status  # applied / pending / FAILED
+DATABASE_URL="postgresql://...(percent-encoded, direct/session)..." pnpm run migrate:push     # apply pending migrations
 ```
 Equivalent containerized form (no local Node/pnpm needed — useful for a
 release pipeline that only has `docker`; no Supabase CLI involved
@@ -121,15 +138,42 @@ runner directly:
 DATABASE_URL="..." pnpm run migrate:verify
 ```
 
+### Recovering from a failed migration
+
+`public._migrations` tracks each migration's `started_at`, `finished_at`,
+and `error`. A row inserted before a migration runs and left with
+`finished_at` still null (Postgres itself already rolled back that
+migration's own DDL transaction) means it failed — and **every subsequent
+`push`, including the next `api` container start, refuses to proceed**
+until it's resolved, rather than silently skipping ahead.
+
+1. See it: `pnpm run migrate:status` prints `FAILED <name> started <ts> —
+   <recorded error>` for that migration (or via the standalone image's
+   `status` command).
+2. Investigate and fix the root cause (a bad migration file typically
+   needs a new migration or, if unreleased, editing in place — see the
+   compatibility rule below).
+3. Unblock the next push: `pnpm run migrate:resolve <version>` (e.g.
+   `pnpm run migrate:resolve 0038`). This marks the row `rolled_back_at`
+   (an audit record — there's no partial schema state to undo, Postgres
+   already rolled that back) so the next `push` retries that version.
+4. Re-run `pnpm run migrate:push` (or restart the `api` container).
+
 **Migration compatibility rule:** migrations must be compatible with both
 the old and new app code, since both run against the database during a
 deploy (migration is applied, then the new image rolls out — the old one
 is still serving traffic in between). Add a new column as nullable,
 deploy, backfill, tighten (`NOT NULL`, drop a default, etc.) in a later
 migration. Never drop or rename a column the currently-deployed code still
-reads or writes. See `supabase/migrations/*.sql` for the existing pattern
-and `supabase/tests/rls_probes.sql` for the RLS regression suite this
-should stay paired with.
+reads or writes, and never delete rows a live deploy still needs (see
+`supabase/migrations/0035_better_auth.sql`'s header comment for a worked
+example: it backfills `public.user` from `auth.users` under the same ids
+instead of deleting and recreating). A migration already applied anywhere
+that matters (e.g. production) must never be edited in place — add a new
+one instead, since `migrate.mjs`'s checksum check will otherwise refuse to
+push (see `verify` above). See `supabase/migrations/*.sql` for the
+existing pattern and `supabase/tests/rls_probes.sql` for the RLS
+regression suite this should stay paired with.
 
 ## Database connection pooling (`@nia/db`)
 
@@ -158,8 +202,15 @@ separate `PGSSLMODE`-style env var to configure.
 - **Postgres** (managed, e.g. Azure Database for PostgreSQL): a plain
   Postgres 17 instance — Nia Core is no longer a Supabase customer, it's
   just a Postgres host (see `docs/plans/local-dev.md`, `docs/decisions.md`).
-  `DATABASE_URL` is the only var required to reach it. A fresh instance
-  needs the same one-time bootstrap `docker/local-postgres-bootstrap.sql`
+  `DATABASE_URL` is the only var required to reach it, and it **must be a
+  direct/session connection, not a transaction-pooler one** — `api`
+  migrates itself at container start (see "Migrations" above), which needs
+  a real session for the advisory lock and multi-statement DDL; a pooled
+  connection string (port `6543`, or a hostname containing `pooler`, e.g.
+  Supabase's PgBouncer endpoint) is refused outright by `scripts/
+  migrate.mjs`. If the managed provider only exposes a pooler by default,
+  use its direct-connection variant/port for `DATABASE_URL`. A fresh
+  instance needs the same one-time bootstrap `docker/local-postgres-bootstrap.sql`
   applies locally (`pgcrypto`; the `anon`/`authenticated`/`service_role`
   roles, the latter with `BYPASSRLS`; a minimal `auth` schema with
   `auth.uid()`/`auth.role()` resolving identity from the

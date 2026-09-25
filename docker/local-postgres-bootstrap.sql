@@ -57,7 +57,14 @@ create schema if not exists auth;
 create table if not exists auth.users (
   id uuid primary key default gen_random_uuid(),
   email text,
-  raw_user_meta_data jsonb not null default '{}'::jsonb
+  raw_user_meta_data jsonb not null default '{}'::jsonb,
+  -- Real Supabase/GoTrue columns 0035_better_auth.sql's backfill reads from
+  -- (email_confirmed_at, created_at, updated_at) — kept here so the stub
+  -- stays close enough to production's real auth.users shape for that
+  -- migration to run unmodified in both places.
+  email_confirmed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create or replace function auth.uid()

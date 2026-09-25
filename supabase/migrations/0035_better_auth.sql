@@ -3,17 +3,25 @@
 -- This migration:
 --   1. Creates Better Auth's own tables: public.user, public.session,
 --      public.account, public.verification.
---   2. Clears every row that transitively hangs off auth.users, in strict
---      child-before-parent order (verified against the live FK graph via
---      pg_constraint, not hand-derived), because the app's fresh
---      public.user table starts empty and any pre-existing row would
---      violate the new foreign keys added in step 3. This is written to
---      run safely whether the database is already empty (local, after an
---      earlier manual wipe) or still holds old rows (remote, at deploy
---      time) — every DELETE is unconditional and idempotent.
+--   2. Backfills public.user from auth.users under the SAME ids (see
+--      packages/auth/src/config.ts's `advanced.database.generateId:
+--      "uuid"` — Better Auth's ids are plain uuids, the same type/shape
+--      auth.users.id already is), so every existing FK column that
+--      currently points at an auth.users row keeps pointing at a row
+--      that exists once step 3 repoints it at public.user. No table is
+--      cleared and no data is deleted — this is a backward-compatible,
+--      data-preserving cutover, per the same rule every other migration
+--      in this directory follows (see docs/decisions.md).
+--      NOT backfilled: passwords/credentials. GoTrue's encrypted_password
+--      format isn't compatible with Better Auth's hasher, so no
+--      public.account row is created here. Any existing user must reset
+--      their password once, post-migration, via
+--      `pnpm --filter @nia/api set-password <email> <newPassword>`
+--      (apps/api/src/scripts/setUserPassword.ts).
 --   3. Drops the 20 FK columns' constraints pointing at auth.users and
 --      re-adds them pointing at public.user, preserving each column's
---      original ON DELETE behavior.
+--      original ON DELETE behavior. Succeeds without deleting anything,
+--      since step 2 already backfilled every id these FKs reference.
 --   4. Drops the `on_auth_user_created` trigger + `handle_new_user()`
 --      function (replaced by Better Auth's `user.create.after` database
 --      hook in packages/auth).
@@ -77,70 +85,28 @@ create index if not exists session_userId_idx on public."session"("userId");
 create index if not exists account_userId_idx on public."account"("userId");
 
 -- ============================================================================
--- STEP 2: Clear every row that transitively depends on auth.users
+-- STEP 2: Backfill public.user from auth.users, under the same ids
 -- ============================================================================
---
--- Order (children before parents), verified by topologically sorting the
--- live FK graph rooted at these tables (see docs/plans/auth.md for the
--- pg_constraint query used to derive it):
---
---    1.  staging_objects            (child of connections, workflow_runs)
---    2.  clean_plans                (child of copilot_applied_plans, workflows)
---    3.  workflow_check_runs        (child of workflows)
---    4.  copilot_pending_actions    (child of workflows)
---    5.  workflow_graphs            (child of workflows)
---    6.  copilot_applied_plans      (child of workflows; self-referencing)
---    7.  workflow_runs              (child of workflows, organizations)
---    8.  workflows                  (child of projects, organizations)
---    9.  messages                   (child of conversations, organizations)
---    10. conversations              (child of organizations)
---    11. source_profiles            (child of connections)
---    12. write_grants               (child of connections)
---    13. connections                (child of organizations)
---    14. connector_installs         (child of organizations)
---    15. nia_secrets                (child of organizations)
---    16. organization_members       (child of organizations)
---    17. audit_log                  (child of organizations)
---    18. projects                   (child of organizations)
---    19. organizations              (root of the tree above)
---    20. profiles                   (independent — keyed 1:1 on auth.users.id)
---
--- (conversations.workflow_id -> workflows is ON DELETE SET NULL, so it does
--- not force conversations before workflows for safety — included here only
--- for readability of the dependency story.)
-do $$
-begin
-  raise notice 'better-auth migration: clearing 20 tables in FK-safe order: staging_objects, clean_plans, workflow_check_runs, copilot_pending_actions, workflow_graphs, copilot_applied_plans, workflow_runs, workflows, messages, conversations, source_profiles, write_grants, connections, connector_installs, nia_secrets, organization_members, audit_log, projects, organizations, profiles';
-end $$;
+-- name is NOT NULL on public.user but auth.users has no native name column;
+-- fall back to public.profiles.full_name (already keyed 1:1 on the same
+-- id), then to the email's local-part if that's also null/empty.
+-- emailVerified comes from auth.users.email_confirmed_at being set.
+-- on conflict (id) do nothing makes this safe to re-run and safe on a
+-- database where public.user already has rows (e.g. a fresh signup that
+-- landed after step 1 created the table but before this statement ran).
 
-delete from public.staging_objects;
-delete from public.clean_plans;
-delete from public.workflow_check_runs;
-delete from public.copilot_pending_actions;
-delete from public.workflow_graphs;
-delete from public.copilot_applied_plans;
-delete from public.workflow_runs;
-delete from public.workflows;
-delete from public.messages;
-delete from public.conversations;
-delete from public.source_profiles;
-delete from public.write_grants;
-delete from public.connections;
-delete from public.connector_installs;
-delete from public.nia_secrets;
-
--- organization_members_protect_last_super_admin exists to stop normal app
--- usage from leaving an org ownerless one row at a time; it isn't meant to
--- block a deliberate full wipe, so it's suspended for this one statement
--- and immediately restored.
-alter table public.organization_members disable trigger organization_members_protect_last_super_admin;
-delete from public.organization_members;
-alter table public.organization_members enable trigger organization_members_protect_last_super_admin;
-
-delete from public.audit_log;
-delete from public.projects;
-delete from public.organizations;
-delete from public.profiles;
+insert into public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+select
+  u.id,
+  coalesce(nullif(p.full_name, ''), split_part(u.email, '@', 1)),
+  u.email,
+  u.email_confirmed_at is not null,
+  u.created_at,
+  u.updated_at
+from auth.users u
+left join public.profiles p on p.id = u.id
+where u.email is not null
+on conflict (id) do nothing;
 
 -- ============================================================================
 -- STEP 3: Repoint the 20 FK columns from auth.users to public.user

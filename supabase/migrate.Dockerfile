@@ -5,6 +5,7 @@
 #   docker run --rm -e DATABASE_URL="$DATABASE_URL" nia/migrate status
 #   docker run --rm -e DATABASE_URL="$DATABASE_URL" nia/migrate push
 #   docker run --rm -e DATABASE_URL="$DATABASE_URL" nia/migrate verify
+#   docker run --rm -e DATABASE_URL="$DATABASE_URL" nia/migrate resolve <version>
 # No Supabase CLI — see scripts/migrate.mjs and docs/plans/local-dev.md for
 # why (this is the last release-pipeline dependency on it, now removed).
 FROM node:22-alpine

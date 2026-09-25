@@ -99,3 +99,13 @@ export const PanelToggleIcon: IconComponent = ({ size = 16 }) => (
     <path d="M14.5 4.5v15" stroke="currentColor" strokeWidth="1.6" />
   </svg>
 );
+
+/** Voice-input glyph — replaces the 🎤 emoji in CommandBar.tsx's input bar
+ * with a monochrome mic outline matching this file's icon convention. */
+export const MicIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+    <rect x="9" y="3.5" width="6" height="11" rx="3" stroke="currentColor" strokeWidth="1.6" />
+    <path d="M6 11.5v1a6 6 0 0 0 12 0v-1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    <path d="M12 18.5v2.2M9 20.7h6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+  </svg>
+);

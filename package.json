@@ -11,7 +11,9 @@
     "guard:scope": "bash scripts/check-workspace-scope-guard.sh",
     "migrate:status": "node scripts/migrate.mjs status",
     "migrate:push": "node scripts/migrate.mjs push",
-    "migrate:verify": "node scripts/migrate.mjs verify"
+    "migrate:verify": "node scripts/migrate.mjs verify",
+    "migrate:resolve": "node scripts/migrate.mjs resolve",
+    "scripts:test": "vitest run --config vitest.config.ts"
   },
   "devDependencies": {
     "pg": "^8.13.1",
