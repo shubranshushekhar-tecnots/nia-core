@@ -5630,3 +5630,55 @@ by an empty stub table) and the last real `@supabase/supabase-js`
 dependency (`packages/secrets` + the 3 connector services' PostgREST
 access to `nia_secrets`/`write_grants`) — both already tracked, neither
 newly introduced by this migration.
+
+**Reconciling production (`tkairolrvxkphyoijskm`) with `_migrations`.**
+Production had been migrated by hand via the Supabase CLI before
+`migrate.mjs`/`_migrations` existed, so `_migrations` didn't exist there
+at all — same class of problem as the local-dev reconciliation above,
+but higher stakes since this is the live database. The real applied
+boundary was verified against `information_schema`/`pg_get_functiondef`
+(every column, enum value, function body, and grant each candidate
+migration file creates/alters, checked directly against production) —
+not against the Supabase CLI's own migration-list output, which
+disagreed with reality: the CLI's table claimed migrations through 0019
+were applied, while an earlier filename-based check (looking for tables
+named after migration files, e.g. expecting a `run_checkpoints` table
+for 0017) misread the boundary as only 0016, since several migrations
+in that range only add columns/functions rather than new tables. Object-
+level verification confirmed 0001-0019 were genuinely, fully applied
+(including 0018's amended `confirm_write_grant`, not 0016's original,
+proving apply order was respected) — 0020-0037 were the real pending
+batch. `_migrations` was backfilled for 0001-0019 with real sha256
+checksums (computed identically to `migrate.mjs`'s own logic) via a
+one-off script, then `migrate.mjs push` applied 0020-0037 for real,
+including 0035's self-heal step (6 orphaned rows resolved across
+`audit_log.actor`, `connector_installs.installed_by_user_id`, and
+`profiles.id`, confirmed via a read-only dry-run query before push and
+verified against the real user's profile surviving intact). The one-off
+backfill script has been deleted post-use — a hardcoded, single-project
+reconciliation script sitting in `scripts/` is more likely to mislead a
+future reader into rerunning or adapting it than to help them; the
+checksum logic it used is fully recoverable from this entry and from
+`migrate.mjs` itself if ever needed again.
+
+**Supabase pooler mode and `migrate.mjs`'s connection check.** Production's
+direct connection host (`db.<ref>.supabase.co`) is IPv6-only unless the
+paid IPv4 add-on is purchased, which blocked running migrations from an
+IPv4-only network. Verified (via Supabase's docs and a live test —
+`pg_advisory_lock` held, a temp table created/committed/read/dropped,
+the lock confirmed still held, all as separate statements over one
+connection, same backend pid throughout) that Supavisor's session mode
+(port 5432) is functionally equivalent to a direct connection for
+`migrate.mjs`'s needs: one backend dedicated to the client for the whole
+session, so advisory locks and multi-statement DDL both work correctly.
+Transaction mode (port 6543) does not — a different backend can service
+each transaction, silently dropping session-level state. Both modes
+share the exact same hostname on Supabase, differing only by port, so
+`assertDirectConnection`'s refusal check now keys on `port === "6543"`
+rather than any hostname pattern (the old check matched any hostname
+containing "pooler", which blocked both modes indiscriminately). This
+also generalizes correctly to non-Supabase hosts: Azure Database for
+PostgreSQL's hostname carries no "pooler" marker at all, so a
+hostname-based check would have silently done nothing there even with a
+transaction-mode pooler in front of it — port is the portable signal,
+hostname isn't.

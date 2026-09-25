@@ -171,9 +171,33 @@ serialize instead of racing each other's DDL.
 
 Because `push` needs a real session (for the advisory lock and for
 multi-statement DDL as one transaction), `DATABASE_URL` must be a
-**direct/session connection** — `scripts/migrate.mjs` refuses to even
-connect if the URL looks like a transaction pooler (port `6543`, or a
-hostname containing `pooler`), with a clear error naming why.
+**direct or session-mode connection** — `scripts/migrate.mjs` refuses to
+even connect if the URL looks like a *transaction-mode* pooler (port
+`6543`), with a clear error naming why.
+
+The check is on **port, not hostname**, deliberately. On Supabase, a
+direct connection (`db.<ref>.supabase.co`, IPv6-only unless the IPv4
+add-on is purchased) and Supavisor's pooler are different hosts, but
+Supavisor's session mode and transaction mode are the *same* host — only
+the port differs (`5432` session, `6543` transaction) — and Supavisor is
+IPv4-only in both modes. Session mode dedicates one backend connection to
+the client for the whole session, giving the same session-level
+guarantees `push` needs (an advisory lock and a temp table both survive
+across separate statements/transactions on that connection — verified
+live against Supabase's Supavisor), so it's a valid, IPv4-reachable
+substitute for the direct connection whenever the direct host's
+IPv6-only-ness is what's blocking you. That's why the check doesn't match
+on hostnames containing `pooler` — a hostname check would block session
+mode along with transaction mode, even though only transaction mode is
+unsafe. It would also be the wrong idea on a non-Supabase host: Azure
+Database for PostgreSQL's hostname carries no "pooler" marker at all, so
+a hostname check wouldn't catch a transaction-mode pooler put in front of
+one either — anyone tempted to reinstate a hostname-based check should
+know it's wrong in both directions. If your database's transaction pooler
+uses a different convention than port `6543`, verify session-level state
+(advisory locks, temp tables) survives across separate statements before
+pointing `DATABASE_URL` at it — see `scripts/migrate.mjs`'s
+`assertDirectConnection` for the live verification query used here.
 
 The standalone image/scripts below remain available for manual or CI use
 (`status`/`verify`/`resolve`) — `api`'s entrypoint only ever calls `push`:
@@ -265,13 +289,15 @@ separate `PGSSLMODE`-style env var to configure.
   Postgres 17 instance — Nia Core is no longer a Supabase customer, it's
   just a Postgres host (see `docs/plans/local-dev.md`, `docs/decisions.md`).
   `DATABASE_URL` is the only var required to reach it, and it **must be a
-  direct/session connection, not a transaction-pooler one** — `api`
-  migrates itself at container start (see "Migrations" above), which needs
-  a real session for the advisory lock and multi-statement DDL; a pooled
-  connection string (port `6543`, or a hostname containing `pooler`, e.g.
-  Supabase's PgBouncer endpoint) is refused outright by `scripts/
-  migrate.mjs`. If the managed provider only exposes a pooler by default,
-  use its direct-connection variant/port for `DATABASE_URL`. A fresh
+  direct or session-mode connection, not a transaction-mode pooler one**
+  — `api` migrates itself at container start (see "Migrations" above),
+  which needs a real session for the advisory lock and multi-statement
+  DDL; a transaction-mode connection string (port `6543` by Supavisor/
+  PgBouncer convention) is refused outright by `scripts/migrate.mjs` —
+  based on port, not hostname (see "Migrations" above for why a hostname
+  check is wrong on both Supabase and Azure). If the managed provider only
+  exposes a transaction-mode pooler by default, use its direct-connection
+  or session-mode variant/port for `DATABASE_URL` instead. A fresh
   instance needs the same one-time bootstrap `docker/local-postgres-bootstrap.sql`
   applies locally (`pgcrypto`; the `anon`/`authenticated`/`service_role`
   roles, the latter with `BYPASSRLS`; a minimal `auth` schema with

@@ -68,14 +68,42 @@ function loadMigrations() {
     });
 }
 
-/** Throws if databaseUrl looks like a transaction-pooler connection. */
+/**
+ * Throws if databaseUrl looks like a transaction-mode pooler connection.
+ *
+ * Port is the discriminator here, not hostname. On Supabase, session mode
+ * and transaction mode are the exact same Supavisor host — the only
+ * difference is port 5432 (session) vs 6543 (transaction) — so a hostname
+ * check (e.g. matching "pooler") blocks both modes indiscriminately, even
+ * though session mode dedicates one backend connection to the client for
+ * the whole session (same session-level guarantees as a direct connection:
+ * an advisory lock taken on one statement is still held on the next, a
+ * temp table created in one statement is still visible in the next) and
+ * transaction mode does not (a different backend can service each
+ * transaction, silently dropping session-level advisory locks and
+ * temp tables). Verified live against Supabase's Supavisor: an advisory
+ * lock taken, then a temp table created/committed/read/dropped, then the
+ * lock released — all as separate statements over one session-mode
+ * connection — see one backend pid throughout and the lock still held
+ * after the DDL.
+ *
+ * This also means a hostname check is the wrong idea on a non-Supabase
+ * host: Azure Database for PostgreSQL's hostname carries no "pooler"
+ * marker at all, so a hostname-based check would silently do nothing
+ * there even if a transaction-mode PgBouncer/pgpool sat in front of it.
+ * Port 6543 is Supavisor/PgBouncer's transaction-mode convention, not a
+ * hard guarantee — if a different setup puts a transaction-mode pooler on
+ * another port, this check can't see it — but it is the correct, portable
+ * signal for the poolers this codebase actually targets, and never
+ * misfires against a legitimate direct or session-mode host.
+ */
 export function assertDirectConnection(databaseUrl) {
   const url = new URL(databaseUrl);
-  if (url.port === "6543" || url.hostname.includes("pooler")) {
+  if (url.port === "6543") {
     throw new Error(
-      `DATABASE_URL looks like a transaction-pooler connection (host=${url.hostname}, port=${url.port || "default"}) — ` +
-        "migrate.mjs needs a direct/session connection to hold an advisory lock and run multi-statement DDL. " +
-        "Use the database's direct (session) connection string instead.",
+      `DATABASE_URL looks like a transaction-pooler connection (host=${url.hostname}, port=${url.port}) — ` +
+        "migrate.mjs needs a direct or session-mode connection to hold an advisory lock and run multi-statement DDL. " +
+        "Use the database's direct connection string, or a session-mode pooler port (e.g. Supabase Supavisor's 5432) instead.",
     );
   }
 }
