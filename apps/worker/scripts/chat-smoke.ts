@@ -61,6 +61,8 @@ import { buildMultiSourceGraph } from "../src/lib/chat/multiSource/graph.js";
 import { channelFor } from "../src/lib/chat/publish.js";
 import { env } from "../src/env.js";
 import { runInTrace, flushLangfuse } from "../src/lib/observability/langfuse.js";
+import { getSecretStore } from "../src/lib/secretStore.js";
+import { dbPool } from "../src/lib/dbPool.js";
 
 const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -124,10 +126,13 @@ async function seedConnection(scope: Scope, connectorId: ConnectorId): Promise<s
     return existing.id as string;
   }
 
-  const { data: vaultRef, error: vaultError } = await supabase.rpc("create_connector_secret", {
-    p_secret: { user, password },
-  });
-  if (vaultError || !vaultRef) throw new Error(`vault write for ${connectorId} failed: ${vaultError?.message}`);
+  let vaultRef: string;
+  try {
+    vaultRef = await getSecretStore(dbPool).put({ user, password }, scope);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`secret write for ${connectorId} failed: ${message}`);
+  }
 
   const { data, error } = await supabase
     .from("connections")

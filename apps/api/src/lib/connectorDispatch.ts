@@ -24,14 +24,16 @@ function baseUrl(manifest: ConnectorManifest): string {
 }
 
 /**
- * A vault-resolution failure whose underlying cause is a network error
- * (the connector's `resolveVaultSecret` — see pool-manager.ts in each
- * connector service — wraps ANY `resolve_connector_secret` RPC failure as
- * "vault resolution failed for ref X: <reason>", so this only matches when
- * <reason> itself looks like connectivity, not e.g. "ref not found" or an
- * RLS denial, which are real Vault-side errors worth showing as-is).
+ * A secret-store failure whose underlying cause is a network error (the
+ * connector's `resolveSecret` — see pool-manager.ts in each connector
+ * service — resolves via @nia/secrets's createEnvKeySecretStore, which
+ * wraps ANY nia_secrets read failure as "nia_secrets read failed for ref X:
+ * <reason>", so this only matches when <reason> itself looks like
+ * connectivity, not e.g. "ref not found" or an RLS denial, which are real
+ * secret-store errors worth showing as-is).
  */
-const VAULT_UNREACHABLE_PATTERN = /vault resolution failed.*(fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|network)/i;
+const SECRET_STORE_UNREACHABLE_PATTERN =
+  /nia_secrets read failed.*(fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|network)/i;
 
 type ConnectorErrorInfo = { message: string; details: string };
 
@@ -51,7 +53,7 @@ type ConnectorErrorInfo = { message: string; details: string };
  * if the body had none) so callers that want the unfiltered text — e.g. for
  * an AppError's `details` field, surfaced to the UI separately from the
  * headline message — have it, even when `message` itself gets rewritten to
- * something friendlier (see VAULT_UNREACHABLE_PATTERN below: a raw
+ * something friendlier (see SECRET_STORE_UNREACHABLE_PATTERN below: a raw
  * `TypeError: fetch failed` means literally nothing to a user, so that case
  * gets a plain-language headline instead of the connector's raw text).
  */
@@ -63,7 +65,7 @@ async function connectorErrorMessage(res: Response): Promise<ConnectorErrorInfo>
       ? `connector service responded ${res.status}: ${rawMessage}`
       : `connector service responded ${res.status}`;
 
-  if (typeof rawMessage === "string" && VAULT_UNREACHABLE_PATTERN.test(rawMessage)) {
+  if (typeof rawMessage === "string" && SECRET_STORE_UNREACHABLE_PATTERN.test(rawMessage)) {
     return { message: "Can't reach the credential store.", details };
   }
   return { message: details, details };

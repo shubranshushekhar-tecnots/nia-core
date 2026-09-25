@@ -495,38 +495,43 @@
   later option (e.g. for self-hosted or enterprise deployments that
   want a managed HSM-backed store instead of an application-level
   master key) — not built, not started.
-- **Remove the Vault fallback once every live `vault_secret_ref`/
-  `write_credential_vault_ref` has been migrated (docs/plans/
-  secret-storage.md, added 2026-09-24).** `SecretStore.get()` currently
-  dual-reads: checks `nia_secrets` first, falls back to
-  `resolve_connector_secret`/`decrypt_connector_secret_for_edit` (Vault)
-  for any ref that predates the migration. This is intentionally
-  temporary. Once `secrets-verify` reports zero `vault-only` refs against
-  every real (non-local) environment that matters, remove the Vault
-  fallback branch from `SecretStore.get()`, and only then consider
-  actually deleting the Vault rows themselves (a separate, later step —
-  not bundled with removing the fallback code path).
-- **Local `supabase_vault` extension is missing `vault.delete_secret`
-  (found data-access migration Step 4, added 2026-09-24).**
-  `supabase/tests/rls_probes.sql` probes #45 and #50 both fail locally
-  with `function vault.delete_secret(uuid) does not exist` — the local
-  stack's `supabase_vault` extension is version 0.3.1, which only
-  exposes `create_secret`/`update_secret` (confirmed via `\df vault.*`);
-  `delete_secret` isn't in this version at all. `public.
-  delete_connector_secret(uuid)` (0027_connection_lifecycle_audit.sql)
-  calls `vault.delete_secret` internally, so both probes' cleanup step
-  errors. Confirmed this is a pre-existing local-environment gap, not a
-  regression from the data-access (PostgREST→pg) migration: re-ran both
-  probes against the committed (pre-migration) tree via `git stash` and
-  got the identical error. All 50 other probes pass, including every
-  cross-tenant-isolation probe and the ones added by this migration's
-  own work (`nia_secrets` RLS, probe #49) — tenant isolation is fully
-  proven regardless. Not fixable by app code; needs the local Supabase
-  CLI/`supabase_vault` extension updated to a version that ships
-  `vault.delete_secret` before probes #45/#50 can be verified locally.
-  Unverified whether a real (hosted) Supabase project's Vault extension
-  has this function — check there before assuming this is only a local
-  quirk.
+- ~~Remove the Vault fallback once every live `vault_secret_ref`/
+  `write_credential_vault_ref` has been migrated~~ **DONE (2026-09-25,
+  Vault removal).** `secrets-verify` confirmed zero `vault-only` refs
+  against every environment that mattered; the `legacyResolve`
+  fallback branch was removed from `SecretStore.get()`
+  (`packages/secrets/src/store.ts`), and migration
+  `0037_drop_vault_rpcs.sql` drops `resolve_connector_secret`,
+  `create_connector_secret`, `decrypt_connector_secret_for_edit`, and
+  `count_vault_secrets`. `secrets-verify.ts`/`secrets-backfill.ts` and
+  their tests were deleted as purposeless once those RPCs are gone;
+  `secrets-rotate.ts` survives (pure `nia_secrets` key-version
+  rotation, no Vault dependency).
+- ~~Local `supabase_vault` extension is missing `vault.delete_secret` —
+  probes #45 and #50 both fail locally~~ **RESOLVED, moot rather than
+  fixed — in two separate steps, not one.** Both probes tested Vault-era
+  RPCs that no longer exist, but at different points: probe #45
+  (`merge_connector_secret`/`delete_connector_secret`'s merge/delete
+  behavior) was removed, and probe #44 narrowed to just its
+  `log_connection_audit` assertion, in the **Auth migration** commit
+  (`0c4cd13`), once migration `0036_drop_dead_vault_secret_rpcs.sql`
+  dropped those two RPCs as dead code — landing at 50 probes (matches
+  `docs/decisions.md`'s Auth-migration close-out entry). Probe #50
+  (`decrypt_connector_secret_for_edit`) was removed later, in **this
+  session's** local-dev-migration work, once new migration
+  `0037_drop_vault_rpcs.sql` dropped that RPC (its last live caller,
+  `apps/api`'s `secretStore.ts` legacy fallback, was removed first) —
+  landing at the current 49. `nia_secrets`'s own RLS (probe #49) already
+  covers the same tenant-isolation ground both dropped probes tested.
+  Verified by diffing `supabase/tests/rls_probes.sql` across every
+  commit that touched it (`2d4852d` → `622a12a` → `0c4cd13` → working
+  tree) plus the live 49-probe passing run — no probe silently stopped
+  running; both removals are deliberate and match their respective
+  RPC-drop migrations. (Note: an unrelated source quirk inflates a naive
+  `grep -c "probe_results values"` by one at every stage — probe 6's
+  `exception when others` fallback hardcodes literal `60`, which is
+  never inserted on a passing run; the real, live-verified counts are
+  49 → 51 → 50 → 49 across those four points, not 50 → 52 → 51 → 50.)
 - **e2e `app.spec.ts:24` ("New workflow" -> "New project" creates a
   project) is broken, pre-existing, unrelated to the data-access
   migration (found data-access migration Step 4, added 2026-09-24).**
@@ -574,12 +579,53 @@
   access. `apps/worker`'s production `src/` is fully clean (zero
   imports) — its `package.json` dependency is kept alive only by
   `scripts/` (smoke tests: `dispatch-smoke.ts`, `chat-smoke.ts`, etc.,
-  and the Vault→`nia_secrets` backfill/verify tooling in
-  `scripts/lib/secretsMigration.ts`, `secrets-backfill.ts`,
-  `secrets-verify.ts` — see `docs/plans/secret-storage.md` Step 2C).
-  Those scripts would need their own migration/retirement before
-  `apps/worker`'s `package.json` entry can actually be dropped; not
-  attempted here, out of scope for Step 5.
+  and `secrets-rotate.ts`, the sole survivor of the former
+  Vault→`nia_secrets` backfill/verify tooling — `secrets-backfill.ts`/
+  `secrets-verify.ts` were deleted once the Vault RPCs they depended on
+  were dropped, see the Vault-removal entry above). Those scripts would
+  need their own migration/retirement before `apps/worker`'s
+  `package.json` entry can actually be dropped; not attempted here, out
+  of scope for Step 5.
+- **`@supabase/supabase-js` is the last Supabase dependency left in the
+  repo, and removing it is now small (added 2026-09-25, local-dev
+  migration).** `packages/secrets`'s `createEnvKeySecretStore` and all
+  three connector services (`connector-mysql`/`connector-mongodb`/
+  `connector-supabase`) still reach `nia_secrets` (and, for the
+  connectors, `write_grants`) through PostgREST via `supabase-js`'s
+  `.from().select().eq().maybeSingle()`, rather than the direct-pg path
+  (`@nia/db`'s `createDbPool`/`withServiceRole`) already used everywhere
+  else in the repo. This was deliberately left out of scope during the
+  Vault-removal work — but `nia_secrets` is a single simple table with
+  no RLS-recursion helpers or PostgREST-specific behavior to replicate,
+  and the direct-pg pattern is already proven (`apps/api/src/lib/
+  secretStore.ts`, `apps/worker/src/lib/secretStore.ts`). Follow-up:
+  give `createEnvKeySecretStore` (and the connectors' `write_grants`
+  lookup) a `pg.Pool`-based implementation, swap all 4 call sites over,
+  and only then drop `@supabase/supabase-js` from `packages/secrets`'s
+  and the 3 connector services' `package.json`s — the change that
+  finally removes the package from the repo entirely.
+- ~~Local dev still depends on the Supabase CLI (`scripts/migrate.sh`
+  shells out to `supabase migration list`/`supabase db push`, app
+  `DATABASE_URL`s point at `supabase start`'s fixed port)~~ **DONE
+  (2026-09-25, local-dev migration, `docs/decisions.md`'s "Local dev:
+  Supabase CLI → plain Postgres" entry).** `docker compose up -d
+  postgres` (plain `postgres:17-alpine`, port 5434, bootstrapped by
+  `docker/local-postgres-bootstrap.sql`) replaces `supabase start`;
+  `scripts/migrate.mjs` (a small `pg`-based runner, tracked in
+  `public._migrations`) replaces `scripts/migrate.sh`; `DATABASE_URL` in
+  the root `.env` and every app's `.env`/`.env.local` now points at
+  `127.0.0.1:5434`. All 49 RLS probes, full `pnpm -r typecheck`, and full
+  `pnpm -r test` (1,414 tests) pass against it; `seed:fixtures` creates
+  all 12 fixtures through the real Better Auth path. One narrow,
+  already-dead exception remains and is not a bug: migration
+  `0033_count_vault_secrets_rpc.sql` references `vault.secrets`, which
+  doesn't exist on plain Postgres — satisfied by an empty stub table in
+  the bootstrap (the function itself is dropped 4 migrations later by
+  `0037_drop_vault_rpcs.sql` and has had no real caller since the Vault
+  removal). The local `supabase start` stack (`supabase_db`/`_rest`/
+  `_auth`/`_kong`/`_inbucket` containers) is no longer used by any app
+  and can be stopped (`supabase stop`) — left running, not torn down,
+  since nothing in this migration required touching it.
 - **`canvas.spec.ts` isolation double-run (idle dev servers, run twice,
   data-access migration Step 4, 2026-09-24): same 5 tests failed
   identically both runs, but root cause is test-fixture/data

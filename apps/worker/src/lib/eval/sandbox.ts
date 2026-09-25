@@ -10,6 +10,7 @@
  */
 import { withServiceRole, workspaceWhere } from "@nia/db";
 import { dbPool } from "../dbPool.js";
+import { getSecretStore } from "../secretStore.js";
 
 export const DEMO_USER_ID = "00000000-0000-0000-0000-0000000000d1";
 export const INVALID_CONNECTION_ID = "00000000-0000-0000-0000-000000000000";
@@ -75,19 +76,12 @@ async function seedConnection(orgId: string, connectorId: ConnectorId): Promise<
     return existing.id;
   }
 
-  let vaultRef: string;
+  let secretRef: string;
   try {
-    const result = await withServiceRole(dbPool, (db) =>
-      db.query<{ create_connector_secret: string }>("select public.create_connector_secret($1::jsonb) as create_connector_secret", [
-        JSON.stringify({ user, password }),
-      ]),
-    );
-    const ref = result.rows[0]?.create_connector_secret;
-    if (!ref) throw new Error("no ref returned");
-    vaultRef = ref;
+    secretRef = await getSecretStore(dbPool).put({ user, password }, { orgId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`vault write for ${connectorId} failed: ${message}`);
+    throw new Error(`secret write for ${connectorId} failed: ${message}`);
   }
 
   try {
@@ -96,7 +90,7 @@ async function seedConnection(orgId: string, connectorId: ConnectorId): Promise<
         `insert into public.connections (org_id, owner_id, connector_id, handle, display_name, owner_user_id, config, vault_secret_ref)
          values ($1, null, $2, $3, $4, $5, $6, $7)
          returning id`,
-        [orgId, connectorId, handle, `Golden eval (${connectorId})`, DEMO_USER_ID, JSON.stringify({ host, port, database }), vaultRef],
+        [orgId, connectorId, handle, `Golden eval (${connectorId})`, DEMO_USER_ID, JSON.stringify({ host, port, database }), secretRef],
       ),
     );
     const row = result.rows[0];

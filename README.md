@@ -23,30 +23,39 @@ packages/
 ## Prerequisites
 
 - Node.js + [pnpm](https://pnpm.io) (`corepack enable && corepack prepare pnpm@9.15.0 --activate`)
-- [Docker](https://docs.docker.com/get-docker/) (sandbox DBs + connector services)
-- [Supabase CLI](https://supabase.com/docs/guides/cli) (local Postgres + Auth)
+- [Docker](https://docs.docker.com/get-docker/) (local Postgres + sandbox DBs + connector services)
+
+No Supabase CLI — Nia Core is a plain Postgres host (see
+`docs/plans/local-dev.md`, `docs/decisions.md`). There's also no Supabase
+Studio anymore; use any Postgres client (`psql`, TablePlus, etc.) pointed
+at `DATABASE_URL` to browse the local database.
 
 ## Run locally
 
 ```bash
 pnpm install
 
-# 1. Local Supabase (Postgres + Auth) — the actual backend
-supabase start
-supabase db reset               # applies supabase/migrations/*.sql + seed.sql
-
-# 2. Docker sandbox: redis + scratch source DBs + connector services
-docker compose up -d redis dev-mysql dev-mongo dev-postgres \
+# 1. Local Postgres + Docker sandbox: redis + scratch source DBs + connector services
+docker compose up -d postgres redis dev-mysql dev-mongo dev-postgres \
   connector-mysql connector-mongodb connector-supabase
+# `postgres` runs the bootstrap in docker/local-postgres-bootstrap.sql on
+# first boot (roles, pgcrypto, the auth schema shim) — see docker-compose.yml.
+
+# 2. Apply migrations (supabase/migrations/*.sql, unmodified, tracked in
+#    public._migrations — see scripts/migrate.mjs)
+DATABASE_URL="postgresql://postgres:postgres@localhost:5434/postgres" pnpm run migrate:push
 
 # 3. Env files — copy every .env.example, then fill in the values
-#    `supabase status` prints the URL/anon/service-role keys to use
+#    (DATABASE_URL as above; no SUPABASE_* keys needed anymore)
 cp .env.example .env
 cp apps/web/.env.example apps/web/.env.local
 cp apps/api/.env.example apps/api/.env
 cp apps/worker/.env.example apps/worker/.env
 
-# 4. Build the shared packages once, then run everything
+# 4. Seed fixture users through the real Better Auth signup path
+pnpm --filter @nia/api seed:fixtures
+
+# 5. Build the shared packages once, then run everything
 pnpm --filter @nia/schemas --filter @nia/guardrails build
 pnpm dev                        # turbo runs dev for every workspace
 ```
@@ -72,11 +81,11 @@ pnpm -r test                       # unit tests, every workspace
 cd apps/web && PORT=3100 npx playwright test   # e2e (web app must be running)
 ```
 
-RLS regression suite (run against the linked Supabase project, wrapped in a
+RLS regression suite (run against local Postgres, wrapped in a
 rolled-back transaction — never persists data):
 
 ```bash
-supabase db query --linked --file supabase/tests/rls_probes.sql
+psql "postgresql://postgres:postgres@localhost:5434/postgres" -f supabase/tests/rls_probes.sql
 ```
 
 ## Further documentation
@@ -122,8 +131,9 @@ optional infrastructure, not a hard dependency.
 
 ## Rules the code already encodes
 
-- **Secrets never cross worker → service.** Services resolve Vault refs themselves
-  (`pool-manager.ts`); payloads carry only `credentialRef`.
+- **Secrets never cross worker → service.** Services resolve secret refs
+  themselves against `nia_secrets` (`pool-manager.ts`, `@nia/secrets`);
+  payloads carry only `credentialRef`.
 - **Pools keyed `connectionId:credVersion`** — rotation bumps the version, stale pools age out.
 - **Two queues** (`interactive`, `heavy`) so backfills never starve chat.
 - **Every /execute returns the normalized tabular shape** with `executedQuery` in meta —

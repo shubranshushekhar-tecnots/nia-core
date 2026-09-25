@@ -1800,7 +1800,7 @@ exception when others then
 end $$;
 
 -- =========================================================================
--- Probes 49-50 — 0032_nia_secrets.sql (Vault replacement: envelope-encrypted
+-- Probe 49 — 0032_nia_secrets.sql (Vault replacement: envelope-encrypted
 -- credential storage)
 -- =========================================================================
 
@@ -1857,33 +1857,12 @@ exception when others then
   insert into probe_results values (49, 'nia_secrets RLS probe (errored: ' || sqlerrm || ')', false);
 end $$;
 
--- Probe 50 — decrypt_connector_secret_for_edit is callable by authenticated,
--- not anon, and returns the secret's decrypted jsonb unmodified (no merge,
--- no new ref minted — that's the only behavior this RPC has).
-do $$
-declare
-  v_member uuid := (select id from test_ids where key = 'member');
-  v_ref uuid;
-  v_decrypted jsonb;
-  privilege_ok boolean;
-begin
-  privilege_ok := has_function_privilege('authenticated', 'public.decrypt_connector_secret_for_edit(uuid)', 'execute')
-    and not has_function_privilege('anon', 'public.decrypt_connector_secret_for_edit(uuid)', 'execute');
-
-  perform pg_temp.act_as(v_member);
-  v_ref := (public.create_connector_secret('{"user":"probe50-user","password":"probe50-pass"}'::jsonb))::uuid;
-  v_decrypted := public.decrypt_connector_secret_for_edit(v_ref);
-  reset role;
-
-  if privilege_ok and v_decrypted = '{"user":"probe50-user","password":"probe50-pass"}'::jsonb then
-    insert into probe_results values (50, 'decrypt_connector_secret_for_edit: granted to authenticated only, returns the decrypted secret unmodified', true);
-  else
-    insert into probe_results values (50, 'decrypt_connector_secret_for_edit: granted to authenticated only, returns the decrypted secret unmodified', false);
-  end if;
-exception when others then
-  reset role;
-  insert into probe_results values (50, 'decrypt_connector_secret_for_edit probe (errored: ' || sqlerrm || ')', false);
-end $$;
+-- Probe 50 (decrypt_connector_secret_for_edit — the Vault-era, authenticated-
+-- callable equivalent of resolve_connector_secret, used only by the
+-- pre-nia_secrets update-path) was removed along with that RPC once every
+-- live ref was confirmed backfilled into nia_secrets — see
+-- docs/decisions.md's Vault-removal entry. nia_secrets's own RLS (the only
+-- access path left) is already covered by Probe 49 above.
 
 -- =========================================================================
 -- Report

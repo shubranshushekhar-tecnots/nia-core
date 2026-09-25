@@ -30,9 +30,9 @@ pg.types.setTypeParser(1700, (val: string) => parseFloat(val));
  * so stale pools simply stop being hit and age out.
  *
  * A pool is composed from two sources: `config` (host/port/database/ssl —
- * sent by Express on every dispatch call, since it lives in Postgres, not
- * Vault) and the Vault secret (user/password — resolved here, inside the
- * service, and never sent by or back to Express).
+ * sent by Express on every dispatch call, since it lives in Postgres
+ * directly) and the nia_secrets secret (user/password — resolved here,
+ * inside the service, and never sent by or back to Express).
  *
  * Mirrors connector-mysql's pool-manager, including the in-flight-promise
  * cache fix from the start (not bolted on after): pools maps key ->
@@ -89,42 +89,38 @@ function parsePostgresConfig(
   return { host, port, database, ssl };
 }
 
-// Service-role client, used for: resolve_connector_secret RPC
-// (0008_connector_secret_rpc.sql, legacy Vault fallback below), reading
-// nia_secrets directly (service_role bypasses its RLS, granted select in
-// 0032_nia_secrets.sql), and write_grants lookups. Never touches any other
-// table.
+// Service-role client, used for: reading nia_secrets directly
+// (service_role bypasses its RLS, granted select in 0032_nia_secrets.sql)
+// and write_grants lookups. Never touches any other table. Vault's
+// resolve_connector_secret RPC (legacy fallback) was dropped once every
+// live ref was confirmed backfilled into nia_secrets — see
+// docs/decisions.md's Vault-removal entry.
 const supabase = createClient(
   process.env.SUPABASE_URL ?? "",
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
   { auth: { persistSession: false, autoRefreshToken: false } },
 );
 
-// docs/plans/secret-storage.md — dual-read: nia_secrets checked first,
-// resolve_connector_secret RPC (legacy Vault) as fallback. Mirrors
-// connector-mysql/src/pool-manager.ts's wiring exactly.
+// docs/plans/secret-storage.md — nia_secrets (envelope-encrypted under
+// NIA_SECRET_MASTER_KEY). Mirrors connector-mysql/src/pool-manager.ts's
+// wiring exactly.
 const secretStore = createEnvKeySecretStore({
   client: supabase,
   masterKey: process.env.NIA_SECRET_MASTER_KEY ?? "",
-  legacyResolve: async (ref) => {
-    const { data, error } = await supabase.rpc("resolve_connector_secret", { p_ref: ref });
-    if (error) throw new Error(`vault resolution failed for ref ${ref}: ${error.message}`);
-    return (data as Record<string, unknown> | null) ?? null;
-  },
 });
 
-async function resolveVaultSecret(vaultRef: string): Promise<{ user: string; password: string }> {
+async function resolveSecret(secretRef: string): Promise<{ user: string; password: string }> {
   // Resolved here, inside the service — the decrypted value never crosses
   // back over the Express -> service boundary, and Express never sees it:
-  // it only ever forwards the opaque vaultRef.
-  const data = await secretStore.get(vaultRef);
+  // it only ever forwards the opaque secretRef.
+  const data = await secretStore.get(secretRef);
   if (
     typeof data !== "object" ||
     data === null ||
     typeof (data as Record<string, unknown>).user !== "string" ||
     typeof (data as Record<string, unknown>).password !== "string"
   ) {
-    throw new Error(`vault secret ${vaultRef} is missing user/password`);
+    throw new Error(`secret ${secretRef} is missing user/password`);
   }
   return { user: (data as { user: string }).user, password: (data as { password: string }).password };
 }
@@ -138,10 +134,10 @@ function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): 
 
   // Build the promise and write it to the cache before any await runs —
   // that's what closes the race: every concurrent caller sees this same
-  // Entry, not just the one that happens to finish resolveVaultSecret last.
+  // Entry, not just the one that happens to finish resolveSecret last.
   const poolPromise = (async () => {
     const { host, port, database, ssl } = parsePostgresConfig(config);
-    const secret = await resolveVaultSecret(cred.vaultRef);
+    const secret = await resolveSecret(cred.vaultRef);
     const pool = new pg.Pool({
       host,
       port,
@@ -187,21 +183,21 @@ export async function getPool(cred: CredentialRef, config: ConnectorConfig): Pro
 
 /**
  * Fail-fast startup probe — every credential resolution on this service
- * goes through `resolveVaultSecret()` above, which reaches Supabase over
+ * goes through `resolveSecret()` above, which reaches Supabase over
  * `process.env.SUPABASE_URL`. If that URL isn't reachable from inside this
  * container (wrong host — e.g. a host-only `127.0.0.1`/`localhost` value
  * copied from a native `.env`, which inside a Docker container's network
  * namespace never routes to the host), every single `/introspect`,
  * `/test`, `/execute`, `/stage`, `/write` call would individually fail
  * with a generic `TypeError: fetch failed` — often minutes into a run,
- * once Vault resolution is finally attempted. Calling this once at process
- * start turns that into one clear, immediate failure instead. Hits Auth's
- * `/auth/v1/health` (no API key required, cheap, present on every Supabase
- * deployment — hosted or local) purely as a network-reachability probe;
- * it says nothing about the service-role key's validity, which is only
- * ever exercised by a real `resolve_connector_secret` call.
+ * once the nia_secrets lookup is finally attempted. Calling this once at
+ * process start turns that into one clear, immediate failure instead. Hits
+ * Auth's `/auth/v1/health` (no API key required, cheap, present on every
+ * Supabase deployment — hosted or local) purely as a network-reachability
+ * probe; it says nothing about the service-role key's validity, which is
+ * only ever exercised by a real nia_secrets/write_grants query.
  */
-export async function checkVaultReachable(): Promise<void> {
+export async function checkSupabaseReachable(): Promise<void> {
   const base = process.env.SUPABASE_URL ?? "";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
@@ -209,7 +205,7 @@ export async function checkVaultReachable(): Promise<void> {
     await fetch(`${base}/auth/v1/health`, { signal: controller.signal });
   } catch (err) {
     throw new Error(
-      `Cannot reach Supabase Vault at SUPABASE_URL="${base}": ${err instanceof Error ? err.message : String(err)}. ` +
+      `Cannot reach Supabase at SUPABASE_URL="${base}": ${err instanceof Error ? err.message : String(err)}. ` +
         `If this service runs in Docker and SUPABASE_URL points at 127.0.0.1/localhost, that address resolves to ` +
         `the container itself, not the host — use host.docker.internal (or a reachable network address) instead.`,
     );

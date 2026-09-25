@@ -66,8 +66,10 @@ services:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
+      # docs/plans/secret-storage.md — must be identical across apps/api and
+      # every connector service. Only used by lib/eval/sandbox.ts's
+      # golden-eval seeding (the worker's one secret-writing call site).
+      NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
       REDIS_URL: redis://redis:6379
       WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is required}
       NIA_GATEWAY_API_KEY: ${NIA_GATEWAY_API_KEY:?NIA_GATEWAY_API_KEY is required}

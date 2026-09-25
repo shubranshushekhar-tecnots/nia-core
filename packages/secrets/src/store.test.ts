@@ -7,8 +7,8 @@ import { createEnvKeySecretStore } from "./store.js";
  * Minimal fake of the slice of SupabaseClient's fluent query builder this
  * store actually calls (`.from().select().eq().maybeSingle()`,
  * `.from().insert().select().single()`, `.from().delete().eq()`) — a real
- * SupabaseClient needs a live Postgres connection, and dual-read/backfill
- * logic doesn't depend on anything Postgres-specific.
+ * SupabaseClient needs a live Postgres connection, and this logic doesn't
+ * depend on anything Postgres-specific.
  */
 function fakeClient(row: Record<string, unknown> | null) {
   const client = {
@@ -31,10 +31,10 @@ function fakeClient(row: Record<string, unknown> | null) {
   return client;
 }
 
-describe("createEnvKeySecretStore dual-read", () => {
+describe("createEnvKeySecretStore", () => {
   const masterKey = randomBytes(32).toString("base64");
 
-  it("resolves from nia_secrets when the row is present, without calling legacyResolve", async () => {
+  it("resolves from nia_secrets when the row is present", async () => {
     const secret = { user: "sales_ro", password: "hunter2" };
     const encrypted = encryptSecret(Buffer.from(masterKey, "base64"), 1, secret);
     const row = {
@@ -47,39 +47,15 @@ describe("createEnvKeySecretStore dual-read", () => {
       key_version: encrypted.keyVersion,
     };
 
-    const legacyResolve = vi.fn(async () => ({ user: "should-not-be-used" }));
-    const store = createEnvKeySecretStore({
-      client: fakeClient(row) as never,
-      masterKey,
-      legacyResolve,
-    });
+    const store = createEnvKeySecretStore({ client: fakeClient(row) as never, masterKey });
 
     const result = await store.get("abc");
 
     expect(result).toEqual(secret);
-    expect(legacyResolve).not.toHaveBeenCalled();
   });
 
-  it("falls back to legacyResolve when nia_secrets has no matching row", async () => {
-    const legacySecret = { user: "vault-only-user", password: "vault-pass" };
-    const legacyResolve = vi.fn(async () => legacySecret);
-    const store = createEnvKeySecretStore({
-      client: fakeClient(null) as never,
-      masterKey,
-      legacyResolve,
-    });
-
-    const result = await store.get("legacy-ref");
-
-    expect(result).toEqual(legacySecret);
-    expect(legacyResolve).toHaveBeenCalledWith("legacy-ref");
-  });
-
-  it("returns null when absent from nia_secrets and no legacyResolve is configured", async () => {
-    const store = createEnvKeySecretStore({
-      client: fakeClient(null) as never,
-      masterKey,
-    });
+  it("returns null when absent from nia_secrets", async () => {
+    const store = createEnvKeySecretStore({ client: fakeClient(null) as never, masterKey });
 
     const result = await store.get("missing-ref");
 

@@ -1,22 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectorConfig, CredentialRef } from "@nia/schemas";
+import { encryptSecret } from "@nia/secrets";
 
 // Fixed 32-byte test key for @nia/secrets' createEnvKeySecretStore, which
 // pool-manager.ts constructs at module load — must be set before the first
 // dynamic import() below.
-process.env.NIA_SECRET_MASTER_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+const MASTER_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+process.env.NIA_SECRET_MASTER_KEY = MASTER_KEY;
+
+function encryptedRow(secret: Record<string, unknown>) {
+  const encrypted = encryptSecret(Buffer.from(MASTER_KEY, "base64"), 1, secret);
+  return {
+    id: "vault-ref-1",
+    ciphertext: encrypted.ciphertext,
+    encrypted_data_key: encrypted.encryptedDataKey,
+    iv: encrypted.iv,
+    auth_tag: encrypted.authTag,
+    algorithm: encrypted.algorithm,
+    key_version: encrypted.keyVersion,
+  };
+}
 
 // Mock the external dependencies pool-manager.ts talks to over the
-// network: the Supabase RPC (legacy vault secret resolution), the
-// nia_secrets table read (dual-read — mocked here to always miss so
-// existing tests keep exercising the legacy RPC fallback path), and the
-// mongodb driver itself. Nothing here should ever touch a real socket.
+// network: the nia_secrets read (@nia/secrets's createEnvKeySecretStore,
+// via .from().select().eq().maybeSingle()) and the mongodb driver itself.
+// Nothing here should ever touch a real socket.
 
-const mockRpc = vi.fn();
-const mockMaybeSingle = vi.fn(async () => ({ data: null, error: null }));
+const mockMaybeSingle = vi.fn(async () => ({ data: encryptedRow({ user: "u", password: "p" }), error: null }));
 vi.mock("@supabase/supabase-js", () => ({
   createClient: () => ({
-    rpc: mockRpc,
     from: () => ({ select: () => ({ eq: () => ({ maybeSingle: mockMaybeSingle }) }) }),
   }),
 }));
@@ -58,7 +70,7 @@ async function freshPoolManager() {
 
 describe("connector-mongodb pool-manager", () => {
   beforeEach(() => {
-    mockRpc.mockReset().mockResolvedValue({ data: { user: "u", password: "p" }, error: null });
+    mockMaybeSingle.mockReset().mockResolvedValue({ data: encryptedRow({ user: "u", password: "p" }), error: null });
     connectMock.mockClear();
     closeMock.mockClear();
     constructedOptions.length = 0;
@@ -122,14 +134,14 @@ describe("connector-mongodb pool-manager", () => {
 
   it("removes the cache entry on a rejected resolve so the next call retries cleanly", async () => {
     const { getDb, poolCount } = await freshPoolManager();
-    mockRpc.mockReset().mockResolvedValueOnce({ data: null, error: { message: "vault unreachable" } });
+    mockMaybeSingle.mockReset().mockResolvedValueOnce({ data: null, error: { message: "network unreachable" } });
     const c = cred();
 
-    await expect(getDb(c, config)).rejects.toThrow("vault unreachable");
+    await expect(getDb(c, config)).rejects.toThrow("nia_secrets read failed");
     expect(poolCount()).toBe(0);
 
     // Next call should retry from scratch, not replay the cached rejection.
-    mockRpc.mockResolvedValue({ data: { user: "u", password: "p" }, error: null });
+    mockMaybeSingle.mockResolvedValue({ data: encryptedRow({ user: "u", password: "p" }), error: null });
     const db = await getDb(c, config);
     expect(db).toBeTruthy();
     expect(instanceCount).toBe(1);

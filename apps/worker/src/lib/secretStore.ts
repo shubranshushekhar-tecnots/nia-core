@@ -1,14 +1,9 @@
 import { CURRENT_KEY_VERSION, decryptSecret, encryptSecret, parseMasterKey, type EncryptedSecret, type SecretScope, type SecretStore } from "@nia/secrets";
-import type { WorkspaceScope } from "./workspaceScope.js";
-import type { WithUser } from "./withUser.js";
+import { withServiceRole } from "@nia/db";
+import type pg from "pg";
 import { env } from "../env.js";
 
 export type { SecretStore } from "@nia/secrets";
-
-/** apps/api's WorkspaceScope and @nia/secrets's SecretScope are the same shape by convention — this is the one place that assumes it. */
-export function toSecretScope(scope: WorkspaceScope): SecretScope {
-  return "orgId" in scope ? { orgId: scope.orgId } : { ownerId: scope.ownerId };
-}
 
 type NiaSecretRow = {
   id: string;
@@ -21,26 +16,27 @@ type NiaSecretRow = {
 };
 
 /**
- * apps/api's own SecretStore implementation, direct SQL against nia_secrets
- * via the caller's own withUser (RLS-scoped, same as every other table this
- * app touches — see 0032_nia_secrets.sql's grant to `authenticated`). Kept
- * separate from @nia/secrets's createEnvKeySecretStore (still SupabaseClient-
- * typed) because that factory is also used by apps/worker's backfill/verify
- * scripts and the connector services under a service-role client — this app
- * has no service-role key (env.ts's header comment) and never will, so its
- * own implementation only ever needs the authenticated-role path.
+ * apps/worker's own SecretStore implementation, direct SQL against
+ * nia_secrets via withServiceRole (RLS-bypassed — the worker has no live
+ * user JWT, same reasoning as dbPool.ts/client.ts elsewhere). Mirrors
+ * apps/api/src/lib/secretStore.ts's shape exactly, swapping withUser for
+ * withServiceRole; no legacy Vault fallback, since the worker's only
+ * secret-writing call site (lib/eval/sandbox.ts) is brand new and never
+ * had a Vault-era ref to read back.
  *
- * The decrypt_connector_secret_for_edit (0032) legacy fallback — for refs
- * that predated nia_secrets and only ever lived in Vault — was dropped once
- * every live ref was confirmed backfilled into nia_secrets; see
- * docs/decisions.md's Vault-removal entry.
+ * The worker previously never held NIA_SECRET_MASTER_KEY (see
+ * DEPLOYMENT.md: "not worker, which never decrypts a secret itself — it
+ * only forwards an opaque ref"). That's still true for read/dispatch, but
+ * writing a real nia_secrets row here means the ciphertext must be
+ * decryptable by whichever connector service resolves it later, so this
+ * one write path needs the same shared master key as api/connector-*.
  */
-export function getSecretStore(withUser: WithUser): SecretStore {
+export function getSecretStore(dbPool: pg.Pool): SecretStore {
   const masterKey = parseMasterKey(env.NIA_SECRET_MASTER_KEY);
 
   return {
     async get(ref) {
-      const { rows } = await withUser((db) =>
+      const { rows } = await withServiceRole(dbPool, (db) =>
         db.query<NiaSecretRow>(
           `select id, ciphertext, encrypted_data_key, iv, auth_tag, algorithm, key_version from nia_secrets where id = $1`,
           [ref],
@@ -59,12 +55,12 @@ export function getSecretStore(withUser: WithUser): SecretStore {
       return decryptSecret(masterKey, encrypted);
     },
 
-    async put(secret, scope) {
+    async put(secret, scope: SecretScope) {
       const encrypted = encryptSecret(masterKey, CURRENT_KEY_VERSION, secret);
       const orgId = "orgId" in scope ? scope.orgId : null;
       const ownerId = "ownerId" in scope ? scope.ownerId : null;
       try {
-        const { rows } = await withUser((db) =>
+        const { rows } = await withServiceRole(dbPool, (db) =>
           db.query<{ id: string }>(
             `insert into nia_secrets (ciphertext, encrypted_data_key, iv, auth_tag, algorithm, key_version, org_id, owner_id)
              values ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -92,7 +88,7 @@ export function getSecretStore(withUser: WithUser): SecretStore {
 
     async delete(ref) {
       try {
-        await withUser((db) => db.query(`delete from nia_secrets where id = $1`, [ref]));
+        await withServiceRole(dbPool, (db) => db.query(`delete from nia_secrets where id = $1`, [ref]));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new Error(`nia_secrets delete failed for ${ref}: ${message}`);

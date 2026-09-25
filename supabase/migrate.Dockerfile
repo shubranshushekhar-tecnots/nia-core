@@ -4,19 +4,13 @@
 # Run as a release step:
 #   docker run --rm -e DATABASE_URL="$DATABASE_URL" nia/migrate status
 #   docker run --rm -e DATABASE_URL="$DATABASE_URL" nia/migrate push
-# ('verify' is CI-only — it needs a git checkout with history, which this
-# image deliberately doesn't have. Run `pnpm run migrate:verify` directly
-# in CI instead — see scripts/migrate.sh.)
+#   docker run --rm -e DATABASE_URL="$DATABASE_URL" nia/migrate verify
+# No Supabase CLI — see scripts/migrate.mjs and docs/plans/local-dev.md for
+# why (this is the last release-pipeline dependency on it, now removed).
 FROM node:22-alpine
-RUN apk add --no-cache bash
 WORKDIR /workspace
-COPY package.json ./
-# Pinned to the version this repo is developed against (see CONVENTIONS.md /
-# `supabase --version`) — bump deliberately, not via a floating tag.
-RUN npm install supabase@2.117.0 --no-save
-ENV PATH="/workspace/node_modules/.bin:${PATH}"
-COPY supabase/config.toml supabase/config.toml
+RUN npm install pg@8.13.1 --no-save
 COPY supabase/migrations supabase/migrations
-COPY scripts/migrate.sh scripts/migrate.sh
-ENTRYPOINT ["bash", "scripts/migrate.sh"]
+COPY scripts/migrate.mjs scripts/migrate.mjs
+ENTRYPOINT ["node", "scripts/migrate.mjs"]
 CMD ["status"]

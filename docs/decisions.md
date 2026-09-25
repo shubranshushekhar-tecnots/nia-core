@@ -5488,3 +5488,145 @@ test). Live check: 9/9 steps passed.
 `apps/web` — no `package.json` entry, no remaining import anywhere in
 either app. `apps/worker` is unchanged from the prior migration (still
 kept alive only by dev/ops scripts, not `src/`).
+
+## Local dev: Supabase CLI → plain Postgres — close-out
+
+`docs/plans/local-dev.md`, Steps 2–4. Local development no longer needs
+the Supabase CLI at all — `docker compose up -d postgres` (a plain
+`postgres:17-alpine`, port 5434, pinned to major version 17 to match
+`supabase/config.toml`/production) replaces `supabase start` as the app
+database. This is the last piece of the "Nia Core is a plain Postgres
+host, not a Supabase customer" transition the Vault-removal,
+data-access, and auth migrations already did for the data/auth planes —
+this closes it for local dev tooling itself.
+
+**Why not just reuse `supabase start` locally forever.** It was still a
+real dependency for every contributor (CLI install, `supabase start`'s
+own Docker stack, GoTrue/PostgREST/Studio containers none of the app
+code uses anymore post the auth/data-access migrations) purely to get a
+Postgres instance — disproportionate for what's actually needed now.
+
+**Bootstrap (`docker/local-postgres-bootstrap.sql`, run once via
+`/docker-entrypoint-initdb.d/`).** A vanilla Postgres image is missing
+exactly what Supabase's own platform bootstrap silently provides outside
+the migrations folder: `pgcrypto` (migration 0001 already self-installs
+this, so not strictly the bootstrap's job, but confirmed present),
+`anon`/`authenticated`/`service_role` roles (`service_role` with
+`BYPASSRLS`, all three grantable to the `postgres` login role so
+`@nia/db`'s `withActingUser`/`withServiceRole` can `SET LOCAL ROLE` into
+them), a minimal `auth` schema (`auth.users` as an FK/trigger target for
+migrations 0001-0034 before `0035_better_auth.sql` repoints everything
+to `public.user`; `auth.uid()`/`auth.role()` resolving identity from the
+same `request.jwt.claims` GUC `withActingUser` already sets — the real,
+permanent mechanism, not a shim), and a `vault.secrets` stub table.
+
+Verified by hand against a genuinely vanilla `postgres:17-alpine`
+container (not Supabase's image, not the CLI) — three real bugs found
+and fixed, none of them present in the actual RLS policies/app code,
+all in the bootstrap itself:
+1. Migration `0033_count_vault_secrets_rpc.sql` fails at `CREATE
+   FUNCTION` time (`language sql`, validated eagerly, unlike the
+   `plpgsql` functions elsewhere that also mention `vault.*` but defer
+   validation to call time) — `relation "vault.secrets" does not exist`.
+   This is the **one genuine platform dependency** in the entire
+   37-migration chain, and it's already dead: `0037_drop_vault_rpcs.sql`
+   drops the function four migrations later, and no live code has called
+   it since the Vault-removal migration. Not worked around in the
+   migration file itself (migrations are forward-only/as-is, per the
+   plan) — the bootstrap's `vault.secrets` stub exists solely to satisfy
+   this one already-superseded function.
+2. `auth.uid()`/`auth.role()` raised `permission denied for schema auth`
+   for `authenticated`/`service_role`. User-created schemas grant no
+   privileges to `PUBLIC` by default (unlike Postgres's own `public`
+   schema) — Supabase's own `auth` schema grants `USAGE`/`EXECUTE`
+   implicitly; a vanilla image doesn't. Fixed with explicit `GRANT USAGE
+   ON SCHEMA auth` + `GRANT EXECUTE ON FUNCTION auth.uid()/auth.role()`.
+3. `service_role` (with `BYPASSRLS` already set) still got `permission
+   denied for table X` on ordinary reads/writes. `BYPASSRLS` only skips
+   row-level security, not object-level `GRANT`s — Supabase's platform
+   applies blanket `service_role` grants on `public` schema objects
+   outside the migrations folder; a vanilla image doesn't. Fixed with
+   `GRANT ALL ON ALL TABLES/SEQUENCES/ROUTINES IN SCHEMA public` +
+   matching `ALTER DEFAULT PRIVILEGES` so tables created by every
+   migration that runs after the bootstrap inherit it automatically.
+
+Re-verified end-to-end after each fix on a fresh container: all 37
+migrations apply, `auth.uid()`/`auth.role()` resolve correctly,
+RLS correctly scopes a read, `service_role` correctly bypasses RLS to
+write. No other Supabase-image dependency found.
+
+**Migration tool: a ~150-line custom `pg`-based runner
+(`scripts/migrate.mjs`), not a third-party framework.** Replaces the old
+`scripts/migrate.sh`, which shelled out to the Supabase CLI (`supabase
+migration list`/`supabase db push --db-url`) — the actual CLI dependency
+this whole step exists to remove from the release pipeline, not just
+local dev. Considered and rejected node-pg-migrate/dbmate/etc.: every
+off-the-shelf migration framework imposes its own file-naming or
+up/down-pair convention, which would mean rewriting
+`supabase/migrations/*.sql`, violating the plan's "import existing
+migrations as-is" requirement. `migrate.mjs` instead tracks a plain
+`public._migrations(version, name, checksum, applied_at)` table,
+applying `supabase/migrations/*.sql` verbatim in filename order inside a
+transaction per file. Three subcommands: `status` (applied vs. pending),
+`push` (apply pending, refusing first if any already-applied file's
+SHA-256 no longer matches what ran), `verify` (the same drift check,
+standalone — the CI dry-run gate). This checksum-based `verify` is
+strictly simpler than the old git-diff-based one it replaces: no `jq`,
+no git checkout/history requirement, no `MIGRATE_BASE_REF` — just
+`DATABASE_URL`, so it also runs unmodified via the containerized form
+(`supabase/migrate.Dockerfile`, now `FROM node:22-alpine` + `pg`, no
+Supabase CLI install at all). One off-the-shelf-tool feature deliberately
+not reimplemented: rollback/`down` migrations — this repo's migration
+compatibility rule (`DEPLOYMENT.md`) already requires every migration to
+be forward-only/additive-safe with the previous app version, so a `down`
+path was never part of the workflow being replaced.
+
+**Reconciling a database migrated before the tracking table existed.**
+The already-running local `postgres` container had migrations applied by
+hand during earlier development before `_migrations` existed, so
+`migrate.mjs status` initially showed all 37 as pending against a
+database that (partially, as it turned out — only migration 0001's
+tables were actually present) already had schema. Backfilling
+blindly would have been wrong; the fix was to inspect the real table set
+first (`\dt public.*`), delete/correct any backfilled tracking rows that
+didn't match reality, and only then run a real `migrate.mjs push` for
+the genuinely-pending migrations — never trust a tracking table without
+cross-checking it against the actual schema first.
+
+**Env cutover.** `DATABASE_URL` in the root `.env` and
+`apps/{api,worker,web}/.env`/`.env.local` now point at
+`postgresql://postgres:postgres@127.0.0.1:5434/postgres` (the
+docker-compose `postgres` service) instead of `supabase start`'s fixed
+`54322` port. `SUPABASE_URL`/`SUPABASE_*_KEY` are left as-is where they
+still exist (`apps/worker/.env`, root `.env` for the connector
+containers) — those are unrelated to `DATABASE_URL` and still used for
+the one remaining `@supabase/supabase-js` dependency (`packages/secrets`
++ the 3 connector services reaching `nia_secrets` via PostgREST, see
+`TODO.md`), not for anything Postgres-CLI-related.
+
+**Seeding** goes through the same real Better Auth path as
+production/CI: `apps/api/src/scripts/seedFixtureUsers.ts`
+(`pnpm --filter @nia/api seed:fixtures`), which calls
+`auth.api.signUpEmail()` per fixture — never raw SQL — so password
+hashes are always in Better Auth's own internal format. Idempotent
+(skips any email that already has a `public.user` row). Confirmed
+working end-to-end against the new local Postgres: all 12 fixtures
+(4 e2e personas + 8 RLS-probe identities) created successfully.
+
+**Verification (Step 3, kept lean, no destructive commands run):** fresh
+bootstrap → `migrate.mjs push` (37/37 applied) → `seed:fixtures` (12/12
+created) on the real local `postgres` container. All 49 RLS probes pass
+(`supabase/tests/rls_probes.sql`, wrapped in `begin;...rollback;` —
+nothing persisted). Full `pnpm -r typecheck`: 12/12 workspaces clean.
+Full `pnpm -r test`: every workspace with a test script passes (apps/web
+37, apps/api 56, apps/worker 205, connector-mongodb 29, connector-mysql
+25, connector-supabase 64, `@nia/db` 11, `@nia/secrets` 9, `@nia/schemas`
+906, `@nia/guardrails` 72 + 1 expected fail — 1,414 tests total, 0
+unexpected failures).
+
+**What's left, tracked in `TODO.md`.** The one genuine Supabase-image
+dependency (migration 0033's dead `vault.secrets` reference, satisfied
+by an empty stub table) and the last real `@supabase/supabase-js`
+dependency (`packages/secrets` + the 3 connector services' PostgREST
+access to `nia_secrets`/`write_grants`) — both already tracked, neither
+newly introduced by this migration.

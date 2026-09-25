@@ -350,8 +350,7 @@ export async function updateConnection(
   // report): the master key that would decrypt an existing secret never
   // reaches Postgres, so unlike the old merge_connector_secret RPC, the
   // decrypt + merge + re-encrypt all happen here in TypeScript via
-  // SecretStore. get() transparently falls back to
-  // decrypt_connector_secret_for_edit for a ref that predates nia_secrets.
+  // SecretStore.
   let newVaultRef: string | undefined;
   if (Object.keys(secretPatch).length > 0) {
     const secretStore = getSecretStore(withUser);

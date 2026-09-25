@@ -3,13 +3,7 @@ import { z } from "zod";
 
 /**
  * Fail fast on boot rather than surfacing a confusing runtime error the
- * first time a job touches Supabase or a connector service.
- *
- * Unlike apps/api/src/env.ts (which deliberately has NO service-role key —
- * see that file's comment), the worker DOES get one: it has no live user
- * JWT to build a per-request client from, and follows the same
- * service_role precedent workflow_runs already established (see
- * apps/worker/src/index.ts's header comment).
+ * first time a job touches the database or a connector service.
  *
  * CONNECTOR_DEV_HOST is a dev-only override for connectorClient.ts:
  * manifest.service.host is the Docker-internal address (e.g.
@@ -23,16 +17,21 @@ import { z } from "zod";
 const EnvSchema = z
   .object({
     NODE_ENV: z.string().default("development"),
-    SUPABASE_URL: z.string().url(),
-    SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
     /**
-     * Direct Postgres for @nia/db (docs/plans/data-access.md) — replaces
-     * the service-role Supabase client (supabaseClient.ts) for data access.
-     * Same connection apps/api uses; the worker always calls
-     * withServiceRole (never withActingUser — it has no live user JWT, see
-     * this file's header comment).
+     * Direct Postgres for @nia/db (docs/plans/data-access.md). Same
+     * connection apps/api uses; the worker always calls withServiceRole
+     * (never withActingUser — it has no live user JWT).
      */
     DATABASE_URL: z.string().min(1),
+    /**
+     * Envelope-encryption master key for nia_secrets (lib/secretStore.ts) —
+     * only used by lib/eval/sandbox.ts's golden-eval seeding, the worker's
+     * one and only secret-writing call site. Must be byte-for-byte
+     * identical to apps/api's and every connector-*'s copy (DEPLOYMENT.md),
+     * since a connector service has to be able to decrypt whatever this
+     * writes.
+     */
+    NIA_SECRET_MASTER_KEY: z.string().min(1),
     REDIS_URL: z.string().default("redis://localhost:6379"),
     CONNECTOR_DEV_HOST: z.string().optional(),
     /**

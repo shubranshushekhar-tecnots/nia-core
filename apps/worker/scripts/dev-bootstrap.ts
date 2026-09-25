@@ -28,6 +28,8 @@
  */
 import { createClient } from "@supabase/supabase-js";
 import { env } from "../src/env.js";
+import { getSecretStore } from "../src/lib/secretStore.js";
+import { dbPool } from "../src/lib/dbPool.js";
 
 if (!/^https?:\/\/(127\.0\.0\.1|localhost)/.test(env.SUPABASE_URL)) {
   throw new Error(
@@ -129,10 +131,13 @@ async function seedConnection(scope: Scope, connectorId: ConnectorId, installedB
     return existing.id as string;
   }
 
-  const { data: vaultRef, error: vaultError } = await supabase.rpc("create_connector_secret", {
-    p_secret: { user, password },
-  });
-  if (vaultError || !vaultRef) throw new Error(`vault write for ${connectorId} failed: ${vaultError?.message}`);
+  let vaultRef: string;
+  try {
+    vaultRef = await getSecretStore(dbPool).put({ user, password }, scope);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`secret write for ${connectorId} failed: ${message}`);
+  }
 
   const { data, error } = await supabase
     .from("connections")

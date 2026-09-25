@@ -73,14 +73,15 @@ describe("dispatchIntrospect", () => {
   });
 
   /**
-   * Bug fix: a vault-connectivity failure (the connector's resolveVaultSecret
-   * wraps a network error as "vault resolution failed for ref X: TypeError:
-   * fetch failed") used to surface a raw TypeError string straight to the UI.
-   * Now it maps to a plain-language headline while the raw connector text
-   * stays available in `details`.
+   * Bug fix: a secret-store-connectivity failure (the connector's
+   * resolveSecret, via @nia/secrets's createEnvKeySecretStore, wraps a
+   * network error as "nia_secrets read failed for ref X: TypeError: fetch
+   * failed") used to surface a raw TypeError string straight to the UI. Now
+   * it maps to a plain-language headline while the raw connector text stays
+   * available in `details`.
    */
-  it("maps a vault-unreachable failure to a plain-language message, keeping the raw text in details", async () => {
-    const rawMessage = "vault resolution failed for ref abc-123: TypeError: fetch failed";
+  it("maps a secret-store-unreachable failure to a plain-language message, keeping the raw text in details", async () => {
+    const rawMessage = "nia_secrets read failed for abc-123: TypeError: fetch failed";
     global.fetch = vi.fn(() =>
       Promise.resolve(new Response(JSON.stringify({ statusCode: 500, message: rawMessage }), { status: 500 })),
     ) as unknown as typeof fetch;

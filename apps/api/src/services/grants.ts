@@ -111,19 +111,19 @@ export async function createWriteGrant(
 }
 
 /**
- * Second step: stores the write credential in Vault (same
- * `create_connector_secret` RPC connections.ts's createConnection already
- * uses for read credentials) and attaches the resulting ref. Takes the raw
- * `{ user, password }` credential, not a pre-existing vault ref — the
- * browser never talks to Vault directly, same boundary as connection
- * creation. Fails (RPC raises) if the grant is already confirmed or already
- * revoked — 0016's deliberate non-idempotence; rotation is revoke + create
- * a new grant, not re-confirm.
+ * Second step: stores the write credential via SecretStore (same
+ * envelope-encrypted nia_secrets path connections.ts's createConnection
+ * already uses for read credentials) and attaches the resulting ref. Takes
+ * the raw `{ user, password }` credential, not a pre-existing ref — the
+ * browser never talks to the secret store directly, same boundary as
+ * connection creation. Fails (RPC raises) if the grant is already confirmed
+ * or already revoked — 0016's deliberate non-idempotence; rotation is
+ * revoke + create a new grant, not re-confirm.
  *
  * Before confirm_write_grant is ever called, the freshly-stored credential
  * is test-connected (same dispatchTest boundary connections.ts's
  * updateConnection uses — /test only ever accepts a CredentialRef, never
- * raw creds, so "store in Vault, then test" is the only order available).
+ * raw creds, so "store the secret, then test" is the only order available).
  * The credVersion passed to dispatchTest is a prediction of what
  * confirm_write_grant's RPC will assign (max existing cred_version for
  * this connection's write_grants, +1 — see
@@ -132,7 +132,7 @@ export async function createWriteGrant(
  * unconditionally right after so that ephemeral test pool never lingers
  * (connector-supabase's getPool/getWritePool key formats differ only by a
  * "write:" segment, and evict() strips both by connectionId prefix). A
- * failed test rolls the Vault write back via delete_connector_secret and
+ * failed test rolls the secret-store write back via secretStore.delete and
  * throws before confirm_write_grant is ever reached — an untested (or
  * bad) credential can never become the confirmed one.
  */

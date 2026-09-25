@@ -53,6 +53,8 @@ import { compilePushdown } from "@nia/schemas";
 import { dispatch } from "../../src/lib/dispatch.js";
 import { buildEtlReadQuery, buildFailurePreCheckQuery, MAX_CHUNK_ROWS } from "../../src/lib/etl/queryBuilder.js";
 import type { WorkspaceScope } from "../../src/lib/workspaceScope.js";
+import { getSecretStore } from "../../src/lib/secretStore.js";
+import { dbPool } from "../../src/lib/dbPool.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "http://127.0.0.1:54321";
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -129,10 +131,13 @@ async function seedConnection(dialect: SourceDialect): Promise<string> {
     return existing.id as string;
   }
 
-  const { data: vaultRef, error: vaultError } = await supabase.rpc("create_connector_secret", {
-    p_secret: { user: "nia_ro", password: "nia_ro_pw" },
-  });
-  if (vaultError || !vaultRef) throw new Error(`vault write for ${connectorId} failed: ${vaultError?.message}`);
+  let vaultRef: string;
+  try {
+    vaultRef = await getSecretStore(dbPool).put({ user: "nia_ro", password: "nia_ro_pw" }, { orgId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`secret write for ${connectorId} failed: ${message}`);
+  }
 
   const { data, error } = await supabase
     .from("connections")

@@ -26,6 +26,8 @@ import { MongoClient } from "mongodb";
 import { createClient } from "@supabase/supabase-js";
 import { dispatchWrite } from "../src/lib/writeDispatch.js";
 import type { WorkspaceScope } from "../src/lib/workspaceScope.js";
+import { getSecretStore } from "../src/lib/secretStore.js";
+import { dbPool } from "../src/lib/dbPool.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "http://127.0.0.1:54321";
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -91,10 +93,13 @@ async function seedConnection(
     .maybeSingle();
   if (existing) return existing.id as string;
 
-  const { data: vaultRef, error: vaultError } = await supabaseAdmin.rpc("create_connector_secret", {
-    p_secret: { user: "nia_ro", password: "nia_ro_pw" },
-  });
-  if (vaultError || !vaultRef) throw new Error(`vault write for read cred failed: ${vaultError?.message}`);
+  let vaultRef: string;
+  try {
+    vaultRef = await getSecretStore(dbPool).put({ user: "nia_ro", password: "nia_ro_pw" }, { orgId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`secret write for read cred failed: ${message}`);
+  }
 
   const { data, error } = await supabaseAdmin
     .from("connections")
@@ -115,16 +120,20 @@ async function seedConnection(
 }
 
 async function mintAndConfirmGrant(
+  orgId: string,
   supabaseUser: ReturnType<typeof createClient>,
   connectionId: string,
   schema: string,
   writeUser: string,
   writePassword: string,
 ): Promise<string> {
-  const { data: writeVaultRef, error: vaultError } = await supabaseAdmin.rpc("create_connector_secret", {
-    p_secret: { user: writeUser, password: writePassword },
-  });
-  if (vaultError || !writeVaultRef) throw new Error(`vault write for write cred failed: ${vaultError?.message}`);
+  let writeVaultRef: string;
+  try {
+    writeVaultRef = await getSecretStore(dbPool).put({ user: writeUser, password: writePassword }, { orgId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`secret write for write cred failed: ${message}`);
+  }
 
   const { data: grantRow, error: grantError } = await supabaseUser.rpc("create_write_grant", {
     p_connection_id: connectionId,
@@ -160,7 +169,7 @@ async function smokeMysql(orgId: string, supabaseUser: ReturnType<typeof createC
 
     const connectionId = await seedConnection(orgId, "mysql", "@mysql-write-smoke", "Write smoke (mysql)", CONTAINER_MYSQL);
     log(`Seeded connection: ${connectionId}`);
-    const grantId = await mintAndConfirmGrant(supabaseUser, connectionId, "sandbox", WRITE_USER, WRITE_PASSWORD);
+    const grantId = await mintAndConfirmGrant(orgId, supabaseUser, connectionId, "sandbox", WRITE_USER, WRITE_PASSWORD);
     log(`Confirmed write grant: ${grantId}`);
 
     const scope: WorkspaceScope = { orgId };
@@ -234,7 +243,7 @@ async function smokeMongo(orgId: string, supabaseUser: ReturnType<typeof createC
 
     const connectionId = await seedConnection(orgId, "mongodb", "@mongodb-write-smoke", "Write smoke (mongodb)", CONTAINER_MONGO);
     log(`Seeded connection: ${connectionId}`);
-    const grantId = await mintAndConfirmGrant(supabaseUser, connectionId, "sandbox", WRITE_USER, WRITE_PASSWORD);
+    const grantId = await mintAndConfirmGrant(orgId, supabaseUser, connectionId, "sandbox", WRITE_USER, WRITE_PASSWORD);
     log(`Confirmed write grant: ${grantId}`);
 
     const scope: WorkspaceScope = { orgId };

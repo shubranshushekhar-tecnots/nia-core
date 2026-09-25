@@ -102,8 +102,9 @@ A one-off release step — **never** runs on service startup (no service
 DATABASE_URL="postgresql://...(percent-encoded)..." pnpm run migrate:status  # applied vs pending
 DATABASE_URL="postgresql://...(percent-encoded)..." pnpm run migrate:push    # apply pending migrations
 ```
-Equivalent containerized form (no local Node/pnpm/Supabase CLI needed —
-useful for a release pipeline that only has `docker`):
+Equivalent containerized form (no local Node/pnpm needed — useful for a
+release pipeline that only has `docker`; no Supabase CLI involved
+anywhere in this — see `docs/decisions.md`):
 ```
 docker build -f supabase/migrate.Dockerfile -t $REGISTRY/nia-migrate:$TAG .
 docker run --rm -e DATABASE_URL="$DATABASE_URL" $REGISTRY/nia-migrate:$TAG status
@@ -111,9 +112,11 @@ docker run --rm -e DATABASE_URL="$DATABASE_URL" $REGISTRY/nia-migrate:$TAG push
 ```
 CI dry-run check — fails if a migration file that's already applied to
 `$DATABASE_URL` was modified in the current change (forward-only/additive
-is a hard rule here, see below; this makes it a checked gate). Needs `jq`
-and a real git checkout, so run it directly on the CI runner, not via the
-`migrate` image:
+is a hard rule here, see below; this makes it a checked gate). Compares a
+SHA-256 checksum of each file against what's recorded in `public.
+_migrations` at apply time — only needs `DATABASE_URL`, no git checkout or
+`jq`, so it also works via the `migrate` image above, not just on the CI
+runner directly:
 ```
 DATABASE_URL="..." pnpm run migrate:verify
 ```
@@ -132,9 +135,8 @@ should stay paired with.
 
 `packages/db` is the direct-Postgres data-access module (`pg` driver) that
 replaces PostgREST call sites — see `docs/plans/data-access.md`. It connects
-using `DATABASE_URL`, as the `postgres` role (the only role hosted Supabase
-exposes; `authenticator`, which PostgREST itself connects as, is never
-handed to customers). There is one pool per process, not one per role:
+using `DATABASE_URL`, as the `postgres` role (the login role every app
+service uses — never a customer-facing credential). There is one pool per process, not one per role:
 privilege narrowing to `authenticated` (real end-user calls, via
 `withActingUser`) or `service_role` (worker calls, via `withServiceRole`)
 happens per-transaction with `SET LOCAL ROLE`, which reverts automatically
@@ -153,10 +155,19 @@ separate `PGSSLMODE`-style env var to configure.
 
 ## Managed services needed
 
-- **Supabase** (hosted): Postgres + Auth + Vault. `SUPABASE_URL` /
-  `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` all come from the
-  hosted project's dashboard. `DATABASE_URL` (direct Postgres connection,
-  for migrations only) likewise.
+- **Postgres** (managed, e.g. Azure Database for PostgreSQL): a plain
+  Postgres 17 instance — Nia Core is no longer a Supabase customer, it's
+  just a Postgres host (see `docs/plans/local-dev.md`, `docs/decisions.md`).
+  `DATABASE_URL` is the only var required to reach it. A fresh instance
+  needs the same one-time bootstrap `docker/local-postgres-bootstrap.sql`
+  applies locally (`pgcrypto`; the `anon`/`authenticated`/`service_role`
+  roles, the latter with `BYPASSRLS`; a minimal `auth` schema with
+  `auth.uid()`/`auth.role()` resolving identity from the
+  `request.jwt.claims` GUC that `packages/db`'s `withActingUser` sets) —
+  run that file once against the managed instance before the first
+  `migrate:push`. Auth itself is Better Auth (`public.user`/`session`/
+  `account`/`verification` tables, created by migration
+  `0035_better_auth.sql`) — no separate hosted auth service.
 - **Redis**: the `redis:7-alpine` container in `docker-compose.prod.yml`
   is sufficient as-is, or point `REDIS_URL` at a managed Redis instead and
   drop the `redis` service from the compose file.

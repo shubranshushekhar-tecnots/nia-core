@@ -62,6 +62,8 @@ import { Redis } from "ioredis";
 import { createClient } from "@supabase/supabase-js";
 import { QUEUE_HEAVY, EtlRunJob, type GraphDoc } from "@nia/schemas";
 import { grantStagedPostgresWriteRole } from "./lib/stagedWriteRole.js";
+import { getSecretStore } from "../src/lib/secretStore.js";
+import { dbPool } from "../src/lib/dbPool.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKER_DIR = path.resolve(__dirname, "..");
@@ -290,8 +292,13 @@ async function seedConnection(
     return existing.id as string;
   }
 
-  const { data: vaultRef, error: vaultError } = await supabaseAdmin.rpc("create_connector_secret", { p_secret: readCred });
-  if (vaultError || !vaultRef) throw new Error(`vault write for ${connectorId} failed: ${vaultError?.message}`);
+  let vaultRef: string;
+  try {
+    vaultRef = await getSecretStore(dbPool).put(readCred, { orgId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`secret write for ${connectorId} failed: ${message}`);
+  }
 
   const { data, error } = await supabaseAdmin
     .from("connections")
@@ -389,11 +396,14 @@ async function seedWorkflow(orgId: string, sourceConnectionId: string, destConne
  * lock/unlock, checks going green) are proven separately by the E2E
  * Playwright test (Block 4 item a), not by this script.
  */
-async function createAndConfirmWriteGrant(destConnectionId: string): Promise<string> {
-  const { data: vaultRef, error: vaultError } = await supabaseAdmin.rpc("create_connector_secret", {
-    p_secret: { user: WRITE_ROLE_USER, password: WRITE_ROLE_PASSWORD },
-  });
-  if (vaultError || !vaultRef) throw new Error(`vault write for write cred failed: ${vaultError?.message}`);
+async function createAndConfirmWriteGrant(orgId: string, destConnectionId: string): Promise<string> {
+  let vaultRef: string;
+  try {
+    vaultRef = await getSecretStore(dbPool).put({ user: WRITE_ROLE_USER, password: WRITE_ROLE_PASSWORD }, { orgId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`secret write for write cred failed: ${message}`);
+  }
 
   const supabaseUser = createClient(SUPABASE_URL, ANON_KEY!, { auth: { persistSession: false, autoRefreshToken: false } });
   const { error: signInError } = await supabaseUser.auth.signInWithPassword({ email: DEMO_EMAIL, password: DEMO_PASSWORD });
@@ -411,7 +421,7 @@ async function createAndConfirmWriteGrant(destConnectionId: string): Promise<str
 
   const { error: confirmError } = await supabaseUser.rpc("confirm_write_grant", {
     p_grant_id: grantId,
-    p_write_credential_vault_ref: vaultRef as string,
+    p_write_credential_vault_ref: vaultRef,
   });
   if (confirmError) throw new Error(`confirm_write_grant failed: ${confirmError.message}`);
 
@@ -625,7 +635,7 @@ async function main(): Promise<void> {
   const workflowId = await seedWorkflow(orgId, sourceConnectionId, destConnectionId);
   log(`Seeded workflow ${workflowId} (source ${sourceConnectionId} -> dest ${destConnectionId}).`, artifact);
 
-  const grantId = await createAndConfirmWriteGrant(destConnectionId);
+  const grantId = await createAndConfirmWriteGrant(orgId, destConnectionId);
   log(`Created + confirmed write grant ${grantId} (scope: public).`, artifact);
 
   const runId = randomUUID();

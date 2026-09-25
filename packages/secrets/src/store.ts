@@ -16,11 +16,7 @@ export type SecretScope = { orgId: string } | { ownerId: string };
  * how encryptedDataKey is protected would change.
  */
 export interface SecretStore {
-  /**
-   * Resolves `ref` to its decrypted secret. Returns null if `ref` doesn't
-   * exist in nia_secrets AND no legacy fallback resolves it either (or none
-   * was configured) — never throws just because a ref predates this store.
-   */
+  /** Resolves `ref` to its decrypted secret. Returns null if `ref` doesn't exist in nia_secrets. */
   get(ref: string): Promise<Record<string, unknown> | null>;
   /** Envelope-encrypts `secret` and inserts a new nia_secrets row scoped to `scope`. Returns the new row's id. */
   put(secret: Record<string, unknown>, scope: SecretScope): Promise<string>;
@@ -51,13 +47,6 @@ export interface CreateEnvKeySecretStoreOptions {
   client: SupabaseClient;
   /** Raw NIA_SECRET_MASTER_KEY value; validated eagerly so a malformed key fails fast at store-construction time. */
   masterKey: string;
-  /**
-   * Dual-read fallback for refs that predate nia_secrets (Vault-only).
-   * apps/api passes decrypt_connector_secret_for_edit; connector services
-   * pass resolve_connector_secret. Omit once every ref has been migrated
-   * and the fallback is removed (TODO.md).
-   */
-  legacyResolve?: (ref: string) => Promise<Record<string, unknown> | null>;
 }
 
 /** The env-key SecretStore implementation: NIA_SECRET_MASTER_KEY from process env, backed by the nia_secrets table. */
@@ -88,9 +77,6 @@ export function createEnvKeySecretStore(opts: CreateEnvKeySecretStoreOptions): S
         return decryptSecret(masterKey, encrypted);
       }
 
-      if (opts.legacyResolve) {
-        return opts.legacyResolve(ref);
-      }
       return null;
     },
 

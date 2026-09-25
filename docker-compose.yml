@@ -2,6 +2,34 @@
 # The web app (apps/web) runs via `pnpm dev` on the host during development;
 # add it here (output: 'standalone' image) when you cut the self-host bundle.
 services:
+  # Local application database — replaces the Supabase CLI's local Postgres
+  # (docs/plans/local-dev.md). Version pinned to 17 to match
+  # supabase/config.toml's `major_version` (what production runs on Azure).
+  # On its own port (5434) so it doesn't clash with dev-postgres (5433, the
+  # connector sandbox DB below) or a native Postgres bound to 5432 on the
+  # host (see memory notes on this — always check for that first if a host
+  # client can't reach this container).
+  postgres:
+    image: postgres:17-alpine
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs once against a fresh (empty) data directory — see the file's
+      # own header for exactly what it provisions and why.
+      - ./docker/local-postgres-bootstrap.sql:/docker-entrypoint-initdb.d/local-postgres-bootstrap.sql:ro
+
   redis:
     image: redis:7-alpine
     ports:
@@ -15,9 +43,7 @@ services:
       dockerfile: services/connector-mysql/Dockerfile
     environment:
       PORT: 4010
-      # Vault read-only, via the single resolve_connector_secret RPC —
-      # see 0008_connector_secret_rpc.sql. This service never touches any
-      # other table with this key.
+      # nia_secrets (docs/plans/secret-storage.md) plus write_grants lookups.
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       # Phase 6 Block 5 — must match apps/worker/.env's copy exactly (worker
@@ -181,8 +207,9 @@ services:
 
 networks:
   nia-internal:
-    internal: true   # connector services talk to Vault/worker here, never the public net
+    internal: true   # connector services talk to worker here, never the public net
 
 volumes:
+  postgres-data:
   redis-data:
   langfuse-data:

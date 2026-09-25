@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { WithUser } from "../lib/withUser.js";
-import { decryptSecret, parseMasterKey } from "@nia/secrets";
+import { CURRENT_KEY_VERSION, decryptSecret, encryptSecret, parseMasterKey } from "@nia/secrets";
 import { createConnection, updateConnection } from "./connections.js";
 
 // getSecretStore (../lib/secretStore.js) does real envelope encryption
@@ -93,16 +93,26 @@ function parseSetClause(text: string, params: readonly unknown[]): Record<string
  * secretStore.ts no longer takes a SupabaseClient) — one fake in-memory
  * store per test, matching secretStore.ts's real nia_secrets SQL shapes
  * exactly: `... from nia_secrets where id = $1`, `insert into nia_secrets
- * (...) ... returning id`, `delete from nia_secrets where id = $1`, and the
- * legacy `select public.decrypt_connector_secret_for_edit($1)` fallback.
- * baseRow's "old-ref" is treated as a pre-migration ref never present in
- * nia_secrets, so a get() on it falls through to that legacy RPC, mirroring
- * secretStore.ts's real wiring exactly.
+ * (...) ... returning id`, `delete from nia_secrets where id = $1`.
+ * baseRow's "old-ref" is pre-seeded into the fake's nia_secrets table below
+ * (secretStore.ts no longer has a legacy-RPC fallback for pre-migration
+ * refs — every ref must already live in nia_secrets, per the Vault-removal
+ * backfill).
  */
 function createFakeWithUser(row: FakeConnectionRow) {
   const queries: { text: string; params: readonly unknown[] }[] = [];
   const secretRows = new Map<string, Record<string, unknown>>();
   let nextSecretId = 1;
+
+  const oldEncrypted = encryptSecret(TEST_MASTER_KEY, CURRENT_KEY_VERSION, { user: "old-user", password: "old-password" });
+  secretRows.set(row.vault_secret_ref, {
+    ciphertext: oldEncrypted.ciphertext,
+    encrypted_data_key: oldEncrypted.encryptedDataKey,
+    iv: oldEncrypted.iv,
+    auth_tag: oldEncrypted.authTag,
+    algorithm: oldEncrypted.algorithm,
+    key_version: oldEncrypted.keyVersion,
+  });
 
   const withUser: WithUser = (async (fn) =>
     fn({
@@ -133,9 +143,6 @@ function createFakeWithUser(row: FakeConnectionRow) {
           secretRows.delete(params[0] as string);
           return { rows: [] } as never;
         }
-        if (text.includes("decrypt_connector_secret_for_edit")) {
-          return { rows: [{ decrypt_connector_secret_for_edit: { user: "old-user", password: "old-password" } }] } as never;
-        }
         throw new Error(`unexpected query in fake: ${text}`);
       },
     })) as WithUser;
@@ -158,8 +165,9 @@ describe("updateConnection — edit flow", () => {
     });
 
     // An empty secretPatch means updateConnection never touches the
-    // SecretStore at all (see connections.ts's `if (Object.keys(secretPatch).length > 0)` guard).
-    expect(secretRows.size).toBe(0);
+    // SecretStore at all (see connections.ts's `if (Object.keys(secretPatch).length > 0)` guard)
+    // — secretRows still holds just the one pre-seeded row.vault_secret_ref entry.
+    expect(secretRows.size).toBe(1);
     expect(result.config).toMatchObject({ host: "new-host" });
     // config changed (host) -> cred_version still bumps and the pool is invalidated,
     // even though no secret field was touched.
@@ -176,12 +184,12 @@ describe("updateConnection — edit flow", () => {
     });
 
     // The merge-in-API path (docs/plans/secret-storage.md's update-path
-    // report): the old secret is read via legacyResolve (asserted via the
-    // decrypt_connector_secret_for_edit query below), merged with the
-    // patch in memory, and written as a brand-new nia_secrets row — decrypt
-    // it to confirm only "password" changed and "user" carried over.
-    expect(secretRows.size).toBe(1);
-    const [storedRow] = [...secretRows.values()] as [Record<string, unknown>];
+    // report): the old secret is read from nia_secrets (pre-seeded by
+    // createFakeWithUser under row.vault_secret_ref), merged with the patch
+    // in memory, and written as a brand-new nia_secrets row — decrypt it to
+    // confirm only "password" changed and "user" carried over.
+    expect(secretRows.size).toBe(2);
+    const storedRow = secretRows.get("secret-1") as Record<string, unknown>;
     const encrypted = {
       ciphertext: storedRow.ciphertext as string,
       encryptedDataKey: storedRow.encrypted_data_key as string,
@@ -191,7 +199,7 @@ describe("updateConnection — edit flow", () => {
       keyVersion: storedRow.key_version as number,
     };
     expect(decryptSecret(TEST_MASTER_KEY, encrypted)).toEqual({ user: "old-user", password: "new-password" });
-    expect(queries.some((q) => q.text.includes("decrypt_connector_secret_for_edit"))).toBe(true);
+    expect(queries.some((q) => q.text.includes("from nia_secrets where id") && q.params[0] === row.vault_secret_ref)).toBe(true);
     expect(dispatchInvalidate).toHaveBeenCalledTimes(1);
 
     const auditQuery = queries.find((q) => q.text.includes("log_connection_audit"));

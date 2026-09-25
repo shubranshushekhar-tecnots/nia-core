@@ -93,6 +93,8 @@ import {
 import { runEtl } from "../src/lib/etl/runEtl.js";
 import { proposeCleaning } from "../src/lib/clean/proposeCleaning.js";
 import type { WorkspaceScope } from "../src/lib/workspaceScope.js";
+import { getSecretStore } from "../src/lib/secretStore.js";
+import { dbPool } from "../src/lib/dbPool.js";
 
 // ============================================================
 // Credentials — read ONLY here, never logged.
@@ -241,10 +243,13 @@ async function getOrgId(): Promise<string> {
   return data.id as string;
 }
 
-async function createVaultSecret(user: string, password: string): Promise<string> {
-  const { data, error } = await supabaseAdmin.rpc("create_connector_secret", { p_secret: { user, password } });
-  if (error || !data) throw new Error(`vault write failed: ${error?.message}`);
-  return data as string;
+async function createVaultSecret(orgId: string, user: string, password: string): Promise<string> {
+  try {
+    return await getSecretStore(dbPool).put({ user, password }, { orgId });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`secret write failed: ${message}`);
+  }
 }
 
 async function ensureConnectorInstalled(orgId: string, connectorId: "supabase" | "postgres"): Promise<void> {
@@ -309,7 +314,7 @@ async function ensureWriteGrant(orgId: string, supabaseUser: ReturnType<typeof c
   if (findError) throw new Error(`write_grants lookup failed: ${findError.message}`);
   if (existing) return existing.id as string;
 
-  const destWriteVaultRef = await createVaultSecret(DEST_CONN.user, DEST_CONN.password);
+  const destWriteVaultRef = await createVaultSecret(orgId, DEST_CONN.user, DEST_CONN.password);
   const { data: grantRow, error: grantError } = await supabaseUser.rpc("create_write_grant", {
     p_connection_id: destConnId,
     p_scope: { schemas: ["public", "nia"] },
@@ -630,7 +635,7 @@ async function seedAppMetadata(): Promise<{ orgId: string; scope: WorkspaceScope
   const orgId = await getOrgId();
   const scope: WorkspaceScope = { orgId };
 
-  const srcVaultRef = await createVaultSecret(SRC_CONN.user, SRC_CONN.password);
+  const srcVaultRef = await createVaultSecret(orgId, SRC_CONN.user, SRC_CONN.password);
   const sourceConnId = await ensureConnection(
     orgId,
     "supabase",
@@ -639,7 +644,7 @@ async function seedAppMetadata(): Promise<{ orgId: string; scope: WorkspaceScope
     srcVaultRef,
   );
 
-  const destReadVaultRef = await createVaultSecret(DEST_CONN.user, DEST_CONN.password);
+  const destReadVaultRef = await createVaultSecret(orgId, DEST_CONN.user, DEST_CONN.password);
   const destConnId = await ensureConnection(
     orgId,
     "postgres",
