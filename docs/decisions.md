@@ -5682,3 +5682,78 @@ PostgreSQL's hostname carries no "pooler" marker at all, so a
 hostname-based check would have silently done nothing there even with a
 transaction-mode pooler in front of it — port is the portable signal,
 hostname isn't.
+
+## Company repo (`naslabs-ai/niacore`) gets squashed snapshots, not real history
+
+`origin` (`shubranshushekhar-tecnots/nia-core`) is the personal repo with the
+real commit history and stays the working remote. The company repo is a
+second remote, `company`, fed via a long-lived local `company-main` branch
+that only ever receives one squashed commit per update — never the real
+`main` history, and never a force-push.
+
+**Why:** an earlier attempt pushed a single orphan `Initial commit` straight
+to the company repo's `main` and then deleted that branch, so there was no
+shared ancestry to build on. Squashing sidesteps that permanently: each
+update is one new commit on `company-main`, hand-written message, no
+per-commit trailers or attribution metadata carried across (verified before
+this was set up: none of the local history has any — see the attribution
+check below).
+
+**Attribution check done before any of this was pushed:** all commits
+checked for `Co-Authored-By`/"Generated with Claude Code" trailers — none
+found. `~/.claude/settings.json` has `"includeCoAuthoredBy": false`. Repo-
+local `user.name`/`user.email` (which overrides the machine's global/personal
+identity) is the company identity, so this — not the identity of whatever
+produced a given commit — is what ends up as author on every `company-main`
+squash commit too, since `git commit` always resolves identity from the repo
+it's run in, regardless of branch. Tracked files were also grepped for
+`claude`/`anthropic`/personal-email hits: the only matches were legitimate
+product content (`NIA_GATEWAY_MODEL=anthropic/claude-sonnet-4-6` config,
+`.gitignore`'s `.claude/` entry, a landing-page brand-mark reference) — none
+needed removal.
+
+**One-time setup:**
+```bash
+git remote add company https://github.com/naslabs-ai/niacore.git
+
+git checkout main
+git checkout --orphan company-main
+git add -A
+git commit -m "Initial snapshot"
+
+# verify company-main's tree is a complete mirror of main's before pushing
+diff <(git ls-tree -r --name-only main | sort) <(git ls-tree -r --name-only company-main | sort)
+# no output = identical file lists
+
+git push company company-main:main
+git checkout main
+```
+
+**Every subsequent update** (one squashed commit per update, message written
+by hand):
+```bash
+git checkout company-main
+git merge --squash --allow-unrelated-histories main
+git commit -m "<message>"
+git push company company-main:main
+git checkout main
+```
+`--allow-unrelated-histories` is required every time — `company-main` never
+shares a merge-base with `main` by design (that's exactly what keeps
+per-commit trailers from crossing over: squash merge only stages a diff, it
+never imports the squashed commits' messages or metadata). The push is
+always a fast-forward on `company-main` → `main`, so force-push is never
+needed. Only ever commit to `company-main` through this squash-merge step —
+committing to it directly would make the next squash diff against drift
+instead of against `main`.
+
+No paths are excluded from what crosses over — `apps/web/src/components/
+landing`, `apps/web/src/lib/landing`, `packages/ui/src/theme.css`, and
+`supabase/migrations/0034_sales_leads.sql` were considered for exclusion at
+one point (another session was mid-work on the landing page) but were
+confirmed finished, live-wired, and (for the migration) already applied to
+production before this was set up — see this file's production-
+reconciliation entry above for the 0020-0037 batch. `designs/` is the one
+path that never crosses over, but only because it's already gitignored
+repo-wide (`.gitignore`'s `designs/` entry), not because of anything
+company-repo-specific.

@@ -23,6 +23,17 @@ packages/
   ui/                   # design tokens (theme.css) + shared UI
 ```
 
+## Remotes
+
+`origin` is the personal GitHub repo (`shubranshushekhar-tecnots/nia-core`) —
+full commit history lives there, and that's where day-to-day work happens.
+
+The company repo (`naslabs-ai/niacore`) is a separate `company` remote. It
+does **not** receive `main`'s real history — it only ever gets squashed
+snapshots pushed to a long-lived local `company-main` branch (one commit per
+update, message written by hand, no per-commit trailers carried across). See
+`docs/decisions.md` if the exact squash-merge commands are ever needed again.
+
 ## Prerequisites
 
 - Node.js + [pnpm](https://pnpm.io) (`corepack enable && corepack prepare pnpm@9.15.0 --activate`)
