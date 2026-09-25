@@ -28,6 +28,14 @@ function isApiPath(pathname: string): boolean {
  */
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // /dev is the hero-preview sandbox, not a real app route — must not be
+  // reachable once real customer data is in play. 404 rather than redirect
+  // so it doesn't even reveal the route exists.
+  if (process.env.NODE_ENV === "production" && pathname.startsWith("/dev")) {
+    return new NextResponse(null, { status: 404 });
+  }
+
   const hasSession = Boolean(getSessionCookie(request));
 
   if (!hasSession && !isPublicPath(pathname) && !isApiPath(pathname)) {

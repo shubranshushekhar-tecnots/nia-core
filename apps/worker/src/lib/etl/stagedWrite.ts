@@ -18,6 +18,7 @@ import {
   markStagingDropped,
   persistStagingTable,
 } from "./stagingRegistry.js";
+import { env } from "../../env.js";
 import type { WorkspaceScope } from "@nia/db";
 import type { DispatchResult } from "../errors.js";
 
@@ -169,6 +170,11 @@ export async function writeChunkRows(
 const QUARANTINE_COLUMNS = ["run_id", "dest_table", "step_id", "function", "input_value", "source_row"];
 const DEFAULT_QUARANTINE_ROW_CAP = 100_000;
 function quarantineRowCap(): number {
+  // Test-only override — refused outright in production, same convention
+  // as runEtl.ts's RESIDUAL_GROUP_CAP.
+  if (env.NODE_ENV === "production" && process.env.QUARANTINE_ROW_CAP) {
+    throw new Error("QUARANTINE_ROW_CAP must not be set when NODE_ENV=production — it is a test-only override");
+  }
   const raw = Number(process.env.QUARANTINE_ROW_CAP ?? "");
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_QUARANTINE_ROW_CAP;
 }

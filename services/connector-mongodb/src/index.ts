@@ -21,7 +21,7 @@ import {
 import { getDb, getWriteDb, evict, poolCount, verifyActiveWriteGrant, checkSupabaseReachable } from "./pool-manager.js";
 import { flattenDocuments } from "./flatten.js";
 import { resolveColumnType, serializeCellValue } from "./column-types.js";
-import { verifyWriteContext } from "./writeSignature.js";
+import { verifyWriteContext, HttpError } from "./writeSignature.js";
 import { buildBulkWriteOps } from "./writeOps.js";
 
 /**
@@ -219,14 +219,14 @@ app.post("/write", async (req): Promise<WriteResponse> => {
     body.context.signature,
     secret,
   );
-  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+  if (!signatureValid) throw new HttpError(401, "write context signature is invalid or expired");
 
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
     body.context.grantNamespace,
   );
-  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+  if (!grantActive) throw new HttpError(403, "no confirmed, unrevoked write grant covers this entity");
 
   const db = await getWriteDb(body.credential, body.config);
   const ops = buildBulkWriteOps(body.columns, body.upsertKeys, body.rows);
@@ -330,14 +330,14 @@ app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
     body.context.signature,
     secret,
   );
-  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+  if (!signatureValid) throw new HttpError(401, "write context signature is invalid or expired");
 
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
     body.context.grantNamespace,
   );
-  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+  if (!grantActive) throw new HttpError(403, "no confirmed, unrevoked write grant covers this entity");
 
   const db = await getWriteDb(body.credential, body.config);
   const existing = await db.listCollections({ name: body.entity.name }, { nameOnly: true }).toArray();
@@ -393,14 +393,14 @@ app.post("/drop-entity", async (req): Promise<DropEntityResponse> => {
     body.context.signature,
     secret,
   );
-  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+  if (!signatureValid) throw new HttpError(401, "write context signature is invalid or expired");
 
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
     body.context.grantNamespace,
   );
-  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+  if (!grantActive) throw new HttpError(403, "no confirmed, unrevoked write grant covers this entity");
 
   const db = await getWriteDb(body.credential, body.config);
   const existing = await db.listCollections({ name: body.entity.name }, { nameOnly: true }).toArray();
@@ -428,6 +428,22 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       app.log.error(err);
       process.exit(1);
     });
+
+  // Graceful shutdown: Fastify's close() stops accepting new connections
+  // and waits for in-flight requests to finish before resolving.
+  const shutdown = () => {
+    app.log.info("shutting down…");
+    app
+      .close()
+      .then(() => process.exit(0))
+      .catch((err) => {
+        app.log.error(err);
+        process.exit(1);
+      });
+    setTimeout(() => process.exit(1), 10_000).unref();
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 export { app };

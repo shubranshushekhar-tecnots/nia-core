@@ -283,6 +283,35 @@ count metrics once `api`/`worker` are actually migrated onto this module
 for `localhost`/`127.0.0.1`/Docker-internal hosts, TLS otherwise) — no
 separate `PGSSLMODE`-style env var to configure.
 
+## Scheduled jobs
+
+`worker` registers its own repeatable jobs in-process at boot via BullMQ's
+`upsertJobScheduler` (idempotent — keyed by a fixed schedulerId, so
+restarting `worker` never creates duplicates): the nightly golden-eval
+suite (`lib/eval/schedule.ts` — dev/CI only, refuses to register under
+`NODE_ENV=production`, see below) and the hourly staging sweep
+(`lib/etl/stagingSweepSchedule.ts`, cadence set by `STAGING_SWEEP_CRON`).
+As long as one `worker` replica is running, nothing further needs to be
+scheduled externally.
+
+If infra prefers to run the staging sweep as an external scheduled job
+instead (e.g. a k8s `CronJob`) rather than depend on the in-process
+schedule — for instance to decouple it from `worker`'s own uptime, or to
+get its own retry/alerting independent of the long-running process — the
+same sweep logic is available as a one-shot command:
+```
+docker run --rm --env-file .env $REGISTRY/nia-worker:$TAG node dist/cli/stagingSweep.js
+```
+(or, from a repo checkout with deps installed: `pnpm --filter @nia/worker
+run sweep:staging`). It exits `0` once the sweep completes (per-row
+skips/failures are logged, not fatal) and non-zero only if the sweep
+itself couldn't run (e.g. database unreachable). Safe to run concurrently
+with the in-process schedule or with itself — it only ever acts on
+`staging_objects` rows already >24h stale, and a row swept by one caller
+is simply absent for the other. Running it externally does **not** require
+disabling the in-process schedule; the two are redundant-safe, not
+mutually exclusive.
+
 ## Managed services needed
 
 - **Postgres** (managed, e.g. Azure Database for PostgreSQL): a plain

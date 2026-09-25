@@ -31,6 +31,7 @@ import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type { ChatQueryJob } from "@nia/schemas";
+import { env } from "../../env.js";
 import { runChatQuery } from "../chat/runChatQuery.js";
 import { recordScore, flushLangfuse } from "../observability/langfuse.js";
 import { GoldenCase } from "./goldenCase.js";
@@ -92,6 +93,11 @@ function contentIncludes(content: string, needle: string): boolean {
 }
 
 export async function runGoldenSuite(): Promise<EvalReport> {
+  // Refused even if an eval_run job somehow reaches a production worker
+  // (e.g. manually enqueued) — see schedule.ts, which is the primary gate.
+  if (env.NODE_ENV === "production") {
+    throw new Error("runGoldenSuite refused: NODE_ENV=production — this seeds the docker-compose sandbox DBs and is dev/CI only");
+  }
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const cases = loadGoldenCases();

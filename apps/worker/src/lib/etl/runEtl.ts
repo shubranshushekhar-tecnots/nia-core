@@ -54,6 +54,7 @@ import {
   lastStepForAssertions,
   type StagedWriteTarget,
 } from "./stagedWrite.js";
+import { env } from "../../env.js";
 
 /**
  * Orphaned-destination-table lifecycle fix — best-effort undo of a
@@ -140,6 +141,10 @@ async function fail(scope: WorkspaceScope, runId: string, nodeId: string, messag
  */
 const DEFAULT_RESIDUAL_GROUP_CAP = 100_000;
 function residualGroupCap(): number {
+  // Test-only override — refused outright in production.
+  if (env.NODE_ENV === "production" && process.env.RESIDUAL_GROUP_CAP) {
+    throw new Error("RESIDUAL_GROUP_CAP must not be set when NODE_ENV=production — it is a test-only override");
+  }
   const raw = Number(process.env.RESIDUAL_GROUP_CAP ?? "");
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_RESIDUAL_GROUP_CAP;
 }
@@ -1132,6 +1137,9 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   // no-op; apps/worker/scripts/kill-test.ts sets it to give a `kill -9` a
   // wide, deterministic target instead of guessing when a sub-millisecond
   // in-memory hop happens to land.
+  if (env.NODE_ENV === "production" && process.env.ETL_KILL_TEST_RACE_DELAY_MS) {
+    throw new Error("ETL_KILL_TEST_RACE_DELAY_MS must not be set when NODE_ENV=production — it is a kill-test-only override");
+  }
   const raceDelayMs = Number(process.env.ETL_KILL_TEST_RACE_DELAY_MS ?? 0);
   if (raceDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, raceDelayMs));
 

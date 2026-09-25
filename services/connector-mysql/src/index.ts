@@ -22,7 +22,7 @@ import {
   type DropEntityResponse,
 } from "@nia/schemas";
 import { getPool, getWritePool, evict, poolCount, verifyActiveWriteGrant, checkSupabaseReachable } from "./pool-manager.js";
-import { verifyWriteContext } from "./writeSignature.js";
+import { verifyWriteContext, HttpError } from "./writeSignature.js";
 import { buildUpsertSql, buildCreateTableSql, buildDropTableSql } from "./writeSql.js";
 import {
   buildCreateStagingSql,
@@ -224,14 +224,14 @@ app.post("/write", async (req): Promise<WriteResponse> => {
     body.context.signature,
     secret,
   );
-  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+  if (!signatureValid) throw new HttpError(401, "write context signature is invalid or expired");
 
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
     body.context.grantNamespace,
   );
-  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+  if (!grantActive) throw new HttpError(403, "no confirmed, unrevoked write grant covers this entity");
 
   const isQuarantineWrite =
     body.context.quarantineEntity !== null && entityMatches(body.entity, body.context.quarantineEntity);
@@ -335,7 +335,7 @@ app.post("/stage", async (req): Promise<StageResponse> => {
     body.context.signature,
     secret,
   );
-  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+  if (!signatureValid) throw new HttpError(401, "write context signature is invalid or expired");
 
   if (body.context.connectionId !== body.credential.connectionId) {
     throw new Error("signed context connectionId does not match the request credential");
@@ -361,7 +361,7 @@ app.post("/stage", async (req): Promise<StageResponse> => {
   }
 
   const grantActive = await verifyActiveWriteGrant(body.context.grantId, body.context.connectionId, body.context.grantNamespace);
-  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+  if (!grantActive) throw new HttpError(403, "no confirmed, unrevoked write grant covers this entity");
 
   const pool = await getWritePool(body.credential, body.config);
 
@@ -574,14 +574,14 @@ app.post("/create-entity", async (req): Promise<CreateEntityResponse> => {
     body.context.signature,
     secret,
   );
-  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+  if (!signatureValid) throw new HttpError(401, "write context signature is invalid or expired");
 
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
     body.context.grantNamespace,
   );
-  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+  if (!grantActive) throw new HttpError(403, "no confirmed, unrevoked write grant covers this entity");
 
   const pool = await getWritePool(body.credential, body.config);
   const conn = await pool.getConnection();
@@ -632,14 +632,14 @@ app.post("/drop-entity", async (req): Promise<DropEntityResponse> => {
     body.context.signature,
     secret,
   );
-  if (!signatureValid) throw new Error("write context signature is invalid or expired");
+  if (!signatureValid) throw new HttpError(401, "write context signature is invalid or expired");
 
   const grantActive = await verifyActiveWriteGrant(
     body.context.grantId,
     body.context.connectionId,
     body.context.grantNamespace,
   );
-  if (!grantActive) throw new Error("no confirmed, unrevoked write grant covers this entity");
+  if (!grantActive) throw new HttpError(403, "no confirmed, unrevoked write grant covers this entity");
 
   const pool = await getWritePool(body.credential, body.config);
   const conn = await pool.getConnection();
@@ -667,6 +667,22 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       app.log.error(err);
       process.exit(1);
     });
+
+  // Graceful shutdown: Fastify's close() stops accepting new connections
+  // and waits for in-flight requests to finish before resolving.
+  const shutdown = () => {
+    app.log.info("shutting down…");
+    app
+      .close()
+      .then(() => process.exit(0))
+      .catch((err) => {
+        app.log.error(err);
+        process.exit(1);
+      });
+    setTimeout(() => process.exit(1), 10_000).unref();
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 export { app };

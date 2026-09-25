@@ -13,7 +13,17 @@ import { env } from "../../env.js";
 
 const SCHEDULER_ID = "nightly-golden-eval";
 
+/**
+ * Never registered in production: the golden suite seeds connections against
+ * the docker-compose sandbox DBs (dev-mysql/dev-mongo/dev-postgres,
+ * hardcoded nia_ro/nia_ro_pw creds — see sandbox.ts) that don't exist outside
+ * local/CI. This is a dev/CI quality gate, not customer-facing behavior.
+ */
 export async function registerNightlyEvalSchedule(queue: Queue): Promise<void> {
+  if (env.NODE_ENV === "production") {
+    console.log("[eval] skipping nightly golden-eval schedule — dev/CI only, not registered in production");
+    return;
+  }
   await queue.upsertJobScheduler(
     SCHEDULER_ID,
     { pattern: env.EVAL_NIGHTLY_CRON },

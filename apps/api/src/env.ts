@@ -6,6 +6,7 @@ import { z } from "zod";
  * first time a route touches auth.
  */
 const EnvSchema = z.object({
+  NODE_ENV: z.string().default("development"),
   /**
    * Direct Postgres connection for @nia/db (docs/plans/data-access.md,
    * Step 3) and for @nia/auth's Better Auth instance (docs/plans/auth.md,
@@ -39,8 +40,11 @@ const EnvSchema = z.object({
   /**
    * Dev-only override for connectorDispatch.ts: manifest.service.host is the
    * Docker-internal address (e.g. "connector-mysql"), unreachable when
-   * apps/api runs on the host via `pnpm dev`. Unset in prod, where apps/api
-   * runs inside the compose network and the manifest host resolves directly.
+   * apps/api runs on the host via `pnpm dev`. Must never be set in
+   * production — a prod apps/api silently pointing at localhost instead of
+   * the real Docker-network service host is a bad, quiet failure mode, so
+   * this is refused outright at boot (see the `.refine()` below), same
+   * reasoning as apps/worker's copy of this var.
    */
   CONNECTOR_DEV_HOST: z.string().optional(),
   /** BullMQ producer + chat-event pub/sub subscriber, same as apps/worker. */
@@ -158,6 +162,10 @@ const EnvSchema = z.object({
    * `openssl rand -base64 32`. See DEPLOYMENT.md for rotation.
    */
   NIA_SECRET_MASTER_KEY: z.string().min(1),
+}).refine((e) => !(e.NODE_ENV === "production" && e.CONNECTOR_DEV_HOST), {
+  message:
+    "CONNECTOR_DEV_HOST must not be set when NODE_ENV=production — it overrides the connector service host to a dev-only address.",
+  path: ["CONNECTOR_DEV_HOST"],
 });
 
 export const env = EnvSchema.parse(process.env);

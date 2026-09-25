@@ -158,7 +158,11 @@ export async function checkSupabaseReachable(): Promise<void> {
     await fetch(`${base}/auth/v1/health`, { signal: controller.signal });
   } catch (err) {
     throw new Error(
-      `Cannot reach Supabase at SUPABASE_URL="${base}": ${err instanceof Error ? err.message : String(err)}. ` +
+      // Never interpolate the raw URL into a thrown/logged message — it's
+      // a connection URL, one of the categories the production-readiness
+      // pass requires stay out of logs, even though this particular one
+      // carries no embedded credentials.
+      `Cannot reach Supabase at SUPABASE_URL (value redacted from logs): ${err instanceof Error ? err.message : String(err)}. ` +
         `If this service runs in Docker and SUPABASE_URL points at 127.0.0.1/localhost, that address resolves to ` +
         `the container itself, not the host — use host.docker.internal (or a reachable network address) instead.`,
     );

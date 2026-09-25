@@ -4,6 +4,7 @@ import { getSchema } from "../../introspection.js";
 import { probeCardinality } from "../probeCardinality.js";
 import type { PlanStateType } from "../state.js";
 import { decideRetryOrRefuse } from "./shared.js";
+import { env } from "../../../env.js";
 
 /** Injected-I/O check (plan.ts's validatePlanFeasibility) — entity existence + aggregate row-cap breach. */
 export async function validateFeasibilityNode(state: PlanStateType): Promise<Partial<PlanStateType>> {
@@ -33,6 +34,10 @@ export async function validateFeasibilityNode(state: PlanStateType): Promise<Par
   // validated schema — same "not part of production config, only ever set
   // by an eval/test harness" convention as runEtl.ts's RESIDUAL_GROUP_CAP.
   // See plan.ts's PlanFeasibilityContext.residualGroupCap doc comment.
+  // Refused outright in production — never a legitimate value there.
+  if (env.NODE_ENV === "production" && process.env.PLAN_RESIDUAL_GROUP_CAP) {
+    throw new Error("PLAN_RESIDUAL_GROUP_CAP must not be set when NODE_ENV=production — it is a test-only override");
+  }
   const rawCapOverride = Number(process.env.PLAN_RESIDUAL_GROUP_CAP ?? "");
   const residualGroupCap = Number.isFinite(rawCapOverride) && rawCapOverride > 0 ? rawCapOverride : undefined;
 

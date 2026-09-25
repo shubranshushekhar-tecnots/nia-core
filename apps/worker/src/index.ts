@@ -20,6 +20,7 @@ import { profileEntity } from "./lib/profile/profileEntity.js";
 import { registerStagingSweepSchedule } from "./lib/etl/stagingSweepSchedule.js";
 import { sweepStaleStaging } from "./lib/etl/stagingSweeper.js";
 import { proposeCleaning } from "./lib/clean/proposeCleaning.js";
+import { env } from "./env.js";
 
 /**
  * Nia worker — the execution spine.
@@ -47,7 +48,7 @@ import { proposeCleaning } from "./lib/clean/proposeCleaning.js";
  *    on this queue rather than interactive.
  */
 
-const connection = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379", {
+const connection = new Redis(env.REDIS_URL, {
   maxRetriesPerRequest: null, // required by BullMQ
 });
 
@@ -201,6 +202,12 @@ for (const w of [interactive, heavy]) {
 
 async function shutdown() {
   console.log("shutting down workers…");
+  // Hard backstop: BullMQ's non-forced Worker.close() waits for the
+  // in-flight job handler to finish (the desired "let the current chunk
+  // complete" behavior), but a hung handler — e.g. a stuck connector
+  // dispatch — would otherwise block this Promise.all forever. Same
+  // pattern as apps/api and the connector services.
+  setTimeout(() => process.exit(1), 10_000).unref();
   await Promise.all([interactive.close(), heavy.close()]);
   await heavyQueue.close();
   await shutdownLangfuse();

@@ -80,9 +80,21 @@ app.use("/copilot-agent", copilotAgentRouter);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-app.listen(env.PORT, () => {
+const server = app.listen(env.PORT, () => {
   console.log(`[api] listening on :${env.PORT} (web origin: ${env.WEB_ORIGIN})`);
   // Best-effort, non-blocking: warns if a running connector container's
   // image predates its current source (see connectorFreshness.ts).
   void checkConnectorFreshness();
 });
+
+// Graceful shutdown: stop accepting new connections, let in-flight requests
+// (including any open SSE stream — chat.ts/runs.ts's res.write loops exit
+// on their own once the connection closes) drain naturally. A hard timeout
+// backstops a request that never finishes on its own.
+function shutdown() {
+  console.log("[api] shutting down…");
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

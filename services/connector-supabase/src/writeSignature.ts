@@ -31,6 +31,19 @@ export const WRITE_CONTEXT_MAX_AGE_MS = 60_000;
 /** Small forward allowance for clock skew between the worker and connector-supabase hosts. */
 const CLOCK_SKEW_MS = 5_000;
 
+/**
+ * Thrown for a specific HTTP status instead of a bare Error (which Fastify
+ * defaults to 500). Fastify's default error handler uses `error.statusCode`
+ * when present, so this alone is enough — no custom setErrorHandler needed.
+ */
+export class HttpError extends Error {
+  statusCode: number;
+  constructor(statusCode: number, message: string) {
+    super(message);
+    this.statusCode = statusCode;
+  }
+}
+
 export type WriteSignaturePayload = {
   connectionId: string;
   grantId: string;
