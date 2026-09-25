@@ -46,6 +46,35 @@ function entityMatches(a: WriteEntityRef, b: WriteEntityRef): boolean {
 }
 
 /**
+ * Bug fix: pg_namespace-first check, same pattern as /create-entity's
+ * schemaCheck below and /preflight's create-schema-nia check — shared by
+ * /stage and /write's quarantine-write branch so neither re-issues
+ * `CREATE SCHEMA IF NOT EXISTS "nia"` (which needs database-level CREATE)
+ * once the admin-run grant DDL has already created it for a role that
+ * only ever holds schema-scoped CREATE on "nia".
+ */
+async function checkNiaSchemaExists(queryable: { query: (sql: string) => Promise<{ rowCount: number | null }> }): Promise<boolean> {
+  const r = await queryable.query(`SELECT 1 FROM pg_namespace WHERE nspname = 'nia'`);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * Bug fix: `nia.nia_quarantine` is a single fixed table shared across every
+ * write grant on the same database (stagingRegistry.ts's
+ * deriveQuarantineEntity) — skip re-enabling RLS on it once it's already
+ * on, so a role that isn't its owner doesn't hit "must be owner of table
+ * nia_quarantine" (see stagingSql.ts's buildCreateQuarantineSql doc
+ * comment).
+ */
+async function checkQuarantineRlsEnabled(queryable: { query: (sql: string) => Promise<{ rows: unknown[] }> }): Promise<boolean> {
+  const r = await queryable.query(
+    `SELECT c.relrowsecurity AS enabled FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'nia' AND c.relname = 'nia_quarantine'`,
+  );
+  const row = r.rows[0] as { enabled: boolean } | undefined;
+  return Boolean(row?.enabled);
+}
+
+/**
  * connector-supabase — direct Postgres access (targets a Supabase project's
  * underlying Postgres, not its REST/PostgREST API). Same uniform contract as
  * connector-mysql/connector-mongodb: /test /introspect /execute /invalidate
@@ -319,7 +348,9 @@ app.post("/write", async (req): Promise<WriteResponse> => {
     const start = Date.now();
     const client = await pool.connect();
     try {
-      for (const sql of buildCreateQuarantineSql(body.entity)) await client.query(sql);
+      const schemaExists = await checkNiaSchemaExists(client);
+      const rlsAlreadyEnabled = await checkQuarantineRlsEnabled(client);
+      for (const sql of buildCreateQuarantineSql(body.entity, schemaExists, rlsAlreadyEnabled)) await client.query(sql);
       const sql = buildQuarantineInsertSql(body.entity, body.rows.length);
       const result = await client.query({ text: sql, values: body.rows.flat() });
       return { written: result.rowCount ?? 0, durationMs: Date.now() - start };
@@ -436,7 +467,8 @@ app.post("/stage", async (req): Promise<StageResponse> => {
   if (body.op === "create") {
     const client = await pool.connect();
     try {
-      for (const sql of buildCreateStagingSql(body.entity, body.stagingEntity)) await client.query(sql);
+      const schemaExists = await checkNiaSchemaExists(client);
+      for (const sql of buildCreateStagingSql(body.entity, body.stagingEntity, schemaExists)) await client.query(sql);
       // The apply op unconditionally UPDATEs the quarantine table (to mark
       // this run's pending rows committed) whenever a quarantineEntity is
       // set, even for a chunk/run that never actually quarantines a row —
@@ -450,7 +482,8 @@ app.post("/stage", async (req): Promise<StageResponse> => {
       // destination untouched. Idempotent (CREATE TABLE IF NOT EXISTS),
       // same as the staging table above.
       if (body.quarantineEntity) {
-        for (const sql of buildCreateQuarantineSql(body.quarantineEntity)) await client.query(sql);
+        const rlsAlreadyEnabled = await checkQuarantineRlsEnabled(client);
+        for (const sql of buildCreateQuarantineSql(body.quarantineEntity, schemaExists, rlsAlreadyEnabled)) await client.query(sql);
       }
     } finally {
       client.release();
@@ -558,15 +591,31 @@ app.post("/preflight", async (req): Promise<PreflightResponse> => {
   const pool = await getWritePool(body.credential, body.config);
   const checks: PreflightResponse["checks"] = [];
 
+  // Bug fix: Postgres checks the CREATE privilege *before* evaluating
+  // `IF NOT EXISTS`, so `CREATE SCHEMA IF NOT EXISTS "nia"` still fails
+  // with "permission denied for database" even when "nia" already exists,
+  // for a role that (by design — see docs/decisions.md's "Staging/
+  // quarantine writes in nia..." entry) only ever has schema-scoped
+  // `CREATE ON SCHEMA "nia"`, never database-level CREATE. The admin-run
+  // grant DDL (writeGrantStatement.ts) is what creates "nia" — this check
+  // must only ever query for its existence, never attempt to create it
+  // itself. Same pg_namespace-first pattern as /create-entity's schemaCheck
+  // below, for the destination schema.
+  let niaSchemaExists = false;
   try {
-    await pool.query('CREATE SCHEMA IF NOT EXISTS "nia"');
-    checks.push({ name: "create-schema-nia", ok: true });
+    const r = await pool.query(`SELECT 1 FROM pg_namespace WHERE nspname = 'nia'`);
+    niaSchemaExists = (r.rowCount ?? 0) > 0;
+    checks.push({
+      name: "create-schema-nia",
+      ok: niaSchemaExists,
+      message: niaSchemaExists ? undefined : `schema "nia" does not exist yet — the admin-run grant DDL creates it, this role never should`,
+      grantSql: niaSchemaExists ? undefined : `CREATE SCHEMA IF NOT EXISTS "nia"; GRANT USAGE, CREATE ON SCHEMA "nia" TO <role>;`,
+    });
   } catch (e) {
     checks.push({
       name: "create-schema-nia",
       ok: false,
       message: e instanceof Error ? e.message : "unknown error",
-      grantSql: "GRANT CREATE ON DATABASE current_database() TO <role>;",
     });
   }
 
@@ -708,6 +757,62 @@ app.post("/preflight", async (req): Promise<PreflightResponse> => {
   } catch (e) {
     checks.push({
       name: "nia-schema-rls-enabled",
+      ok: false,
+      message: e instanceof Error ? e.message : "unknown error",
+    });
+  }
+
+  // Bug fix: `nia.nia_quarantine` is one fixed table shared by every write
+  // grant on the same underlying database (stagingRegistry.ts's
+  // deriveQuarantineEntity), owned by whichever role created it. A second
+  // grant's role that only got scoped DML privileges (never ownership —
+  // see writeGrantStatement.ts/docs/decisions.md) would otherwise only find
+  // out it can't use the table mid-run, once a staged write actually tries
+  // to insert/update it. Detect the mismatch here instead, with the exact
+  // fix an owner/admin needs to run. A missing table is not a failure —
+  // nothing to guard until some run's first quarantine write creates it.
+  try {
+    const r = await pool.query(
+      `SELECT pg_get_userbyid(c.relowner) AS owner FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'nia' AND c.relname = 'nia_quarantine'`,
+    );
+    const tableExists = (r.rowCount ?? 0) > 0;
+    if (!tableExists) {
+      checks.push({ name: "quarantine-table-ownership", ok: true });
+    } else {
+      const owner = (r.rows[0] as { owner: string }).owner;
+      const privs = await Promise.all(
+        ["select", "insert", "update", "delete"].map(async (priv) => {
+          const pr = await pool.query(`SELECT has_table_privilege(current_user, 'nia.nia_quarantine', $1) AS ok`, [priv]);
+          return { priv, ok: Boolean((pr.rows[0] as { ok: boolean } | undefined)?.ok) };
+        }),
+      );
+      const missing = privs.filter((p) => !p.ok).map((p) => p.priv.toUpperCase());
+      const ok = missing.length === 0;
+      checks.push({
+        name: "quarantine-table-ownership",
+        ok,
+        message: ok
+          ? undefined
+          : `table "nia"."nia_quarantine" already exists, owned by role "${owner}" (not this role), and this role lacks ${missing.join(", ")} on it`,
+        // GRANT on a table requires being its owner (or holding GRANT OPTION).
+        // An admin/owner credential normally isn't a member of "${owner}"
+        // (the role that happened to create this table first), so it must
+        // assume that role first — drop the GRANT/SET ROLE/RESET ROLE lines
+        // below only if the admin credential already *is* "${owner}".
+        grantSql: ok
+          ? undefined
+          : [
+              `-- run as an admin/owner credential`,
+              `GRANT "${owner}" TO CURRENT_USER; -- skip this + the next 2 lines if you're already "${owner}"`,
+              `SET ROLE "${owner}";`,
+              `GRANT ${missing.join(", ")} ON "nia"."nia_quarantine" TO <role>;`,
+              `RESET ROLE;`,
+            ].join("\n"),
+      });
+    }
+  } catch (e) {
+    checks.push({
+      name: "quarantine-table-ownership",
       ok: false,
       message: e instanceof Error ? e.message : "unknown error",
     });

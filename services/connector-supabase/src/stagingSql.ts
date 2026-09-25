@@ -76,9 +76,19 @@ BEGIN
 END $$`;
 }
 
-export function buildCreateStagingSql(dest: WriteEntityRef, stagingEntity: WriteEntityRef): string[] {
+/**
+ * `schemaExists`: same reasoning as writeSql.ts's buildCreateTableSql —
+ * Postgres's `CREATE SCHEMA IF NOT EXISTS` still runs its database-level
+ * CREATE privilege check even when the schema already exists, but a
+ * write-grant role is only ever granted `CREATE ON SCHEMA "nia"` (see
+ * writeGrantStatement.ts), never database-level CREATE. The caller
+ * (index.ts's /stage and /write handlers) checks pg_namespace first and
+ * only asks for the CREATE SCHEMA statement when it's actually needed —
+ * see docs/decisions.md's "Staging/quarantine writes in nia..." entry.
+ */
+export function buildCreateStagingSql(dest: WriteEntityRef, stagingEntity: WriteEntityRef, schemaExists = false): string[] {
   return [
-    `CREATE SCHEMA IF NOT EXISTS ${quoteIdent(STAGING_SCHEMA)}`,
+    ...(schemaExists ? [] : [`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(STAGING_SCHEMA)}`]),
     revokeSchemaUsageSql(),
     // Follow-up item 2: LIKE's INCLUDING clauses are opt-in per Postgres's
     // own defaults, and GENERATED/IDENTITY are excluded unless named
@@ -99,9 +109,30 @@ export function buildDropStagingSql(stagingEntity: WriteEntityRef): string {
   return `DROP TABLE IF EXISTS ${qualifiedStagingTable(stagingEntity)}`;
 }
 
-export function buildCreateQuarantineSql(quarantineEntity: WriteEntityRef): string[] {
+/**
+ * `schemaExists`: see buildCreateStagingSql's doc comment above — same
+ * pg_namespace-first pattern, needed here too since this also unconditionally
+ * emitted `CREATE SCHEMA IF NOT EXISTS "nia"`.
+ *
+ * `rlsAlreadyEnabled`: `nia_quarantine` is a single fixed table shared by
+ * every write grant on the same underlying database (stagingRegistry.ts's
+ * deriveQuarantineEntity: "one fixed, long-lived quarantine table per
+ * destination connection/database — never per-run"), so it's normal for a
+ * SECOND grant's role to call this against a table a DIFFERENT role already
+ * created (and RLS-enabled). `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`
+ * requires being the table's owner — unconditionally re-running it here
+ * fails with "must be owner of table nia_quarantine" for any role that
+ * isn't the original creator. The admin-run grant DDL (writeGrantStatement.ts)
+ * now creates+RLS-enables this table once up front; the caller (index.ts)
+ * checks pg_class.relrowsecurity first and skips the ALTER when it's
+ * already on, same as it skips CREATE SCHEMA when the schema already
+ * exists. `CREATE TABLE IF NOT EXISTS` stays unconditional either way — it
+ * only needs CREATE on the schema (which every write role has), never
+ * ownership, so it's always a safe no-op once the table exists.
+ */
+export function buildCreateQuarantineSql(quarantineEntity: WriteEntityRef, schemaExists = false, rlsAlreadyEnabled = false): string[] {
   return [
-    `CREATE SCHEMA IF NOT EXISTS ${quoteIdent(STAGING_SCHEMA)}`,
+    ...(schemaExists ? [] : [`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(STAGING_SCHEMA)}`]),
     revokeSchemaUsageSql(),
     `CREATE TABLE IF NOT EXISTS ${qualifiedStagingTable(quarantineEntity)} (
       id bigint generated always as identity primary key,
@@ -114,7 +145,7 @@ export function buildCreateQuarantineSql(quarantineEntity: WriteEntityRef): stri
       status text not null default 'pending',
       created_at timestamptz not null default now()
     )`,
-    `ALTER TABLE ${qualifiedStagingTable(quarantineEntity)} ENABLE ROW LEVEL SECURITY`,
+    ...(rlsAlreadyEnabled ? [] : [`ALTER TABLE ${qualifiedStagingTable(quarantineEntity)} ENABLE ROW LEVEL SECURITY`]),
   ];
 }
 

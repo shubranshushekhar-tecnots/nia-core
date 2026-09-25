@@ -57,6 +57,21 @@ describe("staging SQL — nia schema RLS + grants preflight", () => {
     expect(statements).toContain('ALTER TABLE "nia"."nia_quarantine" ENABLE ROW LEVEL SECURITY');
   });
 
+  // Bug fix: nia_quarantine is a single fixed table shared by every write
+  // grant on the same database — a second grant's role is never its owner,
+  // so re-running CREATE SCHEMA (needs database-level CREATE) or ALTER
+  // TABLE ... ENABLE ROW LEVEL SECURITY (needs table ownership) against an
+  // already-provisioned "nia"/nia_quarantine fails for that role even
+  // though nothing is actually wrong. Once the caller (index.ts) has
+  // confirmed both already exist, neither statement should be emitted —
+  // only the harmless, ownership-free CREATE TABLE IF NOT EXISTS remains.
+  it("omits CREATE SCHEMA and ALTER TABLE ENABLE RLS once the caller confirms the schema exists and RLS is already on", () => {
+    const statements = buildCreateQuarantineSql(quarantineEntity, true, true);
+    expect(statements.some((s) => s.startsWith("CREATE SCHEMA"))).toBe(false);
+    expect(statements.some((s) => s.includes("ENABLE ROW LEVEL SECURITY"))).toBe(false);
+    expect(statements.some((s) => s.startsWith("CREATE TABLE IF NOT EXISTS"))).toBe(true);
+  });
+
   // Check item 1 (identity columns): staging is `LIKE dest INCLUDING
   // IDENTITY`, so a mapped column that's GENERATED ALWAYS AS IDENTITY on
   // dest is GENERATED ALWAYS AS IDENTITY on staging too — Postgres refuses

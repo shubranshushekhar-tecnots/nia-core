@@ -371,6 +371,36 @@ describe("connector-supabase /write (route-level)", () => {
   });
 });
 
+describe("connector-supabase /preflight (route-level)", () => {
+  const entity = { namespace: "sales", name: "orders" };
+
+  // Bug fix: Postgres checks the CREATE privilege *before* evaluating
+  // `IF NOT EXISTS`, so unconditionally issuing `CREATE SCHEMA IF NOT
+  // EXISTS "nia"` failed with "permission denied for database" for a role
+  // that only ever holds schema-scoped CREATE on "nia" (by design), even
+  // once "nia" already exists. The check must query pg_namespace and skip
+  // the CREATE SCHEMA attempt entirely when it does.
+  it("create-schema-nia passes by querying pg_namespace, without ever attempting CREATE SCHEMA, when \"nia\" already exists", async () => {
+    const { app } = await freshApp();
+    queryMock.mockImplementation(async (q: { text?: string } | string) => {
+      const text = typeof q === "string" ? q : q.text ?? "";
+      if (text.includes("pg_namespace WHERE nspname = 'nia'")) return { rows: [{ "?column?": 1 }], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/preflight",
+      payload: { credential: baseCredential, config: baseConfig, entity, upsertKeys: ["id"] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { checks: Array<{ name: string; ok: boolean }> };
+    expect(body.checks).toContainEqual({ name: "create-schema-nia", ok: true });
+    expect(queryMock).not.toHaveBeenCalledWith('CREATE SCHEMA IF NOT EXISTS "nia"');
+  });
+});
+
 describe("connector-supabase /stage (route-level)", () => {
   const entity = { namespace: "sales", name: "orders" };
   const columns = ["id", "total"];

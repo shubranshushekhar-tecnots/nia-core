@@ -74,6 +74,23 @@ export function buildGrantStatementText(
       `-- is this same schema (${namespace}) — see docs/decisions.md.`,
       `CREATE SCHEMA IF NOT EXISTS "nia";`,
       `GRANT USAGE, CREATE ON SCHEMA "nia" TO ${role};`,
+      `-- "nia"."nia_quarantine" is a single fixed table shared by every write`,
+      `-- grant on this database (never per-destination) — created here, once,`,
+      `-- under this admin/owner credential so no nia_write_* role ever needs`,
+      `-- to own it (only the DML privileges below).`,
+      `CREATE TABLE IF NOT EXISTS "nia"."nia_quarantine" (`,
+      `  id bigint generated always as identity primary key,`,
+      `  run_id uuid not null,`,
+      `  dest_table text not null,`,
+      `  step_id text not null,`,
+      `  function text not null,`,
+      `  input_value text,`,
+      `  source_row jsonb not null,`,
+      `  status text not null default 'pending',`,
+      `  created_at timestamptz not null default now()`,
+      `);`,
+      `ALTER TABLE "nia"."nia_quarantine" ENABLE ROW LEVEL SECURITY;`,
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON "nia"."nia_quarantine" TO ${role};`,
     ].join("\n");
   }
 
