@@ -311,7 +311,7 @@ describe("sendStageRequest", () => {
   });
 });
 
-function preflightRequest(): PreflightRequest {
+function preflightRequest(): Omit<PreflightRequest, "context"> {
   return {
     credential: { connectionId: credential.connectionId, credVersion: 1, vaultRef: "write-vault-ref" },
     config: {},

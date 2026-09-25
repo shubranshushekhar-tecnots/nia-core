@@ -132,8 +132,19 @@ migration entry) is envelope-encrypted under one shared master key,
 `NIA_SECRET_MASTER_KEY`: 32 random bytes, base64-encoded. It must be
 **byte-for-byte identical** across `api`, `connector-mysql`,
 `connector-mongodb`, and `connector-supabase` (not `worker`, which never
-decrypts a secret itself — it only forwards an opaque ref) — same
-distribution rule as `WRITE_DISPATCH_SIGNING_SECRET`.
+decrypts a secret itself — it only forwards an opaque ref).
+
+`WRITE_DISPATCH_SIGNING_SECRET` follows the same "byte-for-byte identical
+everywhere it's set" rule, but a different member list: `api`, `worker`,
+`connector-mysql`, `connector-mongodb`, and `connector-supabase` all need
+it — `api` and `worker` each sign a request-scoped HMAC context (the
+heavier `WriteContext` for `/write`/`/stage`/`/create-entity`/
+`/drop-entity`, worker-only; the lighter `ReadContext` for
+`/test`/`/introspect`/`/execute`/`/invalidate`/`/preflight`, both
+services, split by which of those routes each one actually calls — see
+`packages/schemas/src/contract.ts`'s `ReadContext`/`WriteContext` doc
+comments), and every connector independently re-verifies it before
+running anything.
 
 Generate one with:
 ```

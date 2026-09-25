@@ -23,26 +23,43 @@ async function freshApp() {
   toArrayMock.mockReset();
   aggregateMock.mockClear();
   collectionMock.mockClear();
+  process.env.WRITE_DISPATCH_SIGNING_SECRET = "a".repeat(32);
   const mod = await import("./index.js");
-  return mod.app;
+  const { signReadContext } = await import("./writeSignature.js");
+  return { app: mod.app, signReadContext };
 }
 
 const baseCredential = { connectionId: "11111111-1111-1111-1111-111111111111", credVersion: 1, vaultRef: "v1" };
 const baseConfig = { host: "localhost", port: 27017, database: "testdb" };
 
+function readContext(
+  signReadContext: (typeof import("./writeSignature.js"))["signReadContext"],
+  route: "test" | "introspect" | "execute" | "invalidate" | "preflight",
+  queryPayload: unknown = null,
+) {
+  const issuedAt = Date.now();
+  const signature = signReadContext(
+    { route, connectionId: baseCredential.connectionId, queryPayload: queryPayload === null ? null : JSON.stringify(queryPayload), issuedAt },
+    "a".repeat(32),
+  );
+  return { issuedAt, signature };
+}
+
 describe("connector-mongodb /execute (route-level)", () => {
   it("extracts collection/pipeline from a { kind: 'mongo' } payload and returns a readable executedQuery", async () => {
-    const app = await freshApp();
+    const { app, signReadContext } = await freshApp();
     toArrayMock.mockResolvedValue([{ _id: "1", total: 42 }]);
 
     const pipeline = [{ $match: { status: "paid" } }];
+    const query = { kind: "mongo" as const, collection: "orders", pipeline };
     const res = await app.inject({
       method: "POST",
       url: "/execute",
       payload: {
         credential: baseCredential,
         config: baseConfig,
-        query: { kind: "mongo", collection: "orders", pipeline },
+        query,
+        context: readContext(signReadContext, "execute", query),
       },
     });
 
@@ -58,15 +75,17 @@ describe("connector-mongodb /execute (route-level)", () => {
   });
 
   it("rejects a { kind: 'sql' } payload with a clear error instead of silently misreading it", async () => {
-    const app = await freshApp();
+    const { app, signReadContext } = await freshApp();
 
+    const query = { kind: "sql" as const, sql: "SELECT 1", params: [] };
     const res = await app.inject({
       method: "POST",
       url: "/execute",
       payload: {
         credential: baseCredential,
         config: baseConfig,
-        query: { kind: "sql", sql: "SELECT 1", params: [] },
+        query,
+        context: readContext(signReadContext, "execute", query),
       },
     });
 
@@ -97,7 +116,7 @@ const baseContext = {
 
 describe("connector-mongodb /stage (route-level)", () => {
   it("refuses staged mode with a message pointing to direct mode, without touching Mongo", async () => {
-    const app = await freshApp();
+    const { app } = await freshApp();
 
     const res = await app.inject({
       method: "POST",
@@ -124,12 +143,18 @@ describe("connector-mongodb /stage (route-level)", () => {
 
 describe("connector-mongodb /preflight (route-level)", () => {
   it("reports staged mode as unavailable", async () => {
-    const app = await freshApp();
+    const { app, signReadContext } = await freshApp();
 
     const res = await app.inject({
       method: "POST",
       url: "/preflight",
-      payload: { credential: baseCredential, config: baseConfig, entity: baseEntity, upsertKeys: ["id"] },
+      payload: {
+        credential: baseCredential,
+        config: baseConfig,
+        entity: baseEntity,
+        upsertKeys: ["id"],
+        context: readContext(signReadContext, "preflight"),
+      },
     });
 
     expect(res.statusCode).toBe(200);

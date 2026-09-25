@@ -53,29 +53,44 @@ async function freshApp() {
   verifyActiveWriteGrantMock.mockResolvedValue(true);
   process.env.WRITE_DISPATCH_SIGNING_SECRET = "a".repeat(32);
   const mod = await import("./index.js");
-  const { signWriteContext } = await import("./writeSignature.js");
-  return { app: mod.app, signWriteContext };
+  const { signWriteContext, signReadContext } = await import("./writeSignature.js");
+  return { app: mod.app, signWriteContext, signReadContext };
 }
 
 const baseCredential = { connectionId: "11111111-1111-1111-1111-111111111111", credVersion: 1, vaultRef: "v1" };
 const baseConfig = { host: "localhost", port: 3306, database: "testdb" };
 const baseGrantId = "22222222-2222-2222-2222-222222222222";
 
+function readContext(
+  signReadContext: (typeof import("./writeSignature.js"))["signReadContext"],
+  route: "test" | "introspect" | "execute" | "invalidate" | "preflight",
+  queryPayload: unknown = null,
+) {
+  const issuedAt = Date.now();
+  const signature = signReadContext(
+    { route, connectionId: baseCredential.connectionId, queryPayload: queryPayload === null ? null : JSON.stringify(queryPayload), issuedAt },
+    "a".repeat(32),
+  );
+  return { issuedAt, signature };
+}
+
 describe("connector-mysql /execute (route-level)", () => {
   it("extracts sql/params from a { kind: 'sql' } payload, queries the pool, and returns a readable executedQuery", async () => {
-    const { app } = await freshApp();
+    const { app, signReadContext } = await freshApp();
     queryMock.mockResolvedValue([
       [{ id: 1, name: "Ada" }],
       [{ name: "id" }, { name: "name" }],
     ]);
 
+    const query = { kind: "sql" as const, sql: "SELECT id, name FROM users WHERE id = ?", params: [1] };
     const res = await app.inject({
       method: "POST",
       url: "/execute",
       payload: {
         credential: baseCredential,
         config: baseConfig,
-        query: { kind: "sql", sql: "SELECT id, name FROM users WHERE id = ?", params: [1] },
+        query,
+        context: readContext(signReadContext, "execute", query),
       },
     });
 
@@ -95,15 +110,17 @@ describe("connector-mysql /execute (route-level)", () => {
   });
 
   it("rejects a { kind: 'mongo' } payload with a clear error instead of silently misreading it", async () => {
-    const { app } = await freshApp();
+    const { app, signReadContext } = await freshApp();
 
+    const query = { kind: "mongo" as const, collection: "orders", pipeline: [] };
     const res = await app.inject({
       method: "POST",
       url: "/execute",
       payload: {
         credential: baseCredential,
         config: baseConfig,
-        query: { kind: "mongo", collection: "orders", pipeline: [] },
+        query,
+        context: readContext(signReadContext, "execute", query),
       },
     });
 
@@ -188,7 +205,7 @@ describe("connector-mysql /write (route-level)", () => {
         context: { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, signature: "0".repeat(64), ...stagingFields },
       }),
     });
-    expect(res.statusCode).toBe(500);
+    expect(res.statusCode).toBe(401);
     expect(res.json().message).toMatch(/signature is invalid or expired/);
   });
 
@@ -196,7 +213,7 @@ describe("connector-mysql /write (route-level)", () => {
     const { app, signWriteContext } = await freshApp();
     verifyActiveWriteGrantMock.mockResolvedValue(false);
     const res = await app.inject({ method: "POST", url: "/write", payload: validPayload({ signWriteContext }) });
-    expect(res.statusCode).toBe(500);
+    expect(res.statusCode).toBe(403);
     expect(res.json().message).toMatch(/no confirmed, unrevoked write grant/);
     expect(queryMock).not.toHaveBeenCalled();
   });
