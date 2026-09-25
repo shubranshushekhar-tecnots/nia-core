@@ -1,66 +1,34 @@
-# Production topology: Nia's own services only. No dev sandbox databases
-# (those stay in docker-compose.yml), no local builds, no bind mounts —
-# every image is pulled by tag. Infra runs this with:
-#   docker compose --env-file .env.production -f docker-compose.prod.yml up -d
-# See .env.production.example (root) for the vars this file interpolates,
-# and DEPLOYMENT.md for the full walkthrough.
-#
-# Env var convention used throughout this file: only vars with NO default
-# in the app's own env schema (apps/api/src/env.ts, apps/worker/src/env.ts)
-# are listed here, and always as `${VAR:?VAR is required}` so `docker
-# compose` refuses to start rather than silently booting with an empty
-# value. Vars that DO have an app-side default (timeouts, cron patterns,
-# Langfuse keys, etc.) are deliberately left out of `environment:` blocks
-# entirely — an unset compose interpolation becomes an *empty string* in
-# the container, not an absent var, which breaks the app's zod
-# `z.coerce.number().default(...)` fallbacks (`Number("")` is `0`, not
-# `NaN`). Full reference of every optional var is in each service's
-# apps/*/.env.production.example / services/*/.env.production.example.
 services:
-  redis:
-    image: redis:7-alpine
+  niacore-api:
+    image: ${API_IMAGE_VERSION}
+    container_name: niacore-api
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    networks:
-      - internal
 
-  api:
-    image: ${REGISTRY:?REGISTRY is required}/nia-api:${TAG:?TAG is required}
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
+    env_file:
+      - .env
+
     environment:
-      # Direct Postgres for @nia/db (docs/plans/data-access.md) — apps/api
-      # migrates itself against this on container start (see
-      # apps/api/docker-entrypoint.sh); must be a direct/session connection,
-      # not a transaction pooler (scripts/migrate.mjs refuses those).
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
-      API_URL: ${API_URL:?API_URL is required}
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
-      WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN is required}
-      # docs/plans/secret-storage.md — must be identical across apps/api and
-      # every connector service below.
-      NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
-      # Nia Gateway (OpenAI-compatible AI gateway) — apps/api has no default
-      # for base URL/model (unlike apps/worker), so both are required here.
-      NIA_GATEWAY_API_KEY: ${NIA_GATEWAY_API_KEY:?NIA_GATEWAY_API_KEY is required}
-      NIA_GATEWAY_BASE_URL: ${NIA_GATEWAY_BASE_URL:?NIA_GATEWAY_BASE_URL is required}
-      NIA_GATEWAY_MODEL: ${NIA_GATEWAY_MODEL:?NIA_GATEWAY_MODEL is required}
-      PORT: 4001
-      REDIS_URL: redis://redis:6379
-      # CONNECTOR_DEV_HOST is intentionally never set here — it's a
-      # dev-only override (see apps/api/src/env.ts); this service runs
-      # inside the compose network where the real connector hostnames
-      # resolve directly.
+      - NODE_ENV=${NODE_ENV}
+      - PORT=4001
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - API_URL=${API_URL}
+      - WEB_ORIGIN=${WEB_ORIGIN}
+      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
+      - NIA_GATEWAY_API_KEY=${NIA_GATEWAY_API_KEY}
+      - NIA_GATEWAY_BASE_URL=${NIA_GATEWAY_BASE_URL}
+      - NIA_GATEWAY_MODEL=${NIA_GATEWAY_MODEL}
+
     ports:
       - "${API_PORT:-4001}:4001"
+
     networks:
-      - internal
+      - niacore-network
+
+    depends_on:
+      - niacore-redis
+
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -68,46 +36,55 @@ services:
       retries: 3
       start_period: 10s
 
-  worker:
-    image: ${REGISTRY:?REGISTRY is required}/nia-worker:${TAG:?TAG is required}
+  niacore-worker:
+    image: ${WORKER_IMAGE_VERSION}
+    container_name: niacore-worker
     restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-    environment:
-      NODE_ENV: production
-      # Direct Postgres for @nia/db (docs/plans/data-access.md) — same
-      # connection apps/api uses. The worker does NOT migrate itself (only
-      # apps/api does, see docker-entrypoint.sh); this is just its own data
-      # access connection.
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
-      # docs/plans/secret-storage.md — must be identical across apps/api and
-      # every connector service. Only used by lib/eval/sandbox.ts's
-      # golden-eval seeding (the worker's one secret-writing call site).
-      NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
-      REDIS_URL: redis://redis:6379
-      WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is required}
-      NIA_GATEWAY_API_KEY: ${NIA_GATEWAY_API_KEY:?NIA_GATEWAY_API_KEY is required}
-      # CONNECTOR_DEV_HOST is intentionally never set here — apps/worker's
-      # env.ts actively refuses to boot with NODE_ENV=production and this
-      # set, since it would silently redirect every connector dispatch to
-      # a dev-only address.
-    networks:
-      - internal
-    # No ports, no healthcheck — pure BullMQ consumer, no HTTP surface.
 
-  connector-mysql:
-    image: ${REGISTRY:?REGISTRY is required}/nia-connector-mysql:${TAG:?TAG is required}
-    restart: unless-stopped
+    env_file:
+      - .env
+
     environment:
-      PORT: 4010
-      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
-      WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is required}
-      # docs/plans/secret-storage.md — must match apps/api's copy exactly.
-      NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
+      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
+      - NIA_GATEWAY_API_KEY=${NIA_GATEWAY_API_KEY}
+
     networks:
-      - internal
+      - niacore-network
+
+    depends_on:
+      - niacore-redis
+
+  niacore-connector-mysql:
+    image: ${CONNECTOR_MYSQL_IMAGE_VERSION}
+    container_name: niacore-connector-mysql
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      - PORT=4010
+      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
+
+    # alias "connector-mysql" is a hard contract, not cosmetic: the worker/
+    # api dial connector host:port by the literal hostname hardcoded in
+    # packages/schemas/src/connectors/mysql.ts's service.host — that value
+    # never changes at deploy time (CONNECTOR_DEV_HOST is refused in prod,
+    # see apps/worker/src/env.ts's .refine()). Renaming this service without
+    # keeping the alias breaks connector dispatch + freshness checks with
+    # DNS resolution failures, regardless of the container_name above.
+    networks:
+      niacore-network:
+        aliases:
+          - connector-mysql
+
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4010/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -115,18 +92,27 @@ services:
       retries: 3
       start_period: 10s
 
-  connector-mongodb:
-    image: ${REGISTRY:?REGISTRY is required}/nia-connector-mongodb:${TAG:?TAG is required}
+  niacore-connector-mongodb:
+    image: ${CONNECTOR_MONGODB_IMAGE_VERSION}
+    container_name: niacore-connector-mongodb
     restart: unless-stopped
+
+    env_file:
+      - .env
+
     environment:
-      PORT: 4020
-      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
-      WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is required}
-      # docs/plans/secret-storage.md — must match apps/api's copy exactly.
-      NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
+      - PORT=4020
+      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
+
+    # alias contract — see niacore-connector-mysql's comment above.
     networks:
-      - internal
+      niacore-network:
+        aliases:
+          - connector-mongodb
+
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4020/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -134,18 +120,27 @@ services:
       retries: 3
       start_period: 10s
 
-  connector-supabase:
-    image: ${REGISTRY:?REGISTRY is required}/nia-connector-supabase:${TAG:?TAG is required}
+  niacore-connector-supabase:
+    image: ${CONNECTOR_SUPABASE_IMAGE_VERSION}
+    container_name: niacore-connector-supabase
     restart: unless-stopped
+
+    env_file:
+      - .env
+
     environment:
-      PORT: 4030
-      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
-      WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is required}
-      # docs/plans/secret-storage.md — must match apps/api's copy exactly.
-      NIA_SECRET_MASTER_KEY: ${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is required}
+      - PORT=4030
+      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
+
+    # alias contract — see niacore-connector-mysql's comment above.
     networks:
-      - internal
+      niacore-network:
+        aliases:
+          - connector-supabase
+
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4030/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -153,13 +148,40 @@ services:
       retries: 3
       start_period: 10s
 
+  niacore-redis:
+    image: redis:7-alpine
+    container_name: niacore-redis
+    restart: unless-stopped
+
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --timeout 0
+      --tcp-keepalive 60
+
+    volumes:
+      - niacore_redis_data:/data
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+    networks:
+      - niacore-network
+
+volumes:
+  niacore_redis_data:
+
 networks:
-  # Deliberately NOT `internal: true`. The connectors need real internet
-  # egress (to reach hosted Supabase and customer-owned source databases —
-  # see DEPLOYMENT.md's static-egress-IP note); a Docker `internal: true`
-  # network blocks ALL such egress, not just inbound reachability.
-  # "Internal-only" for every non-api service here is achieved purely by
-  # never publishing a `ports:` entry for them, which is sufficient and
-  # doesn't conflict with that egress requirement.
-  internal:
+  niacore-network:
     driver: bridge
+    enable_ipv6: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.29.0.0/16
+        - subnet: "2001:db8:3::/64"

@@ -740,3 +740,28 @@
   3 seeded ones and clears the shared workflow's `workflow_graphs` row
   before every run, rather than relying on manual cleanup like the one
   just done. Not implemented here — flagging for a follow-up pass.
+- **Schema: `0035_better_auth.sql`'s self-heal step can drop `NOT NULL`
+  on 6 provenance-only columns at migration time**, if (and only if)
+  the database being migrated has rows whose value in that column is
+  orphaned (no matching `public.user`/`auth.users` row at the time
+  0035 runs) — found while investigating a production readiness check
+  (2026-09-25), where production actually had this exact orphan state
+  on 3 of the 6. The 6 candidates, each guarded by its own pre-check so
+  a clean database keeps the constraint: `connections.owner_user_id`,
+  `connector_installs.installed_by_user_id`, `organizations.created_by`,
+  `projects.created_by`, `workflows.created_by`,
+  `write_grants.granted_by_user_id`. These were chosen over deleting
+  the row because RLS never gates access on them (confirmed by reading
+  every policy that touches these tables — they're checked only on
+  `INSERT`, e.g. `connections.owner_user_id`'s own inline comment:
+  "owner_user_id is provenance, not an access gate"), so the owning
+  row/resource is still live and usable; nulling the attribution column
+  is far less destructive than deleting a live connection, org,
+  project, workflow, or grant. If a column actually got relaxed on a
+  given database, `0035`'s output has a `RAISE NOTICE` naming the
+  column and row count. **Application code must still always set these
+  columns on insert** — the schema no longer enforces it, but nothing
+  in `apps/api`/`apps/worker` should ever knowingly insert a null here;
+  treat a null in one of these 6 columns as a signal that a row
+  predates its owner's user record being resolvable, not as a
+  supported/expected state going forward.

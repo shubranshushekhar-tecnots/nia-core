@@ -32,7 +32,15 @@ const EnvSchema = z
      * writes.
      */
     NIA_SECRET_MASTER_KEY: z.string().min(1),
-    REDIS_URL: z.string().default("redis://localhost:6379"),
+    /**
+     * `.min(1)` matters beyond documentation: docker-compose.prod.yml passes
+     * this through as `${REDIS_URL}` with no compose-side fallback, so an
+     * unset value becomes an empty string, not an absent key — `.default()`
+     * alone only fires on `undefined`, not `""`. Without `.min(1)` that
+     * would silently pass validation and only fail later, opaquely, on the
+     * first real Redis call.
+     */
+    REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
     CONNECTOR_DEV_HOST: z.string().optional(),
     /**
      * Phase 6 Block 2 — shared secret for the write-dispatch signed context

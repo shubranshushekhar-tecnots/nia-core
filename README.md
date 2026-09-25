@@ -17,6 +17,9 @@ packages/
   schemas/              # @nia/schemas — Zod: manifests, tabular shape,
                         # service contract, job payloads. The shared currency.
   guardrails/           # SQL validation / query guardrails
+  auth/                 # @nia/auth — Better Auth instance + session helpers
+  db/                   # @nia/db — direct Postgres data access (replaces PostgREST)
+  secrets/              # @nia/secrets — envelope encryption for connection/write-grant credentials
   ui/                   # design tokens (theme.css) + shared UI
 ```
 
@@ -42,7 +45,10 @@ docker compose up -d postgres redis dev-mysql dev-mongo dev-postgres \
 # first boot (roles, pgcrypto, the auth schema shim) — see docker-compose.yml.
 
 # 2. Apply migrations (supabase/migrations/*.sql, unmodified, tracked in
-#    public._migrations — see scripts/migrate.mjs)
+#    public._migrations — see scripts/migrate.mjs). Local-only step: the
+#    built `apps/api` Docker image migrates itself on container start
+#    instead (see DEPLOYMENT.md's "Migrations" section for that flow and
+#    for recovering a FAILED migration via `migrate:resolve`).
 DATABASE_URL="postgresql://postgres:postgres@localhost:5434/postgres" pnpm run migrate:push
 
 # 3. Env files — copy every .env.example, then fill in the values
@@ -78,6 +84,7 @@ Services and ports once running:
 ```bash
 pnpm --filter @nia/web typecheck   # or: pnpm -r typecheck  (all workspaces)
 pnpm -r test                       # unit tests, every workspace
+pnpm run scripts:test              # root-level scripts, e.g. scripts/migrate.mjs
 cd apps/web && PORT=3100 npx playwright test   # e2e (web app must be running)
 ```
 

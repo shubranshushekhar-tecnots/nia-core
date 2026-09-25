@@ -7,28 +7,63 @@ publishes images; infra owns hosting, orchestration, TLS, DNS, and scaling.
 
 | Service | Image / Dockerfile | Build context | Start command | Port | Health check | Internal-only |
 |---|---|---|---|---|---|---|
-| `api` | `apps/api/Dockerfile` → `${REGISTRY}/nia-api:${TAG}` | repo root | `docker-entrypoint.sh` (migrates, then `node dist/index.js`) | 4001 | `GET /health` | No — the only service that should be publicly reachable |
-| `worker` | `apps/worker/Dockerfile` → `${REGISTRY}/nia-worker:${TAG}` | repo root | `node dist/index.js` | — (no HTTP server; pure BullMQ consumer) | none (no HTTP surface) | Yes |
-| `connector-mysql` | `services/connector-mysql/Dockerfile` → `${REGISTRY}/nia-connector-mysql:${TAG}` | repo root | `node services/connector-mysql/dist/index.js` | 4010 | `GET /health` | Yes |
-| `connector-mongodb` | `services/connector-mongodb/Dockerfile` → `${REGISTRY}/nia-connector-mongodb:${TAG}` | repo root | `node services/connector-mongodb/dist/index.js` | 4020 | `GET /health` | Yes |
-| `connector-supabase` | `services/connector-supabase/Dockerfile` → `${REGISTRY}/nia-connector-supabase:${TAG}` | repo root | `node services/connector-supabase/dist/index.js` | 4030 | `GET /health` | Yes |
-| `redis` | `redis:7-alpine` (upstream, not built) | — | — | 6379 | `redis-cli ping` | Yes |
+| `niacore-api` | `apps/api/Dockerfile` → `${API_IMAGE_VERSION}` | repo root | `docker-entrypoint.sh` (migrates, then `node dist/index.js`) | 4001 | `GET /health` | No — the only service that should be publicly reachable |
+| `niacore-worker` | `apps/worker/Dockerfile` → `${WORKER_IMAGE_VERSION}` | repo root | `node dist/index.js` | — (no HTTP server; pure BullMQ consumer) | none (no HTTP surface) | Yes |
+| `niacore-connector-mysql` | `services/connector-mysql/Dockerfile` → `${CONNECTOR_MYSQL_IMAGE_VERSION}` | repo root | `node services/connector-mysql/dist/index.js` | 4010 | `GET /health` | Yes |
+| `niacore-connector-mongodb` | `services/connector-mongodb/Dockerfile` → `${CONNECTOR_MONGODB_IMAGE_VERSION}` | repo root | `node services/connector-mongodb/dist/index.js` | 4020 | `GET /health` | Yes |
+| `niacore-connector-supabase` | `services/connector-supabase/Dockerfile` → `${CONNECTOR_SUPABASE_IMAGE_VERSION}` | repo root | `node services/connector-supabase/dist/index.js` | 4030 | `GET /health` | Yes |
+| `niacore-redis` | `redis:7-alpine` (upstream, not built) | — | — | 6379 | `redis-cli ping` | Yes |
+
+Service keys, `container_name`, and image-version vars all carry the
+`niacore-` prefix; the one exception is the network alias each connector
+also publishes (`connector-mysql` etc, no prefix) — that alias is a
+hostname contract, see below, and must not be renamed.
 
 "Internal-only" means: no `ports:` published in `docker-compose.prod.yml`,
 so the service is unreachable from outside the Docker host. It does
 **not** mean no internet egress — see "Network requirements" below.
 
-Build each app/worker image from the repo root, e.g.:
+**Connector service hostnames are a contract, not a naming convenience.**
+`apps/api` and `apps/worker` never learn a connector's address from env or
+compose — the host/port are hardcoded per connector type in
+`packages/schemas/src/connectors/{mysql,mongodb,supabase,postgres}.ts`
+(e.g. `service: { host: "connector-mysql", port: 4010 }`), and the one
+override that exists (`CONNECTOR_DEV_HOST`) is dev-only — `apps/worker/src/
+env.ts`'s `.refine()` refuses to boot with it set under
+`NODE_ENV=production`. So in production, dispatch and freshness checks
+(`apps/worker/src/lib/connectorClient.ts`, `apps/api/src/lib/
+connectorFreshness.ts`) always resolve the literal hostnames
+`connector-mysql` / `connector-mongodb` / `connector-supabase` on the
+Docker network — regardless of what the compose service key or
+`container_name` is actually called. Any rename (e.g. a `niacore-`
+prefix convention) **must** keep those exact hostnames reachable via a
+network alias:
+```yaml
+networks:
+  niacore-network:
+    aliases:
+      - connector-mysql   # (or connector-mongodb / connector-supabase)
 ```
-docker build -f apps/api/Dockerfile    -t $REGISTRY/nia-api:$TAG    .
-docker build -f apps/worker/Dockerfile -t $REGISTRY/nia-worker:$TAG .
-docker build -f services/connector-mysql/Dockerfile     -t $REGISTRY/nia-connector-mysql:$TAG     .
-docker build -f services/connector-mongodb/Dockerfile   -t $REGISTRY/nia-connector-mongodb:$TAG   .
-docker build -f services/connector-supabase/Dockerfile  -t $REGISTRY/nia-connector-supabase:$TAG  .
+Renaming a connector service without adding this alias breaks every
+connector dispatch and freshness check with a DNS resolution failure —
+each container's own healthcheck will still pass (it only pings its own
+`/health`), so this failure mode is invisible until something actually
+tries to run a workflow.
+
+Build each image from the repo root and push it, tagging however your
+registry expects — these tags are exactly what you'll set as
+`API_IMAGE_VERSION` / `WORKER_IMAGE_VERSION` / etc. below, e.g.:
 ```
-Push, then run the stack:
+docker build -f apps/api/Dockerfile                     -t ghcr.io/your-org/nia-api:1.4.0                .
+docker build -f apps/worker/Dockerfile                  -t ghcr.io/your-org/nia-worker:1.4.0             .
+docker build -f services/connector-mysql/Dockerfile     -t ghcr.io/your-org/nia-connector-mysql:1.4.0    .
+docker build -f services/connector-mongodb/Dockerfile   -t ghcr.io/your-org/nia-connector-mongodb:1.4.0  .
+docker build -f services/connector-supabase/Dockerfile  -t ghcr.io/your-org/nia-connector-supabase:1.4.0 .
 ```
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+Push each, then copy `.env.production.example` to `.env` in the deploy
+directory, fill it in, and run the stack:
+```
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 `apps/api` and `apps/worker` images are built via `pnpm --filter=<pkg>
@@ -48,10 +83,27 @@ Full reference, one file per container, in this repo:
 - `services/connector-supabase/.env.production.example`
 
 Root `.env.production.example` is a *different* file: it's only the vars
-`docker-compose.prod.yml` itself interpolates (image registry/tag, the
-handful of required secrets shared across services). Copy it to
-`.env.production` (gitignored) and fill it in — that's what you pass to
-`docker compose --env-file`.
+`docker-compose.prod.yml` itself interpolates (image versions, the
+handful of required secrets shared across services). Copy it to `.env`
+(gitignored) in the deploy directory and fill it in.
+
+**This `.env` file is read twice by Compose**, for two different reasons,
+and it's easy to miss the second one: once automatically, to substitute
+every `${VAR}` in `docker-compose.prod.yml` itself (this is the standard
+behavior when a file literally named `.env` sits in the project
+directory — no `--env-file` flag needed), and once *per service*, because
+every service in the compose file also has `env_file: - .env`, which
+injects the same file's contents directly into that container's
+environment. Concretely: `${DATABASE_URL}` in the YAML's `environment:`
+block gets substituted from `.env`, and separately, the raw `.env` file
+is also mounted into the container as extra environment variables. Same
+file, two mechanisms, both required — if you ever split this into
+`.env.production` + a symlink, or pass `--env-file` pointing somewhere
+else, the YAML substitution still works but every service's `env_file:`
+silently stops finding anything and containers boot with only whatever
+`environment:` explicitly set. Keep it as one literal `.env` file and
+every variable `docker-compose.prod.yml` interpolates must be listed in
+it, full stop — there's no such thing as a compose-only var here.
 
 **Rule the compose file follows:** every var with no default in the app's
 own env schema is required (`${VAR:?VAR is required}` — compose refuses to
