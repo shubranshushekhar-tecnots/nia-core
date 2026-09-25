@@ -106,13 +106,23 @@ every variable `docker-compose.prod.yml` interpolates must be listed in
 it, full stop — there's no such thing as a compose-only var here.
 
 **Rule the compose file follows:** every var with no default in the app's
-own env schema is required (`${VAR:?VAR is required}` — compose refuses to
-start if it's unset) and is never hardcoded. Vars that already have a
-sensible built-in default (timeouts, cron schedules, optional Langfuse
-keys, etc.) are simply not passed through by the compose file at all —
-they're documented in each per-service `.env.production.example` for
-reference if you ever need to override one, but the shipped compose file
-relies on the app's own default.
+own env schema is required and passed through as a plain `${VAR}`
+interpolation, never hardcoded. Vars that already have a sensible
+built-in default (timeouts, cron schedules, optional Langfuse keys, etc.)
+are simply not passed through by the compose file at all — they're
+documented in each per-service `.env.production.example` for reference if
+you ever need to override one, but the shipped compose file relies on the
+app's own default.
+
+**Trade-off worth knowing:** these are plain `${VAR}` interpolations, not
+`${VAR:?VAR is required}` guards, so `docker compose up` itself never
+refuses to start over a missing variable — an unset var just interpolates
+to an empty string. Each container still fails fast on that empty value
+(the Zod schemas in `apps/api`/`apps/worker`, or the equivalent checks in
+each connector), but that means a missing variable shows up as a
+container that starts and then immediately crash-loops, not as Compose
+refusing to bring the stack up at all. Check `docker compose logs` for
+the specific container on any unexpected crash-loop after a deploy.
 
 ## Secret storage master key (`NIA_SECRET_MASTER_KEY`)
 
