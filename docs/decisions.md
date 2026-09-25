@@ -5683,69 +5683,38 @@ hostname-based check would have silently done nothing there even with a
 transaction-mode pooler in front of it — port is the portable signal,
 hostname isn't.
 
-## Company repo (`naslabs-ai/niacore`) gets squashed snapshots, not real history
+## Company repo (`naslabs-ai/niacore`): how `main` got there, and the branch cleanup
 
-`origin` (`shubranshushekhar-tecnots/nia-core`) is the personal repo with the
-real commit history and stays the working remote. The company repo is a
-second remote, `company`, fed via a long-lived local `company-main` branch
-that only ever receives one squashed commit per update — never the real
-`main` history, and never a force-push.
+`origin` (`shubranshushekhar-tecnots/nia-core`) is the personal repo; `company`
+is a second remote pointing at `naslabs-ai/niacore`. Both track `main`
+directly now — updates are a plain fast-forward push, `git push company
+main:main`, nothing more.
 
-**Why:** an earlier attempt pushed a single orphan `Initial commit` straight
-to the company repo's `main` and then deleted that branch, so there was no
-shared ancestry to build on. Squashing sidesteps that permanently: each
-update is one new commit on `company-main`, hand-written message, no
-per-commit trailers or attribution metadata carried across (verified before
-this was set up: none of the local history has any — see the attribution
-check below).
+**How this ended up possible.** An earlier attempt pushed a single orphan
+`Initial commit` straight to the company repo's `main` and then deleted that
+branch — a squash-merge workflow (via a `company-main` mirror branch) was
+built to work around the resulting lack of shared ancestry. That workflow
+turned out to be unnecessary: the orphan branch itself (then called
+`release-clean`) still existed locally, already sharing history with what
+was on `naslabs-ai/niacore` (it had in fact already been pushed there up to
+an earlier commit, `9dd9b92`), so a plain fast-forward push of the 4 pending
+commits (`git push company release-clean:main`) brought the company repo
+fully current — no squashing, no orphan dance, no force-push, ever needed
+for the `company` remote. The squash/`company-main` instructions that used
+to live here have been removed as unneeded.
 
 **Attribution check done before any of this was pushed:** all commits
 checked for `Co-Authored-By`/"Generated with Claude Code" trailers — none
 found. `~/.claude/settings.json` has `"includeCoAuthoredBy": false`. Repo-
 local `user.name`/`user.email` (which overrides the machine's global/personal
 identity) is the company identity, so this — not the identity of whatever
-produced a given commit — is what ends up as author on every `company-main`
-squash commit too, since `git commit` always resolves identity from the repo
-it's run in, regardless of branch. Tracked files were also grepped for
+produced a given commit — is what ends up as author on every commit here,
+since `git commit` always resolves identity from the repo it's run in,
+regardless of branch. Tracked files were also grepped for
 `claude`/`anthropic`/personal-email hits: the only matches were legitimate
 product content (`NIA_GATEWAY_MODEL=anthropic/claude-sonnet-4-6` config,
 `.gitignore`'s `.claude/` entry, a landing-page brand-mark reference) — none
 needed removal.
-
-**One-time setup:**
-```bash
-git remote add company https://github.com/naslabs-ai/niacore.git
-
-git checkout main
-git checkout --orphan company-main
-git add -A
-git commit -m "Initial snapshot"
-
-# verify company-main's tree is a complete mirror of main's before pushing
-diff <(git ls-tree -r --name-only main | sort) <(git ls-tree -r --name-only company-main | sort)
-# no output = identical file lists
-
-git push company company-main:main
-git checkout main
-```
-
-**Every subsequent update** (one squashed commit per update, message written
-by hand):
-```bash
-git checkout company-main
-git merge --squash --allow-unrelated-histories main
-git commit -m "<message>"
-git push company company-main:main
-git checkout main
-```
-`--allow-unrelated-histories` is required every time — `company-main` never
-shares a merge-base with `main` by design (that's exactly what keeps
-per-commit trailers from crossing over: squash merge only stages a diff, it
-never imports the squashed commits' messages or metadata). The push is
-always a fast-forward on `company-main` → `main`, so force-push is never
-needed. Only ever commit to `company-main` through this squash-merge step —
-committing to it directly would make the next squash diff against drift
-instead of against `main`.
 
 No paths are excluded from what crosses over — `apps/web/src/components/
 landing`, `apps/web/src/lib/landing`, `packages/ui/src/theme.css`, and
@@ -5757,3 +5726,25 @@ reconciliation entry above for the 0020-0037 batch. `designs/` is the one
 path that never crosses over, but only because it's already gitignored
 repo-wide (`.gitignore`'s `designs/` entry), not because of anything
 company-repo-specific.
+
+**Branch cleanup: consolidating on one `main`.** The `release-clean` orphan
+branch had originally been checked out from the pre-existing `main` at
+commit `42741b6` (`git checkout --orphan`), so its root commit is a byte-
+for-byte snapshot of `main`'s tree at that point (`git diff 42741b6
+<orphan-root>` is empty) — confirmed before doing anything below, so nothing
+from `main`'s prior 72-commit history is lost, only its own commit-by-commit
+shape. `main` itself never moved past `42741b6` after that snapshot was
+taken (0 commits either side vs. `origin/main` beyond the usual 2 ahead), so
+there was no divergence to reconcile. Consolidated as:
+```bash
+git branch -m main main-legacy      # old main's real history, kept for reference
+git branch -m release-clean main    # release-clean becomes the new main
+git push origin main-legacy:main-legacy   # archive old history on origin under a new name
+git push --force-with-lease origin main:main   # rewrite origin's main to match (manual step — check branch protection first)
+```
+`origin/main-legacy` now holds the pre-orphan history for anyone who needs to
+look back at the original 72-commit shape of `main`. The final
+`--force-with-lease` onto `origin`'s `main` is the one step here that's
+inherently destructive to `origin`'s ref history (old `main`'s commit-by-
+commit shape stops being reachable from any branch tip there) — done by hand
+after checking GitHub branch protection, not run automatically.

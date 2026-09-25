@@ -25,14 +25,19 @@ packages/
 
 ## Remotes
 
-`origin` is the personal GitHub repo (`shubranshushekhar-tecnots/nia-core`) —
-full commit history lives there, and that's where day-to-day work happens.
+`origin` is the personal GitHub repo (`shubranshushekhar-tecnots/nia-core`);
+`company` is `naslabs-ai/niacore`. Both track `main` directly — no squashing,
+no separate mirror branch. Bring `company` up to date with a normal
+fast-forward push:
 
-The company repo (`naslabs-ai/niacore`) is a separate `company` remote. It
-does **not** receive `main`'s real history — it only ever gets squashed
-snapshots pushed to a long-lived local `company-main` branch (one commit per
-update, message written by hand, no per-commit trailers carried across). See
-`docs/decisions.md` if the exact squash-merge commands are ever needed again.
+```bash
+git push company main:main
+```
+
+`origin`'s `main-legacy` branch holds the pre-orphan `main` history for
+reference (content-identical to the orphan root `main` was rebuilt from —
+nothing was lost, see `docs/decisions.md`). See that file for the full story
+of how the two repos ended up related this way.
 
 ## Prerequisites
 
