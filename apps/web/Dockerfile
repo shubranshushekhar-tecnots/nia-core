@@ -40,6 +40,14 @@ RUN addgroup -S nia && adduser -S nia -G nia
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
+# Next.js standalone's server.js binds to $HOSTNAME when set, and Docker
+# auto-sets HOSTNAME to the container id for every container — without this
+# override the server only listens on the container's own bridge IP, never
+# 127.0.0.1 or 0.0.0.0. That silently breaks this file's own HEALTHCHECK
+# below (which targets 127.0.0.1), which in turn stops niacore-proxy from
+# ever starting in docker-compose.prod.yml (it depends on niacore-web being
+# healthy). Same fix already applied to langfuse-server in docker-compose.yml.
+ENV HOSTNAME=0.0.0.0
 # Standalone output mirrors the outputFileTracingRoot-relative path
 # (repo-root-based), so the traced node_modules + apps/web/server.js land
 # under apps/web/ here. Static assets and public/ aren't included in

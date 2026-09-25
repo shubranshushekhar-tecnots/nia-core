@@ -31,7 +31,10 @@ function baseUrl(manifest: ConnectorManifest): string {
   // network. In local dev (apps/api runs on the host via `pnpm dev`, per
   // CONVENTIONS.md), CONNECTOR_DEV_HOST overrides just the host so the same
   // exposed "4010:4010" port mapping in docker-compose.yml is reachable.
-  const host = process.env.CONNECTOR_DEV_HOST ?? manifest.service.host;
+  // Reads the parsed `env` (env.ts normalizes "" -> undefined), not raw
+  // process.env — an empty-string override must fall through to
+  // manifest.service.host, not resolve to a host-less URL.
+  const host = env.CONNECTOR_DEV_HOST ?? manifest.service.host;
   return `http://${host}:${manifest.service.port}`;
 }
 

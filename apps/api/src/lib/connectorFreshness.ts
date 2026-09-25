@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CONNECTOR_MANIFESTS } from "@nia/schemas";
+import { env } from "../env.js";
 
 /**
  * Dev-time guard against the "stale connector image" failure mode: twice
@@ -60,7 +61,9 @@ export async function checkConnectorFreshness(): Promise<void> {
     services.set(manifest.service.host, manifest.service.port);
   }
 
-  const devHost = process.env.CONNECTOR_DEV_HOST;
+  // Parsed `env` (env.ts normalizes "" -> undefined), not raw process.env —
+  // see connectorDispatch.ts's baseUrl() for the same reasoning.
+  const devHost = env.CONNECTOR_DEV_HOST;
   await Promise.all(
     [...services.entries()].map(async ([serviceHost, port]) => {
       try {

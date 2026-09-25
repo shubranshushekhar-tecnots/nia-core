@@ -5849,3 +5849,65 @@ Both were only caught because the boot test ran the real production
 build/proxy stack and drove an actual sign-up through it — a reminder
 that `next dev` and a design read-through both silently pass on
 standalone-build-only and non-default-port-only behavior.
+
+## Release prep: Redis eviction policy, nginx resilience/limits, CI image publishing
+
+Four independent changes made together as release prep (`docs/plans/
+release-prep.md`), none altering runtime app code:
+
+**A. Redis `noeviction`, not `allkeys-lru`** (`docker-compose.prod.yml`).
+BullMQ (`apps/worker`) stores job state as plain Redis keys, not a cache —
+under `allkeys-lru`, Redis silently evicts a key instead of refusing the
+write once `maxmemory` is hit, which can drop a queued/in-flight job with no
+error surfaced anywhere. `noeviction` makes Redis reject the write instead,
+which is loud (OOM error) rather than silent.
+
+**B. `deploy/nginx/nginx.conf` — resilience + missing limit.**
+- Replaced the `upstream niacore_web { server niacore-web:3000; }` block
+  (resolved once at nginx startup and cached for the worker's lifetime) with
+  `resolver 127.0.0.11 valid=10s ipv6=off;` + `set $web http://niacore-web:
+  3000; proxy_pass $web;`, so nginx re-resolves the container's address
+  periodically instead of 502ing every request after `niacore-web` is
+  recreated (new container IP) until nginx itself is reloaded.
+- Added `X-Forwarded-Proto` passthrough via a `map` (`$fwd_proto`, falls
+  back to `$scheme` if absent) instead of hardcoding `$scheme` — this proxy
+  itself only ever speaks plain http, so hardcoding `$scheme` would always
+  forward `"http"` even behind a TLS-terminating load balancer that already
+  set the real `X-Forwarded-Proto`.
+- Added `client_max_body_size 50m;`. `apps/api` has no CSV/Excel upload
+  route or body-size limit configured as of this writing (confirmed: no
+  multer/xlsx/csv-parse dependency, no upload endpoint) — 50m is the plan's
+  documented fallback for that case, not a measured limit. Revisit this
+  value if/when an actual upload feature and its own limit ship.
+- Kept `proxy_set_header Host $http_host;`, `proxy_buffering off`, and the
+  1800s timeouts unchanged (see the entry above for why each exists).
+
+**C. `.github/workflows/images.yml` — new CI publishing pipeline.** Builds
+and pushes all six service images (`apps/api`, `apps/worker`, `apps/web`,
+and the three connectors) to `ghcr.io/<repo owner, lowercased>/niacore-
+<service>` on every `v*` tag push (or manual `workflow_dispatch` with an
+explicit `tag` input), `linux/amd64`, using only the built-in
+`GITHUB_TOKEN` — no separate registry credential to provision or rotate.
+Each connector image is smoke-checked in-job (`docker run` + `node -e`
+importing `@nia/secrets` and `@nia/db`) before the job is green, catching a
+broken/missing workspace dependency in the image at build time instead of
+as a runtime crash-loop after deploy (the actual failure mode the prior
+commit's "connector images missing `packages/db`" fix was responding to).
+Uses `type=gha` build cache, keyed per image so one service's cache miss
+doesn't invalidate another's.
+
+**D. Docs — tags now include the `v`.** `.env.production.example`'s
+example image tags and `DEPLOYMENT.md`'s manual `docker build` examples
+changed from bare `1.4.0` to `v1.4.0` to match what the tag-push trigger in
+(C) actually produces (`github.ref_name` on a `v*` tag push is the literal
+`v1.0.1`, not `1.0.1`). `DEPLOYMENT.md` gained a "Releasing" section
+documenting `git tag v1.0.1 && git push company v1.0.1` as the primary
+release path, with the manual per-image `docker build`/push commands kept
+as a documented fallback for local debugging or a non-ghcr.io registry.
+Image *names* (`niacore-connector-supabase`, not `-postgres`) were already
+correct as of the prior commit — no change needed there.
+
+Tested without Docker: `deploy/nginx/nginx.conf` syntax validated with a
+local Homebrew `nginx -t` (real nginx binary, no container); `.github/
+workflows/images.yml` validated with `actionlint` (zero findings); every
+workspace package typechecks clean (`pnpm typecheck`, 12/12 packages).

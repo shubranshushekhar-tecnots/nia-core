@@ -1,0 +1,105 @@
+# Builds and publishes every service's production image to ghcr.io.
+# See DEPLOYMENT.md for how the resulting tags plug into
+# .env.production.example (API_IMAGE_VERSION etc).
+#
+# To release: git tag v1.0.1 && git push company v1.0.1
+name: Build and push images
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to build and push (e.g. v1.0.1)"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: api
+            dockerfile: apps/api/Dockerfile
+            image: niacore-api
+            connector: false
+          - name: worker
+            dockerfile: apps/worker/Dockerfile
+            image: niacore-worker
+            connector: false
+          - name: web
+            dockerfile: apps/web/Dockerfile
+            image: niacore-web
+            connector: false
+          - name: connector-mysql
+            dockerfile: services/connector-mysql/Dockerfile
+            image: niacore-connector-mysql
+            connector: true
+          - name: connector-mongodb
+            dockerfile: services/connector-mongodb/Dockerfile
+            image: niacore-connector-mongodb
+            connector: true
+          - name: connector-supabase
+            dockerfile: services/connector-supabase/Dockerfile
+            image: niacore-connector-supabase
+            connector: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Tag exactly as pushed (github.ref_name for a tag push, e.g.
+      # "v1.0.1"); workflow_dispatch has no tag ref, so it takes an explicit
+      # input instead.
+      - name: Resolve tag and image owner
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG=${{ inputs.tag }}" >> "$GITHUB_ENV"
+          else
+            echo "TAG=${{ github.ref_name }}" >> "$GITHUB_ENV"
+          fi
+          echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          load: true
+          tags: |
+            ghcr.io/${{ env.OWNER }}/${{ matrix.image }}:${{ env.TAG }}
+            ghcr.io/${{ env.OWNER }}/${{ matrix.image }}:latest
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      # Connector images bundle @nia/secrets and @nia/db (see each
+      # Dockerfile's build stage); a broken/missing workspace dep here would
+      # otherwise only surface as a runtime crash-loop after deploy.
+      # -w must point at the service's own directory: pnpm only symlinks
+      # workspace deps (@nia/secrets, @nia/db) into that service's
+      # node_modules, never into the /repo root (the runtime stage's
+      # default WORKDIR) — running node -e from /repo fails module
+      # resolution even on a correctly-built image.
+      - name: Verify @nia/secrets and @nia/db are present
+        if: matrix.connector == true
+        run: |
+          docker run --rm -w "/repo/services/${{ matrix.name }}" "ghcr.io/${{ env.OWNER }}/${{ matrix.image }}:${{ env.TAG }}" \
+            node -e "import('@nia/secrets').then(()=>import('@nia/db')).then(()=>{console.log('ok');}).catch((e)=>{console.error(e);process.exit(1);})"

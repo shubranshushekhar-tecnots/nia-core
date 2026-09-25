@@ -45,8 +45,19 @@ const EnvSchema = z.object({
    * the real Docker-network service host is a bad, quiet failure mode, so
    * this is refused outright at boot (see the `.refine()` below), same
    * reasoning as apps/worker's copy of this var.
+   *
+   * Normalizes "" -> undefined: a compose override setting this to an
+   * empty string (the usual way to un-leak it from a shared `env_file`
+   * without deleting the key) must behave identically to it being fully
+   * unset, both for the production `.refine()` guard below and for every
+   * `env.CONNECTOR_DEV_HOST ?? manifest.service.host` fallback read
+   * elsewhere — an empty string previously survived as a real value and
+   * silently produced host-less URLs like "http://:4010/test".
    */
-  CONNECTOR_DEV_HOST: z.string().optional(),
+  CONNECTOR_DEV_HOST: z
+    .string()
+    .optional()
+    .transform((v) => (v === "" ? undefined : v)),
   /** BullMQ producer + chat-event pub/sub subscriber, same as apps/worker. */
   REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
   /**

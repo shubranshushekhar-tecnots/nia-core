@@ -1,6 +1,12 @@
+# Nia Core — production stack. One image per service, all built from the monorepo.
+# Required variables use ${VAR:?...}: if one is missing, `docker compose` stops
+# with a clear error instead of starting containers with blank values.
+# The database is managed Postgres (currently hosted on Supabase, used as plain
+# Postgres with no Supabase features), reached via DATABASE_URL. There is no DB container.
+
 services:
   niacore-api:
-    image: ${API_IMAGE_VERSION}
+    image: ${API_IMAGE_VERSION:?API_IMAGE_VERSION is not set in .env}
     container_name: niacore-api
     restart: unless-stopped
 
@@ -9,36 +15,37 @@ services:
 
     environment:
       - PORT=4001
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
-      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
-      - API_URL=${API_URL}
-      - WEB_ORIGIN=${WEB_ORIGIN}
-      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
-      - NIA_GATEWAY_API_KEY=${NIA_GATEWAY_API_KEY}
-      - NIA_GATEWAY_BASE_URL=${NIA_GATEWAY_BASE_URL}
-      - NIA_GATEWAY_MODEL=${NIA_GATEWAY_MODEL}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
+      - REDIS_URL=${REDIS_URL:?REDIS_URL is not set in .env}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is not set in .env}
+      - API_URL=${API_URL:?API_URL is not set in .env}
+      - WEB_ORIGIN=${WEB_ORIGIN:?WEB_ORIGIN is not set in .env}
+      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
+      - NIA_GATEWAY_API_KEY=${NIA_GATEWAY_API_KEY:?NIA_GATEWAY_API_KEY is not set in .env}
+      - NIA_GATEWAY_BASE_URL=${NIA_GATEWAY_BASE_URL:?NIA_GATEWAY_BASE_URL is not set in .env}
+      - NIA_GATEWAY_MODEL=${NIA_GATEWAY_MODEL:?NIA_GATEWAY_MODEL is not set in .env}
+      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
 
-    # No public port: niacore-proxy is the only publicly reachable service
-    # (docs/plans/web-container.md). apps/web reaches this container
-    # directly over niacore-network at http://niacore-api:4001
-    # (API_INTERNAL_URL, set on niacore-web below).
+    # No public port. Only niacore-proxy is public. The api runs database
+    # migrations at container start, then serves.
     networks:
       - niacore-network
 
     depends_on:
-      - niacore-redis
+      niacore-redis:
+        condition: service_healthy
 
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      # Longer start period: migrations run before the server starts.
+      start_period: 60s
 
   niacore-web:
-    image: ${WEB_IMAGE_VERSION}
+    image: ${WEB_IMAGE_VERSION:?WEB_IMAGE_VERSION is not set in .env}
     container_name: niacore-web
     restart: unless-stopped
 
@@ -47,40 +54,38 @@ services:
 
     environment:
       - PORT=3000
-      - DATABASE_URL=${DATABASE_URL}
-      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
-      - SITE_URL=${WEB_ORIGIN}
-      # Fixed Docker-network address, not env-configurable by infra — same
-      # hostname contract as the connector aliases below (DEPLOYMENT.md).
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is not set in .env}
+      - SITE_URL=${WEB_ORIGIN:?WEB_ORIGIN is not set in .env}
+      # Fixed Docker-network address (same contract as the connector aliases).
       - API_INTERNAL_URL=http://niacore-api:4001
 
     networks:
       - niacore-network
 
     depends_on:
-      - niacore-api
+      niacore-api:
+        condition: service_healthy
 
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health-web').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 20s
 
   niacore-proxy:
     image: nginx:alpine
     container_name: niacore-proxy
     restart: unless-stopped
 
+    # Public front door. Routes everything to niacore-web:3000; web reaches
+    # the api itself via its /api/backend rewrite. TLS terminates in front
+    # (load balancer) and must forward Host and X-Forwarded-Proto: https.
     volumes:
       - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
 
-    # Public entry point (docs/plans/web-container.md) — front door only,
-    # TLS termination point for infra to configure. Routes everything to
-    # niacore-web:3000; apps/web's own /api/backend/:path* rewrite (not
-    # this proxy) is what reaches niacore-api. Infra may swap this service
-    # for its own reverse proxy as long as it forwards to niacore-web:3000
-    # the same way and sets X-Forwarded-* headers (see deploy/nginx/nginx.conf).
     ports:
       - "${PROXY_PORT:-80}:80"
 
@@ -88,10 +93,11 @@ services:
       - niacore-network
 
     depends_on:
-      - niacore-web
+      niacore-web:
+        condition: service_healthy
 
   niacore-worker:
-    image: ${WORKER_IMAGE_VERSION}
+    image: ${WORKER_IMAGE_VERSION:?WORKER_IMAGE_VERSION is not set in .env}
     container_name: niacore-worker
     restart: unless-stopped
 
@@ -99,20 +105,26 @@ services:
       - .env
 
     environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
-      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
-      - NIA_GATEWAY_API_KEY=${NIA_GATEWAY_API_KEY}
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
+      - REDIS_URL=${REDIS_URL:?REDIS_URL is not set in .env}
+      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
+      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
+      - NIA_GATEWAY_API_KEY=${NIA_GATEWAY_API_KEY:?NIA_GATEWAY_API_KEY is not set in .env}
 
     networks:
       - niacore-network
 
+    # Waits for the api to be healthy, so migrations have finished before
+    # the worker touches the database.
     depends_on:
-      - niacore-redis
+      niacore-redis:
+        condition: service_healthy
+      niacore-api:
+        condition: service_healthy
 
   niacore-connector-mysql:
-    image: ${CONNECTOR_MYSQL_IMAGE_VERSION}
+    image: ${CONNECTOR_MYSQL_IMAGE_VERSION:?CONNECTOR_MYSQL_IMAGE_VERSION is not set in .env}
     container_name: niacore-connector-mysql
     restart: unless-stopped
 
@@ -121,17 +133,13 @@ services:
 
     environment:
       - PORT=4010
-      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
-      - DATABASE_URL=${DATABASE_URL}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
+      - NODE_ENV=production
+      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
+      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
 
-    # alias "connector-mysql" is a hard contract, not cosmetic: the worker/
-    # api dial connector host:port by the literal hostname hardcoded in
-    # packages/schemas/src/connectors/mysql.ts's service.host — that value
-    # never changes at deploy time (CONNECTOR_DEV_HOST is refused in prod,
-    # see apps/worker/src/env.ts's .refine()). Renaming this service without
-    # keeping the alias breaks connector dispatch + freshness checks with
-    # DNS resolution failures, regardless of the container_name above.
+    # The alias is a hard contract: api/worker dial "connector-mysql" by the
+    # hostname in packages/schemas/src/connectors/mysql.ts. Never remove it.
     networks:
       niacore-network:
         aliases:
@@ -145,7 +153,7 @@ services:
       start_period: 10s
 
   niacore-connector-mongodb:
-    image: ${CONNECTOR_MONGODB_IMAGE_VERSION}
+    image: ${CONNECTOR_MONGODB_IMAGE_VERSION:?CONNECTOR_MONGODB_IMAGE_VERSION is not set in .env}
     container_name: niacore-connector-mongodb
     restart: unless-stopped
 
@@ -154,11 +162,12 @@ services:
 
     environment:
       - PORT=4020
-      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
-      - DATABASE_URL=${DATABASE_URL}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
+      - NODE_ENV=production
+      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
+      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
 
-    # alias contract — see niacore-connector-mysql's comment above.
+    # Alias contract, see niacore-connector-mysql.
     networks:
       niacore-network:
         aliases:
@@ -172,7 +181,7 @@ services:
       start_period: 10s
 
   niacore-connector-supabase:
-    image: ${CONNECTOR_SUPABASE_IMAGE_VERSION}
+    image: ${CONNECTOR_SUPABASE_IMAGE_VERSION:?CONNECTOR_SUPABASE_IMAGE_VERSION is not set in .env}
     container_name: niacore-connector-supabase
     restart: unless-stopped
 
@@ -181,11 +190,12 @@ services:
 
     environment:
       - PORT=4030
-      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY}
-      - DATABASE_URL=${DATABASE_URL}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET}
+      - NODE_ENV=production
+      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
+      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
 
-    # alias contract — see niacore-connector-mysql's comment above.
+    # Alias contract, see niacore-connector-mysql. Serves Postgres and Supabase.
     networks:
       niacore-network:
         aliases:
@@ -203,11 +213,12 @@ services:
     container_name: niacore-redis
     restart: unless-stopped
 
+    # noeviction: BullMQ keeps jobs in Redis. Eviction would silently drop jobs.
     command: >
       redis-server
       --appendonly yes
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
       --timeout 0
       --tcp-keepalive 60
 

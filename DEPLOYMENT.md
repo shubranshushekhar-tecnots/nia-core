@@ -98,25 +98,44 @@ each container's own healthcheck will still pass (it only pings its own
 `/health`), so this failure mode is invisible until something actually
 tries to run a workflow.
 
-Build each image from the repo root and push it, tagging however your
-registry expects — these tags are exactly what you'll set as
-`API_IMAGE_VERSION` / `WEB_IMAGE_VERSION` / `WORKER_IMAGE_VERSION` / etc.
-below. These are pushed to and run on an x86 server, so build with
+### Releasing
+
+`.github/workflows/images.yml` builds and pushes all six images to
+`ghcr.io/<repo owner, lowercased>/niacore-<service>` on every push of a
+`v*`-matching tag (or manually via `workflow_dispatch`, e.g. to redo a
+release without a new tag) — `linux/amd64`, one matrix job per image, tagged
+both `:<tag exactly as pushed>` and `:latest`, using the built-in
+`GITHUB_TOKEN` (no separate registry credential to manage). Each connector
+image is smoke-checked in-workflow (`node -e` importing `@nia/secrets` and
+`@nia/db`) before the job is considered green. To cut a release:
+```
+git tag v1.0.1
+git push company v1.0.1
+```
+Then set `API_IMAGE_VERSION` / `WEB_IMAGE_VERSION` / etc. in `.env` (see
+below) to that same `v1.0.1` tag and redeploy.
+
+To build locally instead (debugging the image itself, or a registry other
+than ghcr.io) — these are pushed to and run on an x86 server, so build with
 `--platform linux/amd64` (see CONVENTIONS.md's "Local testing (Docker boot
 tests)" section for why local boot tests must NOT use this flag), e.g.:
 ```
-docker build --platform linux/amd64 -f apps/api/Dockerfile                     -t ghcr.io/your-org/niacore-api:1.4.0                .
-docker build --platform linux/amd64 -f apps/web/Dockerfile                     -t ghcr.io/your-org/niacore-web:1.4.0                .
-docker build --platform linux/amd64 -f apps/worker/Dockerfile                  -t ghcr.io/your-org/niacore-worker:1.4.0             .
-docker build --platform linux/amd64 -f services/connector-mysql/Dockerfile     -t ghcr.io/your-org/niacore-connector-mysql:1.4.0    .
-docker build --platform linux/amd64 -f services/connector-mongodb/Dockerfile   -t ghcr.io/your-org/niacore-connector-mongodb:1.4.0  .
-docker build --platform linux/amd64 -f services/connector-supabase/Dockerfile  -t ghcr.io/your-org/niacore-connector-supabase:1.4.0 .
+docker build --platform linux/amd64 -f apps/api/Dockerfile                     -t ghcr.io/your-org/niacore-api:v1.4.0                .
+docker build --platform linux/amd64 -f apps/web/Dockerfile                     -t ghcr.io/your-org/niacore-web:v1.4.0                .
+docker build --platform linux/amd64 -f apps/worker/Dockerfile                  -t ghcr.io/your-org/niacore-worker:v1.4.0             .
+docker build --platform linux/amd64 -f services/connector-mysql/Dockerfile     -t ghcr.io/your-org/niacore-connector-mysql:v1.4.0    .
+docker build --platform linux/amd64 -f services/connector-mongodb/Dockerfile   -t ghcr.io/your-org/niacore-connector-mongodb:v1.4.0  .
+docker build --platform linux/amd64 -f services/connector-supabase/Dockerfile  -t ghcr.io/your-org/niacore-connector-supabase:v1.4.0 .
 ```
 Push each, then copy `.env.production.example` to `.env` in the deploy
 directory, fill it in, and run the stack:
 ```
 docker compose -f docker-compose.prod.yml up -d
 ```
+Build this `.env` only from `.env.production.example` — never copy a local
+dev `.env`. Dev-only vars like `CONNECTOR_DEV_HOST` make `niacore-api` and
+`niacore-worker` refuse to start under `NODE_ENV=production` (see env.ts's
+`.refine()` in each).
 
 `apps/api` and `apps/worker` images are built via `pnpm --filter=<pkg>
 --prod deploy` — a self-contained directory with only production
@@ -387,9 +406,9 @@ mutually exclusive.
 
 ## Managed services needed
 
-- **Postgres** (managed, e.g. Azure Database for PostgreSQL): a plain
-  Postgres 17 instance — Nia Core is no longer a Supabase customer, it's
-  just a Postgres host (see `docs/plans/local-dev.md`, `docs/decisions.md`).
+- **Postgres** (managed, currently hosted on Supabase, used as a plain
+  Postgres 17 instance — no Supabase features (auth, Vault, PostgREST)
+  are used at runtime; see `docs/plans/local-dev.md`, `docs/decisions.md`).
   `DATABASE_URL` is the only var required to reach it, and it **must be a
   direct or session-mode connection, not a transaction-mode pooler one**
   — `api` migrates itself at container start (see "Migrations" above),

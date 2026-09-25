@@ -41,7 +41,20 @@ const EnvSchema = z
      * first real Redis call.
      */
     REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
-    CONNECTOR_DEV_HOST: z.string().optional(),
+    /**
+     * Normalizes "" -> undefined: a compose override setting this to an
+     * empty string (the usual way to un-leak it from a shared `env_file`
+     * without deleting the key) must behave identically to it being fully
+     * unset, both for the production `.refine()` guard below and for
+     * every `env.CONNECTOR_DEV_HOST ?? manifest.service.host` fallback
+     * read (connectorClient.ts, routeAwareness.ts) — an empty string
+     * previously survived as a real value and silently produced
+     * host-less connector URLs.
+     */
+    CONNECTOR_DEV_HOST: z
+      .string()
+      .optional()
+      .transform((v) => (v === "" ? undefined : v)),
     /**
      * Phase 6 Block 2 — shared secret for the write-dispatch signed context
      * (see lib/writeSignature.ts). connector-supabase holds an identical
