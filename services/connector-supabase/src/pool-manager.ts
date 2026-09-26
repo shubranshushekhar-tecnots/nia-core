@@ -2,6 +2,7 @@ import pg from "pg";
 import { createDbPool, withServiceRole } from "@nia/db";
 import { createEnvKeySecretStore } from "@nia/secrets";
 import type { ConnectorConfig, CredentialRef } from "@nia/schemas";
+import { extractProjectRef, isSupabasePoolerHost, resolvePoolerUsername } from "./poolerUsername.js";
 
 // Phase 8b-2, Fix 1 finding — node-postgres deliberately does NOT parse
 // NUMERIC/DECIMAL (OID 1700) to a JS number by default (unlike
@@ -124,6 +125,27 @@ async function resolveSecret(secretRef: string): Promise<{ user: string; passwor
   return { user: (data as { user: string }).user, password: (data as { password: string }).password };
 }
 
+/**
+ * A newly-minted write-grant role (NodeDrawer.tsx's `randomWriteRoleUser`)
+ * is a bare name with no project ref — unlike a source/read username,
+ * which is free-text typed by the user and already carries its own ref if
+ * the pooler was used (docs/plans/pooler-write-grant.md). Falls back to
+ * the connection's own (read) credential — stored under a DIFFERENT
+ * vault_secret_ref than `cred.vaultRef` whenever `cred` is itself a write
+ * credential — to source a ref for it. Looked up by cred.connectionId,
+ * same service-role app-db pool this file already uses for
+ * verifyActiveWriteGrant.
+ */
+async function deriveProjectRefFromConnection(connectionId: string): Promise<string | undefined> {
+  const { rows } = await withServiceRole(dbPool, (db) =>
+    db.query<{ vault_secret_ref: string }>(`select vault_secret_ref from connections where id = $1`, [connectionId]),
+  );
+  const connectionVaultRef = rows[0]?.vault_secret_ref;
+  if (!connectionVaultRef) return undefined;
+  const connectionSecret = await resolveSecret(connectionVaultRef);
+  return extractProjectRef(connectionSecret.user);
+}
+
 function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): Promise<pg.Pool> {
   const existing = pools.get(key);
   if (existing) {
@@ -137,11 +159,21 @@ function createPool(key: string, cred: CredentialRef, config: ConnectorConfig): 
   const poolPromise = (async () => {
     const { host, port, database, ssl } = parsePostgresConfig(config);
     const secret = await resolveSecret(cred.vaultRef);
+    // docs/plans/pooler-write-grant.md — a bare minted-role username fails
+    // against Supabase's session pooler; only bother deriving a project
+    // ref (an extra secret-store round trip) when it's actually needed —
+    // never for a normal read pool, whose own username is already
+    // qualified when the pooler's in use.
+    const projectRef =
+      isSupabasePoolerHost(host) && !secret.user.includes(".")
+        ? await deriveProjectRefFromConnection(cred.connectionId)
+        : undefined;
+    const user = resolvePoolerUsername(secret.user, host, projectRef);
     const pool = new pg.Pool({
       host,
       port,
       database,
-      user: secret.user,
+      user,
       password: secret.password,
       max: POOL_LIMIT_PER_CONNECTION,
       ssl: ssl ? { rejectUnauthorized: false } : undefined,

@@ -5911,3 +5911,86 @@ Tested without Docker: `deploy/nginx/nginx.conf` syntax validated with a
 local Homebrew `nginx -t` (real nginx binary, no container); `.github/
 workflows/images.yml` validated with `actionlint` (zero findings); every
 workspace package typechecks clean (`pnpm typecheck`, 12/12 packages).
+
+## Write-grant confirm fails against a Supabase pooler destination (ENOIDENTIFIER)
+
+Production bug (`docs/plans/pooler-write-grant.md`): destination = Supabase
+via the session pooler (`*.pooler.supabase.com:5432`). The write-grant flow
+mints role `nia_write_<8 hex>`; clicking "I've run this — confirm access"
+failed with `(ENOIDENTIFIER) no tenant identifier provided (external_id or
+sni_hostname required)`.
+
+**Root cause.** Supavisor multiplexes many projects behind one pooler
+host/port, so it derives the tenant from the *username* itself — the wire
+username must be `<role>.<project_ref>`, not the bare Postgres role name.
+The read/source connection already "worked" only because its username is
+free-text typed by the user, and users who set up a pooler connection
+naturally paste Supabase's own pooler connection string, which already
+comes pre-qualified (`postgres.<ref>`). The write role, by contrast, is
+minted client-side (`NodeDrawer.tsx`'s `randomWriteRoleUser`) as a bare
+name with no ref, and there's no stored `project_ref` field anywhere to
+qualify it with. The "confirm access" click itself goes through
+`services/connector-supabase`'s `/test` endpoint (`pool-manager.ts`'s
+`getPool`, not `getWritePool`) — so the fix has to live in the one place
+both a read pool and a write pool ultimately construct their `pg.Pool`,
+not behind a `getWritePool`-only branch.
+
+**Fix — `services/connector-supabase/src/poolerUsername.ts`** (new, pure,
+unit-tested module): `isSupabasePoolerHost(host)` matches
+`*.pooler.supabase.com`; `resolvePoolerUsername(user, host, projectRef)`
+passes non-pooler hosts and already-qualified usernames (containing a
+`.`) through unchanged, appends `.${projectRef}` for a bare username on a
+pooler host, and throws a clear "no project ref could be determined" error
+if none is available — never silently connects with a wrong/bare
+username. `pool-manager.ts`'s `createPool` (used by both `getPool` and
+`getWritePool`) now derives `projectRef` — only when the host is a pooler
+host and the resolved secret's username isn't already qualified — by
+loading the connection's own (read) credential from the vault and calling
+`extractProjectRef` on its username, then calls
+`resolvePoolerUsername(secret.user, host, projectRef)` for the value it
+actually connects with. A normal read pool never pays for the extra vault
+lookup, since its own username already contains a `.` when the pooler is
+in use.
+
+**Second bug found during Step 1's inventory, fixed alongside it:**
+`nia.nia_quarantine` (the shared staging/quarantine table every write
+grant's SQL creates) is created under the user's own admin credential with
+`ENABLE ROW LEVEL SECURITY` and no policy — table owner is RLS-exempt, but
+every `nia_write_*` role is not the owner, so once a role actually
+qualifies its username and connects, it would still be blocked from using
+the table it was just granted DML on. Confirmed via `stagingSql.ts`'s
+ownership comment that this is the only affected table — every other
+table the write role writes to (its own staging/destination tables) is
+created *by* the write role itself, so it's already the owner and RLS-
+exempt there. Fixed with the smaller of the two options the plan offered:
+`packages/schemas/src/writeGrantStatement.ts`'s generated postgres grant
+SQL now also emits an idempotent (`IF NOT EXISTS` against `pg_policies`)
+`CREATE POLICY nia_quarantine_write_access ... FOR ALL TO public USING
+(true) WITH CHECK (true)` — safe as `TO public` because RLS still gates on
+the explicit `GRANT` already required to reach the table at all; this
+policy only satisfies RLS for a role that already holds that grant, it
+doesn't widen who can attempt the query.
+
+**Tests:** new `poolerUsername.test.ts` (pooler host + bare user + ref →
+qualified; already-qualified user → unchanged; non-pooler host →
+unchanged; pooler host with no ref available → throws, message matches
+`/project ref/i`). Existing `pool-manager.test.ts` (22 tests total across
+both files) and the full `@nia/connector-supabase` (75 tests) and
+`@nia/schemas` (906 tests) suites all still pass. Every workspace package
+typechecks clean (`pnpm -r typecheck`, 12/12 packages).
+
+**Images needing a rebuild:**
+- `services/connector-supabase` — the actual bug fix (`pool-manager.ts` +
+  new `poolerUsername.ts`).
+- `apps/api` — its copilot tools (`explainWriteGrant.ts`,
+  `explainMissingPrivilege.ts`) call `buildGrantStatementText` directly, so
+  a copilot explanation would otherwise keep showing the old (unpatched)
+  `nia_quarantine` grant SQL.
+- `apps/web` — `NodeDrawer.tsx`'s grant panel and
+  `DeleteConnectionDialog.tsx` call `buildGrantStatementText`/
+  `buildDropRoleStatementText` directly (client bundle), so the drawer
+  would otherwise keep showing the old grant SQL to the user.
+- `apps/worker`, `services/connector-mysql`, `services/connector-mongodb`
+  all also bundle `@nia/schemas` at build time but don't call
+  `writeGrantStatement.ts`'s exports anywhere — rebuilding them isn't
+  functionally required by this change, only the three above are.

@@ -91,6 +91,22 @@ export function buildGrantStatementText(
       `);`,
       `ALTER TABLE "nia"."nia_quarantine" ENABLE ROW LEVEL SECURITY;`,
       `GRANT SELECT, INSERT, UPDATE, DELETE ON "nia"."nia_quarantine" TO ${role};`,
+      `-- RLS with no policy denies everyone but the table's owner (this admin`,
+      `-- credential) — without a policy, every nia_write_* role above would be`,
+      `-- granted DML it can never actually use. TO public is safe here: this`,
+      `-- policy only ever satisfies RLS for a role that already holds the`,
+      `-- explicit GRANT above (or an equivalent future grant) — it doesn't`,
+      `-- widen who can attempt the query. Guarded by an existence check since`,
+      `-- this statement is meant to be re-run (once per write grant, always`,
+      `-- against this same shared table) and CREATE POLICY has no IF NOT EXISTS.`,
+      `DO $$`,
+      `BEGIN`,
+      `  IF NOT EXISTS (`,
+      `    SELECT 1 FROM pg_policies WHERE schemaname = 'nia' AND tablename = 'nia_quarantine' AND policyname = 'nia_quarantine_write_access'`,
+      `  ) THEN`,
+      `    CREATE POLICY nia_quarantine_write_access ON "nia"."nia_quarantine" FOR ALL TO public USING (true) WITH CHECK (true);`,
+      `  END IF;`,
+      `END $$;`,
     ].join("\n");
   }
 
