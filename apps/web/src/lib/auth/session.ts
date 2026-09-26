@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { withActingUser } from "@nia/db";
-import { auth } from "@/lib/auth/auth";
-import { dbPool } from "@/lib/db/pool";
+import { getAuth } from "@/lib/auth/auth";
+import { getPool } from "@/lib/db/pool";
 import type { ActorRole, OrgRole } from "@nia/schemas";
 
 export type UserContext = {
@@ -30,7 +30,7 @@ export type UserWithOrg = {
  * token.
  */
 export async function getSessionUser(): Promise<{ id: string; email: string } | null> {
-  const session = await auth.api.getSession({ headers: await headers() });
+  const session = await getAuth().api.getSession({ headers: await headers() });
   return session ? { id: session.user.id, email: session.user.email } : null;
 }
 
@@ -57,10 +57,10 @@ export async function requireUser(): Promise<UserContext> {
   }
 
   const [profileResult, membershipResult] = await Promise.all([
-    withActingUser(dbPool, user.id, (db) =>
+    withActingUser(getPool(), user.id, (db) =>
       db.query<{ full_name: string | null }>("select full_name from public.profiles where id = $1", [user.id]),
     ),
-    withActingUser(dbPool, user.id, (db) =>
+    withActingUser(getPool(), user.id, (db) =>
       db.query<{ role: string; created_at: string; org_id: string; org_name: string; org_slug: string }>(
         `select m.role, m.created_at, o.id as org_id, o.name as org_name, o.slug as org_slug
          from public.organization_members m

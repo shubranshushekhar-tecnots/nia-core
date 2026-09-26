@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { dbPool } from "@/lib/db/pool";
+import { getPool } from "@/lib/db/pool";
 import type { ActionState } from "@/lib/auth/actions";
 
 const talkToSalesSchema = z.object({
@@ -25,11 +25,11 @@ export async function submitTalkToSales(_prevState: ActionState, formData: FormD
   }
 
   // Unauthenticated (no session yet, this is the public landing page) —
-  // insert directly via dbPool, which connects as the `postgres` role and
+  // insert directly via the pool, which connects as the `postgres` role and
   // so bypasses RLS the same way the old anon-key Supabase client's
   // `with check (true)` policy (0034_sales_leads.sql) allowed anyway.
   try {
-    await dbPool.query(
+    await getPool().query(
       `insert into public.sales_leads (name, work_email, company, team_size, message)
        values ($1, $2, $3, $4, $5)`,
       [parsed.data.name, parsed.data.workEmail, parsed.data.company, parsed.data.teamSize ?? null, parsed.data.message ?? null],

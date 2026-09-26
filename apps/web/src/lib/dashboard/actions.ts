@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { withActingUser } from "@nia/db";
-import { dbPool } from "@/lib/db/pool";
+import { getPool } from "@/lib/db/pool";
 import { getSessionUser, requireUser } from "@/lib/auth/session";
 import type { ActionState } from "@/lib/auth/actions";
 import type { WorkflowDefinition } from "./types";
@@ -42,7 +42,7 @@ export async function createProject(
     if (ctx.role !== "individual") return { error: "Choose an organization first." };
 
     try {
-      await withActingUser(dbPool, ctx.userId, (db) =>
+      await withActingUser(getPool(), ctx.userId, (db) =>
         db.query("insert into public.projects (org_id, owner_id, name, created_by) values (null, $1, $2, $1)", [
           ctx.userId,
           parsed.data.name,
@@ -65,7 +65,7 @@ export async function createProject(
   }
 
   try {
-    await withActingUser(dbPool, ctx.userId, (db) =>
+    await withActingUser(getPool(), ctx.userId, (db) =>
       db.query("insert into public.projects (org_id, name, created_by) values ($1, $2, $3)", [
         orgId,
         parsed.data.name,
@@ -106,7 +106,7 @@ export async function createWorkflow(
     if (ctx.role !== "individual") return { error: "Choose an organization first." };
 
     try {
-      await withActingUser(dbPool, ctx.userId, (db) =>
+      await withActingUser(getPool(), ctx.userId, (db) =>
         db.query(
           "insert into public.workflows (org_id, owner_id, project_id, name, created_by) values (null, $1, $2, $3, $1)",
           [ctx.userId, parsed.data.projectId, parsed.data.name],
@@ -126,7 +126,7 @@ export async function createWorkflow(
   }
 
   try {
-    await withActingUser(dbPool, ctx.userId, (db) =>
+    await withActingUser(getPool(), ctx.userId, (db) =>
       db.query("insert into public.workflows (org_id, project_id, name, created_by) values ($1, $2, $3, $4)", [
         orgId,
         parsed.data.projectId,
@@ -163,7 +163,7 @@ export async function renameProject(
   const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
-  const result = await withActingUser(dbPool, user.id, (db) =>
+  const result = await withActingUser(getPool(), user.id, (db) =>
     db.query<{ id: string }>("update public.projects set name = $1 where id = $2 returning id", [
       parsed.data.name,
       projectId,
@@ -191,7 +191,7 @@ export async function renameWorkflow(
   const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
-  const result = await withActingUser(dbPool, user.id, (db) =>
+  const result = await withActingUser(getPool(), user.id, (db) =>
     db.query<{ id: string; project_id: string }>(
       "update public.workflows set name = $1 where id = $2 returning id, project_id",
       [parsed.data.name, workflowId],
@@ -221,7 +221,7 @@ export async function deleteProject(_prevState: ActionState, formData: FormData)
   const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
-  const result = await withActingUser(dbPool, user.id, (db) =>
+  const result = await withActingUser(getPool(), user.id, (db) =>
     db.query<{ id: string }>("delete from public.projects where id = $1 returning id", [projectId]),
   );
   const data = result.rows[0] ?? null;
@@ -239,7 +239,7 @@ export async function deleteWorkflow(_prevState: ActionState, formData: FormData
   const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
-  const result = await withActingUser(dbPool, user.id, (db) =>
+  const result = await withActingUser(getPool(), user.id, (db) =>
     db.query<{ id: string }>("delete from public.workflows where id = $1 returning id", [workflowId]),
   );
   const data = result.rows[0] ?? null;
@@ -257,7 +257,7 @@ export async function updateWorkflowDefinition(
   const user = await getSessionUser();
   if (!user) return { error: "Your session expired — sign in again." };
 
-  const result = await withActingUser(dbPool, user.id, (db) =>
+  const result = await withActingUser(getPool(), user.id, (db) =>
     db.query<{ id: string }>("update public.workflows set definition = $1 where id = $2 returning id", [
       definition,
       workflowId,
