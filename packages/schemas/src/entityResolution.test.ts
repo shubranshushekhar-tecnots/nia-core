@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveSourceEntity, findPersistedEntity, fieldNamesForSource } from "./entityResolution.js";
+import { resolveSourceEntity, findPersistedEntity, fieldNamesForSource, fieldNamesForDestinationEntity } from "./entityResolution.js";
 import type { IntrospectResponse } from "./contract.js";
 
 function schema(entities: IntrospectResponse["entities"]): IntrospectResponse {
@@ -138,5 +138,27 @@ describe("fieldNamesForSource", () => {
     expect(warn.mock.calls[0]![0]).toContain("no persisted entity");
     expect(warn.mock.calls[1]![0]).toContain("deleted_table");
     warn.mockRestore();
+  });
+});
+
+describe("fieldNamesForDestinationEntity", () => {
+  const TWO_TABLES = schema([
+    { namespace: "public", name: "orders", fields: [{ name: "id", type: "int" }, { name: "total", type: "int" }], primaryKey: null },
+    { namespace: "public", name: "customers", fields: [{ name: "id", type: "int" }, { name: "name", type: "string" }], primaryKey: null },
+  ]);
+
+  it("scopes strictly to the persisted entity's fields when it resolves", () => {
+    const result = fieldNamesForDestinationEntity(TWO_TABLES, { namespace: "public", name: "customers" });
+    expect(result.sort()).toEqual(["id", "name"]);
+  });
+
+  it("bug fix: returns [] (never the flat union) for a not-yet-created destination table, instead of leaking every other table's columns", () => {
+    const result = fieldNamesForDestinationEntity(TWO_TABLES, { namespace: "public", name: "new_customers" });
+    expect(result).toEqual([]);
+  });
+
+  it("still falls back to the flat union when no entity is persisted at all (legacy pre-Block-0 node)", () => {
+    const result = fieldNamesForDestinationEntity(TWO_TABLES);
+    expect(result.sort()).toEqual(["id", "name", "total"]);
   });
 });

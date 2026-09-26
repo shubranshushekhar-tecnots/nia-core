@@ -116,3 +116,29 @@ export function fieldNamesForEntity(schema: IntrospectResponse, entity?: EntityR
 
 /** @deprecated alias of {@link fieldNamesForEntity} kept for existing source-side call sites. */
 export const fieldNamesForSource = fieldNamesForEntity;
+
+/**
+ * New-table-mapping bug fix (docs/plans/new-table-mapping.md) — destination-
+ * only variant of {@link fieldNamesForEntity}. A source's persisted entity
+ * must already exist (a source only ever reads from a real table), so an
+ * unresolved source ref means schema drift and the flat-union fallback above
+ * is a reasonable best effort. A *destination* entity that doesn't resolve
+ * has a second, entirely normal cause: it's a brand-new "+ Create new…"
+ * table that doesn't exist yet — ensureDestination.ts (apps/worker)
+ * auto-creates it from the approved mapping's contract at run time. Falling
+ * back to the flat union in that case is exactly the bug that let every
+ * other table's columns (including, on Supabase, its internal auth/storage
+ * schemas) leak into the "Select field…" destination dropdown for a table
+ * that isn't even created yet. This returns `[]` instead whenever a
+ * persisted destination entity is given but doesn't resolve — both
+ * MappingEditor.tsx's FieldSelect and proposeMapping.ts already treat an
+ * empty field list correctly (free-text entry / nothing left to
+ * deterministically match). The "no entity persisted at all" branch is left
+ * untouched (delegates to fieldNamesForEntity's own flat-union fallback) —
+ * that's the pre-Block-0 legacy-node case, not this bug.
+ */
+export function fieldNamesForDestinationEntity(schema: IntrospectResponse, entity?: EntityRef): string[] {
+  if (!entity) return fieldNamesForEntity(schema, entity);
+  const resolved = findPersistedEntity(schema, entity);
+  return resolved ? resolved.fields.map((f) => f.name) : [];
+}

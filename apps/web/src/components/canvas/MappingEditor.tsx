@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   buildDestinationContract,
   fieldNamesForEntity,
+  fieldNamesForDestinationEntity,
   manifestDialect,
   schemaFromIntrospection,
   type CheckResult,
@@ -160,16 +161,30 @@ function driftedField(value: string, fields: string[]): boolean {
  * selection) via `fieldNamesForEntity` when given, instead of always
  * flattening every entity in the connection's schema into one union — the
  * same asymmetry fix applied to `proposeMapping.ts`'s destination side.
- * `entity` undefined (no persisted selection yet, e.g. a legacy node or a
- * brand-new "+ Create new…" table) falls back to `fieldNamesForEntity`'s
- * own flat-union behavior, unchanged from before this fix.
+ * `entity` undefined (no persisted selection yet, e.g. a legacy node) falls
+ * back to `fieldNamesForEntity`'s own flat-union behavior, unchanged from
+ * before this fix.
+ *
+ * New-table-mapping bug fix (docs/plans/new-table-mapping.md): `side`
+ * distinguishes the destination case, where an `entity` that's given but
+ * doesn't resolve (a brand-new "+ Create new…" table, not yet created) must
+ * never fall back to the flat union either — that's exactly what let every
+ * other table's columns (including Supabase's internal auth/storage
+ * schemas) leak into the "Select field…" dropdown. See
+ * `fieldNamesForDestinationEntity`'s own doc comment for why sources don't
+ * need this — a source entity always refers to an already-existing table.
  */
-function useEntityFields(connectionId?: string, entity?: EntityRef): { fields: string[]; isLoading: boolean } {
+function useEntityFields(
+  connectionId: string | undefined,
+  entity: EntityRef | undefined,
+  side: 'source' | 'destination',
+): { fields: string[]; isLoading: boolean } {
   const { schema, isLoading } = useEntitySchema(connectionId);
   const fields = useMemo(() => {
     if (!schema) return [];
-    return fieldNamesForEntity(schema, entity).slice().sort();
-  }, [schema, entity]);
+    const names = side === 'destination' ? fieldNamesForDestinationEntity(schema, entity) : fieldNamesForEntity(schema, entity);
+    return names.slice().sort();
+  }, [schema, entity, side]);
   return { fields, isLoading };
 }
 
@@ -237,12 +252,12 @@ export default function MappingEditor({
   onChange: (next: SourceDestConfig) => void;
 }) {
   const mapping = config.mapping ?? emptyMapping;
-  const rawSourceFields = useEntityFields(sourceConnectionId, sourceEntity);
+  const rawSourceFields = useEntityFields(sourceConnectionId, sourceEntity, 'source');
   const sourceFields = sourceFieldsOverride ?? rawSourceFields.fields;
   // An override (post-aggregate output fields) is already resolved data, so
   // it's never "loading" regardless of the raw introspection query's state.
   const sourceFieldsLoading = sourceFieldsOverride ? false : rawSourceFields.isLoading;
-  const { fields: destFields, isLoading: destFieldsLoading } = useEntityFields(destConnectionId, config.entity);
+  const { fields: destFields, isLoading: destFieldsLoading } = useEntityFields(destConnectionId, config.entity, 'destination');
 
   const [proposing, setProposing] = useState(false);
   const [proposeError, setProposeError] = useState<string | undefined>(undefined);

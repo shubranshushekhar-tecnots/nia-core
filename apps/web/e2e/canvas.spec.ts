@@ -756,6 +756,72 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
   });
 
   /**
+   * Bug fix regression test (docs/plans/new-table-mapping.md) — a "Select
+   * field…" dropdown on a brand-new ("+ Create new…") destination table used
+   * to list every other table's columns on the connection (production
+   * report: Supabase's internal auth/storage schemas). Reuses the same
+   * mysql -> supabase heterogeneous pairing as the manual-mapping test
+   * above, but the destination side picks "+ Create new…" instead of an
+   * existing table: the destination connection's `sandbox` database already
+   * has two real tables (sandbox_items: id/name; employees: id/name/salary
+   * — docker/dev-postgres-init.sql), so pre-fix, fieldNamesForEntity's
+   * flat-union fallback (entityResolution.ts) would surface all three of
+   * those column names as a <select> in the "to" dropdown for a table that
+   * isn't even created yet. Post-fix (fieldNamesForDestinationEntity), an
+   * unresolved destination entity always yields zero fields, so
+   * FieldSelect's own empty-fields branch renders a plain text input
+   * instead — this asserts that <select> never exists, rather than
+   * inspecting an option list that shouldn't be there at all. Also covers
+   * the plan's second design bullet ("new table mapping defaults to one
+   * destination column per source field, same name") via the "to" input's
+   * pre-filled value.
+   */
+  test('destination drawer: a brand-new destination table never offers another table\'s columns in the "to" dropdown', async ({ page }) => {
+    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
+    await connectNodes(page, 0, 1);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    // Source node: pick "employees" (id/name/salary) so the mapping's
+    // "from" side has real fields to choose from.
+    await page.locator('.react-flow__node').nth(0).click();
+    const sourceDrawer = page.getByTestId('node-drawer');
+    await page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema'));
+    const sourceTableSelect = sourceDrawer.locator('select').first();
+    const employeesValue = await sourceTableSelect.locator('option', { hasText: 'employees' }).getAttribute('value');
+    await sourceTableSelect.selectOption(employeesValue!);
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+    await page.locator('.react-flow__pane').click({ position: { x: 300, y: 500 } });
+
+    // Destination node: "+ Create new…" a table that doesn't exist yet, in
+    // the same `sandbox` database that already holds sandbox_items/employees.
+    await page.locator('.react-flow__node').nth(1).click();
+    const drawer = page.getByTestId('node-drawer');
+    await page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema'));
+    const tableSelect = drawer.locator('select').first();
+    await tableSelect.selectOption('__new__');
+    await drawer.getByPlaceholder('namespace').fill('public');
+    await drawer.getByPlaceholder('new table name').fill('new_customers');
+    await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
+
+    await drawer.getByRole('button', { name: 'Field mapping' }).click();
+    await drawer.getByRole('button', { name: '+ Entry' }).click();
+
+    // Table select/NewTargetInputs only render on the Setup tab
+    // (NodeDrawer.tsx's `(!showTabs || activeTab === 'setup')` guard), so
+    // the only <select> on this tab is the entry's own "from" field. A
+    // pre-fix flat-union leak would add a second <select> here for "to",
+    // listing sandbox_items'/employees' columns.
+    await expect(drawer.locator('select')).toHaveCount(1);
+    const fromSelect = drawer.locator('select');
+    await expect(fromSelect).toHaveValue('id'); // sourceFields[0] alphabetically (id, name, salary)
+
+    const toInput = drawer.getByPlaceholder('dest field');
+    await expect(toInput).toBeVisible();
+    await expect(toInput).toHaveValue('id');
+  });
+
+  /**
    * Phase 5 Session 5, Block 1 — destination-node read preview. Reuses the
    * exact mysql->supabase heterogeneous pairing and `salary` mapping the
    * manual-mapping test above already established is unambiguous (both dev

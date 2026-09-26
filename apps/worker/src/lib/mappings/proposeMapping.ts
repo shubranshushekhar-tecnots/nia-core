@@ -1,4 +1,4 @@
-import { ProposalSchema, parseNodeConfig, fieldNamesForEntity, type MappingEntry } from "@nia/schemas";
+import { ProposalSchema, parseNodeConfig, fieldNamesForEntity, fieldNamesForDestinationEntity, type MappingEntry } from "@nia/schemas";
 import { resolveGraph } from "../checks/runWorkflowChecks.js";
 import { resolveConnection } from "../resolveConnection.js";
 import { getSchema } from "../introspection.js";
@@ -82,12 +82,16 @@ export async function proposeMapping(workflowId: string, destNodeId: string, sco
   // — a flat union of every table in the destination connection — so a
   // target table's exact-name-match fields could be masked or diluted by
   // unrelated tables' columns. Scope to the destination node's persisted
-  // `entity` the same way the source side already does; `uniqueFieldNames`
-  // is kept only as the fallback fieldNamesForEntity itself already applies
-  // for legacy nodes with no persisted entity.
+  // `entity` the same way the source side already does; the "no persisted
+  // entity at all" case still falls back to that flat union for legacy
+  // nodes (fieldNamesForDestinationEntity delegates to fieldNamesForEntity
+  // then). New-table-mapping bug fix (docs/plans/new-table-mapping.md): a
+  // persisted `entity` that doesn't resolve (a brand-new "+ Create new…"
+  // table, not created yet) must never fall back to that flat union either
+  // — see fieldNamesForDestinationEntity's own doc comment.
   const destConfig = parseNodeConfig("destination", dest.config);
   const destEntity = !destConfig.unrecognized && destConfig.type !== "transform" ? destConfig.value.entity : undefined;
-  const destFields = fieldNamesForEntity(destSchema.value, destEntity);
+  const destFields = fieldNamesForDestinationEntity(destSchema.value, destEntity);
 
   // Follow-up item 3: a destination field whose name exactly matches a
   // source field (case-insensitive) is mapped deterministically, without

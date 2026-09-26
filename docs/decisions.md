@@ -5994,3 +5994,88 @@ typechecks clean (`pnpm -r typecheck`, 12/12 packages).
   all also bundle `@nia/schemas` at build time but don't call
   `writeGrantStatement.ts`'s exports anywhere — rebuilding them isn't
   functionally required by this change, only the three above are.
+
+## New-table destination mapping leaked every other table's columns (incl. Supabase auth/storage)
+
+Production bug (`docs/plans/new-table-mapping.md`): picking "+ Create new…"
+for a Supabase destination table (`public.customers`, not created yet) and
+opening the Field Mapping tab's "to" dropdown listed ~257 columns from
+every entity on the connection, including Supabase's internal `auth`/
+`storage` schemas (`client_secret`, `bucket_id`, `confirmation_token`,
+etc.) — not the new table's (nonexistent) columns.
+
+**Root cause.** `packages/schemas/src/entityResolution.ts`'s
+`fieldNamesForEntity` falls back to a flat union of every entity's fields
+across the whole schema whenever the given `EntityRef` doesn't resolve to
+a persisted entity. That fallback is correct and already tested/documented
+for the *source* side (`fieldNamesForSource` alias, used by
+`runWorkflowChecks.ts`/`runPreview.ts`): a source must already exist, so
+an unresolved source ref means schema drift and a best-effort flat union
+is reasonable. It's wrong for the *destination* side: an unresolved
+destination entity is the normal, expected state of a brand-new
+"+ Create new…" table (`ensureDestination.ts` auto-creates it from the
+approved mapping's contract at run time, it isn't drift). Both
+`MappingEditor.tsx`'s manual dropdown and `proposeMapping.ts`'s
+AI-assisted proposal called the same shared `fieldNamesForEntity` for
+their destination side, so both leaked the flat union.
+
+**Fix.** Added `fieldNamesForDestinationEntity` alongside the existing
+function in `packages/schemas/src/entityResolution.ts` rather than
+changing `fieldNamesForEntity` itself, to avoid touching the
+already-tested source-side drift-tolerance behavior. It returns `[]`
+(never the flat union) whenever a destination entity is given but doesn't
+resolve. `MappingEditor.tsx`'s `useEntityFields` now takes a
+`side: 'source' | 'destination'` parameter and calls the right function
+per side; `proposeMapping.ts` (apps/worker) switched its `destFields`
+computation to the new function. `FieldSelect` (web) and the LLM-proposal
+early-return path (worker) both already handled an empty field list
+correctly — an empty destination list just means "nothing to
+deterministically match yet," which is exactly right for a table that
+doesn't exist. Also implemented the plan's second design bullet: a
+brand-new destination table (`destFields === []`) now defaults its "to"
+field to the same name as the source field
+(`apps/web/src/lib/canvas/mappingDefaults.ts`'s `defaultDestinationField`),
+instead of leaving it blank.
+
+**Tests:** new `entityResolution.test.ts` cases (resolves correctly;
+returns `[]` for an unresolved destination entity — the bug fix; still
+falls back to the flat union when no entity is persisted at all, the
+legacy pre-Block-0 case) — 17/17 pass. New `mappingDefaults.test.ts` cases
+for the same-name default on an empty `destFields` — 6/6 pass. New
+`proposeMapping.test.ts` case asserting a not-yet-created destination
+entity yields zero proposed entries with no LLM call — 12/12 pass. New
+Playwright regression test in `apps/web/e2e/canvas.spec.ts`
+("destination drawer: a brand-new destination table never offers another
+table's columns in the 'to' dropdown") reuses the dev-sandbox mysql →
+supabase pairing, picks "+ Create new…" for a table name that doesn't
+exist in the sandbox database that already holds two real tables
+(`sandbox_items`, `employees` — `docker/dev-postgres-init.sql`), and
+asserts the "to" field renders as a single free-text input (never a
+second `<select>`) pre-filled with the source field's own name — this is
+the gap that let the production bug through, since existing new-table e2e
+coverage happened to only exercise manual text entry. Every workspace
+package typechecks clean (`pnpm -r typecheck`, 12/12 packages).
+
+**Images needing a rebuild:** all six workspace packages/services that
+depend on `@nia/schemas` (`apps/api`, `apps/web`, `apps/worker`,
+`services/connector-mysql`, `services/connector-mongodb`,
+`services/connector-supabase`) bundle it from source at Docker build time
+(each Dockerfile `COPY`s `packages/schemas` and runs
+`pnpm --filter @nia/schemas build` before building its own app/service),
+so in principle any of their images would pick up a `@nia/schemas`
+change. But only two actually *call* the changed code paths:
+- `apps/web` — `MappingEditor.tsx` (manual "to" dropdown) and
+  `mappingDefaults.ts` (same-name default) both call the new
+  `fieldNamesForDestinationEntity`/updated default directly; needs a
+  rebuild.
+- `apps/worker` — `proposeMapping.ts` (AI-assisted mapping proposals)
+  calls `fieldNamesForDestinationEntity` directly; needs a rebuild too —
+  **not just web**, despite `entityResolution.ts` living in the shared
+  package. Skipping this one would leave the AI proposal path serving
+  the pre-fix flat-union `destFields` to the LLM even after web is fixed.
+- `apps/api` and the three `services/connector-*` images don't reference
+  `fieldNamesForEntity`/`fieldNamesForDestinationEntity`/
+  `fieldNamesForSource` anywhere (confirmed via a repo-wide search) — they
+  only produce/consume raw `IntrospectResponse` schemas, they don't do
+  this entity-scoping. Rebuilding them isn't functionally required by
+  this change.

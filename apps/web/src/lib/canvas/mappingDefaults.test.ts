@@ -17,4 +17,12 @@ describe('defaultDestinationField', () => {
   it('skips a same-named destination field already used by an existing entry', () => {
     expect(defaultDestinationField('email', ['email'], [{ from: 'contact_email', to: 'email' }])).toBe('');
   });
+
+  it('new-table-mapping fix: defaults to the same name as the source field when destFields is empty (brand-new destination table)', () => {
+    expect(defaultDestinationField('email', [], [])).toBe('email');
+  });
+
+  it('new-table-mapping fix: still yields "" for an empty destFields when that same name is already used by another entry', () => {
+    expect(defaultDestinationField('email', [], [{ from: 'contact_email', to: 'email' }])).toBe('');
+  });
 });

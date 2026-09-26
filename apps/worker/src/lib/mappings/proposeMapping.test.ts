@@ -219,6 +219,38 @@ describe("proposeMapping", () => {
     expect(destLine).not.toContain('"email"');
   });
 
+  it("new-table-mapping bug fix: a destination entity that doesn't resolve yet (brand-new table) is scoped to zero fields, never the flat union of every other table", async () => {
+    resolveGraphMock.mockResolvedValueOnce({
+      nodes: [
+        { id: "src", type: "source", manifestId: "mysql", connectionId: SOURCE_CONN, position: { x: 0, y: 0 }, config: {} },
+        {
+          id: "dest",
+          type: "destination",
+          manifestId: "supabase",
+          connectionId: DEST_CONN,
+          position: { x: 0, y: 0 },
+          config: { entity: { namespace: "public", name: "new_customers" } },
+        },
+      ],
+      edges: [{ id: "e1", source: "src", target: "dest" }],
+    });
+    // Destination connection already has two real, unrelated tables (the
+    // production repro: Supabase's auth/storage schemas) — none of their
+    // columns must ever be offered for a table that doesn't exist yet.
+    getSchemaMock.mockImplementation(async (connection: { id: string }) =>
+      connection.id === SOURCE_CONN
+        ? schema(["first_name", "last_name", "email"])
+        : multiEntitySchema(),
+    );
+
+    const result = await proposeMapping("wf-1", "dest", SCOPE);
+
+    // Zero destination fields means "unmatchedDestFields.length === 0" fires
+    // proposeMapping's early return before ever calling the LLM.
+    expect(result).toEqual({ ok: true, value: { entries: [] } });
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
   it("resolves the upstream source through an intervening transform node (Source -> Transform -> Destination)", async () => {
     resolveGraphMock.mockResolvedValueOnce({
       nodes: [
