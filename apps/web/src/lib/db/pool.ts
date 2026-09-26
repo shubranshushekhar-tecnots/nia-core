@@ -7,7 +7,11 @@ import type pg from "pg";
  * middleware layer here to stash a `req.withUser` closure on), so this
  * module only needs to export the pool itself.
  */
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL is not set");
+}
+
 export const dbPool: pg.Pool = createDbPool({
-  connectionString: process.env.DATABASE_URL!,
+  connectionString: process.env.DATABASE_URL,
   max: 10,
 });

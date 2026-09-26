@@ -186,15 +186,13 @@ documented in each per-service `.env.production.example` for reference if
 you ever need to override one, but the shipped compose file relies on the
 app's own default.
 
-**Trade-off worth knowing:** these are plain `${VAR}` interpolations, not
-`${VAR:?VAR is required}` guards, so `docker compose up` itself never
-refuses to start over a missing variable — an unset var just interpolates
-to an empty string. Each container still fails fast on that empty value
-(the Zod schemas in `apps/api`/`apps/worker`, or the equivalent checks in
-each connector), but that means a missing variable shows up as a
-container that starts and then immediately crash-loops, not as Compose
-refusing to bring the stack up at all. Check `docker compose logs` for
-the specific container on any unexpected crash-loop after a deploy.
+**Fail-fast on a missing variable:** every required var in
+`docker-compose.prod.yml` is interpolated as `${VAR:?VAR is not set in
+.env}`, so `docker compose up` itself refuses to start any container if
+one is missing from `.env` — you get a clear error naming the exact
+variable instead of a container that starts and crash-loops on an empty
+value. `PROXY_PORT` is the only var with a real default (`:-80`) and is
+the sole exception.
 
 ## Secret storage master key (`NIA_SECRET_MASTER_KEY`)
 
