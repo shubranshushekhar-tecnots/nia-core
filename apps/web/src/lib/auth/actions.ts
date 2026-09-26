@@ -51,7 +51,8 @@ export async function login(_prevState: ActionState, formData: FormData): Promis
 
   let token: string;
   try {
-    const result = await getAuth().api.signInEmail({ body: parsed.data, headers: await headers() });
+    const requestHeaders = await headers();
+    const result = await getAuth().api.signInEmail({ body: parsed.data, headers: requestHeaders });
     token = result.token;
   } catch (err) {
     if (err instanceof APIError) {
@@ -83,9 +84,10 @@ export async function signup(_prevState: ActionState, formData: FormData): Promi
 
   let token: string;
   try {
+    const requestHeaders = await headers();
     const result = await getAuth().api.signUpEmail({
       body: { email: parsed.data.email, password: parsed.data.password, name: parsed.data.fullName },
-      headers: await headers(),
+      headers: requestHeaders,
     });
     // autoSignIn (packages/auth/src/config.ts) means this is only null if
     // email verification were required (it isn't — see config), so this
@@ -106,7 +108,8 @@ export async function signup(_prevState: ActionState, formData: FormData): Promi
 }
 
 export async function logout(): Promise<void> {
-  await getAuth().api.signOut({ headers: await headers() });
+  const requestHeaders = await headers();
+  await getAuth().api.signOut({ headers: requestHeaders });
   revalidatePath("/", "layout");
   redirect("/login");
 }

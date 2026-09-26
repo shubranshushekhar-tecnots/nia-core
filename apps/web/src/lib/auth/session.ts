@@ -30,7 +30,13 @@ export type UserWithOrg = {
  * token.
  */
 export async function getSessionUser(): Promise<{ id: string; email: string } | null> {
-  const session = await getAuth().api.getSession({ headers: await headers() });
+  // headers() must be called (and awaited) before getAuth() — it's what
+  // signals Next's dynamic-rendering bailout during static generation.
+  // Calling getAuth() first would construct the DB pool (see lib/db/pool.ts)
+  // before that bailout has a chance to fire, turning a normal "this route
+  // is dynamic" signal into a hard build failure when DATABASE_URL isn't set.
+  const requestHeaders = await headers();
+  const session = await getAuth().api.getSession({ headers: requestHeaders });
   return session ? { id: session.user.id, email: session.user.email } : null;
 }
 
