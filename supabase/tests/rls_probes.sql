@@ -1901,6 +1901,97 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 52 — 0040_staff_audit_log.sql (Console v1 Step 3: staff_audit_log
+-- has zero policies and no grant to authenticated/anon at all — confirm
+-- both SELECT and INSERT hard-fail with permission denied for an ordinary
+-- authenticated user, same posture as platform_staff, Probe 51.)
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  select_denied boolean := false;
+  insert_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_outsider);
+  begin
+    perform 1 from public.staff_audit_log limit 1;
+  exception when insufficient_privilege then
+    select_denied := true;
+  end;
+  begin
+    insert into public.staff_audit_log (staff_user_id, action) values (v_outsider, 'probe.tamper');
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  reset role;
+
+  if select_denied and insert_denied then
+    insert into probe_results values (52, 'staff_audit_log: authenticated has no grant at all — SELECT and INSERT both raise permission denied, not just an RLS-empty result', true);
+  else
+    insert into probe_results values (52, 'staff_audit_log: authenticated has no grant at all — SELECT and INSERT both raise permission denied, not just an RLS-empty result', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (52, 'staff_audit_log authenticated-grant probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 53 — 0040_staff_audit_log.sql (Console v1 Step 3: append-only
+-- enforced by trigger, not just RLS — service_role has BYPASSRLS and full
+-- default-privilege UPDATE/DELETE grants, so RLS alone would not stop it.
+-- Confirm UPDATE, DELETE, and TRUNCATE are all rejected even for
+-- service_role: UPDATE/DELETE by the row-level append-only trigger,
+-- TRUNCATE by the revoked TRUNCATE privilege (checked first, so this
+-- raises a plain permission-denied rather than the statement-level
+-- trigger's own message — both are valid, redundant defenses).
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_row_id uuid;
+  update_rejected boolean := false;
+  delete_rejected boolean := false;
+  truncate_rejected boolean := false;
+begin
+  insert into public.staff_audit_log (staff_user_id, action, detail)
+  values (v_outsider, 'probe.fixture', '{}'::jsonb)
+  returning id into v_row_id;
+
+  set local role service_role;
+  begin
+    update public.staff_audit_log set action = 'tampered' where id = v_row_id;
+  exception when others then
+    if sqlerrm like '%append-only%' then
+      update_rejected := true;
+    end if;
+  end;
+  begin
+    delete from public.staff_audit_log where id = v_row_id;
+  exception when others then
+    if sqlerrm like '%append-only%' then
+      delete_rejected := true;
+    end if;
+  end;
+  begin
+    truncate public.staff_audit_log;
+  exception when others then
+    if sqlerrm like '%append-only%' or sqlerrm like '%permission denied%' then
+      truncate_rejected := true;
+    end if;
+  end;
+  reset role;
+
+  if update_rejected and delete_rejected and truncate_rejected then
+    insert into probe_results values (53, 'staff_audit_log append-only: UPDATE, DELETE, and TRUNCATE all rejected for service_role', true);
+  else
+    insert into probe_results values (53, 'staff_audit_log append-only: UPDATE, DELETE, and TRUNCATE all rejected for service_role', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (53, 'staff_audit_log append-only probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

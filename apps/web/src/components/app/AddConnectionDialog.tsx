@@ -154,7 +154,17 @@ export default function AddConnectionDialog({
             );
           })}
 
-          {state?.error && <span style={modalErrorStyle}>{state.error}</span>}
+          {state?.error && (
+            <span style={modalErrorStyle}>
+              {state.error}
+              {state.errorDetails && state.errorDetails !== state.error && (
+                <details style={{ marginTop: 4 }}>
+                  <summary style={{ cursor: 'pointer' }}>Show details</summary>
+                  <span style={{ display: 'block', marginTop: 2 }}>{state.errorDetails}</span>
+                </details>
+              )}
+            </span>
+          )}
           <div style={modalActionsStyle}>
             <button type="button" style={modalBtnGhostStyle} onClick={onClose}>
               Cancel

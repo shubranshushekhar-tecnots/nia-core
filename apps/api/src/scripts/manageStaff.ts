@@ -1,3 +1,4 @@
+import type pg from "pg";
 import { dbPool } from "../lib/dbPool.js";
 
 /**
@@ -22,9 +23,58 @@ import { dbPool } from "../lib/dbPool.js";
  *   pnpm --filter @nia/api staff:revoke <email> --by <active-staff-email>
  *   pnpm --filter @nia/api staff:list
  *
- * Note: this script does not yet write to staff_audit_log — that table and
- * the audit-write are console-plan.md build order Step 3, not this one.
+ * Every actual grant/revoke/bootstrap (i.e. every path that reaches the
+ * insert/update below, not the "nothing to do" no-op paths) also writes a
+ * public.staff_audit_log row via private.log_staff_action()
+ * (0040_staff_audit_log.sql) — staff_user_id is the actor (granterId/
+ * revokerId), target_user_id is the account being granted/revoked/
+ * bootstrapped, org_id is null (this action is not org-scoped). The
+ * platform_staff mutation and the audit insert run on the SAME checked-out
+ * client inside one BEGIN/COMMIT (withTransaction below) — if
+ * private.log_staff_action() raises for any reason (e.g. a bad
+ * target_user_id violating staff_audit_log's FK), the platform_staff
+ * insert/update in the same transaction is rolled back too, so a
+ * grant/revoke can never "succeed" in platform_staff without a matching
+ * audit row, or vice versa.
  */
+
+/**
+ * Runs `run` inside one BEGIN/COMMIT on a single checked-out client, rolling
+ * back on any error. Exported (alongside logStaffAction below) so
+ * manageStaff.atomicity.integration.test.ts can exercise the exact same
+ * primitives grant()/revoke() use, rather than duplicating this SQL in the
+ * test file.
+ */
+export async function withTransaction<T>(run: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  const client = await dbPool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await run(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function logStaffAction(
+  db: Pick<pg.PoolClient, "query">,
+  staffUserId: string,
+  action: string,
+  targetUserId: string,
+  detail: Record<string, unknown>,
+): Promise<void> {
+  await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+    staffUserId,
+    action,
+    targetUserId,
+    null,
+    JSON.stringify(detail),
+  ]);
+}
 
 async function findUserIdByEmail(email: string): Promise<string | null> {
   const result = await dbPool.query<{ id: string }>('select id from "user" where email = $1', [email]);
@@ -96,17 +146,21 @@ async function grant(email: string, byEmail: string | undefined, bootstrap: bool
   // Upsert: a previously-revoked row is re-granted in place (fresh
   // granted_by/granted_at, revoked_at/revoked_by cleared) rather than
   // inserting a second row for the same user_id, since user_id is the
-  // primary key.
-  await dbPool.query(
-    `insert into public.platform_staff (user_id, granted_by, granted_at, revoked_at, revoked_by)
-     values ($1, $2, now(), null, null)
-     on conflict (user_id) do update set
-       granted_by = excluded.granted_by,
-       granted_at = excluded.granted_at,
-       revoked_at = null,
-       revoked_by = null`,
-    [userId, granterId],
-  );
+  // primary key. Same transaction as the audit write (see header comment):
+  // if logStaffAction throws, this insert/update is rolled back too.
+  await withTransaction(async (client) => {
+    await client.query(
+      `insert into public.platform_staff (user_id, granted_by, granted_at, revoked_at, revoked_by)
+       values ($1, $2, now(), null, null)
+       on conflict (user_id) do update set
+         granted_by = excluded.granted_by,
+         granted_at = excluded.granted_at,
+         revoked_at = null,
+         revoked_by = null`,
+      [userId, granterId],
+    );
+    await logStaffAction(client, granterId, bootstrap ? "staff.bootstrap" : "staff.grant", userId, { email });
+  });
   const via = bootstrap ? "bootstrap (self-granted)" : `by ${byEmail} (${granterId})`;
   console.log(`granted staff: ${email} (${userId}), granted ${via}`);
   await dbPool.end();
@@ -125,11 +179,19 @@ async function revoke(email: string, byEmail: string | undefined) {
   }
   const revokerId = await requireActiveStaffByEmail(byEmail, "--by");
 
-  const result = await dbPool.query(
-    "update public.platform_staff set revoked_at = now(), revoked_by = $2 where user_id = $1 and revoked_at is null",
-    [userId, revokerId],
-  );
-  if (result.rowCount === 0) {
+  // Same transaction as the audit write (see header comment): if
+  // logStaffAction throws, this update is rolled back too.
+  const rowCount = await withTransaction(async (client) => {
+    const updateResult = await client.query(
+      "update public.platform_staff set revoked_at = now(), revoked_by = $2 where user_id = $1 and revoked_at is null",
+      [userId, revokerId],
+    );
+    if (updateResult.rowCount) {
+      await logStaffAction(client, revokerId, "staff.revoke", userId, { email });
+    }
+    return updateResult.rowCount;
+  });
+  if (rowCount === 0) {
     console.log(`${email} is not currently staff — nothing to do`);
   } else {
     console.log(`revoked staff: ${email} (${userId}), revoked by ${byEmail} (${revokerId})`);
@@ -186,7 +248,14 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only run main() when this file is executed directly (`tsx
+// src/scripts/manageStaff.ts ...`) — not when
+// manageStaff.atomicity.integration.test.ts imports withTransaction/
+// logStaffAction from it, which would otherwise also run main() against
+// that test file's own (empty) process.argv.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

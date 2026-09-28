@@ -69,7 +69,6 @@ import {
   connectionsUploadBtnStyle,
   connectionsUploadIconStyle,
   connectionsUploadRowStyle,
-  modalErrorStyle,
   pageEmptyCardStyle,
   pageTitleStyle,
   soonBtnStyle,
@@ -332,7 +331,7 @@ function InstallButton({ connectorId, connectorName }: { connectorId: string; co
         </button>
         <span style={connectionsInstallLabelStyle}>{pending ? 'Installing\u2026' : 'Install'}</span>
       </div>
-      {state?.error && <span style={modalErrorStyle}>{state.error}</span>}
+      {state?.error && <ActionErrorDetail error={state.error} details={state.errorDetails} />}
     </form>
   );
 }

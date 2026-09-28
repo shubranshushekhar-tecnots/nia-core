@@ -33,12 +33,38 @@ const RULES: { test: RegExp; summary: string }[] = [
     summary: "Host not found — check the hostname for typos.",
   },
   {
-    test: /etimedout|econnrefused/i,
+    test: /etimedout|econnrefused|econnreset/i,
     summary: "Connection timed out or was refused — check the host, port, and firewall/network access.",
   },
   {
-    test: /password authentication failed|access denied/i,
+    // Supabase's Supavisor pooler rejects a bare (unqualified) role name with
+    // this text — the fix is a different username, not a different
+    // password, so this needs its own summary rather than falling into the
+    // generic "Authentication failed" bucket below. Covers both the wire
+    // error Supavisor itself returns ("(ENOIDENTIFIER) no tenant identifier
+    // provided (external_id or sni_hostname required)", plus its older
+    // "Tenant or user not found" phrasing) and the client-side guard thrown
+    // by services/connector-supabase/src/poolerUsername.ts's
+    // resolvePoolerUsername when it has no project ref to qualify the
+    // username with before even attempting to connect.
+    test: /tenant or user not found|no tenant identifier|no project ref could be determined/i,
+    summary: 'Wrong pooler username — Supabase pooler connections need the qualified "role.project-ref" username, not just the role name.',
+  },
+  {
+    test: /unknown database|er_bad_db_error/i,
+    summary: "Database not found — check the database name for typos.",
+  },
+  {
+    test: /password authentication failed|access denied|authentication failed|bad auth/i,
     summary: "Authentication failed — check the username and password.",
+  },
+  {
+    // Postgres/Supabase-specific: this fires on INSERT/UPDATE/DELETE, not a
+    // missing GRANT, so it needs a distinct summary from the generic
+    // "Missing privileges" one below (re-running a GRANT won't fix it — an
+    // RLS policy needs to be added/adjusted instead).
+    test: /row-level security policy/i,
+    summary: "Blocked by a Row-Level Security policy — this role doesn't have a policy allowing this action.",
   },
   {
     test: /permission denied|privilege/i,

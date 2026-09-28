@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { friendlyConnectionError, getConnectorManifest } from '@nia/schemas';
+import { friendlyAppError, friendlyConnectionError, getConnectorManifest } from '@nia/schemas';
 import { apiFetchServer, ApiError } from '@/lib/api/server';
 import type { ActionState } from '@/lib/auth/actions';
 
@@ -12,25 +12,38 @@ import type { ActionState } from '@/lib/auth/actions';
 // only exists behind Express — there is no direct-table equivalent to fall
 // back to for connections.
 
-function apiErrorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) return err.message || fallback;
-  return fallback;
-}
-
 /**
  * Item 5 (fix-chain plan): only `testConnectionAction`/`refreshConnectionSchemaAction`
  * surface raw connector/driver text (the `/test` and `/schema/refresh` Express
  * routes forward the connector service's own error message verbatim) — the
  * other actions in this file (install/create/uninstall/delete) surface
- * structured `AppError`-style messages (e.g. "No manifest for connector...",
- * usage-warning text) that aren't raw driver errors and shouldn't be run
- * through `friendlyConnectionError`'s pattern-matching (its generic
- * "Connection failed." fallback would mislabel them). So this helper is used
- * only by those two actions, not folded into `apiErrorMessage` itself.
+ * structured `AppError`-style messages (e.g. NOT_INSTALLED, NAME_TAKEN) that
+ * aren't raw driver errors and shouldn't be run through
+ * `friendlyConnectionError`'s pattern-matching (its generic "Connection
+ * failed." fallback would mislabel them) — those go through
+ * `friendlyAppErrorMessage` below instead.
  */
 function friendlyApiErrorMessage(err: unknown, fallback: string): ActionState {
   if (!(err instanceof ApiError) || !err.message) return { error: fallback };
   const { summary, details } = friendlyConnectionError(err.message);
+  return { error: summary, errorDetails: details };
+}
+
+/**
+ * Layer 3, second half (docs/plans/learning-mode.md): maps Nia's own
+ * `AppError` codes (NOT_INSTALLED, MISSING_FIELD, NAME_TAKEN,
+ * HANDLE_EXHAUSTED, CREATE_FAILED — all thrown by createConnection) to a
+ * plain summary + fix line via the single source-of-truth
+ * `friendlyAppError`, always keeping the raw message as `errorDetails`
+ * behind the existing "Show details" pattern. An unrecognized code (e.g.
+ * install/uninstall's ALREADY_INSTALLED/INSTALL_FAILED/UNINSTALL_FAILED,
+ * not in that source-of-truth list) still gets `errorDetails` populated —
+ * `friendlyAppError` falls back to showing the raw message as both summary
+ * and details rather than hiding it.
+ */
+function friendlyAppErrorMessage(err: unknown, fallback: string): ActionState {
+  if (!(err instanceof ApiError) || !err.message) return { error: fallback };
+  const { summary, details } = friendlyAppError(err.code, err.message);
   return { error: summary, errorDetails: details };
 }
 
@@ -45,7 +58,7 @@ export async function installConnectorAction(
       body: JSON.stringify({ connectorId }),
     });
   } catch (err) {
-    return { error: apiErrorMessage(err, "Couldn't install the connector. Try again.") };
+    return friendlyAppErrorMessage(err, "Couldn't install the connector. Try again.");
   }
   revalidatePath('/app/connections');
   return { success: true };
@@ -98,7 +111,7 @@ export async function createConnectionAction(
       body: JSON.stringify({ connectorId, displayName: parsedName.data.displayName, fields }),
     });
   } catch (err) {
-    return { error: apiErrorMessage(err, "Couldn't create the connection. Check the details and try again.") };
+    return friendlyAppErrorMessage(err, "Couldn't create the connection. Check the details and try again.");
   }
   revalidatePath('/app/connections');
   return { success: true };
@@ -109,7 +122,7 @@ export async function uninstallConnectorAction(_prevState: ActionState, formData
   try {
     await apiFetchServer(`/connectors/installs/${installId}`, { method: 'DELETE' });
   } catch (err) {
-    return { error: apiErrorMessage(err, "Couldn't uninstall the connector. Try again.") };
+    return friendlyAppErrorMessage(err, "Couldn't uninstall the connector. Try again.");
   }
   revalidatePath('/app/connections');
   return { success: true };
@@ -157,7 +170,7 @@ export async function deleteConnectionAction(_prevState: ActionState, formData: 
   try {
     await apiFetchServer(`/connections/${connectionId}`, { method: 'DELETE' });
   } catch (err) {
-    return { error: apiErrorMessage(err, "Couldn't delete the connection. Try again.") };
+    return friendlyAppErrorMessage(err, "Couldn't delete the connection. Try again.");
   }
   revalidatePath('/app/connections');
   return { success: true };

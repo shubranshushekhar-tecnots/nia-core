@@ -6,11 +6,12 @@ import { defineConfig } from "vitest/config";
 //
 // This is the default (unit) config: `pnpm test` must be runnable with no
 // Docker/live services, so a failing run always means a real regression,
-// never "Redis wasn't up." Tests that intentionally exercise a real local
-// Redis (sse.replay.test.ts, checksQueue.timeout.test.ts — see their own
-// header comments) are excluded here and live in vitest.integration.config.ts
-// instead; run them explicitly with `pnpm test:integration` once
-// docker-compose's `redis` service is up.
+// never "Redis/Postgres wasn't up." Tests that intentionally exercise a
+// real local service (sse.replay.test.ts/checksQueue.timeout.test.ts need
+// Redis; manageStaff.atomicity.integration.test.ts needs Postgres — see
+// their own header comments) are excluded here and live in
+// vitest.integration.config.ts instead; run them explicitly with
+// `pnpm test:integration` once the needed service is up.
 export default defineConfig({
   test: {
     env: {
@@ -31,6 +32,7 @@ export default defineConfig({
       "**/dist/**",
       "src/lib/sse.replay.test.ts",
       "src/lib/checksQueue.timeout.test.ts",
+      "src/scripts/manageStaff.atomicity.integration.test.ts",
     ],
   },
 });

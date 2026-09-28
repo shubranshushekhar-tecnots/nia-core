@@ -35,6 +35,18 @@ function quoteLiteral(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+// roleUser/rolePassword are always Nia-generated (never a value the caller
+// typed freely) — restricting them to a fixed character set up front means
+// we never have to trust a single dialect's literal-escaping rules to be
+// airtight. This matters in particular for MySQL, where backslash is a
+// string-literal escape character by default: doubling `'` alone (as
+// quoteLiteral does) is NOT sufficient to make an arbitrary string safe to
+// interpolate into a MySQL string literal, because a trailing `\` can
+// "eat" the closing quote regardless of quote-doubling. Validating the
+// character set here removes the need to reason about that per dialect.
+const ROLE_USER_PATTERN = /^[A-Za-z0-9_]+$/;
+const ROLE_PASSWORD_PATTERN = /^[A-Za-z0-9]+$/;
+
 export type BuildReadOnlyStatementOptions = {
   /**
    * Additional Postgres/Supabase schemas beyond "public" to grant USAGE +
@@ -57,6 +69,13 @@ export function buildReadOnlyStatementText(
   rolePassword: string,
   options: BuildReadOnlyStatementOptions = {},
 ): string | null {
+  if (!ROLE_USER_PATTERN.test(roleUser)) {
+    throw new Error(`Invalid read-only role/user name "${roleUser}": must match ${ROLE_USER_PATTERN}.`);
+  }
+  if (!ROLE_PASSWORD_PATTERN.test(rolePassword)) {
+    throw new Error(`Invalid read-only role password: must match ${ROLE_PASSWORD_PATTERN}.`);
+  }
+
   const dialect = dialectForConnector(connectorId);
   if (!dialect) return null;
 
@@ -74,13 +93,20 @@ export function buildReadOnlyStatementText(
     ];
     for (const schemaName of schemaNames) {
       const schema = postgresAdapter.quoteIdent(schemaName);
+      // A `--` comment only extends to the next line break, so a raw CR/LF
+      // in a user-supplied schema name could otherwise close the comment
+      // early and turn whatever follows on the "same" logical line into an
+      // executable statement. Strip CR/LF before this is the only place in
+      // the file where an unquoted, user-supplied value is interpolated
+      // into a comment rather than through quoteIdent/quoteLiteral/JSON.stringify.
+      const commentSafeSchemaName = schemaName.replace(/[\r\n]/g, " ");
       lines.push(
         `GRANT USAGE ON SCHEMA ${schema} TO ${role};`,
         `GRANT SELECT ON ALL TABLES IN SCHEMA ${schema} TO ${role};`,
         `-- Only covers tables created *after* this point by whichever role runs`,
         `-- this ALTER DEFAULT PRIVILEGES statement (this admin credential) —`,
         `-- tables created by a different role, or that already exist, need the`,
-        `-- GRANT SELECT ON ALL TABLES line above re-run for schema ${schemaName}`,
+        `-- GRANT SELECT ON ALL TABLES line above re-run for schema ${commentSafeSchemaName}`,
         `-- whenever a new one shows up returning 0 rows.`,
         `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schema} GRANT SELECT ON TABLES TO ${role};`,
       );

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildDropRoleStatementText, buildGrantStatementText, friendlyConnectionError, parseNodeConfig, transformOutputFields, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildDropRoleStatementText, buildGrantStatementText, friendlyAppError, friendlyConnectionError, parseNodeConfig, transformOutputFields, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
 import { resolveTableFieldState } from '@/lib/canvas/tableFieldState';
 import { filterEntities } from '@/lib/canvas/entityFiltering';
@@ -247,7 +247,17 @@ function GrantAccessPanel({
       const created = await createWriteGrant(connectionId, { schemas: [namespace] });
       setGrant(created);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create write grant.');
+      // Layer 3, second half (learning-mode plan): CREATE_FAILED is shared
+      // with connection creation, whose default help step in
+      // friendlyAppError's source-of-truth is "add-connection" — override
+      // it to "grant-write-access" here, where it actually happened.
+      if (err instanceof ConnectionsApiError && err.code === 'CREATE_FAILED') {
+        const { summary, details } = friendlyAppError(err.code, err.message, 'grant-write-access');
+        setError(summary);
+        setErrorDetails(details);
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to create write grant.');
+      }
     } finally {
       setBusy(false);
     }

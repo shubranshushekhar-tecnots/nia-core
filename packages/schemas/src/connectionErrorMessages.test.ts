@@ -12,8 +12,22 @@ describe("friendlyConnectionError", () => {
     { raw: "connect ECONNREFUSED 127.0.0.1:3306", summaryContains: "Connection timed out or was refused" },
     { raw: 'password authentication failed for user "nia_ro"', summaryContains: "Authentication failed" },
     { raw: "Access denied for user 'nia_ro'@'%' (using password: YES)", summaryContains: "Authentication failed" },
+    { raw: "MongoServerError: bad auth : Authentication failed.", summaryContains: "Authentication failed" },
     { raw: 'permission denied for table "customers"', summaryContains: "Missing privileges" },
     { raw: "insufficient privilege", summaryContains: "Missing privileges" },
+    { raw: "read ECONNRESET", summaryContains: "Connection timed out or was refused" },
+    { raw: "FATAL: Tenant or user not found", summaryContains: "Wrong pooler username" },
+    { raw: "no tenant identifier provided", summaryContains: "Wrong pooler username" },
+    {
+      raw: "(ENOIDENTIFIER) no tenant identifier provided (external_id or sni_hostname required)",
+      summaryContains: "Wrong pooler username",
+    },
+    {
+      raw: 'Cannot connect to the Supabase pooler as "nia_wg_abc123": no project ref could be determined. Use the pooler connection string\'s username, formatted "<role>.<project_ref>", when setting up this connection.',
+      summaryContains: "Wrong pooler username",
+    },
+    { raw: "ER_BAD_DB_ERROR: Unknown database 'sales'", summaryContains: "Database not found" },
+    { raw: 'new row violates row-level security policy for table "customers"', summaryContains: "Blocked by a Row-Level Security policy" },
     { raw: "some completely unrecognized driver error", summaryContains: "Connection failed" },
   ];
 

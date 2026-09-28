@@ -17,7 +17,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, type ActorRole, type EntityRef, type GraphNodeType, type Plan, type PlanDiff } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, friendlyConnectionError, type ActorRole, type EntityRef, type GraphNodeType, type Plan, type PlanDiff } from '@nia/schemas';
 import type { SidebarProject, WorkflowDetail } from '@/lib/dashboard/types';
 import type { Connection, ConnectorInstall } from '@/lib/connections/types';
 import {
@@ -547,7 +547,14 @@ function CanvasInner({
           if (!connectionId) return;
           try {
             const result = await apiTestConnection(connectionId);
-            pushToast(result.ok ? 'success' : 'error', result.ok ? `Connection OK${result.latencyMs != null ? ` (${result.latencyMs}ms)` : ''}` : (result.error ?? 'Test failed'));
+            pushToast(
+              result.ok ? 'success' : 'error',
+              result.ok
+                ? `Connection OK${result.latencyMs != null ? ` (${result.latencyMs}ms)` : ''}`
+                : result.error
+                  ? friendlyConnectionError(result.error).summary
+                  : 'Test failed',
+            );
           } catch (err) {
             pushToast('error', err instanceof ConnectionsApiError ? err.message : 'Test failed.');
           }
@@ -567,7 +574,11 @@ function CanvasInner({
             }
             pushToast('success', 'Schema refreshed');
           } catch (err) {
-            pushToast('error', err instanceof ConnectionsApiError ? err.message : 'Refresh failed.');
+            // Item 5 (fix-chain plan): INTROSPECT_FAILED carries the raw
+            // connector introspection error verbatim (same underlying
+            // driver text testConnection can surface) — pattern-match it
+            // into a friendly summary rather than showing it raw in a toast.
+            pushToast('error', err instanceof ConnectionsApiError ? friendlyConnectionError(err.message).summary : 'Refresh failed.');
           }
           break;
         }
