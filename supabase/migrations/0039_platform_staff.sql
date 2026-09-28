@@ -12,7 +12,9 @@
 -- build order Step 3, a separate migration).
 --
 -- Granted/revoked only via a CLI script run by an existing staff member
--- (apps/api/src/scripts/manageStaff.ts) — never via any HTTP route. RLS is
+-- (apps/api/src/scripts/manageStaff.ts), which itself verifies the acting
+-- --by user is an active staff row before writing granted_by/revoked_by —
+-- never via any HTTP route. RLS is
 -- enabled with ZERO policies (default-deny for authenticated/anon; the
 -- fresh table also gets no explicit grant to either, so there is nothing to
 -- revoke) — same posture as staging_objects (0021_staging_registry.sql):
@@ -34,7 +36,8 @@ create table public.platform_staff (
   user_id    uuid primary key references public."user" (id) on delete cascade,
   granted_by uuid not null references public."user" (id),
   granted_at timestamptz not null default now(),
-  revoked_at timestamptz
+  revoked_at timestamptz,
+  revoked_by uuid references public."user" (id)
 );
 
 comment on table public.platform_staff is
@@ -49,15 +52,23 @@ comment on table public.platform_staff is
 
 comment on column public.platform_staff.granted_by is
   'The staff user_id who ran the grant. Not nullable — the very first '
-  'staff member is granted by manageStaff.ts using a value the operator '
-  'supplies directly (e.g. their own user_id), never a bootstrap NULL, so '
-  'this column never needs an exception to its NOT NULL constraint.';
+  'staff member is self-granted by manageStaff.ts''s `grant --bootstrap` '
+  '(granted_by = the same user_id being granted, refused if any active '
+  'staff row already exists), so this column never needs an exception to '
+  'its NOT NULL constraint. Every subsequent grant requires --by <email> '
+  'of an existing active staff member instead.';
 
 comment on column public.platform_staff.revoked_at is
   'Null while the grant is active. Revocation sets this timestamp rather '
   'than deleting the row, preserving the historical grant/revoke record. '
   'requireStaff and every staff-listing query must filter on '
   '`revoked_at is null`.';
+
+comment on column public.platform_staff.revoked_by is
+  'The staff user_id who ran the revoke, mirroring granted_by. Nullable '
+  '(and null while the grant is still active) since a row may never be '
+  'revoked, unlike granted_by which every row has from the moment it is '
+  'created.';
 
 -- Fast "is this user currently staff" lookup (requireStaff runs this on
 -- every /console/* request) and fast "list current staff" for the CLI

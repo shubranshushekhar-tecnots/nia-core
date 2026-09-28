@@ -29,3 +29,20 @@ Layer 3 — Plain-language errors:
 Accessibility (same steps): Esc + focus trap in Add/Edit dialogs; labels on SQL blocks and table selects; help panel keyboard-reachable.
 
 Deliver: the proposed read-only SQL per dialect, the help-content draft, the error mapping table, UI placement sketches (ASCII), a build order in small steps, and tests planned (including: every step × connector has help content; help SQL equals generator output; every mapped error code has a message). Then STOP. Don't commit.
+
+---
+
+Design approved with these changes. Update docs/plans/learning-mode.md, then start the build order step by step (STOP after each step for review). Don't commit.
+
+SQL (step 1):
+1. Injection safety: every user-supplied identifier (database, schema, and anything else interpolated) must be escaped per dialect — Postgres identifiers double any ", MySQL identifiers double any backtick, MongoDB values go through JSON.stringify. Generated passwords use only [A-Za-z0-9]. Unit tests with hostile inputs (quotes, backticks, semicolons, newlines) for all three dialects prove the output stays a single intended statement set.
+2. Postgres/Supabase: add `ALTER ROLE "<role>" SET default_transaction_read_only = on;`. Help copy must state that ALTER DEFAULT PRIVILEGES only covers tables created later by the role that ran it; tables created by other roles need the GRANT SELECT ON ALL TABLES line re-run.
+3. Schema scope: default public; the read-only helper (not the connection config) accepts optional extra schemas and generates USAGE/SELECT/DEFAULT PRIVILEGES per schema.
+4. Supabase pooler: if the pasted connection URL's username is postgres.<ref>, derive <ref> and show/prefill the username as <role>.<ref>. If no ref can be derived, show the existing instruction.
+5. MySQL: keep '%' but add a note to restrict the host to Nia's outbound IP when known; drop FLUSH PRIVILEGES.
+6. MongoDB: add an "Using MongoDB Atlas?" path — createUser often isn't allowed from mongosh on Atlas; steps: Atlas → Database Access → Add user → built-in role read on <database>.
+7. "Use these credentials" button that fills Username/Password with the generated values.
+
+Answers: (1) public default + optional extra schemas in the helper; (2) /app/connections list-only with "Manage from the canvas"; (3) no Ask Copilot on Add/Edit dialogs.
+
+Add the event-log line to TODO.md now.

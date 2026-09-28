@@ -1,5 +1,8 @@
 # TODO
 
+- Learning mode (`docs/plans/learning-mode.md`): minimal first-party event
+  log (step viewed, test failed + error code, help opened). No
+  third-party analytics.
 - Auth: email verification — not built. `emailAndPassword.autoSignIn: true`
   (`packages/auth/src/config.ts`) means signup logs a user straight in
   today with no confirmation step; deferred per `docs/plans/auth.md`'s
