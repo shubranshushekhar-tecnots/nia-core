@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { GraphDoc, PlanProposeOutcome } from '@nia/schemas';
 import type { Connection } from '@/lib/connections/types';
 import { STAGE_LABEL, type LocalMessage } from '@/lib/chat/useChatSession';
@@ -13,6 +13,7 @@ import {
   type AgentToolRender,
 } from '@/lib/api/copilotAgentClient';
 import { useCanvasStore } from '@/lib/canvas/store';
+import { commandInsertText, firstPlaceholderRange, recordRecentCommand, type SlashCommand } from '@/lib/canvas/commandMenu';
 import {
   chatCitationChipStyle,
   chatCitationCopyBtnStyle,
@@ -31,10 +32,6 @@ import {
   chatMentionToolStyle,
   chatMessageTextStyle,
   chatMessageWrapStyle,
-  chatSlashMenuDropdownStyle,
-  chatSlashMenuHintStyle,
-  chatSlashMenuLabelStyle,
-  chatSlashMenuRowStyle,
   chatStatusDotStyle,
   chatStatusRowStyle,
   chatUnfaithfulNoteStyle,
@@ -54,6 +51,7 @@ import {
   appliedPlansTitleStyle,
 } from './styles';
 import { MicIcon } from './navIcons';
+import CommandMenu from './CommandMenu';
 import Logo from '@/components/Logo';
 
 /**
@@ -393,6 +391,11 @@ export default function CommandBar({
   const [planConversationId, setPlanConversationId] = useState<string | undefined>(undefined);
   const [threadOpen, setThreadOpen] = useState(messages.length > 0);
   const [expandedCitation, setExpandedCitation] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Set by pickCommand right before setDraft(); applied in the effect below
+  // once the controlled input's value has actually updated in the DOM —
+  // setSelectionRange has to run after that value lands, not before.
+  const pendingSelectionRef = useRef<{ start: number; end: number } | null>(null);
 
   // Copilot agent (Part 4) — "//"-prefixed messages (distinct from the
   // single-"/" plan-propose flow above, which stays untouched) drive the
@@ -454,6 +457,27 @@ export default function CommandBar({
     setDraft('/' + text);
     setSlashMenuOpen(false);
   }
+
+  // Command-menu selection (docs/plans/copilot-command-menu.md) — replaces
+  // the "/token" with the command's template text and selects its first
+  // <placeholder> so the user can type straight over it. Does not auto-send.
+  function pickCommand(cmd: SlashCommand) {
+    const text = commandInsertText(cmd);
+    pendingSelectionRef.current = firstPlaceholderRange(text) ?? { start: text.length, end: text.length };
+    setDraft(text);
+    recordRecentCommand(cmd.id);
+    setSlashMenuOpen(false);
+  }
+
+  useEffect(() => {
+    if (!pendingSelectionRef.current) return;
+    const { start, end } = pendingSelectionRef.current;
+    pendingSelectionRef.current = null;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(start, end);
+  }, [draft]);
 
   function handlePlusClick() {
     setDraft((d) => {
@@ -817,13 +841,15 @@ export default function CommandBar({
       )}
 
       <div style={barPositionStyle}>
-        {slashMenuOpen && (
-          <div style={{ ...chatSlashMenuDropdownStyle, left: 0, right: 0 }} data-testid="command-bar-slash-menu">
-            {SLASH_SUGGESTIONS.map((s) => (
-              <SlashMenuRow key={s} text={s} onPick={() => pickSlashSuggestion(s)} />
-            ))}
-          </div>
-        )}
+        <CommandMenu
+          open={slashMenuOpen}
+          draft={draft}
+          inputRef={inputRef}
+          onPickCommand={pickCommand}
+          onPickAiSuggestion={pickSlashSuggestion}
+          onClose={() => setSlashMenuOpen(false)}
+          aiSuggestions={SLASH_SUGGESTIONS}
+        />
 
         {mentionOpen && (
           <div style={{ ...chatMentionDropdownStyle, left: 0, right: 0 }} data-testid="command-bar-mention-dropdown">
@@ -845,6 +871,7 @@ export default function CommandBar({
             +
           </button>
           <input
+            ref={inputRef}
             style={barInputStyle}
             placeholder="Ask or command… (@ to mention a node, / for actions)"
             value={draft}
@@ -887,25 +914,6 @@ export default function CommandBar({
         )}
       </div>
     </div>
-  );
-}
-
-function SlashMenuRow({ text, onPick }: { text: string; onPick: () => void }) {
-  const [hovered, setHovered] = useState(false);
-  return (
-    <button
-      type="button"
-      style={chatSlashMenuRowStyle(hovered)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onMouseDown={(e) => {
-        e.preventDefault();
-        onPick();
-      }}
-    >
-      <span style={chatSlashMenuLabelStyle}>{text}</span>
-      <span style={chatSlashMenuHintStyle}>Copilot</span>
-    </button>
   );
 }
 

@@ -6079,3 +6079,139 @@ change. But only two actually *call* the changed code paths:
   only produce/consume raw `IntrospectResponse` schemas, they don't do
   this entity-scoping. Rebuilding them isn't functionally required by
   this change.
+
+## Home dashboard redesign (2026-09-28): client-side aggregation, honesty rules, and a deferred SQL-summary endpoint
+
+Redesigned `/app` (Home) into the chart-heavy dashboard from
+`designs/Nia Core — Workflow Canvas.html` — KPI strip, "Runs per day" /
+"Rows moved" / "Run duration" charts, a Workflows table, and a right
+panel (profile card with a deterministic hash-based avatar, "Needs
+attention", "Activity"). Pure UI/view-layer work: no new backend
+endpoints, no schema changes. Source data is the existing
+`GET /dashboard/recent-runs?limit=` endpoint, called once with
+`limit=50` (`apps/web/src/lib/api/dashboardServer.ts`), then aggregated
+entirely client-side in `apps/web/src/lib/dashboard/aggregate.ts`
+(14-day local-timezone bucketing) and
+`apps/web/src/lib/dashboard/homeViewModel.ts` (per-workflow rows,
+needs-attention, activity feed, per-day duration median).
+
+**Honesty rules adopted** (binding for any future chart/KPI added to
+this page): (1) always state the real data window ("Based on the latest
+50 runs (last N days)" vs "All runs") rather than implying full-period
+coverage; (2) a day outside the loaded window renders as "no data
+loaded" (hatched/grey), never as a silent zero — collapsing "we didn't
+fetch it" into "nothing happened" would be a fabrication; (3) KPI deltas
+only render when both compared periods are fully within the loaded
+window, otherwise the delta is hidden, never computed on partial data;
+(4) p95 duration only renders with enough samples (20+), otherwise "not
+enough runs yet" — same reasoning extended to the new per-day duration
+chart, which deliberately shows only a median line (a per-day p95 would
+need far more samples/day than this app produces) with the overall
+gated p95 shown as a text annotation instead. Several elements present
+in the source design were dropped rather than reproduced because they
+have no real, non-fabricated data or logic behind them yet: per-run
+"Route" subtitles, 'warn'/'idle' workflow statuses, the per-row "Run"
+trigger button and "All runs →" link (no such action/route exists), the
+24h/7d/14d/30d range toggle (confirmed dead even in the source design —
+sets state that's never read), and the early-state "Getting started"
+checklist (its checked/unchecked items depend on data — connections
+count, write-grant status — not available on this page).
+
+**Deferred follow-up (not implemented, no backend change made here):**
+a read-only `GET /dashboard/summary?days=28` endpoint that aggregates
+in SQL, to replace this client-side bucketing once the 50-run client
+fetch becomes a real limitation (e.g. a workflow with high run volume
+needing a true 28-day window instead of "however many of the last 50
+runs happen to fall in it"). Tracked in `TODO.md`.
+
+## Copilot "/" command menu rebuild: 12 locked commands, grouped + tabbed (2026-09-28)
+
+Rebuilt `CommandBar.tsx`'s flat 6-item "/" suggestion dropdown into a
+grouped, tabbed command menu per `docs/plans/copilot-command-menu.md`.
+UI-only: every command still routes through the existing
+`proposePlan()`/`runAgentTurn()` paths — no new backend/schema logic,
+and the separate "//" agent-turn path is untouched.
+
+**Locked command set (12, down from an initial larger candidate list —
+see `TODO.md` for what got dropped and why):**
+- Build: `/source`, `/destination`, `/connect`, `/map`
+- Transform: `/filter`, `/aggregate`, `/clean`
+- Run: `/run`, `/status`, `/cancel`
+- Inspect: `/preview`, `/explain`
+
+Several originally-considered commands (`/describe`, `/profile`,
+`/undo`/revert, `/compute`, `/drop`, `/flatten`) were dropped during
+verification, not for UI reasons — each hit a real backend/agent-tool
+gap (no connection-UUID resolution, no "last applied plan" lookup, plan
+model only supports filter/aggregate steps). All recorded as backlog
+findings in `TODO.md` rather than fixed here, since fixing them is
+agent/backend work, out of scope for this menu rebuild.
+
+**Architecture:**
+- `apps/web/src/lib/canvas/commandMenu.ts` — pure, framework-free logic
+  (the 12-command data model, `filterCommands` ranking, `groupCommands`,
+  template-insertion/placeholder-cursor helpers, localStorage-backed
+  recent-commands, and the keyboard-nav index/tab-cycling math). Kept
+  React-free specifically so it's covered by `vitest.config.ts`'s
+  `src/lib/**/*.test.ts` glob without needing jsdom — this project has
+  no component-test setup, only e2e for interactive behavior.
+- `apps/web/src/components/canvas/CommandMenu.tsx` — the React
+  component. Renders the input's floating panel and owns its own
+  keyboard handling by attaching a native `keydown` listener directly to
+  `CommandBar`'s `<input>` DOM node (via a shared ref) rather than
+  requiring `CommandBar` to thread key events through props: a real
+  listener on the target node fires during the bubble phase before
+  React's root-delegated `onKeyDown`, so `stopPropagation()` there
+  cleanly suppresses `CommandBar`'s own Enter-to-send handler for just
+  the keys this menu owns (arrows, Enter/Tab, Escape, Ctrl+Tab/arrow-
+  left-right tab switching) without `CommandBar` needing any awareness
+  of the menu's internals. Combobox ARIA state
+  (`role=combobox`/`aria-expanded`/`aria-controls`/`aria-activedescendant`)
+  is likewise set imperatively onto that same input element, since the
+  attributes conventionally belong on the `<input>` but the active-
+  descendant state lives inside the menu.
+- `CommandBar.tsx` changes are intentionally small: an `inputRef`, a
+  `pickCommand()` handler that inserts `prefix + template` and places
+  the cursor at the first `<placeholder>` (via a `pendingSelectionRef` +
+  effect, since `setSelectionRange` has to run after the controlled
+  input's value has actually updated in the DOM), and swapping the old
+  inline dropdown JSX for `<CommandMenu ... />`. The dead
+  `chatSlashMenu*` styles and the old `SlashMenuRow` function were
+  removed.
+
+**Known gap found, not fixed here:** the design brief calls for the
+menu to work at a 390px viewport with no clipping. The menu's own
+popup logic satisfies this (matches its anchor's width, respects its
+`maxHeight`, flips above/below), but the surrounding canvas app shell
+(`Sidebar` + `NodesRail` + the right-docked AI/CommandBar panel) has no
+responsive breakpoints of its own and is physically unreachable below
+~960px viewport width. Recorded in `TODO.md` rather than fixed, since
+making the whole shell responsive is well outside a "/" menu rebuild.
+
+**Files changed:** `apps/web/src/lib/canvas/commandMenu.ts` (new),
+`apps/web/src/lib/canvas/commandMenu.test.ts` (new, 32 tests),
+`apps/web/src/components/canvas/CommandMenu.tsx` (new),
+`apps/web/src/components/canvas/styles.ts` (new `commandMenu*` style
+constants), `apps/web/src/components/canvas/CommandBar.tsx` (wiring),
+`apps/web/src/components/app/styles.ts` (removed dead
+`chatSlashMenu*` styles), `apps/web/e2e/command-bar.spec.ts` (updated
+for the new grouped/tabbed structure: filtering, arrow+Enter selection,
+Esc, tab switching, and the 390px popup-sizing check above). No image
+rebuilds needed outside `apps/web` — this is a web-only UI change.
+Screenshots taken at 1440px and 390px per the design brief (not
+committed, per instruction).
+
+## Console v1: `trustDeviceMaxAge = 0` app-wide, no customer regression (2026-09-28)
+
+Per `docs/plans/console-plan.md` §4b (round-2 spike answer to "staff must
+not be able to use trust-this-device/remembered 2FA"), the project's
+`twoFactor()` config will set `trustDeviceMaxAge: 0` globally rather than
+per-role. This structurally disables better-auth's "remember this
+device" cookie for every account, not just staff. Confirmed safe: no
+customer uses 2FA today (`user.twoFactorEnabled` is opt-in and nothing
+in this codebase enrolls anyone automatically), so there is no existing
+trust-device cookie or workflow to regress. If a customer ever opts into
+2FA under this setting, they will simply be re-prompted for a 2FA code
+on every sign-in — an accepted UX cost, not a bug, in exchange for
+staff sessions never being able to skip 2FA verification via a
+remembered-device cookie.

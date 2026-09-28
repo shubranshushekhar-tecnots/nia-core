@@ -12,14 +12,20 @@ import {
 } from '@/components/app/styles';
 import CommandPalette from '@/components/app/CommandPalette';
 import Logo from '@/components/Logo';
+import type { WorkflowStatus } from '@/lib/dashboard/types';
 import {
   headerCopilotToggleBtnStyle,
+  headerDraftChipStyle,
+  headerRenameBtnStyle,
   headerRunBtnStyle,
   headerRunChecksBtnStyle,
   headerSearchInputStyle,
   headerSearchKbdStyle,
   headerSearchLabelStyle,
+  headerTabBtnStyle,
+  headerTabsStyle,
 } from './styles';
+import { EditIcon } from './navIcons';
 
 /**
  * 48px merged header for the workflow canvas (canvasredesign.html) —
@@ -32,6 +38,7 @@ export default function CanvasHeader({
   projectName,
   projectHref,
   workflowName,
+  workflowStatus,
   saveState,
   onReloadAfterConflict,
   checksRunning,
@@ -47,6 +54,7 @@ export default function CanvasHeader({
   projectName: string;
   projectHref: string;
   workflowName: string;
+  workflowStatus: WorkflowStatus;
   saveState: 'idle' | 'saving' | 'saved' | 'conflict';
   onReloadAfterConflict: () => void;
   checksRunning: boolean;
@@ -112,12 +120,32 @@ export default function CanvasHeader({
       </a>
       <span style={breadcrumbSepStyle}>/</span>
       <span style={pageCrumbCurrentStyle}>{workflowName}</span>
+      {/* Always disabled — no PATCH /workflows/:id (rename) endpoint exists
+          yet. Signals where renaming will live without faking that it works. */}
+      <button type="button" disabled style={headerRenameBtnStyle} title="Renaming isn't available yet" aria-label="Rename workflow">
+        <EditIcon size={13} />
+      </button>
+      {workflowStatus === 'draft' && <span style={headerDraftChipStyle}>Draft</span>}
       {saveState !== 'conflict' && saveState !== 'idle' && (
         <>
           <span style={breadcrumbSepStyle}>·</span>
           <span style={{ fontSize: 12, color: 'var(--ink4)' }}>{saveState === 'saving' ? 'Saving…' : 'Saved'}</span>
         </>
       )}
+
+      {/* Only "Editor" is wired — Runs/Schedule have no routes yet, so they
+          render disabled with a "Coming soon" tooltip rather than dead links. */}
+      <div style={headerTabsStyle} role="tablist" aria-label="Workflow view">
+        <button type="button" role="tab" aria-selected style={headerTabBtnStyle(true, false)}>
+          Editor
+        </button>
+        <button type="button" role="tab" aria-selected={false} disabled style={headerTabBtnStyle(false, true)} title="Coming soon">
+          Runs
+        </button>
+        <button type="button" role="tab" aria-selected={false} disabled style={headerTabBtnStyle(false, true)} title="Coming soon">
+          Schedule
+        </button>
+      </div>
 
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
         {saveState === 'conflict' && (

@@ -7,7 +7,6 @@ import type { SidebarProject } from '@/lib/dashboard/types';
 import type { ActorRole } from '@nia/schemas';
 import Logo from '@/components/Logo';
 import {
-  dropdownItemStyle,
   dropdownStyleUp,
   navGroupLabelStyle,
   newProjectRowStyle,
@@ -38,8 +37,8 @@ import {
   ChevronRightIcon,
   ConnectionsIcon,
   HomeIcon,
-  PlusIcon,
   ProjectsIcon,
+  RunsIcon,
   SettingsIcon,
 } from '@/components/canvas/navIcons';
 import { useAppShellStore } from './store';
@@ -89,7 +88,6 @@ export default function Sidebar({
   const setOpenProject = useAppShellStore((s) => s.setOpenProject);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [showCreateWorkflow, setShowCreateWorkflow] = useState(false);
-  const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [railSnapping, setRailSnapping] = useState(false);
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -191,43 +189,6 @@ export default function Sidebar({
         <Logo size={24} showWordmark={wide} />
       </div>
 
-      <div style={{ position: 'relative', width: wide ? '100%' : 'auto' }}>
-        <button
-          type="button"
-          style={iconRailBtnStyle(showCreateMenu, wide)}
-          onClick={() => setShowCreateMenu((v) => !v)}
-          aria-label="New"
-          title="New workflow or project"
-        >
-          <PlusIcon size={16} />
-          {wide && <span style={iconRailBtnLabelStyle}>New</span>}
-        </button>
-        {showCreateMenu && (
-          <div style={{ ...dropdownStyleUp, left: wide ? 8 : 44, top: 'auto', bottom: 0, minWidth: 196 }} onMouseLeave={() => setShowCreateMenu(false)}>
-            <button
-              type="button"
-              style={dropdownItemStyle}
-              onClick={() => {
-                setShowCreateMenu(false);
-                setShowCreateProject(true);
-              }}
-            >
-              New project
-            </button>
-            <button
-              type="button"
-              style={dropdownItemStyle}
-              onClick={() => {
-                setShowCreateMenu(false);
-                setShowCreateWorkflow(true);
-              }}
-            >
-              New workflow
-            </button>
-          </div>
-        )}
-      </div>
-
       <div style={iconRailScrollStyle(wide)}>
         {canManageOrg && (
           <button
@@ -321,6 +282,19 @@ export default function Sidebar({
           <ConnectionsIcon size={16} />
           {wide && <span style={iconRailBtnLabelStyle}>Connections</span>}
         </a>
+
+        {/* No run-history page exists yet (no /app/runs route) — rendered
+            disabled like the org-governance placeholders below rather than
+            a dead link. */}
+        <button
+          type="button"
+          style={{ ...iconRailBtnStyle(false, wide), color: 'var(--ink4)', cursor: 'default', opacity: 0.6 }}
+          disabled
+          title="Runs \u2014 soon"
+        >
+          <RunsIcon size={16} />
+          {wide && <span style={iconRailBtnLabelStyle}>Runs {'\u2014'} soon</span>}
+        </button>
 
         {canManageOrg && (
           <button

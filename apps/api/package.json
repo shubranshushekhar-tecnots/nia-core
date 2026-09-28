@@ -11,7 +11,10 @@
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "seed:fixtures": "tsx src/scripts/seedFixtureUsers.ts",
-    "set-password": "tsx src/scripts/setUserPassword.ts"
+    "set-password": "tsx src/scripts/setUserPassword.ts",
+    "staff:grant": "tsx src/scripts/manageStaff.ts grant",
+    "staff:revoke": "tsx src/scripts/manageStaff.ts revoke",
+    "staff:list": "tsx src/scripts/manageStaff.ts list"
   },
   "dependencies": {
     "@nia/auth": "workspace:*",

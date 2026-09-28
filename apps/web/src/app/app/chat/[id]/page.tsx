@@ -30,7 +30,7 @@ export default async function ChatConversationPage({ params }: { params: Promise
   ]);
 
   return (
-    <AppShell topBar={<TopBar orgName={user.org?.name ?? null} email={user.email} />}>
+    <AppShell topBar={<TopBar orgName={user.org?.name ?? null} email={user.email} userId={user.userId} />}>
       <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
       <div style={mainColStyle}>
         <ChatClient

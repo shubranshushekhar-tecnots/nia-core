@@ -38,7 +38,12 @@ import { opForStep } from "./ops/registry.js";
  */
 export const CheckId = z.enum(["config", "dag", "credentials", "mappings", "grants"]);
 export type CheckId = z.infer<typeof CheckId>;
-export const CheckStatus = z.enum(["pass", "fail", "warn"]);
+// "skip" (canvas redesign, additive) marks a result that was never
+// applicable to begin with — e.g. mappings' heterogeneity check on a
+// same-connector-type path — distinct from "pass" (a real check ran and
+// found nothing wrong). The UI renders skip with its own neutral styling,
+// never folded into pass/fail counts.
+export const CheckStatus = z.enum(["pass", "fail", "warn", "skip"]);
 export type CheckStatus = z.infer<typeof CheckStatus>;
 
 export const CheckResult = z.object({
@@ -335,7 +340,19 @@ export function checkMappings(graph: GraphDoc, lookupFields: FieldsLookup): Chec
       if (!source) continue; // reported separately by checkDag.
 
       const heterogeneous = Boolean(source.manifestId && dest.manifestId && source.manifestId !== dest.manifestId);
-      if (!heterogeneous) continue; // homogeneous/unresolved paths pass automatically.
+      if (!heterogeneous) {
+        // Same connector type (or one side unresolved) — there is no
+        // cross-connector field mapping to approve, so this path is
+        // reported as explicitly skipped rather than silently folded into
+        // the check's generic "pass" summary.
+        results.push({
+          id: "mappings",
+          status: "skip",
+          message: `Skipped \u2014 not needed: ${nodeLabel(source)} -> ${nodeLabel(dest)} uses the same connector type, no field mapping required.`,
+          nodeId: dest.id,
+        });
+        continue;
+      }
 
       const parsed = parseNodeConfig(dest.type, dest.config);
       const mapping = !parsed.unrecognized && parsed.type !== "transform" ? parsed.value.mapping : undefined;

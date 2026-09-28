@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { logout } from '@/lib/auth/actions';
 import { clearStoredBearerToken } from '@/lib/auth/browserSession';
+import Avatar from '@/components/Avatar';
 import {
   breadcrumbSepStyle,
   dropdownItemStyle,
@@ -11,7 +12,6 @@ import {
   orgSwitcherBtnStyle,
   pageCrumbCurrentStyle,
   pageCrumbLinkStyle,
-  profileAvatarStyle,
   profileEmailRowStyle,
   profileEmailTextStyle,
   topBarAvatarBtnStyle,
@@ -31,16 +31,18 @@ export type TopBarCrumb = { label: string; href?: string };
 export default function TopBar({
   orgName,
   email,
+  userId,
   crumbs,
 }: {
   orgName: string | null;
   email: string;
+  /** Seed for the generated avatar — the current user's id. */
+  userId: string;
   crumbs?: TopBarCrumb[];
 }) {
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const initials = email.slice(0, 2).toUpperCase();
 
   return (
     <header style={topBarStyle}>
@@ -101,16 +103,16 @@ export default function TopBar({
       <div style={{ position: 'relative' }}>
         <button
           type="button"
-          style={topBarAvatarBtnStyle}
+          style={{ ...topBarAvatarBtnStyle, padding: 0, background: 'transparent', border: 'none' }}
           onClick={() => setProfileMenuOpen((v) => !v)}
           title={email}
         >
-          {initials}
+          <Avatar seed={userId} size={26} title={email} />
         </button>
         {profileMenuOpen && (
           <div style={{ ...dropdownStyle, right: 0, left: 'auto' }} onMouseLeave={() => setProfileMenuOpen(false)}>
             <div style={profileEmailRowStyle}>
-              <span style={profileAvatarStyle} aria-hidden>{initials}</span>
+              <Avatar seed={userId} size={24} title={email} />
               <span style={profileEmailTextStyle}>{email}</span>
             </div>
             <div style={{ height: 1, background: 'var(--line)', margin: '4px 0' }} />

@@ -406,8 +406,16 @@ describe("checkMappings", () => {
     return { ...dest, config: mapping ? { mapping: { version: 1, ...mapping } } : {} };
   }
 
-  it("passes automatically for a homogeneous (same-manifest) path with no mapping needed", () => {
+  it("skips (not pass) a homogeneous (same-manifest) path with no mapping needed", () => {
     const graph: GraphDoc = { nodes: [{ ...source, manifestId: "mysql" }, { ...dest, manifestId: "mysql" }], edges: [edge] };
+    const results = checkMappings(graph, () => undefined);
+    expect(results).toEqual([
+      { id: "mappings", status: "skip", message: expect.stringContaining("Skipped"), nodeId: "dest" },
+    ]);
+  });
+
+  it("passes when there is nothing to check at all (no destinations/edges)", () => {
+    const graph: GraphDoc = { nodes: [{ ...source, manifestId: "mysql" }], edges: [] };
     expect(checkMappings(graph, () => undefined)).toEqual([
       { id: "mappings", status: "pass", message: "Every heterogeneous source-to-destination path has an approved, drift-free mapping." },
     ]);

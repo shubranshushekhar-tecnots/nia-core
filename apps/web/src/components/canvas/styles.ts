@@ -47,7 +47,7 @@ export const canvasBodyStyle: CSSProperties = {
 };
 
 export const canvasSurfaceStyle: CSSProperties = {
-  flex: 1,
+  flex: '1 1 auto',
   minWidth: 0,
   position: 'relative',
 };
@@ -69,19 +69,18 @@ export const canvasFullscreenWrapStyle: CSSProperties = {
   background: 'var(--canvas)',
 };
 
-// Column holding NodeConfigPanel + canvasSurfaceStyle, inside
-// canvasFullscreenWrapStyle's row — sits beside CopilotSidebar as a
-// sibling, never spans it or NodesRail/the app header. `position: relative`
-// is required here (not just on canvasSurfaceStyle) because
-// NodeConfigPanel is a sibling of canvasSurfaceStyle, not a child of it —
-// its `configPanelShellStyle` absolute positioning resolves against this
-// column, which correctly sits below the header/rail.
+// Row holding canvasSurfaceStyle + NodeConfigPanel as real flex siblings
+// (workflow canvas redesign — was an absolutely-positioned floating overlay
+// over the canvas; now the canvas visibly shrinks to make room for a docked
+// inspector, per spec). Sits beside CopilotSidebar as its own sibling
+// inside canvasFullscreenWrapStyle's row, never spanning it or NodesRail/
+// the app header.
 export const canvasColumnStyle: CSSProperties = {
   flex: 1,
   minWidth: 0,
   minHeight: 0,
   display: 'flex',
-  flexDirection: 'column',
+  flexDirection: 'row',
   position: 'relative',
 };
 
@@ -259,7 +258,7 @@ export const railSectionHeaderStyle: CSSProperties = {
 // colored icon tile stands in for the border as the row's sole visual
 // anchor, per the redesign spec.
 export const railEntryStyle = (draggable: boolean): CSSProperties => ({
-  height: 36,
+  height: 44,
   padding: '0 10px 0 8px',
   margin: '0 8px 2px',
   borderRadius: 8,
@@ -273,9 +272,9 @@ export const railEntryStyle = (draggable: boolean): CSSProperties => ({
   gap: 8,
 });
 
-export const railEntryIconTileStyle = (color: string): CSSProperties => ({
-  width: 22,
-  height: 22,
+export const railEntryIconTileStyle = (color: string, size = 22): CSSProperties => ({
+  width: size,
+  height: size,
   borderRadius: 6,
   flex: 'none',
   background: `${color}1F`,
@@ -456,31 +455,27 @@ export const railCollapsedEntryLabelStyle: CSSProperties = {
   textTransform: 'uppercase',
 };
 
-// ---------- node config panel (floating panel over the canvas, replaces the old docked top band) ----------
+// ---------- node config panel (docked inspector, flex sibling of the canvas surface) ----------
 
 export const FLOATING_PANEL_WIDTH = 360;
 
-// Absolutely positioned within canvasSurfaceStyle (which is `position:
-// relative`) — inset 12px from the canvas's own top/right edges, not the
-// viewport's, so it stays correctly placed inside the fullscreen/full-view
-// subtree too. Capped to the surface's height minus its own inset so long
-// content (e.g. MappingEditor's field list) scrolls internally instead of
-// overflowing the canvas.
+// Real flex sibling of canvasSurfaceStyle inside canvasColumnStyle's row
+// (workflow canvas redesign — was `position: absolute`, floating over the
+// canvas; the canvas now visibly shrinks by FLOATING_PANEL_WIDTH instead).
+// `flex: '0 0 360px'` fixes its width regardless of the canvas's own size;
+// `overflow: auto` (not the old shell's `hidden`) lets long content (e.g.
+// MappingEditor's field list) scroll internally without a fixed maxHeight
+// calc, since height now comes from the flex row's own cross-axis stretch.
 export const configPanelShellStyle: CSSProperties = {
-  position: 'absolute',
-  top: 12,
-  right: 12,
-  zIndex: 25,
+  flex: '0 0 360px',
   width: FLOATING_PANEL_WIDTH,
-  maxHeight: 'calc(100% - 24px)',
+  minWidth: 0,
   display: 'flex',
   flexDirection: 'column',
   background: 'var(--surface)',
-  border: '1px solid var(--panel-line)',
-  borderRadius: 14,
-  boxShadow: 'var(--floating-panel-shadow)',
+  borderLeft: '1px solid var(--panel-line)',
   boxSizing: 'border-box',
-  overflow: 'hidden',
+  overflow: 'auto',
 };
 
 // ---------- Setup / Field mapping tab bar (destination nodes only) ----------
@@ -507,14 +502,13 @@ export const panelTabStyle = (active: boolean): CSSProperties => ({
   whiteSpace: 'nowrap',
 });
 
-// Multi-select hint — a small standalone floating pill (nothing renders at
-// all when selectedCount === 0; see NodeConfigPanel.tsx).
+// Multi-select hint — same docked-sibling treatment as configPanelShellStyle
+// above (nothing renders at all when selectedCount === 0; see
+// NodeConfigPanel.tsx).
 export const configPanelMultiSelectStyle: CSSProperties = {
-  position: 'absolute',
-  top: 12,
-  right: 12,
-  zIndex: 25,
+  flex: '0 0 360px',
   width: FLOATING_PANEL_WIDTH,
+  minWidth: 0,
   padding: '14px 16px',
   display: 'flex',
   alignItems: 'center',
@@ -522,9 +516,7 @@ export const configPanelMultiSelectStyle: CSSProperties = {
   fontSize: 12.5,
   color: 'var(--ink4)',
   background: 'var(--surface)',
-  border: '1px solid var(--panel-line)',
-  borderRadius: 14,
-  boxShadow: 'var(--floating-panel-shadow)',
+  borderLeft: '1px solid var(--panel-line)',
   boxSizing: 'border-box',
 };
 
@@ -545,7 +537,10 @@ export const CONFIG_PANEL_RIBBON_HEIGHT = 52;
 
 export const configPanelRibbonStyle: CSSProperties = {
   flex: 'none',
-  height: CONFIG_PANEL_RIBBON_HEIGHT,
+  // minHeight, not a fixed height — 52px covers the single-line case (which
+  // never reflows), but a long connection/host name now wraps onto a second
+  // line instead of truncating, so the ribbon has to be free to grow for it.
+  minHeight: CONFIG_PANEL_RIBBON_HEIGHT,
   display: 'flex',
   alignItems: 'stretch',
   padding: '0 8px',
@@ -655,6 +650,50 @@ export const configPanelDeleteBtnStyle: CSSProperties = {
   ...configPanelIconBtnStyle,
   color: 'var(--bad)',
 };
+
+// ---------- NodeDrawer footer (live node status) + needsAction alert card ----------
+// Reuses the exact same status-color tokens as GraphFlowNode.tsx's on-canvas
+// footer (mapping.ts's `data.status` is one merge pass shared by both), so
+// a node's color language never disagrees between the canvas card and its
+// inspector.
+
+export const configPanelFooterStyle: CSSProperties = {
+  flex: 'none',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  height: 32,
+  padding: '0 14px',
+  borderTop: '1px solid var(--panel-line)',
+  fontSize: 11.5,
+  color: 'var(--ink-200)',
+};
+
+export const configPanelStatusDotStyle = (color: string): CSSProperties => ({
+  flex: 'none',
+  width: 6,
+  height: 6,
+  borderRadius: 999,
+  background: color,
+});
+
+// Amber (or red, for a failed check) alert card shown at the top of the
+// scrollable detail body whenever data.status.kind is 'needsAction' or
+// 'failed' — the footer strip alone is easy to miss below the fold, so a
+// real check failure/warning also gets this more prominent inline callout.
+export const configPanelAlertCardStyle = (tone: 'warning' | 'danger'): CSSProperties => ({
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 8,
+  marginBottom: 12,
+  padding: '8px 10px',
+  borderRadius: 8,
+  fontSize: 12,
+  lineHeight: 1.4,
+  color: tone === 'warning' ? 'var(--warning-deep, var(--warning))' : 'var(--danger)',
+  background: tone === 'warning' ? 'var(--warning-bg)' : 'var(--danger-bg)',
+  border: `1px solid ${tone === 'warning' ? 'var(--warning-border)' : 'var(--danger-border)'}`,
+});
 
 // ---------- Copilot sidebar (docked right panel; wraps existing CommandBar) ----------
 
@@ -824,6 +863,66 @@ export const headerSearchKbdStyle: CSSProperties = {
   lineHeight: 1,
   flex: 'none',
 };
+
+// Static (never mutates workflow.status) — no publish/draft transition flow
+// exists today, so this only ever reflects the value already on the record.
+export const headerDraftChipStyle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  color: 'var(--ink3)',
+  background: 'var(--control-muted)',
+  border: '1px solid var(--line-200)',
+  borderRadius: 5,
+  padding: '2px 7px',
+  lineHeight: 1.4,
+  flex: 'none',
+};
+
+// Always disabled — no PATCH /workflows/:id (rename) endpoint exists yet
+// (data gap). Styled to sit flush next to pageCrumbCurrentStyle's name text
+// so the pencil reads as "renaming lives here" without implying it works.
+export const headerRenameBtnStyle: CSSProperties = {
+  border: 'none',
+  background: 'none',
+  color: 'var(--ink4)',
+  cursor: 'not-allowed',
+  width: 20,
+  height: 20,
+  borderRadius: 4,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flex: 'none',
+  opacity: 0.6,
+};
+
+// Editor | Runs | Schedule segmented control. Only "Editor" is ever wired
+// (Runs/Schedule have no routes yet — rendered disabled with a "Coming
+// soon" tooltip, never a fake active state).
+export const headerTabsStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+  background: 'var(--control-muted)',
+  border: '1px solid var(--line-100)',
+  borderRadius: 8,
+  padding: 2,
+  flex: 'none',
+};
+
+export const headerTabBtnStyle = (active: boolean, disabled: boolean): CSSProperties => ({
+  border: 'none',
+  background: active ? 'var(--surface)' : 'none',
+  color: disabled ? 'var(--ink4)' : active ? 'var(--ink)' : 'var(--ink3)',
+  boxShadow: active ? '0 1px 2px rgba(15,23,42,.08)' : 'none',
+  cursor: disabled ? 'not-allowed' : 'pointer',
+  fontSize: 12,
+  fontWeight: 600,
+  height: 24,
+  borderRadius: 6,
+  padding: '0 10px',
+  opacity: disabled ? 0.55 : 1,
+});
 
 // ---------- full-view floating controls ----------
 
@@ -1098,5 +1197,178 @@ export const viewportFullscreenBtnStyle = (active: boolean): CSSProperties => ({
   alignItems: 'center',
   gap: 6,
   padding: '0 10px 0 8px',
+  whiteSpace: 'nowrap',
+});
+
+// Select/Pan interaction-mode toggle pair — same 28px square footprint as
+// viewportToolbarBtnStyle, but with a persistent "active" affordance (filled
+// background) since, unlike zoom/fit, this reflects ongoing canvas state
+// rather than a one-shot action.
+export const viewportToolbarToggleBtnStyle = (active: boolean): CSSProperties => ({
+  border: 'none',
+  background: active ? 'var(--surface2)' : 'none',
+  color: active ? 'var(--ink)' : 'var(--ink3)',
+  cursor: 'pointer',
+  width: 28,
+  height: 28,
+  borderRadius: 6,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+});
+
+// Undo/Redo currently have no backing history stack (canvas-redesign data
+// gap) so they always render in this disabled visual state; kept separate
+// from viewportToolbarBtnStyle so a future history implementation can wire
+// real enabled/disabled states without touching the base button style.
+export const viewportToolbarDisabledBtnStyle: CSSProperties = {
+  border: 'none',
+  background: 'none',
+  color: 'var(--ink4)',
+  cursor: 'not-allowed',
+  width: 28,
+  height: 28,
+  borderRadius: 6,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  opacity: 0.5,
+};
+
+// ---------- CommandBar "/" command menu (docs/plans/copilot-command-menu.md) ----------
+// Replaces CommandBar.tsx's old flat chatSlashMenu* list: a grouped,
+// scrollable command list with a bottom tab strip (Commands | Recent | AI
+// Command). Same visual language as chatSlashMenu*/chatMention* in
+// app/styles.ts (card dropdown positioned against the bar), but taller and
+// split into an internally-scrolling list plus a fixed-height tab strip so
+// the tab row is never clipped by maxHeight/viewport edges.
+
+/** `placement` flips the panel above (default, room permitting) or below the input — see CommandMenu.tsx's viewport-space check. */
+export const commandMenuPanelStyle = (placement: 'above' | 'below'): CSSProperties => ({
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  ...(placement === 'above' ? { bottom: '100%', marginBottom: 8 } : { top: '100%', marginTop: 8 }),
+  maxHeight: 360,
+  display: 'flex',
+  flexDirection: 'column',
+  boxSizing: 'border-box',
+  borderRadius: 12,
+  background: 'var(--surface)',
+  border: '1px solid var(--line)',
+  boxShadow: 'var(--amb)',
+  overflow: 'hidden',
+  zIndex: 5,
+});
+
+export const commandMenuListStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  boxSizing: 'border-box',
+  padding: 6,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+};
+
+export const commandMenuGroupHeaderStyle: CSSProperties = {
+  fontFamily: 'var(--font-ui)',
+  fontSize: 10.5,
+  fontWeight: 500,
+  color: 'var(--ink4)',
+  textTransform: 'uppercase',
+  letterSpacing: '.06em',
+  padding: '10px 10px 4px',
+};
+
+export const commandMenuRowStyle = (active: boolean): CSSProperties => ({
+  width: '100%',
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '10px 12px',
+  borderRadius: 8,
+  background: active ? 'var(--surface2)' : 'transparent',
+  border: 'none',
+  cursor: 'pointer',
+  textAlign: 'left',
+});
+
+export const commandMenuRowIconStyle: CSSProperties = {
+  flex: 'none',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 16,
+  height: 16,
+  color: 'var(--ink3)',
+};
+
+export const commandMenuRowNameStyle: CSSProperties = {
+  flex: 'none',
+  fontFamily: 'var(--font-ui)',
+  fontSize: 14,
+  fontWeight: 500,
+  color: 'var(--ink)',
+};
+
+export const commandMenuRowDescStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  fontFamily: 'var(--font-ui)',
+  fontSize: 11.5,
+  color: 'var(--ink4)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+/** Single muted hint line at the bottom of the panel, directly above the
+ * tab strip — shows the highlighted command's "name — description" in
+ * place of the old per-row title tooltip/inline description. */
+export const commandMenuHintStyle: CSSProperties = {
+  flex: 'none',
+  fontFamily: 'var(--font-ui)',
+  fontSize: 11.5,
+  fontWeight: 400,
+  color: 'var(--ink4)',
+  padding: '7px 12px',
+  borderTop: '1px solid var(--panel-line)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+export const commandMenuEmptyStyle: CSSProperties = {
+  fontFamily: 'var(--font-ui)',
+  padding: '16px 10px',
+  fontSize: 12.5,
+  color: 'var(--ink4)',
+  textAlign: 'center',
+};
+
+export const commandMenuTabStripStyle: CSSProperties = {
+  flex: 'none',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '4px 6px',
+  borderTop: '1px solid var(--panel-line)',
+  background: 'var(--surface)',
+};
+
+export const commandMenuTabBtnStyle = (active: boolean): CSSProperties => ({
+  fontFamily: 'var(--font-ui)',
+  border: 'none',
+  background: active ? 'var(--surface2)' : 'none',
+  color: active ? 'var(--ink)' : 'var(--ink3)',
+  cursor: 'pointer',
+  height: 26,
+  borderRadius: 6,
+  fontSize: 11.5,
+  fontWeight: 500,
+  padding: '0 9px',
   whiteSpace: 'nowrap',
 });

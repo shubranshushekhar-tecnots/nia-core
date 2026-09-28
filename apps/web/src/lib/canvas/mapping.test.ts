@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { GraphDoc } from "@nia/schemas";
 import { CONNECTOR_MANIFESTS } from "@nia/schemas";
 import type { Connection } from "@/lib/connections/types";
-import { graphToFlow, flowToGraph, type MappingContext } from "./mapping.js";
+import { graphToFlow, flowToGraph, applyCheckResults, type MappingContext } from "./mapping.js";
 
 function connection(id: string, connectorId: string): Connection {
   return {
@@ -164,25 +164,7 @@ describe("resolution + write-lock", () => {
     expect(withoutConfig[0]!.data.connectionLabel).toBe("mysql dev");
   });
 
-  it("writeLocked is false for read-only manifests (mysql/mongodb) but true for postgres/supabase, which both offer a write verb", () => {
-    const doc = GraphDoc.parse({
-      nodes: [
-        { id: "n1", type: "source", manifestId: "mysql", position: { x: 0, y: 0 }, config: {} },
-        { id: "n2", type: "source", manifestId: "mongodb", position: { x: 0, y: 0 }, config: {} },
-        { id: "n3", type: "destination", manifestId: "supabase", position: { x: 0, y: 0 }, config: {} },
-        { id: "n4", type: "destination", manifestId: "postgres", position: { x: 0, y: 0 }, config: {} },
-      ],
-      edges: [],
-    });
-    const { nodes } = graphToFlow(doc, baseCtx);
-    const byId = new Map(nodes.map((n) => [n.id, n.data.writeLocked]));
-    expect(byId.get("n1")).toBe(false);
-    expect(byId.get("n2")).toBe(false);
-    expect(byId.get("n3")).toBe(true);
-    expect(byId.get("n4")).toBe(true);
-  });
-
-  it("resolving an unresolved node's manifestId leaves the round-trip byte-identical (resolved/unknownReason/writeLocked are derived-only, not persisted)", () => {
+  it("resolving an unresolved node's manifestId leaves the round-trip byte-identical (resolved/unknownReason/status are derived-only, not persisted)", () => {
     const doc = GraphDoc.parse({
       nodes: [
         { id: "n1", type: "source", manifestId: "not-a-real-connector", position: { x: 0, y: 0 }, config: {} },
@@ -191,5 +173,48 @@ describe("resolution + write-lock", () => {
     });
     const { nodes, edges } = graphToFlow(doc, baseCtx);
     expect(flowToGraph(nodes, edges)).toEqual(doc);
+  });
+});
+
+describe("applyCheckResults", () => {
+  const doc = GraphDoc.parse({
+    nodes: [{ id: "n1", type: "destination", manifestId: "postgres", connectionId: mysqlConnId, position: { x: 0, y: 0 }, config: {} }],
+    edges: [],
+  });
+
+  it("a passing grants check (no matching CheckResult) reads 'ready', regardless of the connector's static write capability", () => {
+    const { nodes } = graphToFlow(doc, baseCtx);
+    const merged = applyCheckResults(nodes, [{ id: "grants", status: "pass", message: "ok" }], {});
+    expect(merged[0]!.data.status).toEqual({ kind: "ready", message: "Ready" });
+  });
+
+  it("a failing grants CheckResult for this node's id surfaces as 'needsAction' with the check's own message — this is the fix for the write-grant mismatch bug", () => {
+    const { nodes } = graphToFlow(doc, baseCtx);
+    const merged = applyCheckResults(
+      nodes,
+      [{ id: "grants", status: "fail", message: "Node n1 needs a write grant.", nodeId: "n1" }],
+      {},
+    );
+    expect(merged[0]!.data.status).toEqual({ kind: "needsAction", message: "Node n1 needs a write grant." });
+  });
+
+  it("a live run state for this node wins over check results", () => {
+    const { nodes } = graphToFlow(doc, baseCtx);
+    const merged = applyCheckResults(
+      nodes,
+      [{ id: "grants", status: "fail", message: "stale failure", nodeId: "n1" }],
+      { n1: { status: "done", totalRowsProcessed: 42, durationMs: 1200 } },
+    );
+    expect(merged[0]!.data.status).toEqual({ kind: "succeeded", message: "42 rows in 1.2s" });
+  });
+
+  it("an unresolved node is always 'disabled', even with a passing check result", () => {
+    const brokenDoc = GraphDoc.parse({
+      nodes: [{ id: "n1", type: "source", manifestId: "not-a-real-connector", position: { x: 0, y: 0 }, config: {} }],
+      edges: [],
+    });
+    const { nodes } = graphToFlow(brokenDoc, baseCtx);
+    const merged = applyCheckResults(nodes, [{ id: "config", status: "pass", message: "ok" }], {});
+    expect(merged[0]!.data.status?.kind).toBe("disabled");
   });
 });

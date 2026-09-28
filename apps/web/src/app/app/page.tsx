@@ -1,10 +1,5 @@
 import { requireUser } from '@/lib/auth/session';
-import {
-  getContinueWorkflow,
-  getDashboardStats,
-  getRecentRuns,
-  getSidebarProjects,
-} from '@/lib/api/dashboardServer';
+import { getDashboardStats, getRecentRuns, getSidebarProjects } from '@/lib/api/dashboardServer';
 import { getPlanUsage } from '@/lib/billing/plan';
 import { greetingForHour } from '@/lib/time';
 import AppShell from '@/components/app/AppShell';
@@ -17,24 +12,24 @@ export default async function AppHomePage() {
   const user = await requireUser();
   const orgId = user.org?.id ?? null;
 
-  const [projects, stats, continueWorkflow, recentRuns] = await Promise.all([
+  const [projects, stats, recentRuns] = await Promise.all([
     getSidebarProjects(),
     getDashboardStats(),
-    getContinueWorkflow(),
-    getRecentRuns(),
+    getRecentRuns(50),
   ]);
 
   const plan = getPlanUsage(stats.workflowCount);
   const greeting = greetingForHour(new Date().getHours());
 
   return (
-    <AppShell topBar={<TopBar orgName={user.org?.name ?? null} email={user.email} />}>
+    <AppShell topBar={<TopBar orgName={user.org?.name ?? null} email={user.email} userId={user.userId} />}>
       <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
       <div style={mainColStyle}>
         <HomeContent
           greeting={greeting}
           fullName={user.fullName}
-          continueWorkflow={continueWorkflow}
+          userId={user.userId}
+          orgName={user.org?.name ?? null}
           recentRuns={recentRuns}
           plan={plan}
           stats={stats}

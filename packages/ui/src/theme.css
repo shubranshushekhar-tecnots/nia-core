@@ -187,9 +187,9 @@
   --ink3: var(--text-3);
   --ink4: var(--text-4);
   --line2: var(--line-strong);
-  --acc: #5A3FD8;
-  --canvas: #F4F4F7;
-  --canvas-dot: #C3C7D1;
+  --acc: #594CDF;
+  --canvas: #F6F6F7;
+  --canvas-dot: #D6D7DC;
   --canvas-gap: 20px;
 
   /* Chat surface (Home/App.html's orphaned `// ---------- chat ----------`
@@ -227,7 +227,7 @@
   --copilot-w: 320px;
   --copilot-w-min: 280px;
   --copilot-w-max: 520px;
-  --acc-soft: #EFEBFD;
+  --acc-soft: #EEECFD;
   --acc-soft-text: #4B30C4;
   --acc-soft-bd: #E1DAFB;
   --edge-stroke: #B9BCC7;
@@ -237,6 +237,68 @@
   --card-shadow: 0 1px 2px rgba(16, 18, 27, .08), 0 12px 28px rgba(16, 18, 27, .10);
   --floating-panel-shadow: 0 16px 40px rgba(22, 21, 31, .12), 0 2px 6px rgba(22, 21, 31, .05);
   --popover-shadow: 0 24px 56px rgba(15, 23, 42, .16);
+
+  /* Workflow canvas redesign (2026-09-28 brief) — additive tokens only,
+     nothing above is removed since --ink/--ink2/--ink3/--ok/--bad/--warn
+     etc. are still read by other canvas/app components not yet migrated.
+     --acc-hover is the redesign's button-press/hover shade of --acc.
+     --surface-subtle/--control-muted/--line-100/--line-200 are the new
+     neutral scale used by the node card body, rail rows, and inspector.
+     --ink-100/200/300 are the redesign's own ink scale (mirrors --text
+     but with the brief's exact hex values, since --text and --ink above are
+     slightly different shades from the same design system). --success/
+     --warning/--danger (+ -bg/-border) are the node status-line palette,
+     distinct from the pre-existing --ok/--warn/--bad (which stay wired to
+     ChecksDock/Home and are not touched). --data-store-* and --transform-*
+     are icon-tile colors for source/destination vs. transform nodes.
+     --font-mono lets canvas components reference JetBrains Mono (already
+     loaded for [data-app-theme]'s dark --font-data) without hardcoding
+     the family name. */
+  --acc-hover: #4336C4;
+  --surface-subtle: #FBFBFC;
+  --control-muted: #F0F0F2;
+  --line-100: #ECECEF;
+  --line-200: #DEDEE3;
+  --ink-100: #0E0E12;
+  --ink-200: #52555C;
+  --ink-300: #6B6E76;
+  --success: #17803D;
+  --success-bg: #EAF6EE;
+  --warning: #9A4A06;
+  --warning-bg: #FFF6EA;
+  --warning-border: #F6D9AE;
+  --danger: #B42318;
+  --danger-bg: #FEF3F2;
+  --danger-border: #F8D3CF;
+  --data-store-bg: #EAF6EE;
+  --data-store-icon: #17803D;
+  --transform-bg: #EEECFD;
+  --transform-icon: #594CDF;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  /* Home dashboard redesign (2026-09-28) — chart-only colors, extracted
+     verbatim from designs/Nia Core — Workflow Canvas.html's "Home — busy
+     workspace"/"Home — early days" boards. Distinct from --success/--danger
+     above (those are status text/dot colors reused from the canvas'
+     checks language) — these are specifically the bar/line palette used
+     inside RunsPerDayChart/RowsMovedChart/RunDurationChart/WorkflowsTable's
+     mini run-history strip, never used for text or status dots. */
+  --chart-ok: #7F76E8;
+  --chart-ok-hover: #594CDF;
+  --chart-fail: #D92D20;
+  --chart-p95: #D9772B;
+  --chart-strip-ok: #B7B1F4;
+  --chart-tooltip-bg: #0E0E12;
+  --chart-tooltip-ok: #A9A3F2;
+  --chart-tooltip-fail: #F2675C;
+}
+
+/* CanvasEdge.tsx's "running" variant — animated dash flow, distinct from
+   the Landing page's own edgeFlow keyframe (different dasharray/context). */
+@keyframes nia-edge-running-dash { to { stroke-dashoffset: -20; } }
+.nia-edge-running { stroke-dasharray: 6 4; animation: nia-edge-running-dash .6s linear infinite; }
+
+[data-app-theme][data-om-theme='light'] {
 
   /* Phase 7 Copilot ghost preview (proposed-but-not-yet-applied plan nodes/
      edges rendered on the canvas). App shell is light-only (see this

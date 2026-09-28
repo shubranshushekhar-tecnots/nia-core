@@ -1865,6 +1865,42 @@ end $$;
 -- access path left) is already covered by Probe 49 above.
 
 -- =========================================================================
+-- Probe 51 — 0039_platform_staff.sql (Console v1 Step 2: platform_staff has
+-- zero policies and no grant to authenticated/anon at all — confirm both
+-- SELECT and INSERT hard-fail with permission denied for an ordinary
+-- authenticated user, not just an RLS-filtered empty result, since no
+-- GRANT statement for this table was ever issued to that role.)
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  select_denied boolean := false;
+  insert_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_outsider);
+  begin
+    perform 1 from public.platform_staff limit 1;
+  exception when insufficient_privilege then
+    select_denied := true;
+  end;
+  begin
+    insert into public.platform_staff (user_id, granted_by) values (v_outsider, v_outsider);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  reset role;
+
+  if select_denied and insert_denied then
+    insert into probe_results values (51, 'platform_staff: authenticated has no grant at all — SELECT and INSERT both raise permission denied, not just an RLS-empty result', true);
+  else
+    insert into probe_results values (51, 'platform_staff: authenticated has no grant at all — SELECT and INSERT both raise permission denied, not just an RLS-empty result', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (51, 'platform_staff RLS probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

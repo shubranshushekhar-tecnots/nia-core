@@ -155,22 +155,88 @@ test.describe.serial('command bar: scope precedence, chat, / hint, reload persis
     await expect(page.getByTestId('command-bar-hint')).toContainText('Copilot will propose a plan');
     await expect(page.getByTestId('command-bar-send')).toBeEnabled();
 
-    // "/" suggestion menu (this session) — appears while still composing
-    // the leading command token, offers example prompts. Picking one only
-    // fills the input (doesn't auto-send), so the user can edit specifics
-    // before hitting Send. Typing past the token (a space) closes it.
+    // "/" command menu (rebuilt: 12 locked commands grouped Build/
+    // Transform/Run/Inspect, plus Recent and AI Command tabs — docs/plans/
+    // copilot-command-menu.md). Opens on a lone "/", offers grouped
+    // commands or example prompts. Picking one only fills the input
+    // (doesn't auto-send), so the user can edit specifics before hitting
+    // Send. Typing past the token (a space) closes it.
     await input.fill('/');
     const slashMenu = page.getByTestId('command-bar-slash-menu');
     await expect(slashMenu).toBeVisible();
-    await expect(slashMenu.getByRole('button')).toHaveCount(6);
+    const listbox = slashMenu.getByRole('listbox');
+    // Default "Commands" tab: all 12 locked commands, unfiltered.
+    await expect(listbox.getByRole('option')).toHaveCount(12);
+    await expect(slashMenu.getByRole('tab')).toHaveCount(3);
+    await expect(slashMenu.getByRole('tab', { name: /^Commands/ })).toHaveAttribute('aria-selected', 'true');
+
+    // Typing narrows the list by name/description (filterCommands ranking
+    // is unit-tested directly in commandMenu.test.ts — here we only assert
+    // the menu wires that filtering up correctly).
+    await input.fill('/filter');
+    await expect(listbox.getByRole('option')).toHaveCount(1);
+    await expect(listbox.getByRole('option').first()).toContainText('filter');
+
+    // Keyboard-only selection: ArrowDown highlights the first result, Enter
+    // picks it and inserts its template at the first <placeholder> without
+    // sending.
+    await input.fill('/');
+    await expect(listbox.getByRole('option')).toHaveCount(12);
+    await input.press('ArrowDown');
+    await input.press('Enter');
+    await expect(input).toHaveValue(/^\/Add a source node reading a table/);
+    await expect(slashMenu).not.toBeVisible();
+
+    // Escape closes the menu and leaves the draft untouched.
+    await input.fill('/');
+    await expect(slashMenu).toBeVisible();
+    await input.press('Escape');
+    await expect(slashMenu).not.toBeVisible();
+    await expect(input).toHaveValue('/');
+
+    // Tab switching (ArrowRight/ArrowLeft cycles Commands -> Recent -> AI
+    // Command, wrapping). AI Command's 6 static example prompts are the
+    // same suggestions the old flat menu offered.
+    await input.fill('/');
+    await expect(slashMenu).toBeVisible();
+    await input.press('ArrowRight');
+    await expect(slashMenu.getByRole('tab', { name: /^Recent/ })).toHaveAttribute('aria-selected', 'true');
+    await input.press('ArrowRight');
+    await expect(slashMenu.getByRole('tab', { name: /^AI Command/ })).toHaveAttribute('aria-selected', 'true');
+    await expect(listbox.getByRole('option')).toHaveCount(6);
     // dispatchEvent (not .click()) — same technique dragPaletteItemOnto uses
     // above — bypasses Playwright's viewport-actionability gate, which the
     // unrelated concurrent CanvasHeader/CanvasIconRail WIP layout currently
     // trips (extra header chrome leaves too little room above the bar for
     // this upward-opening dropdown).
-    await slashMenu.getByRole('button').first().dispatchEvent('mousedown');
+    await listbox.getByRole('option').first().dispatchEvent('mousedown');
     await expect(input).toHaveValue(/^\/Add a source node reading a table/);
     await expect(slashMenu).not.toBeVisible();
+
+    // No clipping at a narrow (390px) viewport. NOTE: the canvas app shell
+    // (Sidebar + NodesRail + this AI/command dock) has no responsive
+    // breakpoints of its own (fixed-width columns, tracked as a backlog
+    // finding in TODO.md) — at a true 390px viewport the whole dock sits
+    // off-screen to the right, which is a pre-existing shell issue, not a
+    // property of this menu. What IS this menu's own responsibility, and
+    // what we assert here, is that the panel never grows wider than the
+    // input row it's anchored to (commandMenuPanelStyle's `left:0;right:0`)
+    // and stays within its own maxHeight — i.e. it doesn't clip its own
+    // content or overflow its anchor, independent of where that anchor
+    // happens to sit on the page.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await input.fill('/');
+    await expect(slashMenu).toBeVisible();
+    const inputBox = await input.boundingBox();
+    const box = await slashMenu.boundingBox();
+    expect(inputBox).not.toBeNull();
+    expect(box).not.toBeNull();
+    if (box && inputBox) {
+      expect(box.width).toBeCloseTo(inputBox.width, 0);
+      expect(box.height).toBeLessThanOrEqual(360);
+    }
+    await input.press('Escape');
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     await input.fill('');
     await expect(page.getByRole('button', { name: /mysql-dev.*rows/ })).toHaveCount(1);

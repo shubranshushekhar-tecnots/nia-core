@@ -22,6 +22,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
         <TopBar
           orgName={user.org?.name ?? null}
           email={user.email}
+          userId={user.userId}
           crumbs={[{ label: 'Projects', href: '/app/projects' }, { label: project.name }]}
         />
       }

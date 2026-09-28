@@ -17,7 +17,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, type ActorRole, type EntityRef, type Plan, type PlanDiff } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, type ActorRole, type EntityRef, type GraphNodeType, type Plan, type PlanDiff } from '@nia/schemas';
 import type { SidebarProject, WorkflowDetail } from '@/lib/dashboard/types';
 import type { Connection, ConnectorInstall } from '@/lib/connections/types';
 import {
@@ -32,6 +32,7 @@ import {
   buildCanvasNode,
   graphToFlow,
   flowToGraph,
+  applyCheckResults,
   type CanvasNode,
   type CanvasEdge,
   type MappingContext,
@@ -48,6 +49,8 @@ import { buildActivityFeed, type ActivityItem } from '@/lib/canvas/activityFeed'
 import Logo from '@/components/Logo';
 import Sidebar from '@/components/app/Sidebar';
 import GraphFlowNode from './GraphFlowNode';
+import CanvasEdgeComponent from './CanvasEdge';
+import CanvasToolbar, { type InteractionMode } from './CanvasToolbar';
 import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRail';
 import NodeConfigPanel from './NodeConfigPanel';
 import ChecksDock from './ChecksDock';
@@ -75,13 +78,12 @@ import {
   planBannerErrorStyle,
   planBannerStyle,
   planBannerTextStyle,
-  viewportFullscreenBtnStyle,
-  viewportToolbarBtnStyle,
-  viewportToolbarDividerStyle,
-  viewportToolbarStyle,
+  railContextMenuItemStyle,
 } from './styles';
 
 const nodeTypes = { source: GraphFlowNode, transform: GraphFlowNode, destination: GraphFlowNode };
+const edgeTypes = { default: CanvasEdgeComponent };
+const DROP_ROLE_LABEL: Record<GraphNodeType, string> = { source: 'Source', transform: 'Transform', destination: 'Destination' };
 const AUTOSAVE_DELAY_MS = 800;
 
 function useMappingContext(connections: Connection[]): MappingContext {
@@ -146,12 +148,22 @@ function CanvasInner({
     return () => document.removeEventListener('fullscreenchange', handler);
   }, []);
   const toggleFullscreen = useCallback(() => {
+    // Both DOM calls return a Promise that rejects with a `fullscreenerror`
+    // Event (not an Error) when denied — e.g. no fullscreen permission in an
+    // embedded/iframed preview. Swallow it: there's no user-facing recovery
+    // beyond staying non-fullscreen, and leaving it unhandled surfaces as an
+    // "Uncaught (in promise) #<Event>" console error.
     if (document.fullscreenElement) {
-      document.exitFullscreen();
+      document.exitFullscreen().catch(() => {});
     } else {
-      fullscreenRef.current?.requestFullscreen();
+      fullscreenRef.current?.requestFullscreen().catch(() => {});
     }
   }, []);
+  // Drives ReactFlow's own panOnDrag/selectionOnDrag props below — 'select'
+  // is React Flow's default (drag draws a selection box, pan via space/
+  // middle-mouse/scroll); 'pan' swaps drag to pan the viewport instead,
+  // matching common canvas-tool conventions (Figma/Miro space-drag toggle).
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>('select');
   const queryClient = useQueryClient();
   const queryKey = useMemo(() => ['workflow-graph', workflow.id], [workflow.id]);
 
@@ -324,17 +336,24 @@ function CanvasInner({
     [setEdges, nodes, scheduleSave],
   );
 
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      const raw = e.dataTransfer.getData(PALETTE_DRAG_MIME);
-      if (!raw) return;
-      const payload = JSON.parse(raw) as PaletteDragPayload;
-      const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+  // Dual-role connections (e.g. Postgres/Supabase, which support both
+  // `etl_source` and `etl_sink`) carry >1 entry in NodesRail's payload —
+  // dropping one shows this inline picker at the drop point instead of
+  // guessing a role; single-role connectors/transforms still drop straight
+  // in via the `roles.length === 1` branch below, unchanged from before.
+  const [dropPicker, setDropPicker] = useState<{
+    x: number;
+    y: number;
+    flowPosition: { x: number; y: number };
+    payload: PaletteDragPayload;
+  } | null>(null);
+
+  const addNodeFromDrop = useCallback(
+    (role: GraphNodeType, payload: Pick<PaletteDragPayload, 'manifestId' | 'connectionId'>, position: { x: number; y: number }) => {
       const newNode = buildCanvasNode(
         {
           id: crypto.randomUUID(),
-          graphNodeType: payload.graphNodeType,
+          graphNodeType: role,
           manifestId: payload.manifestId,
           connectionId: payload.connectionId,
           position,
@@ -347,8 +366,51 @@ function CanvasInner({
         return next;
       });
     },
-    [screenToFlowPosition, ctx, setNodes, edges, scheduleSave],
+    [ctx, setNodes, edges, scheduleSave],
   );
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const raw = e.dataTransfer.getData(PALETTE_DRAG_MIME);
+      if (!raw) return;
+      const payload = JSON.parse(raw) as PaletteDragPayload;
+      const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      if (payload.roles.length > 1) {
+        setDropPicker({ x: e.clientX, y: e.clientY, flowPosition: position, payload });
+        return;
+      }
+      const role = payload.roles[0];
+      if (!role) return;
+      addNodeFromDrop(role, payload, position);
+    },
+    [screenToFlowPosition, addNodeFromDrop],
+  );
+
+  const pickDropRole = useCallback(
+    (role: GraphNodeType) => {
+      if (!dropPicker) return;
+      addNodeFromDrop(role, dropPicker.payload, dropPicker.flowPosition);
+      setDropPicker(null);
+    },
+    [dropPicker, addNodeFromDrop],
+  );
+
+  // Esc/click-away cancels the picker without creating a node — mirrors
+  // NodeContextMenu.tsx's own close-on-click/Escape pattern.
+  useEffect(() => {
+    if (!dropPicker) return;
+    const close = () => setDropPicker(null);
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') close();
+    }
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [dropPicker]);
 
   const onNodeClick: NodeMouseHandler = useCallback(
     (_, node) => {
@@ -900,7 +962,6 @@ function CanvasInner({
   );
 
   const handleRunChecks = useCallback(async () => {
-    setChecksDockExpanded(true);
     setChecksRunning(true);
     setChecksError(null);
     try {
@@ -910,8 +971,15 @@ function CanvasInner({
       // next reload — re-fetch the history rather than hand-merge a single
       // row into the cache (listCheckRuns is cheap, capped at 20 rows).
       queryClient.invalidateQueries({ queryKey: checkRunsQueryKey });
+      // Auto-expand only when this explicit run surfaced a failure — a
+      // clean run stays collapsed so the dock doesn't jump open every time
+      // someone clicks "Run checks" and everything passes.
+      if (result.results.some((r) => r.status === 'fail')) {
+        setChecksDockExpanded(true);
+      }
     } catch (error) {
       setChecksError(error instanceof ChecksApiError ? error.message : 'Checks failed to run.');
+      setChecksDockExpanded(true);
     } finally {
       setChecksRunning(false);
     }
@@ -974,6 +1042,21 @@ function CanvasInner({
               ? `Runs all ${runNodeIds.length} destinations.`
               : 'All checks passing.';
 
+  // Root-cause fix: node status (GraphFlowNode's footer) comes from live
+  // check results + live run state, never the old static `writeLocked`
+  // capability flag. Only applied to real nodes — ghost overlay nodes
+  // (from Copilot's plan/plan-diff preview) have no `id` in `latestCheckRun`
+  // /`runStates` and must keep their own ghost styling untouched, so this
+  // maps `displayNodes` by id instead of re-deriving status from scratch.
+  const nodesWithStatus = useMemo(() => {
+    const real = applyCheckResults(nodes, latestCheckRun?.results, runStates);
+    const statusById = new Map(real.map((n) => [n.id, n.data.status]));
+    return displayNodes.map((n) => {
+      const status = statusById.get(n.id);
+      return status ? { ...n, data: { ...n.data, status } } : n;
+    });
+  }, [nodes, displayNodes, latestCheckRun, runStates]);
+
   return (
     <div style={canvasPageRootStyle} data-app-theme="" data-om-theme="light">
       <CanvasHeader
@@ -981,6 +1064,7 @@ function CanvasInner({
         projectName={workflow.project.name}
         projectHref={`/app/projects/${workflow.project.id}`}
         workflowName={workflow.name}
+        workflowStatus={workflow.status}
         saveState={saveState}
         onReloadAfterConflict={reloadAfterConflict}
         checksRunning={checksRunning}
@@ -1001,17 +1085,6 @@ function CanvasInner({
 
         <div ref={fullscreenRef} style={canvasFullscreenWrapStyle}>
           <div style={canvasColumnStyle}>
-            <NodeConfigPanel
-              node={selectedNode}
-              selectedCount={selectedCount}
-              workflowId={workflow.id}
-              upstreamSource={upstreamSource}
-              checkResults={latestCheckRun?.results ?? null}
-              onConfigChange={updateSelectedNodeConfig}
-              onDelete={deleteSelectedNode}
-              onClose={onPaneClick}
-            />
-
             <div
               data-testid="canvas-surface"
               style={canvasSurfaceStyle}
@@ -1019,9 +1092,10 @@ function CanvasInner({
               onDragOver={(e) => e.preventDefault()}
             >
             <ReactFlow
-              nodes={displayNodes}
+              nodes={nodesWithStatus}
               edges={displayEdges}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               onNodesChange={handleNodesChange}
               onEdgesChange={handleEdgesChange}
               onConnect={onConnect}
@@ -1036,13 +1110,20 @@ function CanvasInner({
               // user drops renders at 200% — clamp it to 1 so an empty canvas
               // never starts zoomed in.
               fitViewOptions={{ maxZoom: 1 }}
+              panOnDrag={interactionMode === 'pan'}
+              selectionOnDrag={interactionMode === 'select'}
             >
               <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} color="var(--canvas-dot)" bgColor="var(--canvas)" />
               <MiniMap
                 pannable
                 zoomable
+                nodeColor={(n) => (n.selected ? 'var(--acc-soft)' : 'var(--line-200)')}
+                nodeStrokeColor="transparent"
+                nodeBorderRadius={4}
                 maskColor="rgba(15,23,42,.06)"
-                style={{ background: 'var(--surface)', border: '1px solid var(--panel-line)', borderRadius: 10 }}
+                maskStrokeColor="var(--acc)"
+                maskStrokeWidth={2}
+                style={{ width: 152, height: 96, background: 'var(--surface)', border: '1px solid var(--panel-line)', borderRadius: 10 }}
               />
             </ReactFlow>
 
@@ -1050,6 +1131,40 @@ function CanvasInner({
 
             {contextMenu && (
               <NodeContextMenu menu={contextMenu} onAction={handleMenuAction} onClose={() => setContextMenu(null)} />
+            )}
+
+            {dropPicker && (
+              <div
+                role="menu"
+                data-testid="drop-role-picker"
+                style={{
+                  position: 'fixed',
+                  top: dropPicker.y,
+                  left: dropPicker.x,
+                  zIndex: 50,
+                  minWidth: 180,
+                  background: 'var(--surface)',
+                  border: '1px solid var(--panel-line)',
+                  borderRadius: 8,
+                  boxShadow: 'var(--floating-panel-shadow)',
+                  padding: 4,
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {dropPicker.payload.roles.map((role) => (
+                  <button
+                    key={role}
+                    type="button"
+                    role="menuitem"
+                    style={railContextMenuItemStyle}
+                    onClick={() => pickDropRole(role)}
+                  >
+                    Use as {DROP_ROLE_LABEL[role]}
+                  </button>
+                ))}
+              </div>
             )}
 
             {ghostPlan && (
@@ -1149,34 +1264,16 @@ function CanvasInner({
               </div>
             )}
 
-            <div style={viewportToolbarStyle(checksDockHeight)} data-testid="viewport-toolbar">
-              <button type="button" style={viewportToolbarBtnStyle} onClick={() => zoomOut()} aria-label="Zoom out" title="Zoom out">
-                {'\u2212'}
-              </button>
-              <button type="button" style={viewportToolbarBtnStyle} onClick={() => zoomIn()} aria-label="Zoom in" title="Zoom in">
-                {'+'}
-              </button>
-              <button
-                type="button"
-                style={viewportToolbarBtnStyle}
-                onClick={() => fitView({ maxZoom: 1, duration: 300 })}
-                aria-label="Fit view"
-                title="Fit view"
-              >
-                {'\u2317'}
-              </button>
-              <div style={viewportToolbarDividerStyle} />
-              <button
-                type="button"
-                style={viewportFullscreenBtnStyle(isFullscreen)}
-                onClick={toggleFullscreen}
-                aria-label={isFullscreen ? 'Exit full view' : 'Full view'}
-                title={isFullscreen ? 'Exit full view' : 'Full view'}
-              >
-                <span aria-hidden>{isFullscreen ? '\u2716' : '\u26F6'}</span>
-                {isFullscreen ? 'Exit full view' : 'Full view'}
-              </button>
-            </div>
+            <CanvasToolbar
+              dockHeight={checksDockHeight}
+              onZoomOut={() => zoomOut()}
+              onZoomIn={() => zoomIn()}
+              onFitView={() => fitView({ maxZoom: 1, duration: 300 })}
+              interactionMode={interactionMode}
+              onInteractionModeChange={setInteractionMode}
+              isFullscreen={isFullscreen}
+              onToggleFullscreen={toggleFullscreen}
+            />
 
             <ChecksDock
               running={checksRunning}
@@ -1184,6 +1281,8 @@ function CanvasInner({
               results={latestCheckRun?.results ?? null}
               ranAt={latestCheckRun?.ranAt ?? null}
               stale={checksStale}
+              nodeCount={nodes.length}
+              edgeCount={edges.length}
               expanded={checksDockExpanded}
               onToggleExpanded={() => setChecksDockExpanded((v) => !v)}
               onHeightChange={setChecksDockHeight}
@@ -1276,6 +1375,17 @@ function CanvasInner({
               </div>
             )}
             </div>
+
+            <NodeConfigPanel
+              node={selectedNode}
+              selectedCount={selectedCount}
+              workflowId={workflow.id}
+              upstreamSource={upstreamSource}
+              checkResults={latestCheckRun?.results ?? null}
+              onConfigChange={updateSelectedNodeConfig}
+              onDelete={deleteSelectedNode}
+              onClose={onPaneClick}
+            />
           </div>
         </div>
 

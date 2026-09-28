@@ -2,11 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { CONNECTOR_MANIFESTS } from '@nia/schemas';
-import { connectionSecondaryLabel, type Connection, type ConnectorInstall } from '@/lib/connections/types';
+import { connectionRegion, type Connection, type ConnectorInstall } from '@/lib/connections/types';
 import type { GraphNodeType } from '@nia/schemas';
 import AddConnectionDialog from '@/components/app/AddConnectionDialog';
 import {
-  railAddEntryStyle,
   railBodyStyle,
   railCollapseBtnStyle,
   railContextMenuItemStyle,
@@ -34,8 +33,17 @@ const NODE_TYPE_COLOR: Record<GraphNodeType, string> = {
   destination: 'var(--c-action)',
 };
 
+/**
+ * Dual-role connections (e.g. Postgres/Supabase support both etl_source and
+ * etl_sink) now drag out as ONE payload carrying every role the connector
+ * supports — FlowCanvas.tsx's onDrop shows an inline "Use as Source" /
+ * "Use as Destination" picker when `roles.length > 1`, and creates the node
+ * straight away (same as before) when there's exactly one. No fixed
+ * `graphNodeType` on the payload anymore — that was the source of the old
+ * one-row-per-role duplication in this rail.
+ */
 export type PaletteDragPayload = {
-  graphNodeType: GraphNodeType;
+  roles: GraphNodeType[];
   manifestId?: string;
   connectionId?: string;
   label: string;
@@ -44,11 +52,12 @@ export type PaletteDragPayload = {
 export const PALETTE_DRAG_MIME = 'application/nia-canvas-node';
 
 type PaletteEntry = PaletteDragPayload & {
-  group: string;
+  group: 'Connections' | 'Transforms';
   connectorId?: string;
   connectorName?: string;
-  // Item 6.2 (fix-chain plan): host/database, shown alongside displayName
-  // so two connections named e.g. both "Neon Postgres" are distinguishable.
+  // "Provider · region" sub-line per the redesign spec (region best-effort,
+  // regex-derived — see connectionRegion's doc comment; omitted when
+  // unparseable rather than inventing one).
   secondaryLabel?: string;
   // Trailing "+ Add connection" row appended after a connector's real
   // connection rows, as opposed to the single not-yet-connected
@@ -88,53 +97,53 @@ function buildEntries(connections: Connection[], connectorInstalls: ConnectorIns
   for (const install of connectorInstalls) {
     const manifest = CONNECTOR_MANIFESTS[install.connectorId];
     if (!manifest) continue;
-    const manifestConnections = connectionsByConnector.get(install.connectorId) ?? [];
-    const groups: { graphNodeType: GraphNodeType; group: string }[] = [];
-    if (manifest.capabilities.includes('etl_source')) groups.push({ graphNodeType: 'source', group: 'Sources' });
-    if (manifest.capabilities.includes('etl_sink')) groups.push({ graphNodeType: 'destination', group: 'Destinations' });
+    const roles: GraphNodeType[] = [];
+    if (manifest.capabilities.includes('etl_source')) roles.push('source');
+    if (manifest.capabilities.includes('etl_sink')) roles.push('destination');
+    if (roles.length === 0) continue;
 
-    for (const { graphNodeType, group } of groups) {
-      if (manifestConnections.length > 0) {
-        for (const connection of manifestConnections) {
-          entries.push({
-            graphNodeType,
-            manifestId: manifest.id,
-            connectionId: connection.id,
-            label: connection.displayName,
-            secondaryLabel: connectionSecondaryLabel(connection),
-            group,
-            connectorId: manifest.id,
-            connectorName: manifest.name,
-          });
-        }
-        // A connector with connections still needs a way to add another one
-        // (e.g. a second Supabase DB) — this trailing row keeps that
-        // affordance visible instead of it disappearing once connected.
+    const manifestConnections = connectionsByConnector.get(install.connectorId) ?? [];
+    if (manifestConnections.length > 0) {
+      for (const connection of manifestConnections) {
+        const region = connectionRegion(connection);
         entries.push({
-          graphNodeType,
+          roles,
           manifestId: manifest.id,
-          label: `Add ${manifest.name} connection`,
-          group,
-          connectorId: manifest.id,
-          connectorName: manifest.name,
-          isAddEntry: true,
-        });
-      } else {
-        // Installed but not connected yet — still visible so "Add
-        // connection" can be triggered from this row (right-click, or a
-        // direct click since there's nothing to drag yet).
-        entries.push({
-          graphNodeType,
-          manifestId: manifest.id,
-          label: manifest.name,
-          group,
+          connectionId: connection.id,
+          label: connection.displayName,
+          secondaryLabel: region ? `${manifest.name} · ${region}` : manifest.name,
+          group: 'Connections',
           connectorId: manifest.id,
           connectorName: manifest.name,
         });
       }
+      // A connector with connections still needs a way to add another one
+      // (e.g. a second Supabase DB) — this trailing row keeps that
+      // affordance visible instead of it disappearing once connected.
+      entries.push({
+        roles,
+        manifestId: manifest.id,
+        label: `Add ${manifest.name} connection`,
+        group: 'Connections',
+        connectorId: manifest.id,
+        connectorName: manifest.name,
+        isAddEntry: true,
+      });
+    } else {
+      // Installed but not connected yet — still visible so "Add
+      // connection" can be triggered from this row (right-click, or a
+      // direct click since there's nothing to drag yet).
+      entries.push({
+        roles,
+        manifestId: manifest.id,
+        label: manifest.name,
+        group: 'Connections',
+        connectorId: manifest.id,
+        connectorName: manifest.name,
+      });
     }
   }
-  entries.push({ graphNodeType: 'transform', label: 'Transform', group: 'Transforms' });
+  entries.push({ roles: ['transform'], label: 'Transform', group: 'Transforms' });
   return entries;
 }
 
@@ -154,7 +163,9 @@ export default function NodesRail({
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [addDialogConnectorId, setAddDialogConnectorId] = useState<string | null>(null);
   const entries = useMemo(() => buildEntries(connections, connectorInstalls), [connections, connectorInstalls]);
-  const groups = ['Sources', 'Transforms', 'Destinations'].filter((g) => entries.some((e) => e.group === g));
+  // Reordered per the redesign spec: Connections -> Transforms -> Triggers
+  // (Triggers is rendered separately below, last, since it's not data-driven).
+  const groups = (['Connections', 'Transforms'] as const).filter((g) => entries.some((e) => e.group === g));
   const q = search.trim().toLowerCase();
 
   useEffect(() => {
@@ -214,63 +225,61 @@ export default function NodesRail({
       </div>
 
       <div style={railBodyStyle}>
-        {(!q || 'triggers'.includes(q) || 'trigger'.includes(q)) && (
-          <div>
-            <div style={railSectionHeaderStyle}>Triggers</div>
-            <div style={railEntryStyle(false)} title="Requires a trigger manifest — Phase 6">
-              <span style={railEntryIconTileStyle('var(--ink4)')}>
-                <TriggerIcon size={13} />
-              </span>
-              <span style={{ flex: 1 }}>Trigger</span>
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 600,
-                  color: 'var(--warn)',
-                  background: 'var(--warn-bg)',
-                  border: '1px solid var(--warn-bd)',
-                  borderRadius: 999,
-                  padding: '1px 6px',
-                }}
-              >
-                Soon
-              </span>
-            </div>
-          </div>
-        )}
-
         {groups.map((group) => {
           const groupEntries = entries.filter((e) => e.group === group && (!q || e.label.toLowerCase().includes(q)));
           if (q && groupEntries.length === 0) return null;
           return (
             <div key={group}>
               <div style={railSectionHeaderStyle}>{group}</div>
+              {group === 'Connections' && !q && (
+                <div style={{ fontSize: 11, color: 'var(--ink-300)', margin: '-2px 14px 6px' }}>
+                  Drag a connection onto the canvas to use it as a source or destination.
+                </div>
+              )}
               {groupEntries.map((entry, i) => {
                 const connected = Boolean(entry.connectionId);
-                const draggable = entry.graphNodeType === 'transform' || connected;
+                const draggable = entry.roles.includes('transform') || connected;
+                const primaryRole = entry.roles[0];
+                const tileColor = entry.roles.length === 1 && primaryRole ? NODE_TYPE_COLOR[primaryRole] : 'var(--ink-300)';
                 if (entry.isAddEntry) {
                   return (
-                    <div
-                      key={`${entry.graphNodeType}-${entry.manifestId ?? 'none'}-add-${i}`}
+                    <button
+                      key={`${entry.manifestId ?? 'none'}-add-${i}`}
+                      type="button"
                       onContextMenu={(e) => openAddConnectionMenu(e, entry)}
                       onClick={() => entry.connectorId && setAddDialogConnectorId(entry.connectorId)}
-                      style={railAddEntryStyle}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        textAlign: 'left',
+                        border: 'none',
+                        background: 'none',
+                        margin: '0 8px 4px',
+                        padding: '4px 8px',
+                        fontSize: 12.5,
+                        fontWeight: 500,
+                        color: 'var(--acc)',
+                        cursor: 'pointer',
+                      }}
                       title={`Add another ${entry.connectorName} connection`}
                     >
-                      <span style={railEntryIconTileStyle('var(--ink4)')}>+</span>
-                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        Add connection
-                      </span>
-                    </div>
+                      + New connection
+                    </button>
                   );
                 }
                 return (
                   <div
-                    key={`${entry.graphNodeType}-${entry.manifestId ?? 'none'}-${entry.connectionId ?? i}`}
+                    key={`${entry.manifestId ?? 'none'}-${entry.connectionId ?? i}`}
                     draggable={draggable}
                     onDragStart={(e) => {
                       if (!draggable) return;
-                      e.dataTransfer.setData(PALETTE_DRAG_MIME, JSON.stringify(entry));
+                      const payload: PaletteDragPayload = {
+                        roles: entry.roles,
+                        manifestId: entry.manifestId,
+                        connectionId: entry.connectionId,
+                        label: entry.label,
+                      };
+                      e.dataTransfer.setData(PALETTE_DRAG_MIME, JSON.stringify(payload));
                       e.dataTransfer.effectAllowed = 'move';
                     }}
                     onContextMenu={(e) => openAddConnectionMenu(e, entry)}
@@ -280,33 +289,25 @@ export default function NodesRail({
                     style={railEntryStyle(draggable)}
                     title={connected ? undefined : `${entry.connectorName} — right-click, or click, to add a connection`}
                   >
-                    <span style={railEntryIconTileStyle(NODE_TYPE_COLOR[entry.graphNodeType])}>
+                    <span style={railEntryIconTileStyle(tileColor, 32)}>
                       {(() => {
-                        const Icon = getConnectorIcon(entry.manifestId, entry.graphNodeType);
-                        return <Icon size={13} />;
+                        const Icon = getConnectorIcon(entry.manifestId, entry.roles[0]);
+                        return <Icon size={16} />;
                       })()}
                     </span>
-                    <span
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        display: 'flex',
-                        alignItems: 'baseline',
-                        gap: 5,
-                        overflow: 'hidden',
-                      }}
-                    >
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.label}</span>
+                    <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, overflow: 'hidden' }}>
+                      <span title={entry.label} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 500 }}>
+                        {entry.label}
+                      </span>
                       {entry.secondaryLabel && (
                         <span
                           style={{
-                            flex: '0 1 auto',
-                            minWidth: 0,
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
+                            fontFamily: 'var(--font-mono)',
                             fontSize: 10.5,
-                            color: 'var(--ink4)',
+                            color: 'var(--ink-300)',
                           }}
                         >
                           {entry.secondaryLabel}
@@ -323,6 +324,31 @@ export default function NodesRail({
             </div>
           );
         })}
+
+        {(!q || 'triggers'.includes(q) || 'trigger'.includes(q) || 'schedule'.includes(q)) && (
+          <div>
+            <div style={railSectionHeaderStyle}>Triggers</div>
+            <div style={railEntryStyle(false)} title="Requires a trigger manifest — Phase 6">
+              <span style={railEntryIconTileStyle('var(--ink4)')}>
+                <TriggerIcon size={13} />
+              </span>
+              <span style={{ flex: 1 }}>Schedule</span>
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: 'var(--warn)',
+                  background: 'var(--warn-bg)',
+                  border: '1px solid var(--warn-bd)',
+                  borderRadius: 999,
+                  padding: '1px 6px',
+                }}
+              >
+                Soon
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {menu && (

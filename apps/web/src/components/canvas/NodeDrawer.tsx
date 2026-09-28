@@ -21,21 +21,37 @@ import ProfileTab from './ProfileTab';
 import { KIND_COLOR, KIND_LABEL } from './GraphFlowNode';
 import { getConnectorIcon } from './icons';
 import {
+  configPanelAlertCardStyle,
   configPanelDeleteBtnStyle,
   configPanelDetailHintStyle,
   configPanelDetailStyle,
   configPanelDividerStyle,
+  configPanelFooterStyle,
   configPanelGroupLabelStyle,
   configPanelGroupStyle,
   configPanelIconBtnStyle,
   configPanelIdentityIconStyle,
   configPanelRibbonStyle,
   configPanelSelectStyle,
+  configPanelStatusDotStyle,
   panelTabBarStyle,
   panelTabStyle,
   segmentedControlStyle,
   segmentedOptionStyle,
 } from './styles';
+import type { NodeStatus, NodeStatusKind } from '@/lib/canvas/mapping';
+
+// Footer status-line palette — same tokens as GraphFlowNode.tsx's on-canvas
+// STATUS_STYLE (both read the exact same merged `data.status`), so a node's
+// color language never disagrees between the canvas card and its inspector.
+const DRAWER_STATUS_STYLE: Record<NodeStatusKind, { dot: string; text: string }> = {
+  ready: { dot: 'var(--ink-300)', text: 'var(--ink-200)' },
+  running: { dot: 'var(--acc)', text: 'var(--acc)' },
+  succeeded: { dot: 'var(--success)', text: 'var(--success)' },
+  needsAction: { dot: 'var(--warning)', text: 'var(--warning-deep, var(--warning))' },
+  failed: { dot: 'var(--danger)', text: 'var(--danger)' },
+  disabled: { dot: 'var(--ink-300)', text: 'var(--ink-300)' },
+};
 
 /**
  * Node properties panel content — rendered inside NodeConfigPanel.tsx's
@@ -731,7 +747,12 @@ export default function NodeDrawer({
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} data-testid="node-drawer">
       {/* Header: icon tile + type + title + connection name + delete/close — no inline form controls here anymore, those moved into the Setup tab body below. */}
       <div style={configPanelRibbonStyle}>
-        <div style={configPanelGroupStyle}>
+        {/* flex: '1 1 0%' + minWidth: 0 (not the shared configPanelGroupStyle's
+            flex: 'none') — this group must bound its own width so a long
+            connectionLabel (below) genuinely wraps onto a second line instead
+            of overflowing the ribbon. Absorbing the leftover width here also
+            makes the old empty spacer div redundant (removed). */}
+        <div style={{ ...configPanelGroupStyle, flex: '1 1 0%', minWidth: 0 }}>
           <span style={configPanelGroupLabelStyle}>{KIND_LABEL[data.graphNodeType]}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }} title={identityTitle}>
             <span style={configPanelIdentityIconStyle(identityColor)} aria-hidden>
@@ -751,15 +772,16 @@ export default function NodeDrawer({
               {identityName}
             </span>
             {data.connectionLabel && (
+              // Connection names are frequently literal hostnames (e.g. an
+              // RDS endpoint) — wraps instead of truncating so the full
+              // host is always visible, never cut off mid-string.
               <span
                 style={{
                   fontSize: 11,
                   color: 'var(--ink4)',
-                  maxWidth: 100,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  flex: 'none',
+                  whiteSpace: 'normal',
+                  wordBreak: 'break-word',
+                  minWidth: 0,
                 }}
               >
                 · {data.connectionLabel}
@@ -767,8 +789,6 @@ export default function NodeDrawer({
             )}
           </div>
         </div>
-
-        <div style={{ flex: 1 }} />
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 'none' }}>
           <button type="button" aria-label="Delete node" onClick={onDelete} style={configPanelDeleteBtnStyle}>
@@ -802,6 +822,18 @@ export default function NodeDrawer({
         {!data.resolved && (
           <div style={configPanelDetailHintStyle}>
             This node references a tool or connection that no longer exists. It can only be removed.
+          </div>
+        )}
+
+        {/* Prominent inline callout for a real check failure/warning — the
+            footer strip below is easy to miss, so needsAction/failed also
+            surface here, at the top of Setup, where the fix (e.g. a grant)
+            actually happens. Same data.status the on-canvas node footer
+            reads, so the two never disagree. */}
+        {data.resolved && (!showTabs || activeTab === 'setup') && data.status && (data.status.kind === 'needsAction' || data.status.kind === 'failed') && (
+          <div style={configPanelAlertCardStyle(data.status.kind === 'failed' ? 'danger' : 'warning')}>
+            <span aria-hidden>{data.status.kind === 'failed' ? '\u2716' : '\u26A0'}</span>
+            <span>{data.status.message}</span>
           </div>
         )}
 
@@ -871,6 +903,17 @@ export default function NodeDrawer({
             </pre>
           </div>
         )}
+      </div>
+
+      {/* Live status footer — mirrors GraphFlowNode.tsx's on-canvas footer
+          (same data.status merge pass), so the inspector and the card never
+          disagree. Falls back to "ready" until the first applyCheckResults
+          merge pass has run (e.g. a brand-new node). */}
+      <div style={configPanelFooterStyle}>
+        <span style={configPanelStatusDotStyle(DRAWER_STATUS_STYLE[data.status?.kind ?? 'ready'].dot)} aria-hidden />
+        <span style={{ color: DRAWER_STATUS_STYLE[data.status?.kind ?? 'ready'].text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {data.status?.message ?? 'Ready'}
+        </span>
       </div>
     </div>
   );

@@ -16,6 +16,13 @@ import { dragHandleStyle } from './styles';
  * passed ⌄" / "N failing ⌄" / "Checks out of date ⌄"), which doubles as
  * the dock's only toggle control — there's no separate chevron button.
  * Tab selection (Checks/Logs) is independent of that expand state.
+ *
+ * Canvas redesign: split into two named exports — `ChecksBar` (the
+ * always-mounted 36px collapsed strip: tabs, pass/fail/skip counts, a mono
+ * "N NODES · M EDGES · last run" meta line, and the pill) and
+ * `ChecksDrawer` (the expanded resizable Checks/Logs body). The default
+ * `ChecksDock` export composes both and still owns all the drag/height
+ * state — FlowCanvas.tsx's call site is unchanged.
  */
 
 const dockStyle = {
@@ -26,6 +33,11 @@ const dockStyle = {
   zIndex: 30,
   display: 'flex',
   flexDirection: 'column',
+  // Clip to canvas-surface's own box — barStyle's row content (tabs, meta
+  // line, counts, pill) has no wrap/shrink, so without this it can overflow
+  // past this container's right edge and visually spill onto whatever sits
+  // to the right (CopilotSidebar/CommandBar) at narrow canvas-surface widths.
+  overflow: 'hidden',
   background: 'var(--surface)',
   borderTop: '1px solid var(--line2)',
   boxShadow: '0 -4px 16px rgba(15,23,42,.08)',
@@ -89,6 +101,10 @@ const STATUS_STYLES: Record<CheckStatus, { color: string; bg: string; label: str
   pass: { color: 'var(--ok)', bg: 'var(--ok-bg)', label: 'Pass' },
   fail: { color: 'var(--bad)', bg: 'var(--bad-bg)', label: 'Fail' },
   warn: { color: 'var(--warn)', bg: 'var(--warn-bg)', label: 'Warn' },
+  // 'skip' (canvas redesign) — a check that never applied (e.g. a
+  // same-connector mapping path), rendered neutral, never counted as a
+  // pass or a failure.
+  skip: { color: 'var(--ink4)', bg: 'var(--surface2)', label: 'Skip' },
 };
 
 type PillTone = 'ok' | 'bad' | 'warn' | 'neutral';
@@ -100,6 +116,13 @@ const PILL_TONE_STYLES: Record<PillTone, { color: string; bg: string; border: st
   neutral: { color: 'var(--ink4)', bg: 'var(--surface2)', border: 'var(--line2)' },
 };
 
+// Failing rows sort first (then warn, then pass, then skip) so the most
+// actionable results never scroll below a wall of passes.
+const STATUS_SORT_RANK: Record<CheckStatus, number> = { fail: 0, warn: 1, pass: 2, skip: 3 };
+function sortResults(results: CheckResult[]): CheckResult[] {
+  return [...results].sort((a, b) => STATUS_SORT_RANK[a.status] - STATUS_SORT_RANK[b.status]);
+}
+
 function ResultRow({ result, onSelect }: { result: CheckResult; onSelect: (nodeId: string) => void }) {
   const s = STATUS_STYLES[result.status];
   const clickable = result.status === 'fail' && !!result.nodeId;
@@ -110,7 +133,13 @@ function ResultRow({ result, onSelect }: { result: CheckResult; onSelect: (nodeI
         display: 'flex',
         gap: 8,
         alignItems: 'flex-start',
-        padding: '6px 0',
+        padding: '6px 8px',
+        margin: '0 -8px',
+        borderRadius: 6,
+        // Failing rows get a tinted background so they read as
+        // actionable at a glance, even once sorted to the top of a
+        // long, otherwise-passing list.
+        background: result.status === 'fail' ? 'var(--bad-bg)' : 'transparent',
         borderBottom: '1px solid var(--line)',
         cursor: clickable ? 'pointer' : 'default',
       }}
@@ -141,12 +170,227 @@ function ResultRow({ result, onSelect }: { result: CheckResult; onSelect: (nodeI
   );
 }
 
+/**
+ * ChecksDrawer — the expanded, resizable body (Checks/Logs tab content +
+ * the drag handle). Split out of the single ChecksDock render tree so the
+ * always-mounted 36px ChecksBar below stays a small, easily-scanned
+ * component of its own; both are still driven by the same drag/height
+ * state, owned by the default ChecksDock export.
+ */
+export function ChecksDrawer({
+  running,
+  error,
+  results,
+  ranAt,
+  activeTab,
+  logs,
+  onSelectNode,
+  bodyHeight,
+  dragging,
+  onDragPointerDown,
+}: {
+  running: boolean;
+  error: string | null;
+  results: CheckResult[] | null;
+  ranAt: string | null;
+  activeTab: 'checks' | 'logs';
+  logs: ActivityItem[];
+  onSelectNode: (nodeId: string) => void;
+  bodyHeight: number;
+  dragging: boolean;
+  onDragPointerDown: (e: ReactPointerEvent) => void;
+}) {
+  const sorted = results ? sortResults(results) : null;
+  return (
+    <div style={{ position: 'relative' }}>
+      <div style={dragHandleStyle('horizontal', dragging)} onPointerDown={onDragPointerDown} data-testid="checks-dock-drag-handle" />
+      {activeTab === 'checks' && (
+        <div style={bodyStyleFor(bodyHeight)} data-testid="checks-dock-body">
+          {running && <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>Running checks…</div>}
+          {!running && error && <div style={{ fontSize: 12.5, color: 'var(--bad)' }}>{error}</div>}
+          {!running && !error && sorted && sorted.length === 0 && (
+            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No checks ran.</div>
+          )}
+          {!running && !error && sorted && sorted.length > 0 && (
+            <div>
+              {sorted.map((r, i) => (
+                <ResultRow key={`${r.id}-${r.nodeId ?? ''}-${i}`} result={r} onSelect={onSelectNode} />
+              ))}
+              {ranAt && (
+                <div style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 8 }}>
+                  Last run {new Date(ranAt).toLocaleString()}
+                </div>
+              )}
+            </div>
+          )}
+          {!running && !error && !sorted && (
+            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No checks have run yet.</div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'logs' && (
+        <div style={bodyStyleFor(bodyHeight)} data-testid="checks-dock-logs">
+          {logs.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No activity yet — checks, chat, and run events will appear here.</div>
+          ) : (
+            logs.map((l, i) => (
+              <div key={`${l.kind}-${l.time}-${i}`} style={logRowStyle}>
+                <span style={{ flex: 'none', color: 'var(--ink4)' }}>{new Date(l.time).toLocaleString()}</span>
+                <span style={{ color: 'var(--ink2)' }}>{l.text}</span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const countDotStyle = (color: string) =>
+  ({
+    display: 'inline-block',
+    width: 6,
+    height: 6,
+    borderRadius: 999,
+    background: color,
+    marginRight: 4,
+  }) as const;
+
+const metaLineStyle = {
+  fontFamily: 'var(--font-mono, var(--font-data))',
+  fontSize: 10.5,
+  letterSpacing: '0.02em',
+  color: 'var(--ink4)',
+  whiteSpace: 'nowrap',
+} as const;
+
+/**
+ * ChecksBar — the always-mounted 36px collapsed strip: Checks/Logs tabs,
+ * a mono "N NODES · M EDGES · last run" meta line, pass/fail/skip counts,
+ * and the summary pill that doubles as the expand/collapse toggle.
+ */
+export function ChecksBar({
+  running,
+  error,
+  results,
+  ranAt,
+  stale,
+  nodeCount,
+  edgeCount,
+  expanded,
+  onToggleExpanded,
+  activeTab,
+  onTabChange,
+}: {
+  running: boolean;
+  error: string | null;
+  results: CheckResult[] | null;
+  ranAt: string | null;
+  stale: boolean;
+  nodeCount: number;
+  edgeCount: number;
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  activeTab: 'checks' | 'logs';
+  onTabChange: (tab: 'checks' | 'logs') => void;
+}) {
+  const passCount = results?.filter((r) => r.status === 'pass').length ?? 0;
+  const failCount = results?.filter((r) => r.status === 'fail').length ?? 0;
+  const skipCount = results?.filter((r) => r.status === 'skip').length ?? 0;
+
+  let pillLabel: string;
+  let pillTone: PillTone;
+  if (running) {
+    pillLabel = 'Running checks…';
+    pillTone = 'neutral';
+  } else if (error) {
+    pillLabel = 'Check run failed';
+    pillTone = 'bad';
+  } else if (!results) {
+    pillLabel = 'No checks have run yet';
+    pillTone = 'neutral';
+  } else if (stale) {
+    pillLabel = 'Checks out of date — re-run';
+    pillTone = 'warn';
+  } else if (failCount > 0) {
+    pillLabel = `${failCount} failing`;
+    pillTone = 'bad';
+  } else {
+    pillLabel = 'All checks passed';
+    pillTone = 'ok';
+  }
+  const pillStyle = PILL_TONE_STYLES[pillTone];
+  const metaLine = `${nodeCount} NODE${nodeCount === 1 ? '' : 'S'} \u00B7 ${edgeCount} EDGE${edgeCount === 1 ? '' : 'S'} \u00B7 ${ranAt ? new Date(ranAt).toLocaleString().toUpperCase() : 'NOT RUN YET'}`;
+
+  return (
+    <div style={barStyle}>
+      <button
+        type="button"
+        style={tabStyle(activeTab === 'checks')}
+        onClick={() => {
+          onTabChange('checks');
+          if (!expanded) onToggleExpanded();
+        }}
+      >
+        Checks
+      </button>
+      <button
+        type="button"
+        style={tabStyle(activeTab === 'logs')}
+        onClick={() => {
+          onTabChange('logs');
+          if (!expanded) onToggleExpanded();
+        }}
+      >
+        Logs
+      </button>
+
+      <span style={metaLineStyle}>{metaLine}</span>
+
+      {results && (
+        <span style={{ ...metaLineStyle, marginLeft: 12 }}>
+          <span style={countDotStyle('var(--ok)')} />
+          {passCount}
+          <span style={{ marginLeft: 8, ...countDotStyle('var(--bad)') }} />
+          {failCount}
+          <span style={{ marginLeft: 8, ...countDotStyle('var(--ink4)') }} />
+          {skipCount}
+        </span>
+      )}
+
+      <button
+        type="button"
+        onClick={onToggleExpanded}
+        data-testid="checks-dock-pill"
+        style={{
+          marginLeft: 'auto',
+          fontSize: 12,
+          fontWeight: 600,
+          color: pillStyle.color,
+          background: pillStyle.bg,
+          border: `1px solid ${pillStyle.border}`,
+          borderRadius: 999,
+          padding: '4px 12px',
+          cursor: 'pointer',
+          flex: 'none',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {pillLabel} {expanded ? '\u2303' : '\u2304'}
+      </button>
+    </div>
+  );
+}
+
 export default function ChecksDock({
   running,
   error,
   results,
   ranAt,
   stale,
+  nodeCount,
+  edgeCount,
   expanded,
   onToggleExpanded,
   onSelectNode,
@@ -161,6 +405,9 @@ export default function ChecksDock({
   ranAt: string | null;
   /** True when latestCheckRun.graphVersion no longer matches the live graph version. */
   stale: boolean;
+  /** Live graph node/edge counts, for ChecksBar's "N NODES · M EDGES" meta line. */
+  nodeCount: number;
+  edgeCount: number;
   expanded: boolean;
   onToggleExpanded: () => void;
   onSelectNode: (nodeId: string) => void;
@@ -233,125 +480,36 @@ export default function ChecksDock({
     document.body.style.userSelect = 'none';
   }
 
-  const failingChecks = results?.filter((r) => r.status === 'fail').length ?? 0;
-
-  let pillLabel: string;
-  let pillTone: PillTone;
-  if (running) {
-    pillLabel = 'Running checks…';
-    pillTone = 'neutral';
-  } else if (error) {
-    pillLabel = 'Check run failed';
-    pillTone = 'bad';
-  } else if (!results) {
-    pillLabel = 'No checks have run yet';
-    pillTone = 'neutral';
-  } else if (stale) {
-    pillLabel = 'Checks out of date — re-run';
-    pillTone = 'warn';
-  } else if (failingChecks > 0) {
-    pillLabel = `${failingChecks} failing`;
-    pillTone = 'bad';
-  } else {
-    pillLabel = 'All checks passed';
-    pillTone = 'ok';
-  }
-  const pillStyle = PILL_TONE_STYLES[pillTone];
-
   return (
     <div ref={dockRef} style={dockStyle} data-testid="checks-dock">
       {expanded && (
-        <div style={{ position: 'relative' }}>
-          <div
-            style={dragHandleStyle('horizontal', dragging)}
-            onPointerDown={handleDragPointerDown}
-            data-testid="checks-dock-drag-handle"
-          />
-          {activeTab === 'checks' && (
-            <div style={bodyStyleFor(bodyHeight)} data-testid="checks-dock-body">
-              {running && <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>Running checks…</div>}
-              {!running && error && <div style={{ fontSize: 12.5, color: 'var(--bad)' }}>{error}</div>}
-              {!running && !error && results && results.length === 0 && (
-                <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No checks ran.</div>
-              )}
-              {!running && !error && results && results.length > 0 && (
-                <div>
-                  {results.map((r, i) => (
-                    <ResultRow key={`${r.id}-${r.nodeId ?? ''}-${i}`} result={r} onSelect={onSelectNode} />
-                  ))}
-                  {ranAt && (
-                    <div style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 8 }}>
-                      Last run {new Date(ranAt).toLocaleString()}
-                    </div>
-                  )}
-                </div>
-              )}
-              {!running && !error && !results && (
-                <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No checks have run yet.</div>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'logs' && (
-            <div style={bodyStyleFor(bodyHeight)} data-testid="checks-dock-logs">
-              {logs.length === 0 ? (
-                <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No activity yet — checks, chat, and run events will appear here.</div>
-              ) : (
-                logs.map((l, i) => (
-                  <div key={`${l.kind}-${l.time}-${i}`} style={logRowStyle}>
-                    <span style={{ flex: 'none', color: 'var(--ink4)' }}>{new Date(l.time).toLocaleString()}</span>
-                    <span style={{ color: 'var(--ink2)' }}>{l.text}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </div>
+        <ChecksDrawer
+          running={running}
+          error={error}
+          results={results}
+          ranAt={ranAt}
+          activeTab={activeTab}
+          logs={logs}
+          onSelectNode={onSelectNode}
+          bodyHeight={bodyHeight}
+          dragging={dragging}
+          onDragPointerDown={handleDragPointerDown}
+        />
       )}
 
-      <div style={barStyle}>
-        <button
-          type="button"
-          style={tabStyle(activeTab === 'checks')}
-          onClick={() => {
-            onTabChange('checks');
-            if (!expanded) onToggleExpanded();
-          }}
-        >
-          Checks
-        </button>
-        <button
-          type="button"
-          style={tabStyle(activeTab === 'logs')}
-          onClick={() => {
-            onTabChange('logs');
-            if (!expanded) onToggleExpanded();
-          }}
-        >
-          Logs
-        </button>
-
-        <button
-          type="button"
-          onClick={onToggleExpanded}
-          data-testid="checks-dock-pill"
-          style={{
-            marginLeft: 'auto',
-            fontSize: 12,
-            fontWeight: 600,
-            color: pillStyle.color,
-            background: pillStyle.bg,
-            border: `1px solid ${pillStyle.border}`,
-            borderRadius: 999,
-            padding: '4px 12px',
-            cursor: 'pointer',
-            flex: 'none',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {pillLabel} {expanded ? '\u2303' : '\u2304'}
-        </button>
-      </div>
+      <ChecksBar
+        running={running}
+        error={error}
+        results={results}
+        ranAt={ranAt}
+        stale={stale}
+        nodeCount={nodeCount}
+        edgeCount={edgeCount}
+        expanded={expanded}
+        onToggleExpanded={onToggleExpanded}
+        activeTab={activeTab}
+        onTabChange={onTabChange}
+      />
     </div>
   );
 }

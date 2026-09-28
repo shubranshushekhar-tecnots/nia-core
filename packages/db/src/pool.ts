@@ -1,6 +1,21 @@
 import pg from "pg";
 
 /**
+ * node-postgres returns `bigint`/`numeric` columns (OID 20) as JS strings by
+ * default, to avoid silent precision loss above Number.MAX_SAFE_INTEGER.
+ * The only bigint column in this schema is workflow_runs.rows_processed
+ * (0002_projects_workflows.sql), whose values never approach that range, but
+ * every caller (services/dashboard.ts, services/runs.ts) declares it as a
+ * plain TS `number` and sums it — e.g. `.reduce((sum, r) => sum +
+ * r.rowsProcessed, 0)`. Left unparsed, that silently becomes STRING
+ * concatenation (`0 + "10" + "10" + ...`), producing a garbage
+ * "0101010101..."-looking value instead of a sum. Parsing OID 20 to a real
+ * number here, once, for every pool this module creates, is the single
+ * source-of-truth fix — no schema change, no query change.
+ */
+pg.types.setTypeParser(20, (value) => Number(value));
+
+/**
  * One pg.Pool per calling service (apps/api, apps/web, apps/worker each call
  * this once at startup with their own `max`). There is deliberately no
  * separate "acting-user pool" vs "service-role pool" here — see client.ts's

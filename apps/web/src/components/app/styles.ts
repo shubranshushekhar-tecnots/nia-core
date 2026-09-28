@@ -675,21 +675,6 @@ export const profileEmailRowStyle: CSSProperties = {
   padding: '4px 8px 8px',
 };
 
-export const profileAvatarStyle: CSSProperties = {
-  width: 24,
-  height: 24,
-  flex: 'none',
-  borderRadius: '50%',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line)',
-  color: 'var(--text-2)',
-  fontSize: 11,
-  fontWeight: 600,
-};
-
 export const profileEmailTextStyle: CSSProperties = {
   fontSize: 12.5,
   fontWeight: 500,
@@ -1949,54 +1934,6 @@ export const chatMentionToolStyle: CSSProperties = {
 export const chatMentionEmptyStyle: CSSProperties = {
   padding: '10px 10px',
   fontSize: 12.5,
-  color: 'var(--text-3)',
-};
-
-// CommandBar's "/" suggestion menu — same visual language as the
-// chatMention* dropdown above (positioned above the bar, card rows with
-// hover state), just for example Copilot prompts instead of connections.
-export const chatSlashMenuDropdownStyle: CSSProperties = {
-  position: 'absolute',
-  left: 56,
-  right: 56,
-  bottom: '100%',
-  marginBottom: 8,
-  maxHeight: 240,
-  overflowY: 'auto',
-  boxSizing: 'border-box',
-  padding: 6,
-  borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
-  boxShadow: 'var(--amb)',
-  zIndex: 5,
-};
-
-export function chatSlashMenuRowStyle(hovered: boolean): CSSProperties {
-  return {
-    width: '100%',
-    boxSizing: 'border-box',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 1,
-    padding: '8px 10px',
-    borderRadius: 8,
-    background: hovered ? 'var(--surface2)' : 'transparent',
-    border: 'none',
-    cursor: 'pointer',
-    textAlign: 'left',
-  };
-}
-
-export const chatSlashMenuLabelStyle: CSSProperties = {
-  fontFamily: 'var(--font-data)',
-  fontSize: 12.5,
-  fontWeight: 600,
-  color: 'var(--text)',
-};
-
-export const chatSlashMenuHintStyle: CSSProperties = {
-  fontSize: 11.5,
   color: 'var(--text-3)',
 };
 

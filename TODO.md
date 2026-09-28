@@ -8,6 +8,12 @@
   (admin-only, direct DB access) is the only way to change a forgotten
   password today; a real self-serve reset flow needs an email service,
   deferred with email verification above.
+- Console: password-reset via email once an email service exists. Dropped
+  from Console v1 (`docs/plans/console-plan.md`) — staff generating or
+  viewing a one-time reset link/token would functionally be impersonation
+  by another name, which v1 explicitly forbids. Revisit once transactional
+  email exists so the console can trigger a real email send without ever
+  exposing the link itself to staff.
 - Auth: Google sign-in — not built. `emailAndPassword` is the only
   enabled method in `createAuth()`; adding an OAuth provider is additive
   (better-auth supports it natively) but out of this migration's scope.
@@ -769,3 +775,80 @@
   treat a null in one of these 6 columns as a signal that a row
   predates its owner's user record being resolvable, not as a
   supported/expected state going forward.
+- **Home dashboard: replace client-side bucketing with a SQL summary
+  endpoint** — not built. The redesigned `/app` Home page
+  (`apps/web/src/lib/dashboard/aggregate.ts` +
+  `homeViewModel.ts`) aggregates KPIs/charts entirely client-side over a
+  single `GET /dashboard/recent-runs?limit=50` fetch. That's honest (the
+  UI always states its real data window and never fabricates a day or a
+  delta it doesn't have full coverage for — see `docs/decisions.md`'s
+  "Home dashboard redesign" entry) but caps every chart at whatever
+  fraction of the last 50 runs falls in the 14-day window, which
+  degrades for any workflow with high run volume. Follow-up: a read-only
+  `GET /dashboard/summary?days=28` on `apps/api` that aggregates in SQL
+  (per-day run counts/rows/median+p95 duration, computed server-side
+  over a real N-day window instead of a fixed row count) to replace the
+  client-side bucketing. Not started — no route, no schema change.
+- **Copilot agent: `/cancel`'s no-confirmation behavior** —
+  `cancel_run` (`apps/api/src/copilot/tools/`) executes immediately with
+  no confirmation card, unlike `start_run` (always `needs_confirmation`
+  first). Found during the "/" command menu redesign
+  (`docs/plans/copilot-command-menu.md`) verification pass. Left
+  unchanged per instruction — logic change is out of scope for a UI-only
+  task — but flagging for a deliberate decision: should cancelling a
+  live run require the same confirm-click as starting one?
+- **Copilot agent: `/describe` and `/profile` can't resolve a node's
+  connection UUID** — `get_workflow`/`list_connections`'s text summaries
+  never surface the connection's UUID (only the UI's own render payload
+  has it), but `describe_source`/`get_profile` require a UUID as input.
+  The model has no way to go from "the node the user means" to a real
+  ID, so both tools always dead-end asking the user to paste a
+  connection ID manually. Reproduced twice during command-menu
+  verification; both commands dropped from the final 12-command list
+  for this reason.
+- **Copilot agent: no "last applied plan" lookup for `revert_plan`** —
+  `revert_plan` needs a real `appliedPlanId`; there's no tool to look up
+  "the most recent one for this workflow," so an `/undo`-style command
+  always dead-ends asking for an ID. The UI already has a working
+  "Revert" button directly on every applied-plan message
+  (`CommandBar.tsx`'s `onRevertPlan`/`revertingPlanId`), so this is
+  lower priority than it looks — dropped `/undo` from the command list
+  as redundant with that existing affordance.
+- **Copilot plan-propose: only `filter`/`aggregate` step kinds are
+  reachable, and plans are add-only** — `packages/schemas/src/
+  nodeConfig.ts` defines `computed_field`, `drop_fields`, `flatten`, and
+  `to_json` transform-step kinds, and the underlying graph model could
+  in principle support editing an existing transform node, but the plan
+  model today only ever proposes `filter`/`aggregate` steps as new
+  nodes, and clarifies (refuses) any request to add the other kinds or
+  to modify an existing node. Found verifying `/compute`, `/drop`,
+  `/flatten` for the command menu — all three dropped from the final
+  list for this reason.
+- **Copilot agent: `/destination` sometimes emits `operation: "read"`
+  instead of `"insert"`** — observed during command-menu verification;
+  an LLM-quality nuance, not a command-design flaw, but unconfirmed
+  whether plan validation actually rejects a destination-node plan with
+  a nonsensical `operation` before it reaches apply. Needs a check.
+- **Copilot agent: `/map` (`propose_mapping`) only verified on a
+  same-connector no-op** — the one live test during command-menu
+  verification was mysql→mysql, which correctly short-circuited with
+  "same connector, no mapping needed." A real cross-connector mapping
+  (e.g. mysql→mongodb) has never been exercised end-to-end.
+- **`apps/worker/scripts/dev-bootstrap.ts` still targets the old
+  Supabase CLI setup** — half-stale since the "local-dev: Supabase CLI →
+  plain Postgres" migration; the documented seed script for the
+  `canvas-e2e` fixture doesn't actually work against this project's
+  current local Postgres setup. Found needing a throwaway SQL seed
+  script during command-menu verification instead.
+- **Canvas app shell has no responsive breakpoints — the command bar
+  becomes unreachable below ~960px viewport width** — `Sidebar` +
+  `NodesRail` + the right-docked AI/CommandBar panel are all fixed
+  pixel widths with no media queries; at a true 390px viewport their
+  combined width pushes the whole AI dock (and its input) off-screen to
+  the right, with no horizontal scroll to reach it. Found verifying
+  `docs/plans/copilot-command-menu.md`'s "works at 390px width" /
+  "no clipping at 390px" requirements for the new "/" command menu: the
+  menu's own popup sizing/placement logic (matches its anchor's width,
+  respects `maxHeight`, flips above/below) checks out and is covered by
+  `command-bar.spec.ts`, but that's moot until the surrounding shell
+  itself becomes responsive. Out of scope for that UI-only task.

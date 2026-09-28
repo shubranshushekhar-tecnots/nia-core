@@ -52,3 +52,22 @@ export function connectionSecondaryLabel(connection: Pick<Connection, 'config'>)
   if (host && database) return `${host}/${database}`;
   return host ?? database;
 }
+
+/**
+ * Workflow canvas redesign: no `region` field is stored on a Connection
+ * anywhere (see this file's own shape above) — the node card/rail's
+ * "Postgres · ap-south-1" sub-line derives it from `config.host` with a
+ * best-effort regex instead of inventing data. Matches the AWS-style
+ * region segment (`us-east-1`, `ap-south-1`, ...) that shows up verbatim in
+ * RDS hostnames and Supabase's pooler hostnames (`aws-0-ap-south-1.pooler.
+ * supabase.com`) alike. Hosts that don't contain this pattern (plain IPs,
+ * PlanetScale's `aws.connect.psdb.cloud`, localhost, ...) return undefined
+ * — callers must render nothing rather than guess.
+ */
+const REGION_PATTERN = /\b([a-z]{2}-[a-z]+-\d)\b/;
+
+export function connectionRegion(connection: Pick<Connection, 'config'>): string | undefined {
+  const host = typeof connection.config.host === 'string' ? connection.config.host : undefined;
+  if (!host) return undefined;
+  return host.match(REGION_PATTERN)?.[1];
+}
