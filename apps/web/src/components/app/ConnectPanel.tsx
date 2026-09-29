@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { friendlyAppError, friendlyConnectionError, type ConfigField } from '@nia/schemas';
 import { createConnection, installConnector, testConnection, ConnectionsApiError } from '@/lib/api/connectionsClient';
-import { useModalA11y } from '@/lib/hooks/useModalA11y';
+import { useModalA11y } from '@/lib/a11y/useModalDialog';
 import ConnectionForm from './ConnectionForm';
 import {
   connectPanelStepDividerStyle,

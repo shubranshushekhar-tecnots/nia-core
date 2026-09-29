@@ -48,7 +48,7 @@ import {
 } from '@nia/schemas';
 import type { HelpStepKey } from '@nia/schemas';
 import { resolveHelpSql, shouldShowCopyButton } from '@/lib/help/resolveHelpSql';
-import { useModalA11y } from '@/lib/hooks/useModalA11y';
+import { useModalA11y } from '@/lib/a11y/useModalDialog';
 import {
   modalActionsStyle,
   modalBtnGhostStyle,

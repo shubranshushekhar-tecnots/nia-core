@@ -3,6 +3,7 @@
 import { useActionState, useEffect } from 'react';
 import type { ConfigField } from '@nia/schemas';
 import { createConnectionAction } from '@/lib/connections/actions';
+import { useModalA11y } from '@/lib/a11y/useModalDialog';
 import type { ActionState } from '@/lib/auth/actions';
 import ConnectionForm from './ConnectionForm';
 import { modalActionsStyle, modalBtnGhostStyle, modalBtnPrimaryStyle, modalCardStyle, modalOverlayStyle } from './styles';
@@ -21,6 +22,7 @@ export default function AddConnectionDialog({
   onClose: () => void;
 }) {
   const [state, formAction, pending] = useActionState(createConnectionAction.bind(null, connectorId), initialState);
+  const dialogRef = useModalA11y<HTMLDivElement>(onClose);
 
   useEffect(() => {
     if (state?.success) onClose();
@@ -28,7 +30,15 @@ export default function AddConnectionDialog({
 
   return (
     <div style={modalOverlayStyle} onClick={onClose}>
-      <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Add ${connectorName} connection`}
+        tabIndex={-1}
+        style={{ ...modalCardStyle, outline: 'none' }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <ConnectionForm
             title={`Add ${connectorName} connection`}

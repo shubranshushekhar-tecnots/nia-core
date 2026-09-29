@@ -4,6 +4,8 @@ import { useActionState, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CONNECTOR_MANIFESTS } from '@nia/schemas';
 import type { Connection, ConnectorCatalogEntry, ConnectorInstall } from '@/lib/connections/types';
+import type { WriteGrant } from '@/lib/api/connectionsClient';
+import { summarizeGrants } from '@/lib/connections/grantsSummary';
 import { testConnectionAction, refreshConnectionSchemaAction, deleteConnectionAction, uninstallConnectorAction } from '@/lib/connections/actions';
 import { CATALOG_ORDER, CONNECTOR_CATALOG_META, catalogIndexLabel } from '@/lib/connections/catalogMeta';
 import { relativeTime } from '@/lib/time';
@@ -154,16 +156,51 @@ function ActionErrorDetail({ error, fix, details }: { error: string; fix?: strin
   );
 }
 
+/**
+ * Learning mode, Step 7 — read-only write-access summary for one
+ * connection, from the same GET /connections/:id/grants payload
+ * NodeDrawer.tsx's canvas UI uses (batch-fetched server-side in page.tsx
+ * here instead, since this page has no react-query provider). `grants ===
+ * null` means that connection's grants fetch failed on the server — kept
+ * strictly distinct from a real empty array (0 grants); a load failure
+ * always shows a message, never gets collapsed into "no write grants".
+ */
+function WriteAccessStatus({ grants }: { grants: WriteGrant[] | null }) {
+  if (grants === null) {
+    return <span style={{ ...connectionsBadgeMetaStyle, color: 'var(--bad)' }}>Couldn&apos;t load write-access status</span>;
+  }
+  if (grants.length === 0) {
+    return <span style={connectionsBadgeMetaStyle}>No write grants</span>;
+  }
+  const { confirmedCount, rows } = summarizeGrants(grants);
+  return (
+    <details style={{ display: 'inline' }}>
+      <summary style={{ display: 'inline', cursor: 'pointer', ...connectionsBadgeMetaStyle }}>
+        {confirmedCount} confirmed write grant{confirmedCount === 1 ? '' : 's'}
+      </summary>
+      <span style={{ display: 'block', marginTop: 2 }}>
+        {rows.map((r) => (
+          <span key={r.id} style={{ display: 'block', ...connectionsBadgeMetaStyle }}>
+            {r.namespaces.join(', ') || '(no namespace)'} {'\u2014'} {r.writeRoleName ?? 'no role'} {'\u2014'} {r.status}
+          </span>
+        ))}
+      </span>
+    </details>
+  );
+}
+
 export default function ConnectionsClient({
   currentUserId,
   catalog,
   installs,
   connections,
+  grantsByConnection,
 }: {
   currentUserId: string;
   catalog: ConnectorCatalogEntry[];
   installs: ConnectorInstall[];
   connections: Connection[];
+  grantsByConnection: Record<string, WriteGrant[] | null>;
 }) {
   const router = useRouter();
   const [search, setSearch] = useState('');
@@ -426,6 +463,22 @@ export default function ConnectionsClient({
                     </span>
                   ))}
                 </div>
+                {p.connections.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
+                    {p.connections.map((c) => (
+                      <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                        <span style={connectionsBadgeMetaStyle}>{c.handle}:</span>
+                        <WriteAccessStatus grants={grantsByConnection[c.id] ?? null} />
+                        <span
+                          style={connectionsBadgeMetaStyle}
+                          title="Grant/revoke write access from a destination node's drawer in a workflow canvas"
+                        >
+                          Manage from the canvas
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div style={connectionsProviderActionsStyle}>
                   <span style={connectionsProviderMetaStyle} title="Right-click this connector's node in a workflow canvas">
                     Add a connection from the canvas

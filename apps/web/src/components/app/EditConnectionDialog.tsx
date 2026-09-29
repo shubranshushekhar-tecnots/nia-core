@@ -5,6 +5,7 @@ import { friendlyConnectionError, getConnectorManifest, type ConfigField } from 
 import type { Connection } from '@/lib/connections/types';
 import { updateConnection, ConnectionsApiError, type ConnectionUsage } from '@/lib/api/connectionsClient';
 import { autoCompleteFor } from '@/lib/connections/formFields';
+import { useModalA11y } from '@/lib/a11y/useModalDialog';
 import HelpPanel from './HelpPanel';
 import {
   modalActionsStyle,
@@ -92,11 +93,20 @@ export default function EditConnectionDialog({
   const [usageWarning, setUsageWarning] = useState<ConnectionUsage[] | null>(null);
   const [pendingSave, setPendingSave] = useState<SavePayload | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const dialogRef = useModalA11y(onClose);
 
   if (!manifest) {
     return (
       <div style={modalOverlayStyle} onClick={onClose}>
-        <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Edit connection"
+          tabIndex={-1}
+          style={{ ...modalCardStyle, outline: 'none' }}
+          onClick={(e) => e.stopPropagation()}
+        >
           <span style={modalTitleStyle}>Edit connection</span>
           <span style={modalErrorStyle}>No manifest for connector {connection.connectorId}.</span>
           <div style={modalActionsStyle}>
@@ -154,7 +164,15 @@ export default function EditConnectionDialog({
 
   return (
     <div style={modalOverlayStyle} onClick={onClose}>
-      <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Edit connection"
+        tabIndex={-1}
+        style={{ ...modalCardStyle, outline: 'none' }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={modalTitleStyle}>Edit connection</span>
           <button type="button" style={helpTriggerStyle} onClick={() => setShowHelp(true)}>

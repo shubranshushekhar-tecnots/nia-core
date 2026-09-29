@@ -261,6 +261,9 @@ export default function ConnectionForm({
               </div>
             )}
             <pre
+              role="region"
+              aria-label="Read-only user SQL statement"
+              tabIndex={0}
               style={{
                 fontFamily: 'var(--font-data)',
                 fontSize: 11,

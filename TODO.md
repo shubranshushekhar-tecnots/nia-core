@@ -894,3 +894,5 @@
   current scope (likely scope change across 0003–0005 individual-workspace
   migrations; connections.ts:193-202, connectors.ts:123-137, no FK).
   Investigate with a real row; consider a repair migration or FK.
+- Connections page fetches grants with one request per connection (N+1) —
+  add a batched endpoint if orgs have many connections.
