@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
-import { headers } from 'next/headers';
+import { headers, cookies } from 'next/headers';
 import { getSessionCookie } from 'better-auth/cookies';
+import { ACTIVE_ORG_COOKIE } from '@/lib/auth/session';
 
 // Internal, Docker-network address of apps/api — same var next.config.mjs's
 // rewrite target and chatServer.ts read. Not NEXT_PUBLIC_-prefixed: must
@@ -34,6 +35,20 @@ export class ApiError extends Error {
  * time a Server Component runs, middleware has already redirected any
  * request with no session cookie at all, so a 401 here means a real
  * server-to-server problem, not a stale-token race.
+ *
+ * Org switcher (Subscription Phase 2): this is a real server-to-server
+ * fetch (Node's own `fetch`, straight to API_INTERNAL_URL) — it never
+ * passes through Next's same-origin /api/backend/:path* rewrite, so
+ * unlike a browser call, the incoming request's cookies aren't attached
+ * automatically. Without forwarding ACTIVE_ORG_COOKIE explicitly here,
+ * apps/api's attachActor would silently fall back to the oldest
+ * membership for every call through this helper (dashboard, connections,
+ * workflow graph, console, most of chat), diverging from whatever org
+ * requireUser() just resolved on the web side for the same request.
+ * Forwarding only this one cookie (not the full incoming Cookie header)
+ * keeps the bearer-token boundary intentional — see apiFetchServerCookie
+ * in chatServer.ts for the one routing family that forwards cookies
+ * wholesale instead, because it authenticates via cookie, not bearer.
  */
 export async function apiFetchServer<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getSessionCookie(await headers());
@@ -42,12 +57,15 @@ export async function apiFetchServer<T>(path: string, init?: RequestInit): Promi
     redirect('/login');
   }
 
+  const activeOrgId = (await cookies()).get(ACTIVE_ORG_COOKIE)?.value;
+
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       ...init?.headers,
       Authorization: `Bearer ${token}`,
+      ...(activeOrgId ? { Cookie: `${ACTIVE_ORG_COOKIE}=${activeOrgId}` } : {}),
     },
     cache: 'no-store',
   });

@@ -1,5 +1,7 @@
 # TODO
 
+- Wire the org switcher (TopBar orgs/activeOrgId) on the Connections page
+  once the redesign is committed.
 - Console Slice 3b (org suspend/unsuspend, `docs/plans/console-plan.md`
   decision 2 / addition 8): `apps/worker/scripts/dispatch-smoke.ts` was not
   re-run against a live suspended org for this change — deferred per the

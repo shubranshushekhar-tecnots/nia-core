@@ -30,6 +30,13 @@ vi.mock("next/navigation", () => ({ notFound, redirect }));
 const pingConsole = vi.fn();
 vi.mock("@/lib/api/consoleServer", () => ({ pingConsole }));
 
+// Org switcher fix: @/lib/api/server now imports ACTIVE_ORG_COOKIE from
+// @/lib/auth/session, whose requireUser is wrapped in React's cache() —
+// that throws outside the RSC runtime (see pickActiveMembership.ts's own
+// extraction, done for the same reason), so this module boundary is
+// mocked here too, same spirit as pingConsole above.
+vi.mock("@/lib/auth/session", () => ({ ACTIVE_ORG_COOKIE: "nia_active_org" }));
+
 const { ApiError } = await import("@/lib/api/server");
 const { default: ConsoleLayout } = await import("./layout");
 
