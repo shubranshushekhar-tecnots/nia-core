@@ -135,7 +135,8 @@ function CanvasInner({
     }
   }, []);
   const ctx = useMappingContext(connections);
-  const [copilotOpen, setCopilotOpen] = useState(true);
+  const copilotOpen = useCanvasStore((s) => s.copilotOpen);
+  const toggleCopilot = useCanvasStore((s) => s.toggleCopilot);
   const { screenToFlowPosition, setCenter, getNode, zoomIn, zoomOut, fitView } = useReactFlow();
   // Wraps canvas-surface + CopilotSidebar (not just the canvas) so "full
   // view" keeps Copilot visible/usable instead of it disappearing along
@@ -1125,7 +1126,7 @@ function CanvasInner({
         runTooltip={runTooltip}
         onRun={handleRun}
         copilotOpen={copilotOpen}
-        onToggleCopilot={() => setCopilotOpen((v) => !v)}
+        onToggleCopilot={toggleCopilot}
       />
 
       <div style={canvasShellRowStyle}>
@@ -1295,7 +1296,7 @@ function CanvasInner({
                 <button
                   type="button"
                   style={headerCopilotToggleBtnStyle(copilotOpen)}
-                  onClick={() => setCopilotOpen((v) => !v)}
+                  onClick={toggleCopilot}
                   aria-pressed={copilotOpen}
                   title={copilotOpen ? 'Hide Nia AI' : 'Show Nia AI'}
                 >
@@ -1443,7 +1444,7 @@ function CanvasInner({
 
           <CopilotSidebar
             open={copilotOpen}
-            onToggle={() => setCopilotOpen((v) => !v)}
+            onToggle={toggleCopilot}
             workflowId={workflow.id}
             connections={connections}
             wiredConnectionIds={wiredConnectionIds}

@@ -86,6 +86,28 @@ type CanvasState = {
   cleanProposal: CleanProposal | null;
   setCleanProposal: (proposal: CleanProposal | null) => void;
   clearGhost: () => void;
+  /**
+   * Learning mode, Step 6 — set by "Ask Copilot about this step" in
+   * GrantAccessPanel/RevokeAccessPanel (NodeDrawer.tsx); CommandBar watches
+   * this and sends it via the existing "//" agent path, then clears it.
+   * Cross-component like selectedNodeId above (the button and CommandBar
+   * aren't otherwise wired together). setPendingAgentPrompt also forces
+   * copilotOpen true (never false) so the click works even when the
+   * Copilot sidebar is collapsed — see copilotOpen below.
+   */
+  pendingAgentPrompt: string | null;
+  setPendingAgentPrompt: (prompt: string | null) => void;
+  /**
+   * Learning mode, Step 6 — moved here (was FlowCanvas-local useState) so
+   * setPendingAgentPrompt can force the sidebar open in the same atomic
+   * `set()` call: CommandBar (which reads pendingAgentPrompt) only exists
+   * in the tree while copilotOpen is true (CopilotSidebar.tsx returns an
+   * empty shell when closed), so "Ask Copilot about this step" has to open
+   * the sidebar *before* CommandBar can mount to see the prompt at all.
+   */
+  copilotOpen: boolean;
+  setCopilotOpen: (open: boolean) => void;
+  toggleCopilot: () => void;
 };
 
 export const useCanvasStore = create<CanvasState>((set) => ({
@@ -104,4 +126,10 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   cleanProposal: null,
   setCleanProposal: (cleanProposal) => set({ cleanProposal, ghostDiff: cleanProposal?.diff ?? null, ghostPlan: null }),
   clearGhost: () => set({ ghostPlan: null, ghostDiff: null, cleanProposal: null }),
+  pendingAgentPrompt: null,
+  setPendingAgentPrompt: (pendingAgentPrompt) =>
+    set((state) => ({ pendingAgentPrompt, copilotOpen: pendingAgentPrompt ? true : state.copilotOpen })),
+  copilotOpen: true,
+  setCopilotOpen: (copilotOpen) => set({ copilotOpen }),
+  toggleCopilot: () => set((state) => ({ copilotOpen: !state.copilotOpen })),
 }));

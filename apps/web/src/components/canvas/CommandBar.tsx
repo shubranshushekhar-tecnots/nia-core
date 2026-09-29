@@ -382,6 +382,8 @@ export default function CommandBar({
 }) {
   const setGhostPlan = useCanvasStore((s) => s.setGhostPlan);
   const clearGhost = useCanvasStore((s) => s.clearGhost);
+  const pendingAgentPrompt = useCanvasStore((s) => s.pendingAgentPrompt);
+  const setPendingAgentPrompt = useCanvasStore((s) => s.setPendingAgentPrompt);
   const [draft, setDraft] = useState('');
   const [mentionOpen, setMentionOpen] = useState(false);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
@@ -630,6 +632,18 @@ export default function CommandBar({
       setAgentPending(false);
     }
   }
+
+  // Learning mode, Step 6 — "Ask Copilot about this step" (GrantAccessPanel/
+  // RevokeAccessPanel in NodeDrawer.tsx) sets pendingAgentPrompt instead of
+  // calling handleAgentCommand directly, since those panels aren't rendered
+  // inside CommandBar. Opens the thread (handleAgentCommand already does
+  // this) and sends via the existing "//" agent path; clears the store
+  // field immediately so this only fires once per click.
+  useEffect(() => {
+    if (!pendingAgentPrompt) return;
+    setPendingAgentPrompt(null);
+    void handleAgentCommand(`// ${pendingAgentPrompt}`);
+  }, [pendingAgentPrompt]);
 
   // Part 3's one confirmation entry point — a real click here, nowhere
   // else. Replaces the confirmation card's render with whatever the

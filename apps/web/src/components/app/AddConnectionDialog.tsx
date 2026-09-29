@@ -5,6 +5,7 @@ import { buildReadOnlyStatementText, getHelpSection, suggestReadOnlyUsername, ty
 import { createConnectionAction } from '@/lib/connections/actions';
 import { autoCompleteFor } from '@/lib/connections/formFields';
 import { parseExtraSchemas } from '@/lib/connections/parseExtraSchemas';
+import { useModalA11y } from '@/lib/a11y/useModalDialog';
 import type { ActionState } from '@/lib/auth/actions';
 import HelpPanel from './HelpPanel';
 import {
@@ -85,6 +86,7 @@ export default function AddConnectionDialog({
   // from it without conflating the two usernames.
   const [pastedUsername, setPastedUsername] = useState<string | undefined>(undefined);
   const [extraSchemasInput, setExtraSchemasInput] = useState('');
+  const dialogRef = useModalA11y(onClose);
 
   useEffect(() => {
     if (state?.success) onClose();
@@ -141,7 +143,15 @@ export default function AddConnectionDialog({
 
   return (
     <div style={modalOverlayStyle} onClick={onClose}>
-      <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Add ${connectorName} connection`}
+        tabIndex={-1}
+        style={{ ...modalCardStyle, outline: 'none' }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={modalTitleStyle}>Add {connectorName} connection</span>
           <button type="button" style={helpTriggerStyle} onClick={() => setShowHelp(true)}>
@@ -256,6 +266,9 @@ export default function AddConnectionDialog({
                   </div>
                 )}
                 <pre
+                  role="region"
+                  aria-label="Read-only user SQL statement"
+                  tabIndex={0}
                   style={{
                     fontFamily: 'var(--font-data)',
                     fontSize: 11,

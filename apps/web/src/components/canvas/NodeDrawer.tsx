@@ -6,6 +6,7 @@ import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildDropRoleStatementText, buil
 import type { CanvasNode } from '@/lib/canvas/mapping';
 import { resolveTableFieldState } from '@/lib/canvas/tableFieldState';
 import { filterEntities } from '@/lib/canvas/entityFiltering';
+import { useCanvasStore } from '@/lib/canvas/store';
 import {
   confirmWriteGrant,
   ConnectionsApiError,
@@ -239,6 +240,7 @@ function GrantAccessPanel({
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const setPendingAgentPrompt = useCanvasStore((s) => s.setPendingAgentPrompt);
 
   const statementText = connectorId ? buildGrantStatementText(connectorId, namespace, credential.user, credential.password) : null;
   /** The generated role/password already exist at mount (see useState above), so Layer 2's help panel always has real values to show — never the shared placeholder credential. */
@@ -315,9 +317,20 @@ function GrantAccessPanel({
     <div style={grantPanelStyle}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>Grant write access to &quot;{namespace}&quot;</div>
-        <button type="button" style={grantButtonStyle} onClick={() => setShowHelp(true)}>
-          Help with this step
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            type="button"
+            style={grantButtonStyle}
+            onClick={() =>
+              setPendingAgentPrompt(`[Connection: ${connectionId}, namespace: ${namespace}] Explain the write grant for this step.`)
+            }
+          >
+            Ask Copilot about this step
+          </button>
+          <button type="button" style={grantButtonStyle} onClick={() => setShowHelp(true)}>
+            Help with this step
+          </button>
+        </div>
       </div>
       {showHelp && (
         <HelpPanel step="grant-write-access" connectorId={connectorId ?? ''} values={helpValues} onClose={() => setShowHelp(false)} />
@@ -339,6 +352,9 @@ function GrantAccessPanel({
           {statementText ? (
             <>
               <pre
+                role="region"
+                aria-label="Grant write access SQL statement"
+                tabIndex={0}
                 style={{
                   fontFamily: 'var(--font-data)',
                   fontSize: 11,
@@ -410,6 +426,7 @@ function RevokeAccessPanel({
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const setPendingAgentPrompt = useCanvasStore((s) => s.setPendingAgentPrompt);
 
   const dropStatement =
     connectorId && grant.writeRoleName ? buildDropRoleStatementText(connectorId, grant.writeRoleName) : null;
@@ -453,9 +470,20 @@ function RevokeAccessPanel({
         <div style={{ fontSize: 11.5, color: 'var(--ok)' }}>
           Write access granted to &quot;{namespace}&quot;{grant.writeRoleName ? <> as role <code>{grant.writeRoleName}</code></> : null}.
         </div>
-        <button type="button" style={{ ...grantButtonStyle, flexShrink: 0 }} onClick={() => setShowHelp(true)}>
-          Help with this step
-        </button>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          <button
+            type="button"
+            style={grantButtonStyle}
+            onClick={() =>
+              setPendingAgentPrompt(`[Connection: ${connectionId}, namespace: ${namespace}] Explain the write grant for this step.`)
+            }
+          >
+            Ask Copilot about this step
+          </button>
+          <button type="button" style={grantButtonStyle} onClick={() => setShowHelp(true)}>
+            Help with this step
+          </button>
+        </div>
       </div>
       {showHelp && (
         <HelpPanel step="revoke-access" connectorId={connectorId ?? ''} values={helpValues} onClose={() => setShowHelp(false)} />
@@ -464,6 +492,9 @@ function RevokeAccessPanel({
         <details style={{ marginBottom: 8 }}>
           <summary style={{ fontSize: 11.5, color: 'var(--ink4)', cursor: 'pointer' }}>Show role removal statement</summary>
           <pre
+            role="region"
+            aria-label="Drop role SQL statement"
+            tabIndex={0}
             style={{
               fontFamily: 'var(--font-data)',
               fontSize: 11,
@@ -631,7 +662,9 @@ function SourceDestForm({
       <div style={configPanelDividerStyle} />
 
       <div style={configPanelGroupStyle}>
-        <span style={configPanelGroupLabelStyle}>Table</span>
+        <label htmlFor="node-drawer-table-select" style={configPanelGroupLabelStyle}>
+          Table
+        </label>
         {(() => {
           const state = resolveTableFieldState({
             connectionId,
@@ -658,6 +691,7 @@ function SourceDestForm({
           return (
             <>
               <select
+                id="node-drawer-table-select"
                 value={selectedKey}
                 onChange={(e) => {
                   if (e.target.value === NEW_TARGET_SENTINEL) {

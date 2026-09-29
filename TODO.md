@@ -885,3 +885,5 @@
 - E2E: no teardown for scratch connections/projects created during runs —
   leaks across runs and caused canvas.spec.ts:1194 flakiness. Add
   per-spec cleanup.
+- Connections page fetches grants with one request per connection (N+1) —
+  add a batched endpoint if orgs have many connections.
