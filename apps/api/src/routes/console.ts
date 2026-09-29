@@ -220,8 +220,14 @@ consoleRouter.get(
         name: string;
         slug: string;
         created_at: string;
-        plan_tier: string;
+        plan_id: string;
+        plan_name: string;
         workflow_limit: number | null;
+        workflow_limit_override_set: boolean;
+        workflow_limit_override: number | null;
+        project_limit: number | null;
+        project_limit_override_set: boolean;
+        project_limit_override: number | null;
         suspended_at: string | null;
         suspended_reason: string | null;
         suspended_by: string | null;
@@ -232,14 +238,21 @@ consoleRouter.get(
            o.name,
            o.slug,
            o.created_at,
-           case when op.org_id is null then 'Pro' else op.plan_tier end as plan_tier,
-           case when op.org_id is null then 25 else op.workflow_limit end as workflow_limit,
+           op.plan_id,
+           pl.name as plan_name,
+           case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as workflow_limit,
+           op.workflow_limit_set as workflow_limit_override_set,
+           op.workflow_limit as workflow_limit_override,
+           case when op.project_limit_set then op.project_limit else pl.project_limit end as project_limit,
+           op.project_limit_set as project_limit_override_set,
+           op.project_limit as project_limit_override,
            o.suspended_at,
            o.suspended_reason,
            o.suspended_by,
            su.name as suspended_by_name
          from public.organizations o
-         left join public.org_plan op on op.org_id = o.id
+         join public.org_plan op on op.org_id = o.id
+         join public.plans pl on pl.id = op.plan_id
          left join public."user" su on su.id = o.suspended_by
          where o.id = $1`,
         [orgId],
@@ -248,8 +261,11 @@ consoleRouter.get(
       const org = orgResult.rows[0];
       if (!org) return null;
 
-      const [usageResult, runsResult, membersResult] = await Promise.all([
+      const [workflowUsageResult, projectUsageResult, runsResult, membersResult] = await Promise.all([
         db.query<{ count: number }>(`select count(*)::int as count from public.workflows where org_id = $1`, [
+          orgId,
+        ]),
+        db.query<{ count: number }>(`select count(*)::int as count from public.projects where org_id = $1`, [
           orgId,
         ]),
         db.query<{ count: number }>(
@@ -283,7 +299,8 @@ consoleRouter.get(
 
       return {
         org,
-        usedCount: usageResult.rows[0]?.count ?? 0,
+        workflowsUsed: workflowUsageResult.rows[0]?.count ?? 0,
+        projectsUsed: projectUsageResult.rows[0]?.count ?? 0,
         runs30d: runsResult.rows[0]?.count ?? 0,
         members: membersResult.rows,
       };
@@ -296,13 +313,20 @@ consoleRouter.get(
       name: result.org.name,
       slug: result.org.slug,
       createdAt: result.org.created_at,
-      planTier: result.org.plan_tier,
+      planId: result.org.plan_id,
+      planTier: result.org.plan_name,
       status: result.org.suspended_at === null ? "Active" : "Suspended",
       suspendedAt: result.org.suspended_at,
       suspendedReason: result.org.suspended_reason,
       suspendedBy: result.org.suspended_by === null ? null : { userId: result.org.suspended_by, name: result.org.suspended_by_name },
       workflowLimit: result.org.workflow_limit,
-      workflowsUsed: result.usedCount,
+      workflowLimitOverrideSet: result.org.workflow_limit_override_set,
+      workflowLimitOverride: result.org.workflow_limit_override,
+      workflowsUsed: result.workflowsUsed,
+      projectLimit: result.org.project_limit,
+      projectLimitOverrideSet: result.org.project_limit_override_set,
+      projectLimitOverride: result.org.project_limit_override,
+      projectsUsed: result.projectsUsed,
       runs30d: result.runs30d,
       members: result.members.map((m) => ({
         userId: m.user_id,
@@ -316,33 +340,36 @@ consoleRouter.get(
 );
 
 /**
- * Build order step 8 / Slice 3a (console-plan.md §3, §5, decision 6).
- * `PATCH /console/orgs/:orgId/plan` — the only mutation slice 3a adds. Body
- * uses this API's usual camelCase convention (planTier/workflowLimit,
- * matching GET /orgs/:orgId's own response shape and every other route's
- * body schema in this file/connections.ts/workflows.ts) rather than the
- * plan doc's prose `{ plan_tier, workflow_limit }` — that text is
- * describing org_plan's *column* shape (decision 6's actual subject), not
- * a literal JSON casing requirement; no other route in this codebase
- * accepts a snake_case body.
+ * Build order step 8 / Slice 3a (console-plan.md §3, §5, decision 6),
+ * extended for subscription-model Phase 1. `PATCH /console/orgs/:orgId/plan`
+ * — the only mutation slice 3a adds. Body now carries `planId` (org_plan's
+ * new FK into the plans catalog) plus the four override fields, replacing
+ * the old free-text `planTier`/`workflowLimit` shape now that org_plan is
+ * guaranteed exactly one row per org (0050's backfill) resolved through the
+ * plans join rather than storing its own tier name/limit directly.
+ * `*LimitOverrideSet: false` means "inherit the plan's default" (the edit
+ * form's "Clear override"); `true` with a null value means an explicit
+ * unlimited override, `true` with a positive integer means an explicit cap
+ * — same tri-state semantics as the enforcement triggers read.
  *
- * `workflowLimit: null` means unlimited (org_plan's own column comment);
- * a positive integer sets a real cap. Upserts org_plan directly via
- * withServiceRole (org_plan has no authenticated write grant at all —
- * 0042/0044 — write-only via service_role, same as every other write in
- * this router) rather than a dedicated RPC, matching GET /orgs/:orgId's
- * own plain-query style.
+ * Upserts org_plan directly via withServiceRole (org_plan has no
+ * authenticated write grant at all — 0042/0044 — write-only via
+ * service_role, same as every other write in this router) rather than a
+ * dedicated RPC, matching GET /orgs/:orgId's own plain-query style.
  *
  * Writes exactly two audit rows per §3's general rule: one
  * `staff_audit_log` row (`private.log_staff_action`, same as every other
- * route here) and one row in the org's own `audit_log` via the new
+ * route here) and one row in the org's own `audit_log` via the
  * `private.log_org_audit` helper (0045_workflow_plan_enforcement.sql —
  * see that migration's header comment for why the plan doc's literal
  * `private.log_audit()` call isn't usable from a withServiceRole route).
  */
 const patchOrgPlanBodySchema = z.object({
-  planTier: z.string().trim().min(1).max(40),
-  workflowLimit: z.number().int().positive().nullable(),
+  planId: z.string().trim().min(1).max(40),
+  workflowLimitOverrideSet: z.boolean(),
+  workflowLimitOverride: z.number().int().positive().nullable(),
+  projectLimitOverrideSet: z.boolean(),
+  projectLimitOverride: z.number().int().positive().nullable(),
 });
 
 consoleRouter.patch(
@@ -353,26 +380,58 @@ consoleRouter.patch(
     if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
 
     const { orgId } = req.params as unknown as { orgId: string };
-    const { planTier, workflowLimit } = req.body as unknown as { planTier: string; workflowLimit: number | null };
+    const {
+      planId,
+      workflowLimitOverrideSet,
+      workflowLimitOverride,
+      projectLimitOverrideSet,
+      projectLimitOverride,
+    } = req.body as unknown as {
+      planId: string;
+      workflowLimitOverrideSet: boolean;
+      workflowLimitOverride: number | null;
+      projectLimitOverrideSet: boolean;
+      projectLimitOverride: number | null;
+    };
 
     const updated = await withServiceRole(dbPool, async (db) => {
       const orgResult = await db.query<{ id: string }>(`select id from public.organizations where id = $1`, [orgId]);
       if (!orgResult.rows[0]) return null;
 
-      const planResult = await db.query<{ plan_tier: string; workflow_limit: number | null }>(
-        `insert into public.org_plan (org_id, plan_tier, workflow_limit, updated_at, updated_by)
-         values ($1, $2, $3, now(), $4)
+      const planExistsResult = await db.query<{ id: string }>(`select id from public.plans where id = $1`, [planId]);
+      if (!planExistsResult.rows[0]) throw new AppError(400, "INVALID_PLAN", "Unknown plan id.");
+
+      const planResult = await db.query<{
+        plan_id: string;
+        workflow_limit_set: boolean;
+        workflow_limit: number | null;
+        project_limit_set: boolean;
+        project_limit: number | null;
+      }>(
+        `insert into public.org_plan (
+           org_id, plan_id, workflow_limit_set, workflow_limit, project_limit_set, project_limit, updated_at, updated_by
+         )
+         values ($1, $2, $3, $4, $5, $6, now(), $7)
          on conflict (org_id) do update set
-           plan_tier = excluded.plan_tier,
+           plan_id = excluded.plan_id,
+           workflow_limit_set = excluded.workflow_limit_set,
            workflow_limit = excluded.workflow_limit,
+           project_limit_set = excluded.project_limit_set,
+           project_limit = excluded.project_limit,
            updated_at = now(),
            updated_by = excluded.updated_by
-         returning plan_tier, workflow_limit`,
-        [orgId, planTier, workflowLimit, authUser.id],
+         returning plan_id, workflow_limit_set, workflow_limit, project_limit_set, project_limit`,
+        [orgId, planId, workflowLimitOverrideSet, workflowLimitOverride, projectLimitOverrideSet, projectLimitOverride, authUser.id],
       );
       const plan = planResult.rows[0]!;
 
-      const detail = JSON.stringify({ planTier: plan.plan_tier, workflowLimit: plan.workflow_limit });
+      const detail = JSON.stringify({
+        planId: plan.plan_id,
+        workflowLimitOverrideSet: plan.workflow_limit_set,
+        workflowLimitOverride: plan.workflow_limit,
+        projectLimitOverrideSet: plan.project_limit_set,
+        projectLimitOverride: plan.project_limit,
+      });
 
       await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
         authUser.id,
@@ -388,7 +447,53 @@ consoleRouter.patch(
 
     if (!updated) throw new AppError(404, "NOT_FOUND", "Organization not found.");
 
-    res.json({ planTier: updated.plan_tier, workflowLimit: updated.workflow_limit });
+    res.json({
+      planId: updated.plan_id,
+      workflowLimitOverrideSet: updated.workflow_limit_set,
+      workflowLimitOverride: updated.workflow_limit,
+      projectLimitOverrideSet: updated.project_limit_set,
+      projectLimitOverride: updated.project_limit,
+    });
+  }),
+);
+
+/**
+ * Subscription model Phase 1. `GET /console/plans` — the plan catalog
+ * (0049_plans_table.sql), for the Org Detail edit-plan form's dropdown.
+ * Read-only, no staff_audit_log row (matches GET /orgs's own list-endpoint
+ * exception in decision 4/10 — this is reference data, not a per-org
+ * lookup). Ordered free/pro/team/enterprise first (upgrade path order),
+ * legacy last (not a plan staff should assign going forward).
+ */
+consoleRouter.get(
+  "/plans",
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const result = await withServiceRole(dbPool, async (db) =>
+      db.query<{ id: string; name: string; project_limit: number | null; workflow_limit: number | null }>(
+        `select id, name, project_limit, workflow_limit
+         from public.plans
+         order by case id
+           when 'free' then 1
+           when 'pro' then 2
+           when 'team' then 3
+           when 'enterprise' then 4
+           when 'legacy' then 5
+           else 6
+         end`,
+      ),
+    );
+
+    res.json({
+      plans: result.rows.map((p) => ({
+        id: p.id,
+        name: p.name,
+        projectLimit: p.project_limit,
+        workflowLimit: p.workflow_limit,
+      })),
+    });
   }),
 );
 

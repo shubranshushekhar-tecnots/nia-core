@@ -18,7 +18,7 @@ export default async function AppHomePage() {
     getRecentRuns(50),
   ]);
 
-  const plan = getPlanUsage(stats.workflowCount, stats.planTier, stats.workflowLimit);
+  const plan = getPlanUsage(stats.workflowCount, stats.projectCount, stats.planTier, stats.workflowLimit, stats.projectLimit);
   const greeting = greetingForHour(new Date().getHours());
 
   return (

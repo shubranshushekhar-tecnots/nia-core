@@ -57,11 +57,11 @@ export default function HomeContent({
           </span>
         </div>
 
-        {plan.limit !== null && plan.used / plan.limit >= 0.8 && (
+        {plan.workflowLimit !== null && plan.workflowUsed / plan.workflowLimit >= 0.8 && (
           <div style={planBannerStyle}>
             <span>
-              {plan.used} of {plan.limit} workflows used on the {plan.plan} plan. An Organization plan adds seats, roles
-              and unlimited workflows.
+              {plan.workflowUsed} of {plan.workflowLimit} workflows used on the {plan.plan} plan. An Organization plan
+              adds seats, roles and unlimited workflows.
             </span>
             <a href="/app/billing" style={{ textDecoration: 'none' }}>
               <button type="button" style={planBannerBtnStyle}>

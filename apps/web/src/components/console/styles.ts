@@ -559,6 +559,23 @@ export const consolePlanFormActionsStyle: CSSProperties = {
   gap: 8,
 };
 
+// Subscription model Phase 1: each override field pairs a checkbox
+// ("Override" / unchecked = "Clear override", inherit the plan's default)
+// with the number input above — this row holds just the checkbox + its
+// label, reusing consolePlanInputStyle's sizing conventions for the input
+// it sits below.
+export const consolePlanOverrideRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+};
+
+export const consolePlanOverrideLabelStyle: CSSProperties = {
+  fontSize: 11.5,
+  color: 'var(--ink3)',
+  cursor: 'pointer',
+};
+
 // design's `primary()` helper — used for the plan form's Save button, the
 // one write action on this screen.
 export const consolePrimaryBtnStyle: CSSProperties = {

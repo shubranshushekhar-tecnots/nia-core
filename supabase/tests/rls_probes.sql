@@ -2418,6 +2418,159 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 74 — 0049_plans_table.sql: plans is a public read-only catalog —
+-- any authenticated user (including a total outsider, not a member of any
+-- org) can SELECT every row.
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  n_plans int;
+begin
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_plans from public.plans;
+  reset role;
+
+  if n_plans = 5 then
+    insert into probe_results values (74, 'plans: any authenticated user can read the full catalog (5 seeded rows)', true);
+  else
+    insert into probe_results values (74, 'plans: any authenticated user can read the full catalog (5 seeded rows)', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (74, 'plans read-all probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 75 — 0049_plans_table.sql: plans has no write grant at all —
+-- confirm an authenticated user cannot INSERT/UPDATE/DELETE it (read-only
+-- catalog, service_role/migrations only).
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  insert_denied boolean := false;
+  update_denied boolean := false;
+  delete_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_outsider);
+  begin
+    insert into public.plans (id, name) values ('probe-plan', 'Probe Plan');
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  begin
+    update public.plans set workflow_limit = 999 where id = 'free';
+  exception when insufficient_privilege then
+    update_denied := true;
+  end;
+  begin
+    delete from public.plans where id = 'free';
+  exception when insufficient_privilege then
+    delete_denied := true;
+  end;
+  reset role;
+
+  if insert_denied and update_denied and delete_denied then
+    insert into probe_results values (75, 'plans: an authenticated user cannot INSERT/UPDATE/DELETE (read-only catalog)', true);
+  else
+    insert into probe_results values (75, 'plans: an authenticated user cannot INSERT/UPDATE/DELETE (read-only catalog)', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (75, 'plans read-only probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 76 — 0051_owner_plan_table.sql: a user CAN read their own
+-- owner_plan row (auto-provisioned either by the backfill or by the
+-- public."user" AFTER INSERT trigger, depending on when this fixture user
+-- was created relative to the migration).
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_seen_user_id uuid;
+begin
+  perform pg_temp.act_as(v_member);
+  select user_id into v_seen_user_id from public.owner_plan where user_id = v_member;
+  reset role;
+
+  if v_seen_user_id = v_member then
+    insert into probe_results values (76, 'owner_plan: a user can read their own row', true);
+  else
+    insert into probe_results values (76, 'owner_plan: a user can read their own row', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (76, 'owner_plan read-own probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 77 — 0051_owner_plan_table.sql: a user CANNOT read another user's
+-- owner_plan row.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_admin  uuid := (select id from test_ids where key = 'admin');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_visible from public.owner_plan where user_id = v_admin;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (77, 'owner_plan: a user cannot read another user''s row', true);
+  else
+    insert into probe_results values (77, 'owner_plan: a user cannot read another user''s row', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (77, 'owner_plan read-other-user probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 78 — 0051_owner_plan_table.sql only ever added a SELECT-own grant —
+-- confirm a user cannot INSERT/UPDATE/DELETE owner_plan at all (write-only
+-- via service_role/the signup trigger).
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  insert_denied boolean := false;
+  update_denied boolean := false;
+  delete_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+  begin
+    insert into public.owner_plan (user_id, plan_id) values (v_member, 'free');
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  begin
+    update public.owner_plan set workflow_limit_set = true, workflow_limit = 999 where user_id = v_member;
+  exception when insufficient_privilege then
+    update_denied := true;
+  end;
+  begin
+    delete from public.owner_plan where user_id = v_member;
+  exception when insufficient_privilege then
+    delete_denied := true;
+  end;
+  reset role;
+
+  if insert_denied and update_denied and delete_denied then
+    insert into probe_results values (78, 'owner_plan: a user still cannot INSERT/UPDATE/DELETE (SELECT-own-only grant)', true);
+  else
+    insert into probe_results values (78, 'owner_plan: a user still cannot INSERT/UPDATE/DELETE (SELECT-own-only grant)', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (78, 'owner_plan member-cannot-write probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

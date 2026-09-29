@@ -44,9 +44,14 @@ async function makeOrgWithLimit(limit: number | null): Promise<{ orgId: string; 
   );
   const orgId = orgRows[0]!.id;
 
-  // 0043's trigger already created a Pro/25 org_plan row for this org —
-  // narrow it to the boundary this test needs.
-  await dbPool.query("update public.org_plan set workflow_limit = $1 where org_id = $2", [limit, orgId]);
+  // 0043's trigger already created a Free/plan-default org_plan row for
+  // this org (no override) — set an explicit override to the boundary
+  // this test needs. plan_id stays 'free', so the trigger's message names
+  // the Free plan.
+  await dbPool.query("update public.org_plan set workflow_limit_set = true, workflow_limit = $1 where org_id = $2", [
+    limit,
+    orgId,
+  ]);
 
   const { rows: projectRows } = await dbPool.query<{ id: string }>(
     `insert into public.projects (org_id, name, created_by) values ($1, $2, $3) returning id`,
@@ -80,7 +85,7 @@ describe("private.enforce_workflow_limit() — org-scoped, real Postgres", () =>
 
       await expect(insertWorkflow(projectId, orgId, userId, "wf-3")).rejects.toMatchObject({
         code: "NIA01",
-        message: "Your plan allows 2 workflows. Delete one or upgrade to add more.",
+        message: "Your Free plan allows 2 workflows. Delete one or upgrade to add more.",
       } satisfies Partial<PgError>);
 
       const { rows } = await dbPool.query<{ count: string }>(
@@ -119,7 +124,10 @@ describe("private.enforce_workflow_limit() — org-scoped, real Postgres", () =>
       }
 
       // Staff lowers the limit below current usage (5 -> 2).
-      await dbPool.query("update public.org_plan set workflow_limit = $1 where org_id = $2", [2, orgId]);
+      await dbPool.query("update public.org_plan set workflow_limit_set = true, workflow_limit = $1 where org_id = $2", [
+        2,
+        orgId,
+      ]);
 
       // Existing 5 rows are untouched by the plan change alone.
       const { rows: afterLower } = await dbPool.query<{ count: string }>(
@@ -131,7 +139,7 @@ describe("private.enforce_workflow_limit() — org-scoped, real Postgres", () =>
       // A new insert is refused, citing the NEW (lower) limit.
       await expect(insertWorkflow(projectId, orgId, userId, "wf-after-lower")).rejects.toMatchObject({
         code: "NIA01",
-        message: "Your plan allows 2 workflows. Delete one or upgrade to add more.",
+        message: "Your Free plan allows 2 workflows. Delete one or upgrade to add more.",
       } satisfies Partial<PgError>);
 
       // Still 5 — the refused insert left no row behind, and the 5
@@ -162,7 +170,7 @@ describe("private.enforce_workflow_limit() — org-scoped, real Postgres", () =>
       expect(rejected).toHaveLength(1);
       expect((rejected[0]!.reason as PgError).code).toBe("NIA01");
       expect((rejected[0]!.reason as PgError).message).toBe(
-        "Your plan allows 1 workflows. Delete one or upgrade to add more.",
+        "Your Free plan allows 1 workflow. Delete one or upgrade to add more.",
       );
 
       const { rows } = await dbPool.query<{ count: string }>(
@@ -177,10 +185,24 @@ describe("private.enforce_workflow_limit() — org-scoped, real Postgres", () =>
 });
 
 describe("private.enforce_workflow_limit() — personal (owner_id) workspace, real Postgres", () => {
-  it("hardcodes the same 25 default as getDashboardStats()'s personal-workspace path (no org_plan row possible)", async () => {
+  it("resolves the fixture user's real owner_plan (plan name + effective limit) and names that plan in the refusal", async () => {
     const { rows: userRows } = await dbPool.query<{ id: string }>('select id from public."user" limit 1');
     const userId = userRows[0]?.id;
     expect(userId).toBeTruthy();
+
+    // Don't assume which plan the fixture user is on (backfilled 'legacy'
+    // vs a fresh signup's 'free') — read the actual effective limit/name
+    // owner_plan+plans resolve to, the same way the trigger itself does.
+    const { rows: planRows } = await dbPool.query<{ plan_name: string; effective_limit: number | null }>(
+      `select pl.name as plan_name,
+              case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as effective_limit
+         from public.owner_plan op
+         join public.plans pl on pl.id = op.plan_id
+        where op.user_id = $1`,
+      [userId],
+    );
+    const { plan_name: planName, effective_limit: limit } = planRows[0]!;
+    expect(limit).not.toBeNull();
 
     const { rows: projectRows } = await dbPool.query<{ id: string }>(
       `insert into public.projects (owner_id, name, created_by) values ($1, $2, $1) returning id`,
@@ -196,14 +218,14 @@ describe("private.enforce_workflow_limit() — personal (owner_id) workspace, re
 
     // The trigger's personal-workspace count is scoped by owner_id alone
     // (not project_id) — start from this fixture user's REAL existing
-    // count, whatever it is, and top up to exactly the 25-row boundary,
-    // rather than assuming this user has zero personal workflows already.
+    // count, whatever it is, and top up to exactly the boundary, rather
+    // than assuming this user has zero personal workflows already.
     const { rows: countRows } = await dbPool.query<{ count: string }>(
       "select count(*) as count from public.workflows where owner_id = $1",
       [userId],
     );
     const existing = Number(countRows[0]?.count ?? 0);
-    const toInsert = Math.max(0, 25 - existing);
+    const toInsert = Math.max(0, limit! - existing);
 
     try {
       for (let i = 0; i < toInsert; i++) {
@@ -212,7 +234,7 @@ describe("private.enforce_workflow_limit() — personal (owner_id) workspace, re
 
       await expect(insertPersonalWorkflow("wf-personal-over-limit")).rejects.toMatchObject({
         code: "NIA01",
-        message: "Your plan allows 25 workflows. Delete one or upgrade to add more.",
+        message: `Your ${planName} plan allows ${limit} workflow${limit === 1 ? "" : "s"}. Delete one or upgrade to add more.`,
       } satisfies Partial<PgError>);
     } finally {
       // Only this test's own rows (all under this freshly created project)

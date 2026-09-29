@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
-import type { Queryable } from "@nia/db";
 import { withActingUser } from "@nia/db";
+import type { Queryable } from "@nia/db";
 import { dbPool } from "../lib/dbPool.js";
 import { getDashboardStats } from "./dashboard.js";
 
@@ -9,45 +9,36 @@ import { getDashboardStats } from "./dashboard.js";
  * follow-ups" review, req. 2 revisit). Proves getDashboardStats() actually
  * reads org_plan (via getOrgPlan's own withUser query, RLS-scoped by
  * 0044_org_plan_member_select.sql's member-only SELECT policy) rather than
- * returning a hardcoded constant, so a Slice 3a plan change reaches the
+ * returning a hardcoded constant, so a Console plan change reaches the
  * customer-facing render (apps/web/src/lib/billing/plan.ts's
  * getPlanUsage()) instead of being silently ignored.
  *
- * getOrgPlan no longer goes through withServiceRole, so this test can't use
- * a stub that ignores query text/real DB state for the org test below
- * (stubWithUser was only ever a valid stand-in while org_plan reads bypassed
- * RLS entirely) — it must run through a real RLS-scoped connection
- * (withActingUser) as an actual member of the org, or the member-scoped
- * policy would correctly return zero rows and the test would only ever see
- * the Pro/25 fallback, masking a real regression. project/workflow counts
- * come along for the ride via the same real connection — they're 0 because
- * no projects/workflows exist for this fixture org, not because of a stub.
+ * Subscription model Phase 1: updated for org_plan's plan_id/override-flag
+ * columns (0049/0050) — a freshly created org now defaults to plan_id
+ * 'free' (workflow_limit 2, project_limit 1) via 0043's create trigger,
+ * not the old hardcoded Pro/25. projectLimit is asserted alongside
+ * workflowLimit since both now resolve through the same plan row.
  *
- * The personal-workspace test below still uses a stub: getOrgPlan()
- * short-circuits before any query for personal scopes, so the project/
- * workflow count queries genuinely don't need real Postgres state there.
+ * getOrgPlan no longer goes through withServiceRole, and it no longer
+ * short-circuits for personal scopes either — both the org and the
+ * personal-workspace test below need a real RLS-scoped connection
+ * (withActingUser), as an actual org member / the owning user respectively,
+ * or the scoped policies would correctly return zero rows and the tests
+ * would only ever see the fallback. A stub that ignores query text can't
+ * stand in for this. project/workflow counts come along for the ride via
+ * the same real connection — they're 0 for the org case because no
+ * projects/workflows exist for that fixture org, not because of a stub.
  *
  * Real local Postgres only (apps/api/.env's DATABASE_URL). Run explicitly
  * with `pnpm test:integration` (apps/api/vitest.integration.config.ts).
  */
-
-const stubWithUser = <T>(fn: (db: Queryable) => Promise<T>): Promise<T> =>
-  fn({
-    query: async <R extends Record<string, unknown> = Record<string, unknown>>() => ({
-      rows: [{ count: 0 }] as unknown as R[],
-      rowCount: 1,
-      command: "SELECT",
-      oid: 0,
-      fields: [],
-    }),
-  });
 
 afterAll(async () => {
   await dbPool.end();
 });
 
 describe("getDashboardStats — org_plan read path, real Postgres", () => {
-  it("an org with the 0042/0043 default row reports workflow_limit 25, plan_tier Pro; a changed row changes what the customer sees", async () => {
+  it("an org with the 0043 default row reports Free plan/workflow_limit 2/project_limit 1; overrides change what the customer sees", async () => {
     const { rows: userRows } = await dbPool.query<{ id: string }>(
       'select id from public."user" limit 1',
     );
@@ -82,24 +73,28 @@ describe("getDashboardStats — org_plan read path, real Postgres", () => {
 
     try {
       // 1. Default row (from 0043's trigger, fired by the insert above) —
-      // the customer-visible limit must still be exactly what
-      // getPlanUsage() has always hardcoded.
+      // no override, so the effective limits are Free's own plan
+      // defaults.
       const defaultStats = await getDashboardStats(memberWithUser, { orgId: orgId! });
-      expect(defaultStats.planTier).toBe("Pro");
-      expect(defaultStats.workflowLimit).toBe(25);
+      expect(defaultStats.planTier).toBe("Free");
+      expect(defaultStats.workflowLimit).toBe(2);
+      expect(defaultStats.projectLimit).toBe(1);
 
-      // 2. Simulate a Slice 3a plan change directly against org_plan.
+      // 2. Simulate a Console plan change: switch to Team with an explicit
+      // workflow_limit override, no project_limit override.
       await dbPool.query(
-        "update public.org_plan set plan_tier = $1, workflow_limit = $2 where org_id = $3",
-        ["Team", 10, orgId],
+        `update public.org_plan
+         set plan_id = 'team', workflow_limit_set = true, workflow_limit = $1
+         where org_id = $2`,
+        [10, orgId],
       );
 
       const changedStats = await getDashboardStats(memberWithUser, { orgId: orgId! });
       expect(changedStats.planTier).toBe("Team");
       expect(changedStats.workflowLimit).toBe(10);
 
-      // 3. workflow_limit = null means unlimited — must be preserved, not
-      // collapsed back to a default.
+      // 3. workflow_limit override = null means an explicit unlimited
+      // override — must be preserved, not collapsed back to a default.
       await dbPool.query(
         "update public.org_plan set workflow_limit = null where org_id = $1",
         [orgId],
@@ -115,15 +110,31 @@ describe("getDashboardStats — org_plan read path, real Postgres", () => {
     }
   });
 
-  it("a personal workspace (no org at all) defaults to Pro/25 without querying org_plan", async () => {
+  it("a personal workspace resolves the fixture user's real owner_plan row (no hardcoded fallback)", async () => {
     const { rows: userRows } = await dbPool.query<{ id: string }>(
       'select id from public."user" limit 1',
     );
     const ownerId = userRows[0]?.id;
     expect(ownerId).toBeTruthy();
 
-    const stats = await getDashboardStats(stubWithUser, { ownerId: ownerId! });
-    expect(stats.planTier).toBe("Pro");
-    expect(stats.workflowLimit).toBe(25);
+    const { rows: planRows } = await dbPool.query<{ plan_name: string; workflow_limit: number | null }>(
+      `select pl.name as plan_name,
+              case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as workflow_limit
+         from public.owner_plan op
+         join public.plans pl on pl.id = op.plan_id
+        where op.user_id = $1`,
+      [ownerId],
+    );
+    const { plan_name: expectedPlan, workflow_limit: expectedLimit } = planRows[0]!;
+
+    // getOrgPlan no longer short-circuits for personal scopes — it queries
+    // owner_plan directly, RLS-scoped by the owner-only policy — so this
+    // needs a real acting-user connection, not a stub, to prove the read
+    // actually goes through the real row rather than any hardcoded value.
+    const ownerWithUser = <T>(fn: (db: Queryable) => Promise<T>): Promise<T> => withActingUser(dbPool, ownerId!, fn);
+
+    const stats = await getDashboardStats(ownerWithUser, { ownerId: ownerId! });
+    expect(stats.planTier).toBe(expectedPlan);
+    expect(stats.workflowLimit).toBe(expectedLimit);
   });
 });

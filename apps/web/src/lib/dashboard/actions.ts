@@ -72,6 +72,9 @@ export async function createProject(
   if (orgId === null) {
     if (ctx.role !== "individual") return { error: "Choose an organization first." };
 
+    const limitCheck = await checkProjectLimit(ctx.userId, null);
+    if (!limitCheck.ok) return { error: limitCheck.message };
+
     try {
       await withActingUser(getPool(), ctx.userId, (db) =>
         db.query("insert into public.projects (org_id, owner_id, name, created_by) values (null, $1, $2, $1)", [
@@ -79,7 +82,8 @@ export async function createProject(
           parsed.data.name,
         ]),
       );
-    } catch {
+    } catch (err) {
+      if (isProjectLimitError(err)) return { error: err.message };
       return { error: "Couldn't create the project. Try again." };
     }
     revalidateAppShell();
@@ -101,6 +105,9 @@ export async function createProject(
   // caller's own resolved org).
   if (ctx.org.suspendedAt) return { error: SUSPENDED_ORG_MESSAGE };
 
+  const limitCheck = await checkProjectLimit(ctx.userId, orgId);
+  if (!limitCheck.ok) return { error: limitCheck.message };
+
   try {
     await withActingUser(getPool(), ctx.userId, (db) =>
       db.query("insert into public.projects (org_id, name, created_by) values ($1, $2, $3)", [
@@ -109,7 +116,8 @@ export async function createProject(
         ctx.userId,
       ]),
     );
-  } catch {
+  } catch (err) {
+    if (isProjectLimitError(err)) return { error: err.message };
     return { error: "Couldn't create the project. Try again." };
   }
 
@@ -124,53 +132,97 @@ const workflowSchema = z.object({
 
 // The customer-visible copy for both enforcement layers below — must read
 // identically whichever one fires. The application-level check (query,
-// then compare) is a fast, friendly pre-check; the BEFORE INSERT trigger
-// on public.workflows (0045_workflow_plan_enforcement.sql,
-// private.enforce_workflow_limit) is the actual source of truth, closing
-// the race this check alone can't (two concurrent creates both reading
-// "N-1 used" and both inserting). The trigger raises this exact text with
-// SQLSTATE 'NIA01', which the catch block below detects and passes
-// through unmodified instead of falling back to the generic message.
-function workflowLimitMessage(limit: number): string {
-  return `Your plan allows ${limit} workflows. Delete one or upgrade to add more.`;
+// then compare) is a fast, friendly pre-check; the BEFORE INSERT triggers
+// on public.workflows/public.projects (private.enforce_workflow_limit /
+// private.enforce_project_limit, 0053/0052) are the actual source of
+// truth, closing the race this check alone can't (two concurrent creates
+// both reading "N-1 used" and both inserting). The triggers raise this
+// exact text with SQLSTATE 'NIA01'/'NIA02', which the catch blocks below
+// detect and pass through unmodified instead of falling back to the
+// generic message. Both name the plan, matching the trigger's own wording.
+function workflowLimitMessage(limit: number, planName: string): string {
+  return `Your ${planName} plan allows ${limit} workflow${limit === 1 ? "" : "s"}. Delete one or upgrade to add more.`;
 }
 
-/** True when a pg error is the trigger's NIA01 workflow-limit race — its own message IS the customer-facing copy. */
+function projectLimitMessage(limit: number, planName: string): string {
+  return `Your ${planName} plan allows ${limit} project${limit === 1 ? "" : "s"}. Upgrade to add more.`;
+}
+
+/** True when a pg error is the workflows trigger's NIA01 limit race — its own message IS the customer-facing copy. */
 function isWorkflowLimitError(err: unknown): err is Error & { code: "NIA01" } {
   return err instanceof Error && "code" in err && (err as { code?: unknown }).code === "NIA01";
 }
 
+/** True when a pg error is the projects trigger's NIA02 limit race — its own message IS the customer-facing copy. */
+function isProjectLimitError(err: unknown): err is Error & { code: "NIA02" } {
+  return err instanceof Error && "code" in err && (err as { code?: unknown }).code === "NIA02";
+}
+
+type LimitKind = "workflow" | "project";
+
 /**
- * Mirrors apps/api/src/services/dashboard.ts's getOrgPlan() exactly: same
- * "case when op.org_id is null then 25 else op.workflow_limit end"
- * left-join (not coalesce, so an explicit workflow_limit = null row
- * — unlimited — survives), same Pro/25 default for personal (org-less)
- * workspaces where org_plan structurally cannot apply.
+ * Resolves the effective limit + plan display name for one org or personal
+ * workspace, mirroring the trigger functions' own join
+ * (org_plan/owner_plan -> plans, override flag decides which side of the
+ * `case when` wins — 0050/0051/0052/0053). org_plan/owner_plan are
+ * guaranteed to have exactly one row per org/user (0043's create trigger,
+ * 0051's signup trigger, both backfilled for pre-existing rows), so no
+ * left-join-with-default is needed here.
  */
+async function resolvePlanLimit(
+  userId: string,
+  orgId: string | null,
+  kind: LimitKind,
+): Promise<{ limit: number | null; planName: string }> {
+  const limitColumn = kind === "workflow" ? "workflow_limit" : "project_limit";
+  const setColumn = `${limitColumn}_set`;
+  const table = orgId === null ? "owner_plan" : "org_plan";
+  const scopeColumn = orgId === null ? "user_id" : "org_id";
+  const scopeValue = orgId === null ? userId : orgId;
+
+  const { rows } = await withActingUser(getPool(), userId, (db) =>
+    db.query<{ limit: number | null; plan_name: string }>(
+      `select case when op.${setColumn} then op.${limitColumn} else pl.${limitColumn} end as limit, pl.name as plan_name
+       from public.${table} op
+       join public.plans pl on pl.id = op.plan_id
+       where op.${scopeColumn} = $1`,
+      [scopeValue],
+    ),
+  );
+  return { limit: rows[0]?.limit ?? null, planName: rows[0]?.plan_name ?? "Legacy" };
+}
+
 async function checkWorkflowLimit(
   userId: string,
   orgId: string | null,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const scopeColumn = orgId === null ? "owner_id" : "org_id";
-  const scopeValue = orgId === null ? userId : orgId;
-
-  const limit = await withActingUser(getPool(), userId, async (db) => {
-    if (orgId === null) return 25;
-    const { rows } = await db.query<{ workflow_limit: number | null }>(
-      `select case when op.org_id is null then 25 else op.workflow_limit end as workflow_limit
-       from (select $1::uuid as id) o
-       left join public.org_plan op on op.org_id = o.id`,
-      [orgId],
-    );
-    return rows[0] ? rows[0].workflow_limit : 25;
-  });
+  const { limit, planName } = await resolvePlanLimit(userId, orgId, "workflow");
   if (limit === null) return { ok: true }; // unlimited
 
+  const scopeColumn = orgId === null ? "owner_id" : "org_id";
+  const scopeValue = orgId === null ? userId : orgId;
   const count = await withActingUser(getPool(), userId, (db) =>
     db.query<{ count: number }>(`select count(*)::int as count from public.workflows where ${scopeColumn} = $1`, [scopeValue]),
   );
   const used = count.rows[0]?.count ?? 0;
-  if (used >= limit) return { ok: false, message: workflowLimitMessage(limit) };
+  if (used >= limit) return { ok: false, message: workflowLimitMessage(limit, planName) };
+  return { ok: true };
+}
+
+async function checkProjectLimit(
+  userId: string,
+  orgId: string | null,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { limit, planName } = await resolvePlanLimit(userId, orgId, "project");
+  if (limit === null) return { ok: true }; // unlimited
+
+  const scopeColumn = orgId === null ? "owner_id" : "org_id";
+  const scopeValue = orgId === null ? userId : orgId;
+  const count = await withActingUser(getPool(), userId, (db) =>
+    db.query<{ count: number }>(`select count(*)::int as count from public.projects where ${scopeColumn} = $1`, [scopeValue]),
+  );
+  const used = count.rows[0]?.count ?? 0;
+  if (used >= limit) return { ok: false, message: projectLimitMessage(limit, planName) };
   return { ok: true };
 }
 

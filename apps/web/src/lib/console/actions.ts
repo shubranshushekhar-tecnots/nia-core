@@ -34,27 +34,54 @@ export async function searchUsersAction(search: string, offset: number): Promise
 }
 
 /**
- * Slice 3a (docs/plans/console-plan.md): submits ConsoleOrgDetailClient's
- * inline plan-edit form to PATCH /console/orgs/:orgId/plan. Called directly
- * from the client component via useTransition (same shape as
- * loadMoreOrgsAction above, not lib/connections/actions.ts's ActionState/
- * FormData pattern) — there's no <form> here, just two controlled inputs,
- * and the caller already needs the fresh planTier/workflowLimit values back
+ * Slice 3a (docs/plans/console-plan.md), extended for subscription-model
+ * Phase 1: submits ConsoleOrgDetailClient's inline plan-edit form to PATCH
+ * /console/orgs/:orgId/plan. Called directly from the client component via
+ * useTransition (same shape as loadMoreOrgsAction above, not
+ * lib/connections/actions.ts's ActionState/FormData pattern) — there's no
+ * <form> here, and the caller needs the fresh planId/override values back
  * to update its own local state, not a generic ActionState.
+ *
+ * `planId` picks the catalog plan; the two `*OverrideSet` flags/values
+ * carry the edit form's "Clear override" (set = false) vs. an explicit cap
+ * or explicit-unlimited (set = true, value positive or null) — same
+ * tri-state shape PATCH /console/orgs/:orgId/plan's body schema expects.
  */
 export async function updateOrgPlanAction(
   orgId: string,
-  planTier: string,
-  workflowLimit: number | null,
-): Promise<{ ok: true; planTier: string; workflowLimit: number | null } | { ok: false; error: string }> {
+  planId: string,
+  workflowLimitOverrideSet: boolean,
+  workflowLimitOverride: number | null,
+  projectLimitOverrideSet: boolean,
+  projectLimitOverride: number | null,
+): Promise<
+  | {
+      ok: true;
+      planId: string;
+      workflowLimitOverrideSet: boolean;
+      workflowLimitOverride: number | null;
+      projectLimitOverrideSet: boolean;
+      projectLimitOverride: number | null;
+    }
+  | { ok: false; error: string }
+> {
   try {
-    const result = await apiFetchServer<{ planTier: string; workflowLimit: number | null }>(
-      `/console/orgs/${encodeURIComponent(orgId)}/plan`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ planTier, workflowLimit }),
-      },
-    );
+    const result = await apiFetchServer<{
+      planId: string;
+      workflowLimitOverrideSet: boolean;
+      workflowLimitOverride: number | null;
+      projectLimitOverrideSet: boolean;
+      projectLimitOverride: number | null;
+    }>(`/console/orgs/${encodeURIComponent(orgId)}/plan`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        planId,
+        workflowLimitOverrideSet,
+        workflowLimitOverride,
+        projectLimitOverrideSet,
+        projectLimitOverride,
+      }),
+    });
     return { ok: true, ...result };
   } catch (err) {
     if (err instanceof ApiError) return { ok: false, error: err.message };

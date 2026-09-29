@@ -55,32 +55,61 @@ export type ConsoleOrgMember = {
 
 /**
  * GET /console/orgs/:orgId's response shape (Slice 2, console-plan.md build
- * order steps 6-7). `workflowLimit` is `null` for genuinely unlimited plans
- * (org_plan's own semantics — see routes/console.ts's doc comment); it is
- * never `null` because of a missing row, the API always resolves that to
- * today's Pro/25 default server-side. `status`/`runs30d` mirror ConsoleOrg's
- * fields above (same hardcoded-'Active'/real-count semantics) so the detail
- * screen's header meta line can reuse the Directory screen's exact
- * "{plan} · {N} people · {M} runs in 30 days · {status}" format.
+ * order steps 6-7; extended for subscription-model Phase 1). `workflowLimit`/
+ * `projectLimit` are the *effective* limit (plan default, or the override
+ * value when its `*OverrideSet` flag is true) — `null` means genuinely
+ * unlimited. The raw `*Override`/`*OverrideSet` fields are exposed
+ * separately so the edit form can show/clear the override itself, distinct
+ * from the effective number used for display and for the lower-limit
+ * warning. `planTier` is the plan's display name (plans.name); `planId`
+ * is the catalog id the edit form's dropdown is bound to. `status`/
+ * `runs30d` mirror ConsoleOrg's fields above (same hardcoded-'Active'/
+ * real-count semantics) so the detail screen's header meta line can reuse
+ * the Directory screen's exact "{plan} · {N} people · {M} runs in 30 days
+ * · {status}" format.
  */
 export type ConsoleOrgDetail = {
   id: string;
   name: string;
   slug: string;
   createdAt: string;
+  planId: string;
   planTier: string;
   status: string;
   suspendedAt: string | null;
   suspendedReason: string | null;
   suspendedBy: { userId: string; name: string | null } | null;
   workflowLimit: number | null;
+  workflowLimitOverrideSet: boolean;
+  workflowLimitOverride: number | null;
   workflowsUsed: number;
+  projectLimit: number | null;
+  projectLimitOverrideSet: boolean;
+  projectLimitOverride: number | null;
+  projectsUsed: number;
   runs30d: number;
   members: ConsoleOrgMember[];
 };
 
 export async function getConsoleOrg(orgId: string): Promise<ConsoleOrgDetail> {
   return apiFetchServer<ConsoleOrgDetail>(`/console/orgs/${encodeURIComponent(orgId)}`);
+}
+
+/**
+ * GET /console/plans's response shape (subscription-model Phase 1) — the
+ * full plan catalog (0049_plans_table.sql), for the Org Detail edit-plan
+ * form's dropdown. `null` limit fields mean unlimited, same semantics as
+ * everywhere else in this file.
+ */
+export type ConsolePlan = {
+  id: string;
+  name: string;
+  projectLimit: number | null;
+  workflowLimit: number | null;
+};
+
+export async function getConsolePlans(): Promise<{ plans: ConsolePlan[] }> {
+  return apiFetchServer<{ plans: ConsolePlan[] }>('/console/plans');
 }
 
 /**

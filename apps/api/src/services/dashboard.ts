@@ -11,6 +11,7 @@ export type DashboardStats = {
   activeWorkflowCount: number;
   planTier: string;
   workflowLimit: number | null;
+  projectLimit: number | null;
 };
 
 export type ContinueWorkflow = {
@@ -32,57 +33,53 @@ export type RecentRun = {
 };
 
 /**
- * Console v1 follow-up ("Slice 2 nearly approved" review, req. 2). Mirrors
- * apps/api/src/routes/console.ts's exact `case when op.org_id is null`
- * left-join pattern (not `coalesce`) so a missing org_plan row (an org
- * created before 0043's trigger existed, or any other gap) defaults to the
- * same Pro/25 constant getPlanUsage() has always returned, while a row
- * that explicitly has `workflow_limit = null` (unlimited, per org_plan's
- * own column comment) is preserved rather than collapsed into a default.
+ * Subscription model Phase 1 (docs/plans/subscription-model.md). Resolves
+ * through org_plan/owner_plan -> plans (0049/0050/0051): the override flag
+ * decides which side of the `case when` wins, same shape as the
+ * enforce_workflow_limit/enforce_project_limit trigger functions
+ * (0052/0053). org_plan/owner_plan are guaranteed to have exactly one row
+ * per org/user (0043's create trigger, 0051's signup trigger, both
+ * backfilled for pre-existing rows), so no left-join-with-default is
+ * needed here unlike the pre-0049 version of this function.
  *
  * Reads via the caller's own `withUser`, not `withServiceRole`: org_plan
- * (0042_org_plan.sql) now has a member-scoped RLS SELECT policy
- * (0044_org_plan_member_select.sql, `private.is_member(org_id)`), so an
- * acting-user query correctly returns the caller's own org's row (or zero
- * rows, if org_plan predates 0043's trigger — handled by the same Pro/25
- * default below) without needing a service-role bypass. org_plan still has
- * no insert/update/delete grant for authenticated at all — it remains
- * write-only via service_role/postgres (today: only the 0043 trigger).
+ * has a member-scoped RLS SELECT policy (0044_org_plan_member_select.sql,
+ * `private.is_member(org_id)`) and owner_plan has an owner-scoped one
+ * (0051, `user_id = auth.uid()`) — an acting-user query correctly returns
+ * only the caller's own row. Neither table grants insert/update/delete to
+ * authenticated at all — both remain write-only via service_role/postgres
+ * (the create/signup triggers, or Console's service-role PATCH route).
  *
- * Personal/individual workspaces (`"ownerId" in scope`, see
- * 0005_individual_workspace.sql) have no `organizations` row at all, so
- * org_plan structurally cannot apply — skip the query entirely and return
- * the same Pro/25 default directly.
+ * `planTier` here is the plan's display name (plans.name — "Free", "Pro",
+ * "Legacy", etc.), not the old hardcoded "Pro" literal.
  */
 async function getOrgPlan(
   withUser: WithUser,
   scope: WorkspaceScope,
-): Promise<{ planTier: string; workflowLimit: number | null }> {
-  if (!("orgId" in scope)) {
-    return { planTier: "Pro", workflowLimit: 25 };
-  }
+): Promise<{ planTier: string; workflowLimit: number | null; projectLimit: number | null }> {
+  const isPersonal = !("orgId" in scope);
+  const table = isPersonal ? "owner_plan" : "org_plan";
+  const scopeColumn = isPersonal ? "user_id" : "org_id";
+  const scopeValue = isPersonal ? scope.ownerId : scope.orgId;
 
   const { rows } = await withUser((db) =>
-    db.query<{ plan_tier: string; workflow_limit: number | null }>(
+    db.query<{ plan_name: string; workflow_limit: number | null; project_limit: number | null }>(
       `select
-         case when op.org_id is null then 'Pro' else op.plan_tier end as plan_tier,
-         case when op.org_id is null then 25 else op.workflow_limit end as workflow_limit
-       from (select $1::uuid as id) o
-       left join public.org_plan op on op.org_id = o.id`,
-      [scope.orgId],
+         pl.name as plan_name,
+         case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as workflow_limit,
+         case when op.project_limit_set then op.project_limit else pl.project_limit end as project_limit
+       from public.${table} op
+       join public.plans pl on pl.id = op.plan_id
+       where op.${scopeColumn} = $1`,
+      [scopeValue],
     ),
   );
 
-  // The subquery always produces exactly one row (a literal $1 wrapped in
-  // its own select), so rows[0] existing is not in question — but
-  // workflow_limit itself can legitimately BE null (unlimited), so it must
-  // be read as-is, not defaulted with `??` the way plan_tier safely can be
-  // (plan_tier is `not null` in the schema; the case-when above already
-  // guarantees a string either way).
   const row = rows[0];
   return {
-    planTier: row?.plan_tier ?? "Pro",
+    planTier: row?.plan_name ?? "Legacy",
     workflowLimit: row ? row.workflow_limit : 25,
+    projectLimit: row ? row.project_limit : null,
   };
 }
 
@@ -112,6 +109,7 @@ export async function getDashboardStats(withUser: WithUser, scope: WorkspaceScop
     activeWorkflowCount: activeWorkflowsResult.rows[0]?.count ?? 0,
     planTier: plan.planTier,
     workflowLimit: plan.workflowLimit,
+    projectLimit: plan.projectLimit,
   };
 }
 

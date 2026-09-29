@@ -1,27 +1,24 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { withActingUser } from "@nia/db";
+import { auth } from "./auth.js";
 import { dbPool } from "./dbPool.js";
 
 /**
  * Console v1, build order Step 7 (docs/plans/console-plan.md §2, §5,
- * decision 6). Proves 0042_org_plan.sql's backfill reproduces
- * apps/web/src/lib/billing/plan.ts's getPlanUsage() constant EXACTLY for
- * every org that existed when the migration ran — i.e. that introducing
- * the new explicit org_plan table changes nothing observable about an
- * existing org's plan/limit on the day it's introduced.
+ * decision 6) — extended for subscription-model Phase 1 (0049-0051).
  *
- * getPlanUsage() today: `{ plan: 'Pro', limit: 25, used: workflowCount }`.
- * `used` is computed on read (not stored), so it's out of scope for this
- * backfill-exactness test — GET /console/orgs/:orgId's own unit tests
- * (routes/console.test.ts) already cover the on-read usage computation.
- * What this test proves is narrower and specific to the migration itself:
- * every row org_plan's backfill INSERT produced has plan_tier='Pro' and
- * workflow_limit=25, with no exceptions.
- *
- * Queries org_plan directly via the pooled DATABASE_URL owner connection
- * (not withServiceRole) — reading, not exercising the service-role grant
- * path, which Probe 54 (supabase/tests/rls_probes.sql) and
- * staffAudit.integration.test.ts already cover from different angles.
+ * Proves the plans/org_plan/owner_plan migrations changed NOTHING
+ * observable about an existing org's or user's effective limit on the day
+ * they ran: 0050/0051's backfill sets `plan_id='legacy'` with NO override
+ * (`workflow_limit_set=false`, `project_limit_set=false`) rather than
+ * carrying forward the raw Pro/25 values directly, so what's actually
+ * being proven is that resolving the limit through
+ * `case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end`
+ * (the same expression private.enforce_workflow_limit() and
+ * getOrgPlan()/resolvePlanLimit() use) reproduces the exact prior
+ * constant (25 workflows, unlimited projects) for every backfilled row —
+ * a later plan change (Legacy -> Pro) would otherwise silently stay capped
+ * at the old default forever.
  *
  * Real local Postgres only (apps/api/.env's DATABASE_URL). Run explicitly
  * with `pnpm test:integration` (apps/api/vitest.integration.config.ts).
@@ -32,18 +29,34 @@ afterAll(async () => {
 });
 
 describe("org_plan backfill — real Postgres", () => {
-  it("every existing org_plan row (the 0042 backfill) matches getPlanUsage()'s exact prior constant: plan_tier='Pro', workflow_limit=25", async () => {
+  it("every existing org_plan row (the 0050 backfill) has plan_id='legacy' with no override, and resolves to the exact prior constant (workflow_limit=25, project_limit=unlimited)", async () => {
     const { rows, rowCount } = await dbPool.query<{
       org_id: string;
-      plan_tier: string;
-      workflow_limit: number | null;
-    }>("select org_id, plan_tier, workflow_limit from public.org_plan");
+      plan_id: string;
+      workflow_limit_set: boolean;
+      project_limit_set: boolean;
+      effective_workflow_limit: number | null;
+      effective_project_limit: number | null;
+    }>(
+      `select
+         op.org_id,
+         op.plan_id,
+         op.workflow_limit_set,
+         op.project_limit_set,
+         case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as effective_workflow_limit,
+         case when op.project_limit_set then op.project_limit else pl.project_limit end as effective_project_limit
+       from public.org_plan op
+       join public.plans pl on pl.id = op.plan_id`,
+    );
 
     expect(rowCount).toBeGreaterThan(0);
 
     for (const row of rows) {
-      expect(row.plan_tier).toBe("Pro");
-      expect(row.workflow_limit).toBe(25);
+      expect(row.plan_id).toBe("legacy");
+      expect(row.workflow_limit_set).toBe(false);
+      expect(row.project_limit_set).toBe(false);
+      expect(row.effective_workflow_limit).toBe(25);
+      expect(row.effective_project_limit).toBeNull();
     }
   });
 
@@ -57,20 +70,37 @@ describe("org_plan backfill — real Postgres", () => {
 
     expect(Number(rows[0]?.missing_count ?? -1)).toBe(0);
   });
+
+  it("a synthetic pre-migration null-limit org_plan row maps to an explicit unlimited override, not a silently-inherited plan default", async () => {
+    // Guards against the specific regression 0050's own header comment
+    // calls out: a hypothetical org_plan row that had workflow_limit=null
+    // BEFORE this migration (meaning "unlimited") must still mean
+    // unlimited after — via workflow_limit_set=true, workflow_limit=null
+    // (an explicit override), not workflow_limit_set=false (which would
+    // silently fall through to the Legacy plan's own 25 default instead).
+    const effective = (workflowLimitSet: boolean, workflowLimit: number | null) =>
+      dbPool.query<{ effective_workflow_limit: number | null }>(
+        `select case when $1 then $2::int else pl.workflow_limit end as effective_workflow_limit
+         from public.plans pl where pl.id = 'legacy'`,
+        [workflowLimitSet, workflowLimit],
+      );
+
+    const { rows: overrideRows } = await effective(true, null);
+    expect(overrideRows[0]?.effective_workflow_limit).toBeNull();
+
+    const { rows: noOverrideRows } = await effective(false, null);
+    expect(noOverrideRows[0]?.effective_workflow_limit).toBe(25);
+  });
 });
 
 /**
  * Console v1 follow-up (docs/plans/console-plan.md, "Slice 2 nearly
- * approved" review). 0042's backfill only covered orgs that existed when
- * that migration ran — this proves 0043_org_plan_default_on_create.sql's
- * `organizations_set_default_org_plan` AFTER INSERT trigger covers every
- * org created AFTER, regardless of insert path (this test inserts into
- * public.organizations directly, the same way supabase/seed.sql does,
- * bypassing the create_organization() RPC entirely — proving the trigger,
- * not the RPC body, is what guarantees the row).
+ * approved" review) — extended for subscription-model Phase 1: 0050
+ * redefined `private.set_default_org_plan()` to default new orgs to
+ * `plan_id='free'` instead of the old hardcoded Pro/25 literal.
  */
 describe("org_plan auto-provisioning on org creation — real Postgres", () => {
-  it("a newly inserted organization gets a Pro/25 org_plan row automatically, with no application code involved", async () => {
+  it("a newly inserted organization gets a Free org_plan row automatically, with no application code involved", async () => {
     const { rows: userRows } = await dbPool.query<{ id: string }>(
       'select id from public."user" limit 1',
     );
@@ -92,16 +122,18 @@ describe("org_plan auto-provisioning on org creation — real Postgres", () => {
 
     try {
       const { rows: planRows } = await dbPool.query<{
-        plan_tier: string;
-        workflow_limit: number | null;
+        plan_id: string;
+        workflow_limit_set: boolean;
+        project_limit_set: boolean;
       }>(
-        "select plan_tier, workflow_limit from public.org_plan where org_id = $1",
+        "select plan_id, workflow_limit_set, project_limit_set from public.org_plan where org_id = $1",
         [orgId],
       );
 
       expect(planRows).toHaveLength(1);
-      expect(planRows[0]?.plan_tier).toBe("Pro");
-      expect(planRows[0]?.workflow_limit).toBe(25);
+      expect(planRows[0]?.plan_id).toBe("free");
+      expect(planRows[0]?.workflow_limit_set).toBe(false);
+      expect(planRows[0]?.project_limit_set).toBe(false);
     } finally {
       // org_plan.org_id references organizations(id) on delete cascade —
       // deleting the org cleans up the org_plan row too.
@@ -114,18 +146,18 @@ describe("org_plan auto-provisioning on org creation — real Postgres", () => {
 
 /**
  * Console v1 follow-up ("Slice 2 follow-ups" review). The trigger test
- * above proves 0043 fires on ANY insert into organizations (deliberately,
- * via a raw insert as the pool's owner role, matching supabase/seed.sql's
- * own bypass-the-RPC path — see that test's header comment). This test
- * proves the SAME trigger also fires on the actual customer-facing path:
- * public.create_organization(), called through withActingUser exactly the
- * way apps/web/src/lib/auth/actions.ts's server action calls it (RLS-scoped
- * `authenticated` role + request.jwt.claims, never the raw owner
- * connection) — so both the org row AND its org_plan row exist after a
- * real signup-style call, not just after a privileged direct insert.
+ * above proves 0043/0050's trigger fires on ANY insert into organizations
+ * (deliberately, via a raw insert as the pool's owner role, matching
+ * supabase/seed.sql's own bypass-the-RPC path — see that test's header
+ * comment). This test proves the SAME trigger also fires on the actual
+ * customer-facing path: public.create_organization(), called through
+ * withActingUser exactly the way apps/web/src/lib/auth/actions.ts's server
+ * action calls it (RLS-scoped `authenticated` role + request.jwt.claims,
+ * never the raw owner connection) — so both the org row AND its Free
+ * org_plan row exist after a real signup-style call.
  */
 describe("org creation via the real customer path (create_organization RPC, authenticated actor) — real Postgres", () => {
-  it("create_organization() as an authenticated user creates both the organization and its org_plan row", async () => {
+  it("create_organization() as an authenticated user creates both the organization and its Free org_plan row", async () => {
     const { rows: userRows } = await dbPool.query<{ id: string }>(
       'select id from public."user" limit 1',
     );
@@ -157,16 +189,12 @@ describe("org creation via the real customer path (create_organization RPC, auth
       expect(memberRows).toHaveLength(1);
       expect(memberRows[0]?.role).toBe("owner");
 
-      const { rows: planRows } = await dbPool.query<{
-        plan_tier: string;
-        workflow_limit: number | null;
-      }>(
-        "select plan_tier, workflow_limit from public.org_plan where org_id = $1",
+      const { rows: planRows } = await dbPool.query<{ plan_id: string }>(
+        "select plan_id from public.org_plan where org_id = $1",
         [orgId],
       );
       expect(planRows).toHaveLength(1);
-      expect(planRows[0]?.plan_tier).toBe("Pro");
-      expect(planRows[0]?.workflow_limit).toBe(25);
+      expect(planRows[0]?.plan_id).toBe("free");
     } finally {
       // create_organization() (unlike the raw inserts the other tests in
       // this file use) also inserts an organization_members 'owner' row —
@@ -187,6 +215,97 @@ describe("org creation via the real customer path (create_organization RPC, auth
           "alter table public.organization_members enable trigger organization_members_protect_last_super_admin",
         );
       }
+    }
+  });
+});
+
+/**
+ * Subscription model Phase 1 (0051_owner_plan_table.sql). Proves the
+ * backfill's "effective limits identical before/after" claim for personal
+ * (owner_id-scoped) workspaces too: every existing user's owner_plan row
+ * is plan_id='legacy' with no override, resolving to the exact prior
+ * hardcoded personal-workspace constant (25 workflows, unlimited projects
+ * — the old enforce_workflow_limit()'s "v_limit := 25" personal branch,
+ * and the fact project_limit didn't exist as an enforced concept before
+ * this round at all).
+ */
+describe("owner_plan backfill — real Postgres", () => {
+  it("every existing owner_plan row has plan_id='legacy' with no override, resolving to the exact prior constant", async () => {
+    const { rows, rowCount } = await dbPool.query<{
+      user_id: string;
+      plan_id: string;
+      workflow_limit_set: boolean;
+      project_limit_set: boolean;
+      effective_workflow_limit: number | null;
+      effective_project_limit: number | null;
+    }>(
+      `select
+         op.user_id,
+         op.plan_id,
+         op.workflow_limit_set,
+         op.project_limit_set,
+         case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as effective_workflow_limit,
+         case when op.project_limit_set then op.project_limit else pl.project_limit end as effective_project_limit
+       from public.owner_plan op
+       join public.plans pl on pl.id = op.plan_id`,
+    );
+
+    expect(rowCount).toBeGreaterThan(0);
+
+    for (const row of rows) {
+      expect(row.plan_id).toBe("legacy");
+      expect(row.workflow_limit_set).toBe(false);
+      expect(row.project_limit_set).toBe(false);
+      expect(row.effective_workflow_limit).toBe(25);
+      expect(row.effective_project_limit).toBeNull();
+    }
+  });
+
+  it("every user has a corresponding owner_plan row (backfill covered every pre-existing user, none skipped)", async () => {
+    const { rows } = await dbPool.query<{ missing_count: string }>(
+      `select count(*) as missing_count
+       from public."user" u
+       left join public.owner_plan op on op.user_id = u.id
+       where op.user_id is null`,
+    );
+
+    expect(Number(rows[0]?.missing_count ?? -1)).toBe(0);
+  });
+});
+
+/**
+ * Subscription model Phase 1 (0051_owner_plan_table.sql). Proves
+ * `private.set_default_owner_plan()`'s AFTER INSERT trigger on
+ * public."user" fires on the real signup path — Better Auth's
+ * signUpEmail() (apps/api/src/scripts/seedFixtureUsers.ts's own precedent
+ * for exercising this exact path in a test rather than a raw insert into
+ * public."user", since the password hash format is internal to Better
+ * Auth) — not just on a direct insert.
+ */
+describe("owner_plan auto-provisioning on signup — real Postgres", () => {
+  it("signing up through the real signUpEmail path creates both the user row and a Free owner_plan row", async () => {
+    const email = `owner-plan-signup-test-${Date.now()}@nia.dev`;
+    const result = await auth.api.signUpEmail({ body: { email, password: "password", name: "owner_plan signup test" } });
+    const userId = result.user.id;
+    expect(userId).toBeTruthy();
+
+    try {
+      const { rows: planRows } = await dbPool.query<{
+        plan_id: string;
+        workflow_limit_set: boolean;
+        project_limit_set: boolean;
+      }>(
+        "select plan_id, workflow_limit_set, project_limit_set from public.owner_plan where user_id = $1",
+        [userId],
+      );
+
+      expect(planRows).toHaveLength(1);
+      expect(planRows[0]?.plan_id).toBe("free");
+      expect(planRows[0]?.workflow_limit_set).toBe(false);
+      expect(planRows[0]?.project_limit_set).toBe(false);
+    } finally {
+      // owner_plan.user_id references "user"(id) on delete cascade.
+      await dbPool.query('delete from public."user" where id = $1', [userId]);
     }
   });
 });

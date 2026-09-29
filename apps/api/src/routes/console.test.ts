@@ -346,16 +346,18 @@ describe("GET /console/orgs", () => {
  */
 function mockOrgDetailQuery(options: {
   org: Record<string, unknown> | null;
-  usageCount?: number;
+  workflowsUsed?: number;
+  projectsUsed?: number;
   runs30d?: number;
   memberRows?: Record<string, string>[];
 }) {
-  const { org, usageCount = 0, runs30d = 0, memberRows = [] } = options;
+  const { org, workflowsUsed = 0, projectsUsed = 0, runs30d = 0, memberRows = [] } = options;
   const query = vi.fn(async (sql: string, _params?: unknown[]) => {
     if (sql.includes("platform_staff")) return { rowCount: 1 };
     if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
     if (sql.includes("from public.organizations o")) return { rows: org ? [org] : [], rowCount: org ? 1 : 0 };
-    if (sql.includes("from public.workflows")) return { rows: [{ count: usageCount }], rowCount: 1 };
+    if (sql.includes("from public.workflows")) return { rows: [{ count: workflowsUsed }], rowCount: 1 };
+    if (sql.includes("from public.projects")) return { rows: [{ count: projectsUsed }], rowCount: 1 };
     if (sql.includes("from public.workflow_runs")) return { rows: [{ count: runs30d }], rowCount: 1 };
     if (sql.includes("organization_members om")) return { rows: memberRows, rowCount: memberRows.length };
     throw new Error(`mockOrgDetailQuery: unexpected SQL: ${sql}`);
@@ -375,8 +377,14 @@ describe("GET /console/orgs/:orgId", () => {
       name: "Acme Inc",
       slug: "acme-inc",
       created_at: "2026-01-01T00:00:00.000Z",
-      plan_tier: "Pro",
+      plan_id: "pro",
+      plan_name: "Pro",
       workflow_limit: 25,
+      workflow_limit_override_set: false,
+      workflow_limit_override: null,
+      project_limit: 10,
+      project_limit_override_set: false,
+      project_limit_override: null,
       suspended_at: null,
       suspended_reason: null,
       suspended_by: null,
@@ -389,7 +397,7 @@ describe("GET /console/orgs/:orgId", () => {
       role: "owner",
       created_at: "2026-01-02T00:00:00.000Z",
     };
-    const query = mockOrgDetailQuery({ org: orgRow, usageCount: 7, runs30d: 12, memberRows: [memberRow] });
+    const query = mockOrgDetailQuery({ org: orgRow, workflowsUsed: 7, projectsUsed: 3, runs30d: 12, memberRows: [memberRow] });
 
     const started = await startServer(buildApp({ mountConsole: true }));
     server = started.server;
@@ -403,10 +411,17 @@ describe("GET /console/orgs/:orgId", () => {
       name: "Acme Inc",
       slug: "acme-inc",
       createdAt: "2026-01-01T00:00:00.000Z",
+      planId: "pro",
       planTier: "Pro",
       status: "Active",
       workflowLimit: 25,
+      workflowLimitOverrideSet: false,
+      workflowLimitOverride: null,
       workflowsUsed: 7,
+      projectLimit: 10,
+      projectLimitOverrideSet: false,
+      projectLimitOverride: null,
+      projectsUsed: 3,
       runs30d: 12,
       suspendedAt: null,
       suspendedReason: null,
@@ -428,14 +443,20 @@ describe("GET /console/orgs/:orgId", () => {
       name: "Acme Inc",
       slug: "acme-inc",
       created_at: "2026-01-01T00:00:00.000Z",
-      plan_tier: "Pro",
+      plan_id: "pro",
+      plan_name: "Pro",
       workflow_limit: 25,
+      workflow_limit_override_set: false,
+      workflow_limit_override: null,
+      project_limit: 10,
+      project_limit_override_set: false,
+      project_limit_override: null,
       suspended_at: "2026-02-01T00:00:00.000Z",
       suspended_reason: "Non-payment",
       suspended_by: "staff-2",
       suspended_by_name: "Bob Staffer",
     };
-    mockOrgDetailQuery({ org: orgRow, usageCount: 0, runs30d: 0, memberRows: [] });
+    mockOrgDetailQuery({ org: orgRow, workflowsUsed: 0, projectsUsed: 0, runs30d: 0, memberRows: [] });
 
     const started = await startServer(buildApp({ mountConsole: true }));
     server = started.server;
@@ -514,8 +535,24 @@ describe("GET /console/orgs/:orgId", () => {
  * private.log_staff_action, and the org's own audit_log via the new
  * private.log_org_audit) are written with matching detail payloads.
  */
-function mockPatchOrgPlanQuery(options: { orgExists: boolean; planTier?: string; workflowLimit?: number | null }) {
-  const { orgExists, planTier = "Enterprise", workflowLimit = 100 } = options;
+function mockPatchOrgPlanQuery(options: {
+  orgExists: boolean;
+  planExists?: boolean;
+  planId?: string;
+  workflowLimitOverrideSet?: boolean;
+  workflowLimitOverride?: number | null;
+  projectLimitOverrideSet?: boolean;
+  projectLimitOverride?: number | null;
+}) {
+  const {
+    orgExists,
+    planExists = true,
+    planId = "enterprise",
+    workflowLimitOverrideSet = true,
+    workflowLimitOverride = 100,
+    projectLimitOverrideSet = true,
+    projectLimitOverride = 50,
+  } = options;
   const query = vi.fn(async (sql: string, _params?: unknown[]) => {
     if (sql.includes("platform_staff")) return { rowCount: 1 };
     if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
@@ -523,8 +560,22 @@ function mockPatchOrgPlanQuery(options: { orgExists: boolean; planTier?: string;
     if (sql.includes("select id from public.organizations")) {
       return { rows: orgExists ? [{ id: "org-1" }] : [], rowCount: orgExists ? 1 : 0 };
     }
+    if (sql.includes("select id from public.plans")) {
+      return { rows: planExists ? [{ id: planId }] : [], rowCount: planExists ? 1 : 0 };
+    }
     if (sql.includes("insert into public.org_plan")) {
-      return { rows: [{ plan_tier: planTier, workflow_limit: workflowLimit }], rowCount: 1 };
+      return {
+        rows: [
+          {
+            plan_id: planId,
+            workflow_limit_set: workflowLimitOverrideSet,
+            workflow_limit: workflowLimitOverride,
+            project_limit_set: projectLimitOverrideSet,
+            project_limit: projectLimitOverride,
+          },
+        ],
+        rowCount: 1,
+      };
     }
     throw new Error(`mockPatchOrgPlanQuery: unexpected SQL: ${sql}`);
   });
@@ -536,43 +587,64 @@ function mockPatchOrgPlanQuery(options: { orgExists: boolean; planTier?: string;
 
 describe("PATCH /console/orgs/:orgId/plan", () => {
   const orgId = "11111111-1111-1111-1111-111111111111";
+  const fullBody = {
+    planId: "enterprise",
+    workflowLimitOverrideSet: true,
+    workflowLimitOverride: 100,
+    projectLimitOverrideSet: true,
+    projectLimitOverride: 50,
+  };
 
   it("upserts org_plan and writes both audit rows with matching detail for a staff session", async () => {
     getSession.mockResolvedValue(STAFF_SESSION);
-    const query = mockPatchOrgPlanQuery({ orgExists: true, planTier: "Enterprise", workflowLimit: 100 });
+    const query = mockPatchOrgPlanQuery({ orgExists: true, ...fullBody });
 
     const started = await startServer(buildApp({ mountConsole: true }));
     server = started.server;
     const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/plan`, {
       method: "PATCH",
       headers: { authorization: "Bearer good-token", "content-type": "application/json" },
-      body: JSON.stringify({ planTier: "Enterprise", workflowLimit: 100 }),
+      body: JSON.stringify(fullBody),
     });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ planTier: "Enterprise", workflowLimit: 100 });
+    expect(await res.json()).toEqual(fullBody);
 
-    const detail = JSON.stringify({ planTier: "Enterprise", workflowLimit: 100 });
+    const detail = JSON.stringify(fullBody);
     const staffAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
     expect(staffAuditCall?.[1]).toEqual(["staff-1", "org.plan_update", null, orgId, detail]);
     const orgAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_org_audit"));
     expect(orgAuditCall?.[1]).toEqual([orgId, "staff-1", "organization.plan_updated", detail]);
   });
 
-  it("accepts workflowLimit: null (unlimited)", async () => {
+  it("accepts overrideSet: false with a null override value (no override — inherits the plan default)", async () => {
     getSession.mockResolvedValue(STAFF_SESSION);
-    mockPatchOrgPlanQuery({ orgExists: true, planTier: "Enterprise", workflowLimit: null });
+    mockPatchOrgPlanQuery({
+      orgExists: true,
+      planId: "free",
+      workflowLimitOverrideSet: false,
+      workflowLimitOverride: null,
+      projectLimitOverrideSet: false,
+      projectLimitOverride: null,
+    });
 
     const started = await startServer(buildApp({ mountConsole: true }));
     server = started.server;
+    const body = {
+      planId: "free",
+      workflowLimitOverrideSet: false,
+      workflowLimitOverride: null,
+      projectLimitOverrideSet: false,
+      projectLimitOverride: null,
+    };
     const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/plan`, {
       method: "PATCH",
       headers: { authorization: "Bearer good-token", "content-type": "application/json" },
-      body: JSON.stringify({ planTier: "Enterprise", workflowLimit: null }),
+      body: JSON.stringify(body),
     });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ planTier: "Enterprise", workflowLimit: null });
+    expect(await res.json()).toEqual(body);
   });
 
   it("returns 404 for an org that does not exist, without writing any audit row", async () => {
@@ -584,7 +656,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
     const res = await fetch(`${started.baseUrl}/console/orgs/00000000-0000-0000-0000-000000000000/plan`, {
       method: "PATCH",
       headers: { authorization: "Bearer good-token", "content-type": "application/json" },
-      body: JSON.stringify({ planTier: "Enterprise", workflowLimit: 100 }),
+      body: JSON.stringify(fullBody),
     });
 
     expect(res.status).toBe(404);
@@ -593,7 +665,25 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
     expect(query.mock.calls.some((call) => call[0].includes("private.log_org_audit"))).toBe(false);
   });
 
-  it("rejects an empty planTier with a validation error, without querying the org", async () => {
+  it("returns 400 for an unknown planId, without writing any audit row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockPatchOrgPlanQuery({ orgExists: true, planExists: false });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/plan`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ ...fullBody, planId: "not-a-real-plan" }),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("INVALID_PLAN");
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_staff_action"))).toBe(false);
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_org_audit"))).toBe(false);
+  });
+
+  it("rejects an empty planId with a validation error, without querying the org", async () => {
     getSession.mockResolvedValue(STAFF_SESSION);
     withServiceRole.mockResolvedValue({ rowCount: 1 });
 
@@ -602,7 +692,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
     const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/plan`, {
       method: "PATCH",
       headers: { authorization: "Bearer good-token", "content-type": "application/json" },
-      body: JSON.stringify({ planTier: "", workflowLimit: 100 }),
+      body: JSON.stringify({ ...fullBody, planId: "" }),
     });
 
     expect(res.status).toBe(400);
@@ -610,7 +700,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
     expect(withServiceRole).toHaveBeenCalledOnce();
   });
 
-  it("rejects a non-positive workflowLimit with a validation error", async () => {
+  it("rejects a non-positive workflowLimitOverride with a validation error", async () => {
     getSession.mockResolvedValue(STAFF_SESSION);
     withServiceRole.mockResolvedValue({ rowCount: 1 });
 
@@ -619,7 +709,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
     const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/plan`, {
       method: "PATCH",
       headers: { authorization: "Bearer good-token", "content-type": "application/json" },
-      body: JSON.stringify({ planTier: "Enterprise", workflowLimit: 0 }),
+      body: JSON.stringify({ ...fullBody, workflowLimitOverride: 0 }),
     });
 
     expect(res.status).toBe(400);
@@ -635,7 +725,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
     const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/plan`, {
       method: "PATCH",
       headers: { authorization: "Bearer good-token", "content-type": "application/json" },
-      body: JSON.stringify({ planTier: "Enterprise", workflowLimit: 100 }),
+      body: JSON.stringify(fullBody),
     });
 
     expect(res.status).toBe(403);
@@ -648,7 +738,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
     const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/plan`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ planTier: "Enterprise", workflowLimit: 100 }),
+      body: JSON.stringify(fullBody),
     });
 
     expect(res.status).toBe(401);

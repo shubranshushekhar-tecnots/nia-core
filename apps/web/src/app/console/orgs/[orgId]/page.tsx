@@ -4,7 +4,9 @@ import {
   getConsoleOrg,
   getConsoleOrgConnectors,
   getConsoleOrgRuns,
+  getConsolePlans,
   type ConsoleConnector,
+  type ConsolePlan,
   type ConsoleRun,
 } from '@/lib/api/consoleServer';
 import { ApiError } from '@/lib/api/server';
@@ -27,7 +29,7 @@ import ConsoleOrgDetailClient from '@/components/console/ConsoleOrgDetailClient'
 export default async function ConsoleOrgDetailPage({ params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params;
 
-  const [user, org, runs, connectors] = await Promise.all([
+  const [user, org, plans, runs, connectors] = await Promise.all([
     getSessionUser(),
     getConsoleOrg(orgId).catch((err) => {
       if (err instanceof ApiError) {
@@ -39,6 +41,16 @@ export default async function ConsoleOrgDetailPage({ params }: { params: Promise
       console.error('[console] GET /console/orgs/:orgId failed (network/transport error)', err);
       notFound();
     }),
+    // Subscription model Phase 1: the plan catalog for the edit-plan
+    // form's dropdown. Degrades to `[]` on failure rather than notFound()
+    // — this screen's own existence doesn't depend on it, only the Edit
+    // plan form does, and an empty dropdown is a clear enough signal.
+    getConsolePlans()
+      .then((page) => page.plans)
+      .catch((err): ConsolePlan[] => {
+        console.error('[console] GET /console/plans failed', err);
+        return [];
+      }),
     // Slice 3c: the Runs tab is secondary to the org detail itself, so a
     // failure here degrades gracefully rather than notFound() — unlike
     // getConsoleOrg above, which is the page's own existence check. Small
@@ -65,7 +77,7 @@ export default async function ConsoleOrgDetailPage({ params }: { params: Promise
 
   return (
     <ConsoleShell activeNavId="directory" email={user?.email ?? ''}>
-      <ConsoleOrgDetailClient org={org} runs={runs} connectors={connectors} />
+      <ConsoleOrgDetailClient org={org} plans={plans} runs={runs} connectors={connectors} />
     </ConsoleShell>
   );
 }

@@ -26,6 +26,7 @@ export default defineConfig({
       "src/lib/staffAudit.integration.test.ts",
       "src/lib/orgPlan.integration.test.ts",
       "src/lib/workflowLimit.integration.test.ts",
+      "src/lib/projectLimit.integration.test.ts",
       "src/services/dashboard.integration.test.ts",
     ],
     env: {

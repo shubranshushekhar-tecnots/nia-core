@@ -9,7 +9,8 @@ const STATUS_DOT: Record<ActivityItem['status'], { dot: string; bg: string; verb
 };
 
 function ProfileCard({ userId, fullName, workspaceLabel, plan }: { userId: string; fullName: string | null; workspaceLabel: string; plan: PlanUsage }) {
-  const pct = plan.limit === null ? 0 : Math.min(100, Math.round((100 * plan.used) / plan.limit));
+  const pct =
+    plan.workflowLimit === null ? 0 : Math.min(100, Math.round((100 * plan.workflowUsed) / plan.workflowLimit));
   return (
     <div
       style={{
@@ -31,15 +32,15 @@ function ProfileCard({ userId, fullName, workspaceLabel, plan }: { userId: strin
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
           <span style={{ color: 'var(--ink-200)' }}>Workflows used</span>
           <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-            <span style={{ fontWeight: 600 }}>{plan.used}</span>{' '}
-            <span style={{ color: 'var(--ink-300)' }}>/ {plan.limit === null ? 'Unlimited' : plan.limit}</span>
+            <span style={{ fontWeight: 600 }}>{plan.workflowUsed}</span>{' '}
+            <span style={{ color: 'var(--ink-300)' }}>/ {plan.workflowLimit === null ? 'Unlimited' : plan.workflowLimit}</span>
           </span>
         </div>
         <div
           role="meter"
-          aria-valuenow={plan.used}
+          aria-valuenow={plan.workflowUsed}
           aria-valuemin={0}
-          aria-valuemax={plan.limit ?? undefined}
+          aria-valuemax={plan.workflowLimit ?? undefined}
           aria-label="Workflows used"
           style={{ height: 6, borderRadius: 3, background: 'var(--line-200)', overflow: 'hidden' }}
         >
