@@ -1,5 +1,15 @@
 # TODO
 
+- Console Slice 3b (org suspend/unsuspend, `docs/plans/console-plan.md`
+  decision 2 / addition 8): `apps/worker/scripts/dispatch-smoke.ts` was not
+  re-run against a live suspended org for this change — deferred per the
+  build authorization. Coverage today is `runEtl.test.ts`'s mocked
+  suspension tests (`isOrgSuspended()` short-circuits `job.cursor === null`
+  to a `fail()` before any real dispatch) plus the RLS probes/fresh-Postgres
+  proof for the insert/update/delete policies themselves. Revisit by adding
+  a suspended-org case to `dispatch-smoke.ts` (suspend the smoke org via
+  the console API, assert the run fails with the suspension message,
+  unsuspend after) next time that smoke suite is touched.
 - Learning mode (`docs/plans/learning-mode.md`): minimal first-party event
   log (step viewed, test failed + error code, help opened). No
   third-party analytics.
@@ -872,3 +882,6 @@
   in one org with no limit check — will hit workflow_limit (25) if the
   suite grows past 25 cases. Use a dedicated eval org with an unlimited
   plan.
+- E2E: no teardown for scratch connections/projects created during runs —
+  leaks across runs and caused canvas.spec.ts:1194 flakiness. Add
+  per-spec cleanup.

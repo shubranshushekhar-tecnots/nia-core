@@ -89,15 +89,17 @@ test.describe.serial('command bar: scope precedence, chat, / hint, reload persis
     // selection/pins — the "canvas (N connections)" fallback chip text).
     await page.setViewportSize({ width: 1440, height: 900 });
     await hideNextDevIndicator(page);
-    // Mask the primary nav's Projects tree: it lists every project ever
-    // created against this local dev DB across e2e runs (nothing in this
-    // suite deletes the scratch projects other specs create), so its
-    // rendered height — and thus every full-page pixel below it — grows
-    // unboundedly run over run. Unrelated to anything this assertion
-    // actually checks (the command bar's own resting state).
+    // Mask the canvas's Nodes rail (connection palette), not the primary
+    // nav: direct diff inspection showed the primary nav column renders
+    // identically (it has a fixed height with its own internal scroll —
+    // it does not grow with project count). The actual varying region is
+    // the Nodes rail, which lists every connection in the org, including
+    // scratch connections left behind by other specs with no teardown
+    // (e.g. "Empty DB E2E Run <timestamp>..."). Unrelated to anything
+    // this assertion actually checks (the command bar's own resting state).
     await expect(page).toHaveScreenshot('command-bar-resting-1440.png', {
       maxDiffPixels: 200,
-      mask: [page.getByRole('navigation', { name: 'Primary' })],
+      mask: [page.getByTestId('nodes-rail')],
     });
 
     // Select the mysql node -> scope narrows to that node's own connection,
@@ -353,9 +355,9 @@ test.describe('command bar: personal (org-less) workspace', () => {
     // class, so a fixed headroom is an appropriate (not unbounded) fix.
     await expect(page).toHaveScreenshot('command-bar-thread-open-1440.png', {
       maxDiffPixels: 900,
-      // Primary nav mask: same unbounded Projects-tree growth as the
-      // resting baseline above.
-      mask: [page.getByTestId('command-bar-message-text'), sql, page.getByRole('navigation', { name: 'Primary' })],
+      // Nodes rail mask: same connection-list pollution as the resting
+      // baseline above, not the primary nav (see comment there).
+      mask: [page.getByTestId('command-bar-message-text'), sql, page.getByTestId('nodes-rail')],
     });
     await widthPin.evaluate((el: HTMLElement) => el.remove());
     await heightPin.evaluate((el: HTMLElement) => el.remove());

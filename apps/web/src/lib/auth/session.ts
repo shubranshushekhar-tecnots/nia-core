@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { withActingUser } from "@nia/db";
@@ -9,7 +10,16 @@ export type UserContext = {
   userId: string;
   email: string;
   fullName: string | null;
-  org: { id: string; name: string; slug: string } | null;
+  org:
+    | {
+        id: string;
+        name: string;
+        slug: string;
+        /** 0046_org_suspension.sql — null unless staff have suspended this org. */
+        suspendedAt: string | null;
+        suspendedReason: string | null;
+      }
+    | null;
   /** "individual" when the user has no organization membership at all. */
   role: ActorRole;
 };
@@ -18,7 +28,7 @@ export type UserWithOrg = {
   userId: string;
   email: string;
   fullName: string | null;
-  org: { id: string; name: string; slug: string };
+  org: { id: string; name: string; slug: string; suspendedAt: string | null; suspendedReason: string | null };
   role: OrgRole;
 };
 
@@ -52,10 +62,15 @@ export async function getSessionUser(): Promise<{ id: string; email: string } | 
  *
  * A user can belong to multiple orgs later (switcher is a stub for now),
  * so this picks the oldest membership — first org created/joined — as the
- * default. All queries are plain RLS-scoped reads: no service role, no
- * bypassing the same policies a real client hits.
+ * default (mirrors apps/api's attachActor middleware exactly — see that
+ * file's header comment). All queries are plain RLS-scoped reads: no
+ * service role, no bypassing the same policies a real client hits.
+ *
+ * Wrapped in React's cache() so that app/app/layout.tsx's own suspension
+ * check and each page's independent requireUser() call within the same
+ * request dedupe into a single DB round trip instead of two.
  */
-export async function requireUser(): Promise<UserContext> {
+export const requireUser = cache(async function requireUser(): Promise<UserContext> {
   const user = await getSessionUser();
 
   if (!user) {
@@ -67,8 +82,17 @@ export async function requireUser(): Promise<UserContext> {
       db.query<{ full_name: string | null }>("select full_name from public.profiles where id = $1", [user.id]),
     ),
     withActingUser(getPool(), user.id, (db) =>
-      db.query<{ role: string; created_at: string; org_id: string; org_name: string; org_slug: string }>(
-        `select m.role, m.created_at, o.id as org_id, o.name as org_name, o.slug as org_slug
+      db.query<{
+        role: string;
+        created_at: string;
+        org_id: string;
+        org_name: string;
+        org_slug: string;
+        suspended_at: string | null;
+        suspended_reason: string | null;
+      }>(
+        `select m.role, m.created_at, o.id as org_id, o.name as org_name, o.slug as org_slug,
+                o.suspended_at, o.suspended_reason
          from public.organization_members m
          join public.organizations o on o.id = m.org_id
          where m.user_id = $1
@@ -81,7 +105,15 @@ export async function requireUser(): Promise<UserContext> {
 
   const profile = profileResult.rows[0] ?? null;
   const membership = membershipResult.rows[0];
-  const org = membership ? { id: membership.org_id, name: membership.org_name, slug: membership.org_slug } : null;
+  const org = membership
+    ? {
+        id: membership.org_id,
+        name: membership.org_name,
+        slug: membership.org_slug,
+        suspendedAt: membership.suspended_at,
+        suspendedReason: membership.suspended_reason,
+      }
+    : null;
 
   return {
     userId: user.id,
@@ -90,7 +122,7 @@ export async function requireUser(): Promise<UserContext> {
     org: membership && org ? org : null,
     role: membership && org ? (membership.role as OrgRole) : "individual",
   };
-}
+});
 
 /**
  * Thin wrapper over requireUser() for routes that genuinely require an

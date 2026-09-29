@@ -70,6 +70,9 @@ export type ConsoleOrgDetail = {
   createdAt: string;
   planTier: string;
   status: string;
+  suspendedAt: string | null;
+  suspendedReason: string | null;
+  suspendedBy: { userId: string; name: string | null } | null;
   workflowLimit: number | null;
   workflowsUsed: number;
   runs30d: number;
@@ -78,4 +81,25 @@ export type ConsoleOrgDetail = {
 
 export async function getConsoleOrg(orgId: string): Promise<ConsoleOrgDetail> {
   return apiFetchServer<ConsoleOrgDetail>(`/console/orgs/${encodeURIComponent(orgId)}`);
+}
+
+/**
+ * GET /console/orgs/:orgId/runs's response shape (Slice 3c, console-plan.md
+ * decision 9). Metadata + error only — never result-row/customer data, same
+ * boundary the migration and route doc comments state. `error` is null for
+ * any run that hasn't failed, or a pre-migration failed run.
+ */
+export type ConsoleRun = {
+  id: string;
+  workflowId: string;
+  status: string;
+  error: { message: string } | null;
+  rowsProcessed: number;
+  durationMs: number | null;
+  startedAt: string;
+  finishedAt: string | null;
+};
+
+export async function getConsoleOrgRuns(orgId: string): Promise<{ runs: ConsoleRun[] }> {
+  return apiFetchServer<{ runs: ConsoleRun[] }>(`/console/orgs/${encodeURIComponent(orgId)}/runs`);
 }

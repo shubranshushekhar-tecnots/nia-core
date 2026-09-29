@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { getSessionUser } from '@/lib/auth/session';
-import { getConsoleOrg } from '@/lib/api/consoleServer';
+import { getConsoleOrg, getConsoleOrgRuns, type ConsoleRun } from '@/lib/api/consoleServer';
 import { ApiError } from '@/lib/api/server';
 import ConsoleShell from '@/components/console/ConsoleShell';
 import ConsoleOrgDetailClient from '@/components/console/ConsoleOrgDetailClient';
@@ -21,7 +21,7 @@ import ConsoleOrgDetailClient from '@/components/console/ConsoleOrgDetailClient'
 export default async function ConsoleOrgDetailPage({ params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params;
 
-  const [user, org] = await Promise.all([
+  const [user, org, runs] = await Promise.all([
     getSessionUser(),
     getConsoleOrg(orgId).catch((err) => {
       if (err instanceof ApiError) {
@@ -33,11 +33,20 @@ export default async function ConsoleOrgDetailPage({ params }: { params: Promise
       console.error('[console] GET /console/orgs/:orgId failed (network/transport error)', err);
       notFound();
     }),
+    // Slice 3c: the Runs tab is secondary to the org detail itself, so a
+    // failure here degrades to an empty list rather than notFound() —
+    // unlike getConsoleOrg above, which is the page's own existence check.
+    getConsoleOrgRuns(orgId)
+      .then((page) => page.runs)
+      .catch((err): ConsoleRun[] => {
+        console.error('[console] GET /console/orgs/:orgId/runs failed', err);
+        return [];
+      }),
   ]);
 
   return (
     <ConsoleShell activeNavId="directory" email={user?.email ?? ''}>
-      <ConsoleOrgDetailClient org={org} />
+      <ConsoleOrgDetailClient org={org} runs={runs} />
     </ConsoleShell>
   );
 }

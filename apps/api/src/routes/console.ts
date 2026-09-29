@@ -50,14 +50,11 @@ consoleRouter.get("/ping", (_req, res) => {
  * it is scoped to `organizations` + `organization_members` + a
  * `workflow_runs` count — no secrets, no result-row customer data.
  *
- * `plan_tier` and `status` are hardcoded below rather than queried:
- * `org_plan` (build step 7) and the `organizations` suspension columns
- * (build step 9) don't exist yet. The hardcoded values reflect today's
- * actual, only-ever-true state exactly (`getPlanUsage()` in
- * apps/web/src/lib/billing/plan.ts already hardcodes every org to
- * 'Pro'; no suspension mechanism exists yet, so every org is 'Active') —
- * not placeholders standing in for something false. Swap these for real
- * columns when steps 7 and 9 land.
+ * `plan_tier` is still hardcoded below (`org_plan`, build step 7, is not
+ * joined into this list query — GET /orgs/:orgId does join it, for the
+ * per-org detail read). `status` is now real: build step 9 (Slice 3b) added
+ * `organizations.suspended_at`, so a suspended org's `status` reflects it
+ * instead of the old always-'Active' placeholder.
  *
  * The design file's type/plan/status filter dropdowns (Directory screen,
  * `designs/Nia Console (superadmin).html`) are intentionally not wired up
@@ -107,6 +104,7 @@ consoleRouter.get(
         name: string;
         slug: string;
         created_at: string;
+        suspended_at: string | null;
         member_count: string;
         runs_30d: string;
       }>(
@@ -115,6 +113,7 @@ consoleRouter.get(
            o.name,
            o.slug,
            o.created_at,
+           o.suspended_at,
            count(distinct om.user_id) as member_count,
            count(distinct wr.id) filter (where wr.started_at > now() - interval '30 days') as runs_30d
          from public.organizations o
@@ -145,7 +144,7 @@ consoleRouter.get(
         name: row.name,
         slug: row.slug,
         planTier: "Pro",
-        status: "Active",
+        status: row.suspended_at === null ? "Active" : "Suspended",
         memberCount: Number(row.member_count),
         runs30d: Number(row.runs_30d),
         createdAt: row.created_at,
@@ -191,10 +190,12 @@ consoleRouter.get(
  * `status`/`runs30d` are included for the same reason GET /orgs already
  * returns them: the design's org header meta line
  * (`designs/Nia Console (superadmin).html`'s `orgMeta`) is
- * "{plan} · {N} people · {M} runs in 30 days · {status}" — `status` is
- * hardcoded 'Active' (no suspension mechanism exists yet, build step 9)
- * and `runs30d` is a real `workflow_runs` count scoped to this org, both
- * computed the identical way GET /orgs already computes them per-row.
+ * "{plan} · {N} people · {M} runs in 30 days · {status}" — `status` is now
+ * real (build step 9/Slice 3b), and `suspendedAt`/`suspendedReason`/
+ * `suspendedBy` are also returned (null when active) so the Org Detail
+ * screen's suspend/unsuspend UI has the current reason to show without a
+ * second request. `runs30d` is a real `workflow_runs` count scoped to this
+ * org, computed the identical way GET /orgs already computes it per-row.
  *
  * One staff_audit_log row per request (action 'org.read', org_id set) —
  * this route touches exactly one org, so it follows §3's general audit
@@ -220,6 +221,10 @@ consoleRouter.get(
         created_at: string;
         plan_tier: string;
         workflow_limit: number | null;
+        suspended_at: string | null;
+        suspended_reason: string | null;
+        suspended_by: string | null;
+        suspended_by_name: string | null;
       }>(
         `select
            o.id,
@@ -227,9 +232,14 @@ consoleRouter.get(
            o.slug,
            o.created_at,
            case when op.org_id is null then 'Pro' else op.plan_tier end as plan_tier,
-           case when op.org_id is null then 25 else op.workflow_limit end as workflow_limit
+           case when op.org_id is null then 25 else op.workflow_limit end as workflow_limit,
+           o.suspended_at,
+           o.suspended_reason,
+           o.suspended_by,
+           su.name as suspended_by_name
          from public.organizations o
          left join public.org_plan op on op.org_id = o.id
+         left join public."user" su on su.id = o.suspended_by
          where o.id = $1`,
         [orgId],
       );
@@ -286,7 +296,10 @@ consoleRouter.get(
       slug: result.org.slug,
       createdAt: result.org.created_at,
       planTier: result.org.plan_tier,
-      status: "Active",
+      status: result.org.suspended_at === null ? "Active" : "Suspended",
+      suspendedAt: result.org.suspended_at,
+      suspendedReason: result.org.suspended_reason,
+      suspendedBy: result.org.suspended_by === null ? null : { userId: result.org.suspended_by, name: result.org.suspended_by_name },
       workflowLimit: result.org.workflow_limit,
       workflowsUsed: result.usedCount,
       runs30d: result.runs30d,
@@ -375,5 +388,187 @@ consoleRouter.patch(
     if (!updated) throw new AppError(404, "NOT_FOUND", "Organization not found.");
 
     res.json({ planTier: updated.plan_tier, workflowLimit: updated.workflow_limit });
+  }),
+);
+
+/**
+ * Build order step 9 / Slice 3b (console-plan.md, decisions 1/2, additions
+ * 3-6). `POST /console/orgs/:orgId/suspend` — `reason` is required (unlike
+ * unsuspend's optional `note` below): a suspension always needs one, both
+ * for the member-facing "Contact support" message (`attachActor`'s 403
+ * detail) and for the audit trail.
+ *
+ * Enforcement itself lives entirely in 0046_org_suspension.sql's RLS
+ * policies + `attachActor`'s 403 check + `runEtl.ts`'s cursor===null
+ * check — this route only ever flips the three `organizations` columns
+ * those all read. Same two-audit-row pattern as PATCH .../plan above.
+ */
+const suspendOrgBodySchema = z.object({
+  reason: z.string().trim().min(1).max(500),
+});
+
+consoleRouter.post(
+  "/orgs/:orgId/suspend",
+  validate({ params: orgIdParamsSchema, body: suspendOrgBodySchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { orgId } = req.params as unknown as { orgId: string };
+    const { reason } = req.body as unknown as { reason: string };
+
+    const updated = await withServiceRole(dbPool, async (db) => {
+      const result = await db.query<{ suspended_at: string; suspended_reason: string }>(
+        `update public.organizations
+         set suspended_at = now(), suspended_by = $2, suspended_reason = $3
+         where id = $1
+         returning suspended_at, suspended_reason`,
+        [orgId, authUser.id, reason],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+
+      const detail = JSON.stringify({ reason });
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+        authUser.id,
+        "org.suspend",
+        null,
+        orgId,
+        detail,
+      ]);
+      await db.query("select private.log_org_audit($1, $2, $3, $4)", [orgId, authUser.id, "organization.suspended", detail]);
+
+      return row;
+    });
+
+    if (!updated) throw new AppError(404, "NOT_FOUND", "Organization not found.");
+
+    res.json({ status: "Suspended", suspendedAt: updated.suspended_at, suspendedReason: updated.suspended_reason });
+  }),
+);
+
+/**
+ * `POST /console/orgs/:orgId/unsuspend` — addition 6: `note` is optional
+ * (unlike suspend's required `reason`), written only to the two audit
+ * rows (`private.log_staff_action`/`log_org_audit`'s `detail`), never
+ * stored on `organizations` itself — there is no "why was this
+ * unsuspended" column to keep in sync, only the audit trail.
+ */
+const unsuspendOrgBodySchema = z.object({
+  note: z.string().trim().max(500).optional(),
+});
+
+consoleRouter.post(
+  "/orgs/:orgId/unsuspend",
+  validate({ params: orgIdParamsSchema, body: unsuspendOrgBodySchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { orgId } = req.params as unknown as { orgId: string };
+    const { note } = req.body as unknown as { note?: string };
+
+    const updated = await withServiceRole(dbPool, async (db) => {
+      const result = await db.query<{ id: string }>(
+        `update public.organizations
+         set suspended_at = null, suspended_by = null, suspended_reason = null
+         where id = $1
+         returning id`,
+        [orgId],
+      );
+      if (!result.rows[0]) return null;
+
+      const detail = JSON.stringify({ note: note ?? null });
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+        authUser.id,
+        "org.unsuspend",
+        null,
+        orgId,
+        detail,
+      ]);
+      await db.query("select private.log_org_audit($1, $2, $3, $4)", [orgId, authUser.id, "organization.unsuspended", detail]);
+
+      return true;
+    });
+
+    if (!updated) throw new AppError(404, "NOT_FOUND", "Organization not found.");
+
+    res.json({ status: "Active" });
+  }),
+);
+
+/**
+ * Build order step 10 / Slice 3c (console-plan.md, decision 9). Run
+ * history + error metadata for the org's Runs tab. Reads only
+ * `workflow_runs.status/error/rows_processed/duration_ms/started_at/
+ * finished_at` — never result rows/customer data, same boundary the
+ * migration's own doc comment states. `error` (added by
+ * 0047_workflow_runs_error.sql) is null for any run that hasn't failed,
+ * or for a pre-migration failed run that finished before this column
+ * existed.
+ *
+ * Most-recent-50, no pagination controls: unlike GET /orgs (which can
+ * genuinely have hundreds of orgs), a single org's run history is bounded
+ * enough that "load more" isn't worth the extra complexity this slice —
+ * revisit if that assumption stops holding.
+ */
+consoleRouter.get(
+  "/orgs/:orgId/runs",
+  validate({ params: orgIdParamsSchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { orgId } = req.params as unknown as { orgId: string };
+
+    const result = await withServiceRole(dbPool, async (db) => {
+      const orgResult = await db.query<{ id: string }>(`select id from public.organizations where id = $1`, [orgId]);
+      if (!orgResult.rows[0]) return null;
+
+      const runsResult = await db.query<{
+        id: string;
+        workflow_id: string;
+        status: string;
+        error: { message: string } | null;
+        rows_processed: number;
+        duration_ms: number | null;
+        started_at: string;
+        finished_at: string | null;
+      }>(
+        `select id, workflow_id, status, error, rows_processed, duration_ms, started_at, finished_at
+         from public.workflow_runs
+         where org_id = $1
+         order by started_at desc
+         limit 50`,
+        [orgId],
+      );
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+        authUser.id,
+        "org.runs_read",
+        null,
+        orgId,
+        JSON.stringify({ count: runsResult.rowCount }),
+      ]);
+
+      return runsResult.rows;
+    });
+
+    if (!result) throw new AppError(404, "NOT_FOUND", "Organization not found.");
+
+    res.json({
+      runs: result.map((row) => ({
+        id: row.id,
+        workflowId: row.workflow_id,
+        status: row.status,
+        error: row.error,
+        rowsProcessed: row.rows_processed,
+        durationMs: row.duration_ms,
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+      })),
+    });
   }),
 );

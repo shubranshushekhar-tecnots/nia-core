@@ -31,6 +31,26 @@ import type { Queue } from "bullmq";
  * keyset query shape per dialect (SQL WHERE/ORDER BY, Mongo _id $match).
  */
 
+// Console v1 Slice 3b — isOrgSuspended() in runEtl.ts calls withServiceRole
+// directly (not through workflowRuns.js), so it needs its own mock here,
+// same pattern as cleanPlanDrift.test.ts/resolveConnection.test.ts: swap
+// withServiceRole for one that just calls the callback with a fake `db`
+// whose `query` is this file's own mock. Defaults to "not suspended"
+// ({ suspended_at: null }) in beforeEach so every pre-existing test below
+// keeps passing unchanged; the dedicated suspension describe() block
+// overrides it per-test.
+const orgSuspensionQueryMock = vi.fn();
+vi.mock("@nia/db", async () => {
+  const actual = await vi.importActual<typeof import("@nia/db")>("@nia/db");
+  return {
+    ...actual,
+    withServiceRole: vi.fn(async (_pool: unknown, fn: (db: { query: typeof orgSuspensionQueryMock }) => unknown) =>
+      fn({ query: orgSuspensionQueryMock }),
+    ),
+  };
+});
+vi.mock("../dbPool.js", () => ({ dbPool: {} }));
+
 const resolveGraphMock = vi.fn();
 vi.mock("../checks/runWorkflowChecks.js", () => ({
   resolveGraph: (...args: unknown[]) => resolveGraphMock(...args),
@@ -228,6 +248,7 @@ function queueStub() {
 }
 
 beforeEach(() => {
+  orgSuspensionQueryMock.mockReset();
   resolveGraphMock.mockReset();
   resolveConnectionMock.mockReset();
   getSchemaMock.mockReset();
@@ -252,6 +273,7 @@ beforeEach(() => {
   dispatchPreflightMock.mockReset();
   dispatchStageMock.mockReset();
 
+  orgSuspensionQueryMock.mockResolvedValue({ rows: [{ suspended_at: null }] });
   resolveGraphMock.mockResolvedValue(graph());
   checkCleanPlanDriftMock.mockResolvedValue({ ok: true });
   // Staged-mode defaults — a no-op destination lifecycle unless a test
@@ -331,6 +353,56 @@ describe("runEtl — chunk loop happy path", () => {
   });
 });
 
+// Console v1 Slice 3b (docs/plans/console-plan.md, decisions 1-2): the one
+// authorized apps/worker change — a suspended org's ETL runs must stop
+// dispatching, checked only on the run's first chunk (job.cursor === null).
+describe("runEtl — suspended org (Console v1 Slice 3b)", () => {
+  it("fails the run on the first chunk when the org is suspended, without dispatching read or write", async () => {
+    orgSuspensionQueryMock.mockResolvedValueOnce({ rows: [{ suspended_at: "2026-01-01T00:00:00.000Z" }] });
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({
+      status: "failed",
+      message: "This organization has been suspended. Contact support.",
+    });
+    expect(startRunMock).toHaveBeenCalledWith(job.runId, job.workflowId, job.scope);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(dispatchWriteMock).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed", { message: result.message });
+    expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "error" }));
+  });
+
+  it("proceeds normally when the org is not suspended", async () => {
+    orgSuspensionQueryMock.mockResolvedValueOnce({ rows: [{ suspended_at: null }] });
+    const queue = queueStub();
+    const job = baseJob({ chunkSize: 10 });
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({ status: "done" });
+    expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not check suspension on a resumed (non-first) chunk", async () => {
+    const queue = queueStub();
+    await runEtl(baseJob({ cursor: JSON.stringify({ lastKey: "1" }) }), queue);
+    expect(orgSuspensionQueryMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the suspension check entirely for personal (org-less) workspace scopes", async () => {
+    const queue = queueStub();
+    const job = baseJob({ scope: { ownerId: "user-1" } });
+
+    await runEtl(job, queue);
+
+    expect(orgSuspensionQueryMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("runEtl — failed write", () => {
   it("does not advance the cursor or self-enqueue, and marks the run failed", async () => {
     dispatchWriteMock.mockResolvedValueOnce({ ok: false, error: { kind: "write-rejected", message: "boom" } });
@@ -343,7 +415,7 @@ describe("runEtl — failed write", () => {
     expect(result.message).toContain("boom");
     expect(recordChunkProgressMock).not.toHaveBeenCalled();
     expect(queue.add).not.toHaveBeenCalled();
-    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed", { message: result.message });
     expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "error" }));
   });
 });
@@ -447,7 +519,7 @@ describe("runEtl — mapping references a field missing after transforms (item 0
     expect(result.message).toContain("phone");
     expect(dispatchWriteMock).not.toHaveBeenCalled();
     expect(recordChunkProgressMock).not.toHaveBeenCalled();
-    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed", { message: result.message });
   });
 });
 
@@ -821,7 +893,7 @@ describe("runEtl — onFailure abort / failure-count threading (Phase 8b-3)", ()
     expect(dispatchWriteMock).not.toHaveBeenCalled();
     expect(recordChunkProgressMock).not.toHaveBeenCalled();
     expect(queue.add).not.toHaveBeenCalled();
-    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed", { message: result.message });
     expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "error" }));
   });
 
@@ -970,7 +1042,7 @@ describe("runEtl — unique-key-missing hard fail", () => {
     expect(result.status).toBe("failed");
     expect(result.message).toContain("public.users");
     expect(dispatchMock).not.toHaveBeenCalled();
-    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed", { message: result.message });
   });
 });
 
@@ -1126,7 +1198,7 @@ describe("runEtl — stateful residual op (Phase 9 Part 1)", () => {
       expect(result.message!.toLowerCase()).toContain("cap");
       expect(dispatchWriteMock).not.toHaveBeenCalled();
       expect(recordChunkProgressMock).not.toHaveBeenCalled();
-      expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed");
+      expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed", { message: result.message });
       expect(publishRunEventMock).toHaveBeenCalledWith(SCOPE, job.runId, expect.objectContaining({ type: "error" }));
     } finally {
       if (previousCap === undefined) delete process.env.RESIDUAL_GROUP_CAP;

@@ -35,8 +35,16 @@ export const attachActor: RequestHandler = asyncHandler(async function attachAct
       db.query<{ full_name: string | null }>("SELECT full_name FROM profiles WHERE id = $1", [authUser.id]),
     ),
     withUser((db) =>
-      db.query<{ role: OrgRole; org_id: string; org_name: string; org_slug: string }>(
-        `SELECT om.role, o.id AS org_id, o.name AS org_name, o.slug AS org_slug
+      db.query<{
+        role: OrgRole;
+        org_id: string;
+        org_name: string;
+        org_slug: string;
+        suspended_at: string | null;
+        suspended_reason: string | null;
+      }>(
+        `SELECT om.role, o.id AS org_id, o.name AS org_name, o.slug AS org_slug,
+                o.suspended_at, o.suspended_reason
          FROM organization_members om
          JOIN organizations o ON o.id = om.org_id
          WHERE om.user_id = $1
@@ -49,6 +57,25 @@ export const attachActor: RequestHandler = asyncHandler(async function attachAct
 
   const profile = profileResult.rows[0];
   const membership = membershipResult.rows[0];
+
+  // Console stays reachable for staff (consoleRouter never runs this
+  // middleware — see index.ts's mount-order comment), so this 403 only
+  // ever blocks the org's own members' regular API traffic. Scoped to
+  // exactly the org this request resolved to (membership.org_id) — never
+  // affects a multi-org user's other orgs, since attachActor already only
+  // ever resolves one org per request (see this file's header comment).
+  if (membership && membership.suspended_at !== null) {
+    next(
+      new AppError(
+        403,
+        "ORG_SUSPENDED",
+        "This organization has been suspended. Contact support.",
+        { reason: membership.suspended_reason },
+      ),
+    );
+    return;
+  }
+
   const org: OrgRef | null = membership
     ? { id: membership.org_id, name: membership.org_name, slug: membership.org_slug }
     : null;

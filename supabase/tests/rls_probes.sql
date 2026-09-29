@@ -2124,6 +2124,300 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Fixture for probes 66-73 — 0046_org_suspension.sql: a pre-existing
+-- project/workflow in the main org, created (as postgres, bypassing RLS —
+-- only the suspension-time behavior is under test, not the insert-side
+-- policies themselves, already covered by probes 59/62) before the org is
+-- ever suspended, so probes 60/61/62 have a real row to try to touch.
+-- =========================================================================
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_project uuid;
+  v_workflow uuid;
+begin
+  insert into public.projects (org_id, name, created_by)
+  values (v_org, 'Suspension probe project', v_member)
+  returning id into v_project;
+
+  insert into public.workflows (project_id, org_id, name, created_by)
+  values (v_project, v_org, 'Suspension probe workflow', v_member)
+  returning id into v_workflow;
+
+  insert into test_ids values ('suspension_project', v_project), ('suspension_workflow', v_workflow);
+end $$;
+
+-- =========================================================================
+-- Probe 66 — staff suspends the main org (direct update, bypassing RLS —
+-- simulates POST /console/orgs/:orgId/suspend's withServiceRole write, not
+-- under test here); private.is_org_suspended() reflects it immediately.
+-- =========================================================================
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_suspended boolean;
+begin
+  update public.organizations
+  set suspended_at = now(), suspended_reason = 'RLS probe suspension'
+  where id = v_org;
+
+  select private.is_org_suspended(v_org) into v_suspended;
+
+  if v_suspended then
+    insert into probe_results values (66, 'is_org_suspended() reflects a freshly suspended org', true);
+  else
+    insert into probe_results values (66, 'is_org_suspended() reflects a freshly suspended org', false);
+  end if;
+exception when others then
+  insert into probe_results values (66, 'suspend-org fixture probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 67 — suspended org: a member cannot INSERT a new project
+-- (projects_insert_members' with-check now includes not is_org_suspended)
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org uuid := (select id from test_ids where key = 'org');
+  insert_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+  begin
+    insert into public.projects (org_id, name, created_by) values (v_org, 'Should be blocked', v_member);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  reset role;
+
+  if insert_denied then
+    insert into probe_results values (67, 'suspended org: member cannot INSERT a new project', true);
+  else
+    insert into probe_results values (67, 'suspended org: member cannot INSERT a new project', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (67, 'suspended-org project insert probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 68 — suspended org: a member cannot UPDATE (e.g. rename) an
+-- existing project (projects_update_members' using/with-check both amended)
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_project uuid := (select id from test_ids where key = 'suspension_project');
+  n_updated int;
+begin
+  perform pg_temp.act_as(v_member);
+  update public.projects set name = 'Should stay blocked' where id = v_project;
+  get diagnostics n_updated = row_count;
+  reset role;
+
+  if n_updated = 0 then
+    insert into probe_results values (68, 'suspended org: member cannot UPDATE an existing project', true);
+  else
+    insert into probe_results values (68, 'suspended org: member cannot UPDATE an existing project', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (68, 'suspended-org project update probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 69 — suspended org: a member cannot DELETE an existing project
+-- (projects_delete_members' using clause amended)
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_project uuid := (select id from test_ids where key = 'suspension_project');
+  n_deleted int;
+begin
+  perform pg_temp.act_as(v_member);
+  delete from public.projects where id = v_project;
+  get diagnostics n_deleted = row_count;
+  reset role;
+
+  if n_deleted = 0 then
+    insert into probe_results values (69, 'suspended org: member cannot DELETE an existing project', true);
+  else
+    insert into probe_results values (69, 'suspended org: member cannot DELETE an existing project', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (69, 'suspended-org project delete probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 70 — suspended org: a member cannot INSERT, UPDATE, or DELETE a
+-- workflow either (same shape as projects — workflows_insert/update/
+-- delete_members all amended identically)
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_project uuid := (select id from test_ids where key = 'suspension_project');
+  v_workflow uuid := (select id from test_ids where key = 'suspension_workflow');
+  insert_denied boolean := false;
+  update_denied boolean := false;
+  delete_denied boolean := false;
+  n_updated int;
+  n_deleted int;
+begin
+  perform pg_temp.act_as(v_member);
+
+  begin
+    insert into public.workflows (project_id, org_id, name, created_by) values (v_project, v_org, 'Should be blocked', v_member);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+
+  update public.workflows set name = 'Should stay blocked' where id = v_workflow;
+  get diagnostics n_updated = row_count;
+  update_denied := n_updated = 0;
+
+  delete from public.workflows where id = v_workflow;
+  get diagnostics n_deleted = row_count;
+  delete_denied := n_deleted = 0;
+
+  reset role;
+
+  if insert_denied and update_denied and delete_denied then
+    insert into probe_results values (70, 'suspended org: member cannot INSERT/UPDATE/DELETE a workflow', true);
+  else
+    insert into probe_results values (70, 'suspended org: member cannot INSERT/UPDATE/DELETE a workflow', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (70, 'suspended-org workflow probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 71 — a personally-owned project (org_id null, owner_id = self) is
+-- completely unaffected by ANY org's suspension — the owner_id branch of
+-- every amended policy was deliberately left untouched.
+-- =========================================================================
+do $$
+declare
+  v_individual uuid := (select id from test_ids where key = 'individual');
+  v_project uuid;
+  insert_ok boolean := false;
+  update_ok boolean := false;
+  delete_ok boolean := false;
+  n_rows int;
+begin
+  perform pg_temp.act_as(v_individual);
+
+  begin
+    insert into public.projects (org_id, owner_id, name, created_by)
+    values (null, v_individual, 'Suspension-unaffected personal project', v_individual)
+    returning id into v_project;
+    insert_ok := true;
+  exception when others then
+    insert_ok := false;
+  end;
+
+  if v_project is not null then
+    update public.projects set name = 'Renamed personal project' where id = v_project;
+    get diagnostics n_rows = row_count;
+    update_ok := n_rows = 1;
+
+    delete from public.projects where id = v_project;
+    get diagnostics n_rows = row_count;
+    delete_ok := n_rows = 1;
+  end if;
+
+  reset role;
+
+  if insert_ok and update_ok and delete_ok then
+    insert into probe_results values (71, 'personally-owned project unaffected by any org''s suspension (insert/update/delete all succeed)', true);
+  else
+    insert into probe_results values (71, 'personally-owned project unaffected by any org''s suspension (insert/update/delete all succeed)', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (71, 'personal-project-unaffected-by-suspension probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 72 — cross-org isolation: org A is suspended but org B is not —
+-- org B's owner can still INSERT/UPDATE their own org's project
+-- (private.is_org_suspended(org_id) is checked per-row's own org_id only).
+-- =========================================================================
+do $$
+declare
+  v_org_b_owner uuid := (select id from test_ids where key = 'org_b_owner');
+  v_org_b uuid := (select id from test_ids where key = 'org_b');
+  v_project uuid;
+  insert_ok boolean := false;
+  update_ok boolean := false;
+  n_rows int;
+begin
+  perform pg_temp.act_as(v_org_b_owner);
+
+  begin
+    insert into public.projects (org_id, name, created_by)
+    values (v_org_b, 'Org B project (post-A-suspension)', v_org_b_owner)
+    returning id into v_project;
+    insert_ok := true;
+  exception when others then
+    insert_ok := false;
+  end;
+
+  if v_project is not null then
+    update public.projects set name = 'Org B project renamed' where id = v_project;
+    get diagnostics n_rows = row_count;
+    update_ok := n_rows = 1;
+  end if;
+
+  reset role;
+
+  if insert_ok and update_ok then
+    insert into probe_results values (72, 'org B unaffected by org A''s suspension (insert/update still succeed)', true);
+  else
+    insert into probe_results values (72, 'org B unaffected by org A''s suspension (insert/update still succeed)', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (72, 'cross-org suspension isolation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 73 — unsuspending the org (suspended_at set back to null) restores
+-- write access immediately — suspension is not a one-way/permanent state.
+-- =========================================================================
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_project uuid;
+  v_suspended boolean;
+begin
+  update public.organizations
+  set suspended_at = null, suspended_by = null, suspended_reason = null
+  where id = v_org;
+
+  select private.is_org_suspended(v_org) into v_suspended;
+
+  perform pg_temp.act_as(v_member);
+  insert into public.projects (org_id, name, created_by) values (v_org, 'Post-unsuspend project', v_member) returning id into v_project;
+  reset role;
+
+  if not v_suspended and v_project is not null then
+    insert into probe_results values (73, 'unsuspending the org restores write access', true);
+  else
+    insert into probe_results values (73, 'unsuspending the org restores write access', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (73, 'unsuspend-restores-access probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

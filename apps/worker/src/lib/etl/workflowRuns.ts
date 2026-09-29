@@ -76,7 +76,18 @@ export async function getRunCheckpoint(runId: string): Promise<RunCheckpoint> {
   return { status: data!.status as RunCheckpoint["status"], cursor: data!.cursor_json ?? null };
 }
 
-export async function finishRun(runId: string, status: "succeeded" | "failed" | "cancelled"): Promise<number> {
+/**
+ * Console v1 Slice 3c (docs/plans/console-plan.md, decision 9): `error` is
+ * the one durable copy of a run's failure text — everything else (Redis
+ * pub/sub via publishRunEvent) is transient and gone once the SSE stream
+ * closes. Only ever passed by runEtl.ts's `fail()` (status: "failed");
+ * `undefined` for "succeeded"/"cancelled" leaves the column null.
+ */
+export async function finishRun(
+  runId: string,
+  status: "succeeded" | "failed" | "cancelled",
+  error?: { message: string },
+): Promise<number> {
   const selectResult = await withServiceRole(dbPool, (db) =>
     db.query<{ started_at: string | null }>("select started_at from public.workflow_runs where id = $1", [runId]),
   );
@@ -84,12 +95,10 @@ export async function finishRun(runId: string, status: "succeeded" | "failed" | 
   const finishedAt = new Date();
   const durationMs = startedAt ? finishedAt.getTime() - new Date(startedAt).getTime() : 0;
   await withServiceRole(dbPool, (db) =>
-    db.query("update public.workflow_runs set status = $1, finished_at = $2, duration_ms = $3 where id = $4", [
-      status,
-      finishedAt.toISOString(),
-      durationMs,
-      runId,
-    ]),
+    db.query(
+      "update public.workflow_runs set status = $1, finished_at = $2, duration_ms = $3, error = $4 where id = $5",
+      [status, finishedAt.toISOString(), durationMs, error ? JSON.stringify(error) : null, runId],
+    ),
   );
   return durationMs;
 }

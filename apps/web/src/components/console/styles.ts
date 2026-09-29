@@ -587,6 +587,87 @@ export const consoleSectionTitleStyle: CSSProperties = {
   color: 'var(--ink3)',
 };
 
+// Slice 3b (docs/plans/console-plan.md, decisions 1-2, additions 3-6):
+// the header action buttons the design has (`isOrgDetail` template) but
+// this build deliberately omitted through Slice 2/3a (see
+// ConsoleOrgDetailClient's doc comment) — suspend/unsuspend is now real,
+// so its one header action is added. Danger-styled (design's `danger()`
+// helper): reuses the same `--error`/`--error-deep` tokens already used
+// elsewhere on this screen (consolePlanFormErrorStyle,
+// consoleLoadMoreErrorStyle) rather than inventing new ones.
+export const consoleHeaderActionsStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+};
+
+export const consoleDangerBtnStyle: CSSProperties = {
+  flex: 'none',
+  height: 32,
+  boxSizing: 'border-box',
+  padding: '0 14px',
+  fontFamily: 'inherit',
+  fontSize: 12.5,
+  fontWeight: 600,
+  whiteSpace: 'nowrap',
+  borderRadius: 8,
+  background: 'var(--error)',
+  border: '1px solid var(--error)',
+  color: '#FFFFFF',
+  cursor: 'pointer',
+};
+
+// Suspended-state pill shown next to the org name in the header — same
+// --bad-bg/--bad-bd/--bad tokens SuspendedOrgPage.tsx (apps/app-side
+// suspension screen) uses, so the two surfaces read as the same concept.
+export const consoleSuspendedBadgeStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  height: 22,
+  padding: '0 9px',
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '.02em',
+  background: 'var(--bad-bg)',
+  border: '1px solid var(--bad-bd)',
+  color: 'var(--bad)',
+};
+
+// Suspend/unsuspend inline forms — same card treatment as
+// consolePlanFormStyle, full-width block below the header rather than a
+// modal (Console's established minimalist convention, see
+// ConsoleOrgDetailClient's doc comment).
+export const consoleSuspendFormStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+  padding: '14px 16px',
+  borderRadius: 12,
+  background: 'var(--surface)',
+  border: '1px solid var(--bad-bd)',
+};
+
+export const consoleSuspendTextareaStyle: CSSProperties = {
+  boxSizing: 'border-box',
+  width: '100%',
+  minHeight: 64,
+  padding: '8px 10px',
+  fontFamily: 'inherit',
+  fontSize: 12.5,
+  color: 'var(--ink)',
+  background: 'var(--surface2)',
+  border: '1px solid var(--line)',
+  borderRadius: 8,
+  outline: 'none',
+  resize: 'vertical',
+};
+
+export const consoleSuspendMetaStyle: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--ink3)',
+};
+
 // Members table column widths ported from the design's Member/Email/Role
 // columns exactly; "Joined" replaces the design's "Last active"/"Status"
 // columns (no last-active tracking or member-suspension mechanism exists
@@ -640,4 +721,40 @@ export const consoleRowLinkStyle: CSSProperties = {
   textDecoration: 'none',
   color: 'inherit',
   cursor: 'pointer',
+};
+
+// Runs table (Slice 3c, docs/plans/console-plan.md decision 9). Not in the
+// original design file (which has no Runs tab data) — column widths follow
+// the same flex-basis convention as the Members table above rather than
+// inventing a new layout language. "Error" is the widest column since it's
+// the one piece of information this tab exists to surface.
+export const consoleColRunStatusStyle: CSSProperties = { flex: '0 1 90px', minWidth: 78 };
+export const consoleColRunStartedStyle: CSSProperties = { flex: '0 1 150px', minWidth: 130 };
+export const consoleColRunDurationStyle: CSSProperties = { flex: '0 1 90px', minWidth: 78, textAlign: 'right' };
+export const consoleColRunErrorStyle: CSSProperties = { flex: '2 1 240px', minWidth: 160 };
+
+export const consoleRowRunStatusCellStyle: CSSProperties = { flex: '0 1 90px', minWidth: 78 };
+export const consoleRowRunStartedCellStyle: CSSProperties = {
+  flex: '0 1 150px',
+  minWidth: 130,
+  fontFamily: 'var(--font-data)',
+  fontSize: 11.5,
+  color: 'var(--ink3)',
+};
+export const consoleRowRunDurationCellStyle: CSSProperties = {
+  flex: '0 1 90px',
+  minWidth: 78,
+  textAlign: 'right',
+  fontFamily: 'var(--font-data)',
+  fontSize: 12,
+  color: 'var(--ink2)',
+};
+export const consoleRowRunErrorCellStyle: CSSProperties = {
+  flex: '2 1 240px',
+  minWidth: 160,
+  fontSize: 12,
+  color: 'var(--ink3)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 };

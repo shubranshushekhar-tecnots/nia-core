@@ -1,0 +1,21 @@
+-- Console v1 Slice 3c (docs/plans/console-plan.md, decision 9, build order
+-- step 10). `workflow_runs` has never had a persisted failure-message
+-- column — the worker's real per-failure text (apps/worker/src/lib/etl/
+-- runEtl.ts's fail()) was, until this migration, only ever published
+-- transiently over Redis to an open SSE stream (publishRunEvent), never
+-- written to the row.
+--
+-- Shared, not console-only (decision 9): this also unblocks apps/api's
+-- explain_last_error Copilot tool, which previously could only report
+-- THAT a run failed, never why. No RLS policy change needed — the
+-- existing `workflow_runs_select_members` SELECT policy
+-- (0002_projects_workflows.sql) already covers every column on the row,
+-- and there are no insert/update/delete policies to amend (the worker
+-- writes this column via `withServiceRole`, which bypasses RLS entirely,
+-- same as every other workflow_runs write).
+--
+-- jsonb, nullable, metadata only: e.g. {"message": "..."}. Never
+-- result-row/customer data — see runEtl.ts's fail() call sites, which all
+-- pass a static/config-derived string, never row content.
+alter table public.workflow_runs
+  add column error jsonb;

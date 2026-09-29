@@ -24,6 +24,37 @@ function revalidateAppShell() {
   for (const path of APP_SHELL_PATHS) revalidatePath(path);
 }
 
+const SUSPENDED_ORG_MESSAGE = "This organization has been suspended. Contact support.";
+
+// Addition 3/5 (docs/plans/console-plan.md, Slice 3b): rename/delete/
+// updateWorkflowDefinition below only have a row id, not an org id — RLS
+// denies the update/delete (zero rows, no Postgres error — see the header
+// comment above renameProject), which reads identically whether the cause
+// is "not your row" or "your org got suspended mid-session" (a stale tab
+// still open past app/app/layout.tsx's own suspension gate). This
+// distinguishes the two with one extra, RLS-scoped read (select policies
+// are untouched by 0046_org_suspension.sql, only insert/update/delete are)
+// against the SPECIFIC row's actual org — never the caller's ctx.org,
+// which could be a different (unrelated, and per decision 4 unaffected)
+// org for a multi-org member — so it can't produce a false "suspended"
+// message for an ordinary permission/not-found failure.
+async function suspendedOrgMessage(
+  userId: string,
+  table: "projects" | "workflows",
+  id: string,
+): Promise<string | null> {
+  const result = await withActingUser(getPool(), userId, (db) =>
+    db.query<{ suspended_at: string | null }>(
+      `select o.suspended_at
+       from public.${table} t
+       join public.organizations o on o.id = t.org_id
+       where t.id = $1`,
+      [id],
+    ),
+  );
+  return result.rows[0]?.suspended_at ? SUSPENDED_ORG_MESSAGE : null;
+}
+
 export async function createProject(
   orgId: string | null,
   _prevState: ActionState,
@@ -63,6 +94,12 @@ export async function createProject(
   if (ctx.role === "individual" || ctx.org?.id !== orgId) {
     return { error: "You're not a member of this organization." };
   }
+
+  // ctx.org.id === orgId is confirmed above, so ctx.org.suspendedAt is the
+  // right org to check here — unlike renameProject/deleteProject below, no
+  // cross-org ambiguity is possible for an insert (the target org IS the
+  // caller's own resolved org).
+  if (ctx.org.suspendedAt) return { error: SUSPENDED_ORG_MESSAGE };
 
   try {
     await withActingUser(getPool(), ctx.userId, (db) =>
@@ -181,6 +218,10 @@ export async function createWorkflow(
     return { error: "You're not a member of this organization." };
   }
 
+  // Same reasoning as createProject — ctx.org.id === orgId is already
+  // confirmed above, so no cross-org ambiguity here.
+  if (ctx.org.suspendedAt) return { error: SUSPENDED_ORG_MESSAGE };
+
   const limitCheck = await checkWorkflowLimit(ctx.userId, orgId);
   if (!limitCheck.ok) return { error: limitCheck.message };
 
@@ -231,7 +272,10 @@ export async function renameProject(
   );
   const data = result.rows[0] ?? null;
 
-  if (!data) return { error: "Couldn't rename the project. Try again." };
+  if (!data) {
+    const suspendedMsg = await suspendedOrgMessage(user.id, "projects", projectId);
+    return { error: suspendedMsg ?? "Couldn't rename the project. Try again." };
+  }
 
   revalidateAppShell();
   revalidatePath(`/app/projects/${projectId}`);
@@ -259,7 +303,10 @@ export async function renameWorkflow(
   );
   const data = result.rows[0] ?? null;
 
-  if (!data) return { error: "Couldn't rename the workflow. Try again." };
+  if (!data) {
+    const suspendedMsg = await suspendedOrgMessage(user.id, "workflows", workflowId);
+    return { error: suspendedMsg ?? "Couldn't rename the workflow. Try again." };
+  }
 
   revalidateAppShell();
   revalidatePath(`/app/projects/${data.project_id}`);
@@ -286,7 +333,10 @@ export async function deleteProject(_prevState: ActionState, formData: FormData)
   );
   const data = result.rows[0] ?? null;
 
-  if (!data) return { error: "Couldn't delete the project. Try again." };
+  if (!data) {
+    const suspendedMsg = await suspendedOrgMessage(user.id, "projects", projectId);
+    return { error: suspendedMsg ?? "Couldn't delete the project. Try again." };
+  }
 
   revalidateAppShell();
   redirect(redirectTo);
@@ -304,7 +354,10 @@ export async function deleteWorkflow(_prevState: ActionState, formData: FormData
   );
   const data = result.rows[0] ?? null;
 
-  if (!data) return { error: "Couldn't delete the workflow. Try again." };
+  if (!data) {
+    const suspendedMsg = await suspendedOrgMessage(user.id, "workflows", workflowId);
+    return { error: suspendedMsg ?? "Couldn't delete the workflow. Try again." };
+  }
 
   revalidateAppShell();
   redirect(`/app/projects/${projectId}`);
@@ -325,7 +378,10 @@ export async function updateWorkflowDefinition(
   );
   const data = result.rows[0] ?? null;
 
-  if (!data) return { error: "Couldn't save the canvas. Try again." };
+  if (!data) {
+    const suspendedMsg = await suspendedOrgMessage(user.id, "workflows", workflowId);
+    return { error: suspendedMsg ?? "Couldn't save the canvas. Try again." };
+  }
 
   revalidatePath(`/app/workflows/${workflowId}`);
   return { success: true };

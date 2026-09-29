@@ -114,6 +114,7 @@ export type WorkflowRunSummary = {
   id: string;
   workflowId: string;
   status: "running" | "succeeded" | "failed" | "cancelled";
+  error: { message: string } | null;
   rowsProcessed: number;
   durationMs: number | null;
   startedAt: string;
@@ -124,6 +125,7 @@ function toRunSummary(row: {
   id: string;
   workflow_id: string;
   status: string;
+  error: { message: string } | null;
   rows_processed: number;
   duration_ms: number | null;
   started_at: string;
@@ -133,6 +135,7 @@ function toRunSummary(row: {
     id: row.id,
     workflowId: row.workflow_id,
     status: row.status as WorkflowRunSummary["status"],
+    error: row.error,
     rowsProcessed: row.rows_processed,
     durationMs: row.duration_ms,
     startedAt: row.started_at,
@@ -147,14 +150,14 @@ function toRunSummary(row: {
  * caller's own req.supabase client is itself the access proof" reasoning
  * resolveRunOwnership above already relies on — not a new privileged path.
  *
- * NOTE: `workflow_runs` has no persisted failure-message column — the
- * worker's real per-failure text (runEtl.ts's `fail()`) is only ever
- * published transiently over Redis to an open SSE stream (publishRunEvent),
- * never written to this row. A run read after its stream has closed can
- * only report `status: "failed"` plus counters, not the original message.
- * This is a pre-existing architectural gap, not something introduced or
- * fixed here — see docs/plans/copilot-agent.md's Close section deviation
- * note for get_run_result/explain_last_error.
+ * `error` (added by supabase/migrations/0047_workflow_runs_error.sql,
+ * Console v1 Slice 3c, decision 9) is the one durable copy of a run's
+ * failure text — everything else (Redis pub/sub via publishRunEvent) is
+ * transient and gone once the SSE stream closes. Null for any run that
+ * hasn't failed, or for a pre-migration failed run that finished before
+ * this column existed — get_run_result/explain_last_error should still
+ * treat a null error on a failed run as "no message captured", not an
+ * error condition of their own.
  */
 export async function listRunsForWorkflow(
   withUser: WithUser,
@@ -168,12 +171,13 @@ export async function listRunsForWorkflow(
       id: string;
       workflow_id: string;
       status: string;
+      error: { message: string } | null;
       rows_processed: number;
       duration_ms: number | null;
       started_at: string;
       finished_at: string | null;
     }>(
-      "select id, workflow_id, status, rows_processed, duration_ms, started_at, finished_at from workflow_runs where workflow_id = $1 order by started_at desc limit $2",
+      "select id, workflow_id, status, error, rows_processed, duration_ms, started_at, finished_at from workflow_runs where workflow_id = $1 order by started_at desc limit $2",
       [workflowId, limit],
     ),
   );
@@ -192,12 +196,13 @@ export async function getRunStatus(
       id: string;
       workflow_id: string;
       status: string;
+      error: { message: string } | null;
       rows_processed: number;
       duration_ms: number | null;
       started_at: string;
       finished_at: string | null;
     }>(
-      "select id, workflow_id, status, rows_processed, duration_ms, started_at, finished_at from workflow_runs where id = $1 and workflow_id = $2",
+      "select id, workflow_id, status, error, rows_processed, duration_ms, started_at, finished_at from workflow_runs where id = $1 and workflow_id = $2",
       [runId, workflowId],
     ),
   );

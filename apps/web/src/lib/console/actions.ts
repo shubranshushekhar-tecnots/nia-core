@@ -44,3 +44,47 @@ export async function updateOrgPlanAction(
     return { ok: false, error: "Couldn't update the plan. Try again." };
   }
 }
+
+/**
+ * Slice 3b (docs/plans/console-plan.md, decisions 1-2, additions 3-6):
+ * submits ConsoleOrgDetailClient's suspend/unsuspend form to
+ * POST /console/orgs/:orgId/suspend|unsuspend — same
+ * useTransition-driven, non-ActionState shape as updateOrgPlanAction
+ * above (a plain confirm-style form, not a <form action>).
+ */
+export async function suspendOrgAction(
+  orgId: string,
+  reason: string,
+): Promise<
+  { ok: true; status: string; suspendedAt: string; suspendedReason: string } | { ok: false; error: string }
+> {
+  try {
+    const result = await apiFetchServer<{ status: string; suspendedAt: string; suspendedReason: string }>(
+      `/console/orgs/${encodeURIComponent(orgId)}/suspend`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      },
+    );
+    return { ok: true, ...result };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't suspend the organization. Try again." };
+  }
+}
+
+export async function unsuspendOrgAction(
+  orgId: string,
+  note: string,
+): Promise<{ ok: true; status: string } | { ok: false; error: string }> {
+  try {
+    const result = await apiFetchServer<{ status: string }>(`/console/orgs/${encodeURIComponent(orgId)}/unsuspend`, {
+      method: 'POST',
+      body: JSON.stringify({ note: note.trim() ? note : undefined }),
+    });
+    return { ok: true, ...result };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't unsuspend the organization. Try again." };
+  }
+}

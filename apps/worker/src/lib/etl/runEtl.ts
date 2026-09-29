@@ -40,7 +40,8 @@ import { ensureDestination, buildRuntimeContract } from "./ensureDestination.js"
 import { buildEtlReadQuery, buildFailurePreCheckQuery, MAX_CHUNK_ROWS } from "./queryBuilder.js";
 import { startRun, recordChunkProgress, finishRun, getRunCheckpoint } from "./workflowRuns.js";
 import { publishRunEvent } from "./publish.js";
-import type { WorkspaceScope } from "@nia/db";
+import { withServiceRole, type WorkspaceScope } from "@nia/db";
+import { dbPool } from "../dbPool.js";
 import { dispatchDropEntity } from "../stagedWriteDispatch.js";
 import { registerDestinationObject, findActiveDestinationObject, markDestinationDropped } from "./stagingRegistry.js";
 import {
@@ -126,9 +127,38 @@ export type RunEtlResult = { status: "done" | "chunk" | "failed" | "cancelled"; 
  * propagate naturally, same as every other index.ts job handler).
  */
 async function fail(scope: WorkspaceScope, runId: string, nodeId: string, message: string): Promise<RunEtlResult> {
-  await finishRun(runId, "failed");
+  await finishRun(runId, "failed", { message });
   await publishRunEvent(scope, runId, { type: "error", nodeId, message });
   return { status: "failed", message };
+}
+
+/**
+ * Console v1 Slice 3b (docs/plans/console-plan.md, decisions 1-2). Same
+ * customer-facing copy as apps/api's attachActor 403 (ORG_SUSPENDED) and
+ * apps/web's layout-level suspended-org page — a suspended org's runs must
+ * stop dispatching too, closing the one write path RLS's insert/update/
+ * delete policies alone can't cover cleanly: a long-running ETL job
+ * already enqueued before the org was suspended would otherwise keep
+ * writing chunk-by-chunk until RLS finally rejects an insert/update deep
+ * into the run, which is a confusing multi-chunk partial failure instead
+ * of one clean stop.
+ *
+ * Checked only on `job.cursor === null` (this run's first chunk), not
+ * every chunk: re-querying `organizations` on every chunk would add a DB
+ * round trip to the hot per-row path for a condition that, once true, was
+ * already true when the run started — an org suspended mid-run is caught
+ * by the *next* run's own first chunk, not this one. Personal (org-less,
+ * `ownerId`) workspaces are never suspended, so this only ever runs for
+ * `orgId` scopes.
+ */
+const SUSPENDED_ORG_RUN_MESSAGE = "This organization has been suspended. Contact support.";
+
+async function isOrgSuspended(orgId: string): Promise<boolean> {
+  const result = await withServiceRole(dbPool, (db) =>
+    db.query<{ suspended_at: string | null }>("select suspended_at from public.organizations where id = $1", [orgId]),
+  );
+  const row = result.rows[0];
+  return row !== undefined && row.suspended_at !== null;
 }
 
 /**
@@ -494,6 +524,10 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   if (job.cursor === null) {
     await startRun(job.runId, job.workflowId, job.scope);
     await publishRunEvent(scope, job.runId, { type: "started", nodeId: job.nodeId });
+
+    if ("orgId" in scope && (await isOrgSuspended(scope.orgId))) {
+      return fail(scope, job.runId, job.nodeId, SUSPENDED_ORG_RUN_MESSAGE);
+    }
   }
 
   // Block 3.5: one read, consulted for both cancel (cooperative, checked

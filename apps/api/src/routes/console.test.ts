@@ -130,7 +130,7 @@ describe("GET /console/ping", () => {
  * what the count(*) query reports (default: as many rows as `orgRows`, i.e.
  * "no more pages" unless a test overrides it to prove `hasMore`).
  */
-function mockOrgsQuery(orgRows: Record<string, string>[], total = orgRows.length) {
+function mockOrgsQuery(orgRows: Record<string, string | null>[], total = orgRows.length) {
   const query = vi.fn(async (sql: string, _params?: unknown[]) => {
     if (sql.includes("platform_staff")) return { rowCount: 1 };
     if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
@@ -154,6 +154,7 @@ describe("GET /console/orgs", () => {
       created_at: "2026-01-01T00:00:00.000Z",
       member_count: "3",
       runs_30d: "12",
+      suspended_at: null,
     };
     const query = mockOrgsQuery([orgRow], 1);
 
@@ -367,6 +368,10 @@ describe("GET /console/orgs/:orgId", () => {
       created_at: "2026-01-01T00:00:00.000Z",
       plan_tier: "Pro",
       workflow_limit: 25,
+      suspended_at: null,
+      suspended_reason: null,
+      suspended_by: null,
+      suspended_by_name: null,
     };
     const memberRow = {
       user_id: "user-1",
@@ -394,6 +399,9 @@ describe("GET /console/orgs/:orgId", () => {
       workflowLimit: 25,
       workflowsUsed: 7,
       runs30d: 12,
+      suspendedAt: null,
+      suspendedReason: null,
+      suspendedBy: null,
       members: [
         { userId: "user-1", name: "Ada Member", email: "ada@acme.test", role: "owner", joinedAt: "2026-01-02T00:00:00.000Z" },
       ],
@@ -401,6 +409,37 @@ describe("GET /console/orgs/:orgId", () => {
 
     const auditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
     expect(auditCall?.[1]).toEqual(["staff-1", "org.read", null, "11111111-1111-1111-1111-111111111111", JSON.stringify({})]);
+  });
+
+  it("reports status: Suspended and the suspendedBy staffer when the org is suspended", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+
+    const orgRow = {
+      id: "11111111-1111-1111-1111-111111111111",
+      name: "Acme Inc",
+      slug: "acme-inc",
+      created_at: "2026-01-01T00:00:00.000Z",
+      plan_tier: "Pro",
+      workflow_limit: 25,
+      suspended_at: "2026-02-01T00:00:00.000Z",
+      suspended_reason: "Non-payment",
+      suspended_by: "staff-2",
+      suspended_by_name: "Bob Staffer",
+    };
+    mockOrgDetailQuery({ org: orgRow, usageCount: 0, runs30d: 0, memberRows: [] });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/11111111-1111-1111-1111-111111111111`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.status).toBe("Suspended");
+    expect(body.suspendedAt).toBe("2026-02-01T00:00:00.000Z");
+    expect(body.suspendedReason).toBe("Non-payment");
+    expect(body.suspendedBy).toEqual({ userId: "staff-2", name: "Bob Staffer" });
   });
 
   it("returns 404 for an org that does not exist, without writing an audit row", async () => {
@@ -605,5 +644,377 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
 
     expect(res.status).toBe(401);
     expect(withServiceRole).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Build order step 9 / Slice 3b (console-plan.md, decisions 1/2, additions
+ * 3-6): POST /console/orgs/:orgId/suspend. requireStaff's own gate (403/401/
+ * flag-off) is already covered by the /ping tests above — these tests focus
+ * on what's new: the update response shape, the 404-when-not-found case,
+ * validation (reason required), and that both audit rows carry the same
+ * `{ reason }` detail.
+ */
+function mockSuspendOrgQuery(options: { orgExists: boolean; suspendedAt?: string; suspendedReason?: string }) {
+  const { orgExists, suspendedAt = "2026-02-01T00:00:00.000Z", suspendedReason = "Non-payment" } = options;
+  const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+    if (sql.includes("platform_staff")) return { rowCount: 1 };
+    if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+    if (sql.includes("private.log_org_audit")) return { rows: [], rowCount: 0 };
+    if (sql.includes("set suspended_at = now()")) {
+      return {
+        rows: orgExists ? [{ suspended_at: suspendedAt, suspended_reason: suspendedReason }] : [],
+        rowCount: orgExists ? 1 : 0,
+      };
+    }
+    throw new Error(`mockSuspendOrgQuery: unexpected SQL: ${sql}`);
+  });
+  withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+    fn({ query }),
+  );
+  return query;
+}
+
+describe("POST /console/orgs/:orgId/suspend", () => {
+  const orgId = "11111111-1111-1111-1111-111111111111";
+
+  it("suspends the org and writes both audit rows with matching { reason } detail for a staff session", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    const query = mockSuspendOrgQuery({
+      orgExists: true,
+      suspendedAt: "2026-02-01T00:00:00.000Z",
+      suspendedReason: "Non-payment",
+    });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/suspend`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Non-payment" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      status: "Suspended",
+      suspendedAt: "2026-02-01T00:00:00.000Z",
+      suspendedReason: "Non-payment",
+    });
+
+    const detail = JSON.stringify({ reason: "Non-payment" });
+    const staffAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(staffAuditCall?.[1]).toEqual(["staff-1", "org.suspend", null, orgId, detail]);
+    const orgAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_org_audit"));
+    expect(orgAuditCall?.[1]).toEqual([orgId, "staff-1", "organization.suspended", detail]);
+  });
+
+  it("returns 404 for an org that does not exist, without writing any audit row", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    const query = mockSuspendOrgQuery({ orgExists: false });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/00000000-0000-0000-0000-000000000000/suspend`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Non-payment" }),
+    });
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.code).toBe("NOT_FOUND");
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_staff_action"))).toBe(false);
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_org_audit"))).toBe(false);
+  });
+
+  it("rejects an empty reason with a validation error, without updating the org", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 1 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/suspend`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "" }),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+    expect(withServiceRole).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a missing reason with a validation error", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 1 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/suspend`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("returns 403 for a non-staff session without ever updating the org", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/suspend`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Non-payment" }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(withServiceRole).toHaveBeenCalledOnce();
+  });
+
+  it("returns 401 for an unauthenticated request", async () => {
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/suspend`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Non-payment" }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(withServiceRole).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Addition 6: POST /console/orgs/:orgId/unsuspend. `note` is optional and
+ * never stored on `organizations` itself — only in the two audit rows'
+ * detail — so these tests cover both the with-note and omitted-note cases.
+ */
+function mockUnsuspendOrgQuery(options: { orgExists: boolean }) {
+  const { orgExists } = options;
+  const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+    if (sql.includes("platform_staff")) return { rowCount: 1 };
+    if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+    if (sql.includes("private.log_org_audit")) return { rows: [], rowCount: 0 };
+    if (sql.includes("set suspended_at = null")) {
+      return { rows: orgExists ? [{ id: "org-1" }] : [], rowCount: orgExists ? 1 : 0 };
+    }
+    throw new Error(`mockUnsuspendOrgQuery: unexpected SQL: ${sql}`);
+  });
+  withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+    fn({ query }),
+  );
+  return query;
+}
+
+describe("POST /console/orgs/:orgId/unsuspend", () => {
+  const orgId = "11111111-1111-1111-1111-111111111111";
+
+  it("unsuspends the org and writes both audit rows with the given note for a staff session", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    const query = mockUnsuspendOrgQuery({ orgExists: true });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/unsuspend`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ note: "Payment received" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "Active" });
+
+    const detail = JSON.stringify({ note: "Payment received" });
+    const staffAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(staffAuditCall?.[1]).toEqual(["staff-1", "org.unsuspend", null, orgId, detail]);
+    const orgAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_org_audit"));
+    expect(orgAuditCall?.[1]).toEqual([orgId, "staff-1", "organization.unsuspended", detail]);
+  });
+
+  it("accepts an omitted note, writing { note: null } to both audit rows", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    const query = mockUnsuspendOrgQuery({ orgExists: true });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/unsuspend`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "Active" });
+
+    const detail = JSON.stringify({ note: null });
+    const staffAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(staffAuditCall?.[1]).toEqual(["staff-1", "org.unsuspend", null, orgId, detail]);
+  });
+
+  it("returns 404 for an org that does not exist, without writing any audit row", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    const query = mockUnsuspendOrgQuery({ orgExists: false });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/00000000-0000-0000-0000-000000000000/unsuspend`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.code).toBe("NOT_FOUND");
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_staff_action"))).toBe(false);
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_org_audit"))).toBe(false);
+  });
+
+  it("rejects a note longer than 500 characters with a validation error", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 1 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/unsuspend`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ note: "x".repeat(501) }),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+    expect(withServiceRole).toHaveBeenCalledOnce();
+  });
+
+  it("returns 403 for a non-staff session without ever updating the org", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/unsuspend`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(403);
+    expect(withServiceRole).toHaveBeenCalledOnce();
+  });
+
+  it("returns 401 for an unauthenticated request", async () => {
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/unsuspend`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(401);
+    expect(withServiceRole).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /console/orgs/:orgId/runs", () => {
+  const orgId = "11111111-1111-1111-1111-111111111111";
+
+  it("returns run history with error metadata and writes one staff_audit_log row for a staff session", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+
+    const runRows = [
+      {
+        id: "run-1",
+        workflow_id: "wf-1",
+        status: "failed",
+        error: { message: "Destination write failed: boom" },
+        rows_processed: 42,
+        duration_ms: 1500,
+        started_at: "2026-02-01T00:00:00.000Z",
+        finished_at: "2026-02-01T00:00:02.000Z",
+      },
+      {
+        id: "run-2",
+        workflow_id: "wf-1",
+        status: "succeeded",
+        error: null,
+        rows_processed: 100,
+        duration_ms: 3000,
+        started_at: "2026-01-30T00:00:00.000Z",
+        finished_at: "2026-01-30T00:00:03.000Z",
+      },
+    ];
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from public.organizations")) return { rows: [{ id: orgId }], rowCount: 1 };
+      if (sql.includes("from public.workflow_runs")) return { rows: runRows, rowCount: runRows.length };
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/runs`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      runs: [
+        {
+          id: "run-1",
+          workflowId: "wf-1",
+          status: "failed",
+          error: { message: "Destination write failed: boom" },
+          rowsProcessed: 42,
+          durationMs: 1500,
+          startedAt: "2026-02-01T00:00:00.000Z",
+          finishedAt: "2026-02-01T00:00:02.000Z",
+        },
+        {
+          id: "run-2",
+          workflowId: "wf-1",
+          status: "succeeded",
+          error: null,
+          rowsProcessed: 100,
+          durationMs: 3000,
+          startedAt: "2026-01-30T00:00:00.000Z",
+          finishedAt: "2026-01-30T00:00:03.000Z",
+        },
+      ],
+    });
+
+    const auditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(auditCall?.[1]).toEqual(["staff-1", "org.runs_read", null, orgId, JSON.stringify({ count: 2 })]);
+  });
+
+  it("returns 404 for an org that does not exist, without writing an audit row", async () => {
+    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("from public.organizations")) return { rows: [], rowCount: 0 };
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/00000000-0000-0000-0000-000000000000/runs`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.code).toBe("NOT_FOUND");
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_staff_action"))).toBe(false);
   });
 });

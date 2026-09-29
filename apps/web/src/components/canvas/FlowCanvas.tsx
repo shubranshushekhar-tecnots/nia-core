@@ -141,6 +141,7 @@ function CanvasInner({
   // view" keeps Copilot visible/usable instead of it disappearing along
   // with everything outside the fullscreened subtree.
   const fullscreenRef = useRef<HTMLDivElement | null>(null);
+  const canvasSurfaceRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
     const handler = () => setIsFullscreen(document.fullscreenElement === fullscreenRef.current);
@@ -996,6 +997,17 @@ function CanvasInner({
     }
   }, [workflow.id, queryClient, checksQueryKey, checkRunsQueryKey]);
 
+  const centerOnNode = useCallback(
+    (nodeId: string) => {
+      const node = getNode(nodeId);
+      if (!node) return;
+      const width = node.measured?.width ?? 200;
+      const height = node.measured?.height ?? 80;
+      setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: 1, duration: 300 });
+    },
+    [getNode, setCenter],
+  );
+
   const handleSelectCheckNode = useCallback(
     (nodeId: string) => {
       setSelectedNodeId(nodeId);
@@ -1007,14 +1019,42 @@ function CanvasInner({
       // its highlight border, and which drives the `.react-flow__node.selected`
       // CSS class) has to be set explicitly here instead.
       setNodes((current) => current.map((n) => ({ ...n, selected: n.id === nodeId })));
-      const node = getNode(nodeId);
-      if (!node) return;
-      const width = node.measured?.width ?? 200;
-      const height = node.measured?.height ?? 80;
-      setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: 1, duration: 300 });
+      // Centering itself happens in the effect below, once the surface has
+      // actually settled at its post-selection width.
     },
-    [setSelectedNodeId, setNodes, getNode, setCenter],
+    [setSelectedNodeId, setNodes],
   );
+
+  // NodeConfigPanel mounts as a real flex sibling of the canvas surface (not
+  // an absolute overlay), so selecting a node that opens the panel for the
+  // first time synchronously shrinks the surface's own box on this same
+  // commit. React Flow tracks the pane's width/height itself via its own
+  // ResizeObserver rather than a live DOM query, so centering before that
+  // observer has fired computes the pan target against the *pre-shrink*
+  // width — landing the node off-center once the panel finishes opening.
+  // Watch the surface's own resize (ResizeObserver reports once immediately
+  // on `observe()` with the current box, and again for any real resize that
+  // follows) and defer one more frame past it — past the point every
+  // ResizeObserver callback queued for this layout change, including React
+  // Flow's own, has already run — before centering.
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    const el = canvasSurfaceRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') {
+      centerOnNode(selectedNodeId);
+      return;
+    }
+    let raf = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => centerOnNode(selectedNodeId));
+    });
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(raf);
+    };
+  }, [selectedNodeId, centerOnNode]);
 
   // Run (workflow execution, Phase 6 Block 3; Block 5 — multi-destination
   // fan-out). Enabled only when the latest persisted check run is all-pass
@@ -1097,6 +1137,7 @@ function CanvasInner({
         <div ref={fullscreenRef} style={canvasFullscreenWrapStyle}>
           <div style={canvasColumnStyle}>
             <div
+              ref={canvasSurfaceRef}
               data-testid="canvas-surface"
               style={canvasSurfaceStyle}
               onDrop={onDrop}
