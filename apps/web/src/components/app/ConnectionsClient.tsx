@@ -1,20 +1,14 @@
 'use client';
 
-import { useActionState, useMemo, useState } from 'react';
+import { useActionState, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { CONNECTOR_MANIFESTS } from '@nia/schemas';
 import type { Connection, ConnectorCatalogEntry, ConnectorInstall } from '@/lib/connections/types';
-import {
-  installConnectorAction,
-  testConnectionAction,
-  refreshConnectionSchemaAction,
-  deleteConnectionAction,
-  uninstallConnectorAction,
-} from '@/lib/connections/actions';
+import { testConnectionAction, refreshConnectionSchemaAction, deleteConnectionAction, uninstallConnectorAction } from '@/lib/connections/actions';
+import { CATALOG_ORDER, CONNECTOR_CATALOG_META, catalogIndexLabel } from '@/lib/connections/catalogMeta';
 import { relativeTime } from '@/lib/time';
 import type { ConnectionHealth, ConnectorCategory } from './styles';
 import {
-  SPHERE_DOT_COUNT,
-  STACK_LAYER_COUNT,
   categoryDotColor,
   connectionsAvailableGridStyle,
   connectionsBadgeDotStyle,
@@ -23,24 +17,12 @@ import {
   connectionsBadgeMetaStyle,
   connectionsBadgeStyle,
   connectionsBadgesRowStyle,
-  connectionsConnectorCardHoverStyle,
-  connectionsConnectorCardStyle,
-  connectionsConnectorDescStyle,
-  connectionsConnectorIndexStyle,
-  connectionsConnectorLogoStyle,
-  connectionsConnectorNameStyle,
-  connectionsConnectorTagStyle,
-  connectionsConnectorTagsStyle,
   connectionsEmptyResultsStyle,
   connectionsFilterListStyle,
   connectionsFilterPillStyle,
-  connectionsGraphicWrapStyle,
   connectionsHealthDotStyle,
   connectionsHealthDotsStyle,
   connectionsHealthStripStyle,
-  connectionsInstallBtnStyle,
-  connectionsInstallLabelStyle,
-  connectionsInstallRowStyle,
   connectionsProviderActionsStyle,
   connectionsProviderIconStyle,
   connectionsProviderListStyle,
@@ -48,23 +30,12 @@ import {
   connectionsProviderNameColStyle,
   connectionsProviderNameStyle,
   connectionsProviderRowStyle,
-  connectionsRoadmapIconStyle,
-  connectionsRoadmapLabelStyle,
-  connectionsRoadmapRowStyle,
   connectionsSearchBoxStyle,
   connectionsSectionHeaderStyle,
   connectionsSectionMetaStyle,
   connectionsSectionTitleStyle,
-  connectionsSoonBadgeStyle,
-  connectionsSphereDotStyle,
-  connectionsSphereHighlightStyle,
-  connectionsSphereMainStyle,
-  connectionsStackLayerStyle,
   connectionsSubtitleStyle,
   connectionsToolbarRowStyle,
-  connectionsUnavailableDescStyle,
-  connectionsUnavailableGraphicStyle,
-  connectionsUnavailableNameStyle,
   connectionsUninstallBtnStyle,
   connectionsUploadBtnStyle,
   connectionsUploadIconStyle,
@@ -74,7 +45,9 @@ import {
 } from './styles';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
 import EditConnectionDialog from './EditConnectionDialog';
-import { CONNECTOR_ICONS, getConnectorIcon } from '@/components/canvas/icons';
+import ConnectorCard from './ConnectorCard';
+import ConnectorLogo from './ConnectorLogo';
+import ConnectPanel from './ConnectPanel';
 
 type ConnectionBadge = {
   id: string;
@@ -96,23 +69,10 @@ type Provider = {
   connections: ConnectionBadge[];
 };
 
-type AvailableConnector = {
-  id: string;
-  index: string;
-  name: string;
-  description: string;
-  category: ConnectorCategory;
-  tags: string[];
-  graphic: 'cards' | 'sphere';
-  real?: boolean;
-  unavailable?: boolean;
-};
-
 // The manifest's own category enum (database/server/product/ai_vector/bi/
 // files) predates and doesn't line up 1:1 with this page's design-derived
-// ConnectorCategory — only "database" is exercised today (MySQL is the
-// only real manifest); the rest fall back to "databases" until a connector
-// actually needs one of them.
+// ConnectorCategory — every shipped manifest is "database" today, so this
+// only matters once a non-database manifest ships.
 function mapManifestCategory(category: string): ConnectorCategory {
   switch (category) {
     case 'server':
@@ -128,178 +88,6 @@ function mapManifestCategory(category: string): ConnectorCategory {
   }
 }
 
-// Static copy for the real, catalog-driven "Available" cards — the API's
-// /connectors catalog only returns id/name/category/version, not marketing
-// copy, so this is authored the same way the 8 decorative AVAILABLE
-// entries below are.
-const REAL_CONNECTOR_META: Record<string, { description: string; tags: string[]; graphic: 'cards' | 'sphere' }> = {
-  mysql: {
-    description: 'Query tables directly with read-only credentials.',
-    tags: ['credentials', 'queryable', 'etl'],
-    graphic: 'cards',
-  },
-  mongodb: {
-    description: 'Run aggregation pipelines against collections with read-only credentials.',
-    tags: ['credentials', 'queryable', 'etl'],
-    graphic: 'cards',
-  },
-  supabase: {
-    description: 'Query a hosted Supabase Postgres project directly over TLS.',
-    tags: ['credentials', 'queryable', 'etl'],
-    graphic: 'cards',
-  },
-  postgres: {
-    description: 'Query a self-hosted or managed Postgres database directly over TLS.',
-    tags: ['credentials', 'queryable', 'etl'],
-    graphic: 'cards',
-  },
-};
-
-// Real vendor logo (canvas/icons.tsx's CONNECTOR_ICONS registry — same
-// source used on canvas nodes) when one exists for this connector id;
-// falls back to initials text for ids without a real logo yet (nothing
-// today — all 3 shipped connectors have one — but future manifests may
-// land before their logo does).
-function ConnectorLogo({ id, size, fallback }: { id: string; size: number; fallback: string }) {
-  if (!CONNECTOR_ICONS[id]) return <>{fallback}</>;
-  const Icon = getConnectorIcon(id);
-  return <Icon size={size} />;
-}
-
-// Decorative bottom-right graphic ported from the design: most connectors
-// get the skewed "stacked cards" motif; AI-vector connectors get a sphere.
-function ConnectorGraphic({ type }: { type: 'cards' | 'sphere' }) {
-  return (
-    <span aria-hidden="true" style={connectionsGraphicWrapStyle}>
-      {type === 'cards'
-        ? Array.from({ length: STACK_LAYER_COUNT }, (_, i) => <span key={i} style={connectionsStackLayerStyle(i)} />)
-        : (
-          <>
-            <span style={connectionsSphereMainStyle} />
-            <span style={connectionsSphereHighlightStyle} />
-            {Array.from({ length: SPHERE_DOT_COUNT }, (_, i) => (
-              <span key={i} style={connectionsSphereDotStyle(i)} />
-            ))}
-          </>
-        )}
-    </span>
-  );
-}
-
-// Thin-line clock glyph for the "On the roadmap" row — matches the design's
-// monochrome outline icon set better than an emoji glyph would (those render
-// as colored pictographs on most platforms).
-function RoadmapIcon() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3 3" />
-    </svg>
-  );
-}
-
-// None of these have a manifest in registry.ts — they are not real,
-// installable tools yet, so every entry here is `unavailable: true` and
-// renders the "SOON" badge / "On the roadmap" treatment instead of an
-// Install control (a disabled-but-identically-styled Install button was
-// previously used for these, which misleadingly looked functional next to
-// real connectors). Supabase and MongoDB used to live here too, but both
-// shipped real manifests in Phase 2 (see registry.ts) and now come through
-// REAL_AVAILABLE below with a working Install button — kept here they'd
-// render as duplicate, fake-Install cards.
-const AVAILABLE: AvailableConnector[] = [
-  {
-    id: 'pgvector',
-    index: '01',
-    name: 'pgvector',
-    description: 'Search embeddings stored alongside your Postgres data.',
-    category: 'ai-vector',
-    tags: ['credentials', 'ai vector', 'queryable'],
-    graphic: 'sphere',
-    unavailable: true,
-  },
-  {
-    id: 'snowflake',
-    index: '02',
-    name: 'Snowflake',
-    description: 'Run warehouse-scale questions without moving the data out.',
-    category: 'warehouses',
-    tags: ['credentials', 'warehouse', 'queryable'],
-    graphic: 'cards',
-    unavailable: true,
-  },
-  {
-    id: 'bigquery',
-    index: '03',
-    name: 'BigQuery',
-    description: 'Query datasets in place and cite the tables behind each answer.',
-    category: 'warehouses',
-    tags: ['oauth', 'warehouse', 'queryable'],
-    graphic: 'cards',
-    unavailable: true,
-  },
-  {
-    id: 'looker',
-    index: '04',
-    name: 'Looker',
-    description: 'Pull explores and dashboards into a workflow as a source.',
-    category: 'bi',
-    tags: ['oauth', 'queryable'],
-    graphic: 'cards',
-    unavailable: true,
-  },
-  {
-    id: 'pinecone',
-    index: '05',
-    name: 'Pinecone',
-    description: 'Read and write vectors from a managed index.',
-    category: 'ai-vector',
-    tags: ['credentials', 'ai vector', 'actions'],
-    graphic: 'sphere',
-    unavailable: true,
-  },
-  {
-    id: 'airtable',
-    index: '06',
-    name: 'Airtable',
-    description: 'Treat bases and views as tables your workflows can query.',
-    category: 'files',
-    tags: ['oauth', 'queryable', 'actions'],
-    graphic: 'cards',
-    unavailable: true,
-  },
-  {
-    id: 'aws',
-    index: '07',
-    name: 'AWS',
-    description: 'Reach RDS, Redshift and Athena through an IAM role.',
-    category: 'warehouses',
-    tags: ['oauth', 'warehouse'],
-    graphic: 'cards',
-    unavailable: true,
-  },
-  {
-    id: 'notion',
-    index: '08',
-    name: 'Notion',
-    description: 'Treat databases and pages as retrievable context.',
-    category: 'files',
-    tags: ['oauth', 'files'],
-    graphic: 'cards',
-    unavailable: true,
-  },
-];
-
 const CATEGORY_LABEL: Record<ConnectorCategory, string> = {
   databases: 'Databases',
   warehouses: 'Warehouses',
@@ -313,26 +101,6 @@ const CATEGORIES: ConnectorCategory[] = ['databases', 'warehouses', 'bi', 'ai-ve
 function badgeLabel(health: ConnectionHealth) {
   if (health === 'idle') return 'idle';
   return null;
-}
-
-function InstallButton({ connectorId, connectorName }: { connectorId: string; connectorName: string }) {
-  const [state, formAction, pending] = useActionState(installConnectorAction.bind(null, connectorId), null);
-  return (
-    <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%', marginTop: 'auto' }}>
-      <div style={connectionsInstallRowStyle}>
-        <button
-          type="submit"
-          disabled={pending}
-          style={{ ...connectionsInstallBtnStyle, cursor: pending ? 'not-allowed' : 'pointer' }}
-          aria-label={`Install ${connectorName}`}
-        >
-          {'\u2192'}
-        </button>
-        <span style={connectionsInstallLabelStyle}>{pending ? 'Installing\u2026' : 'Install'}</span>
-      </div>
-      {state?.error && <ActionErrorDetail error={state.error} fix={state.errorFix} details={state.errorDetails} />}
-    </form>
-  );
 }
 
 function TestButton({ connectionId }: { connectionId: string }) {
@@ -386,12 +154,6 @@ function ActionErrorDetail({ error, fix, details }: { error: string; fix?: strin
   );
 }
 
-// Real backend wiring (Step 5): providers/connections come from the Step 4
-// Express API (installs + connections + the static manifest catalog). Only
-// MySQL has a real manifest today; the "Available" grid below still shows
-// the other 7 decorative connectors as static "Coming soon" cards until
-// they have manifests of their own. Write-grants (mint/revoke) are
-// deliberately not surfaced here yet, per the fixed Step 5 scope.
 export default function ConnectionsClient({
   currentUserId,
   catalog,
@@ -406,14 +168,70 @@ export default function ConnectionsClient({
   const router = useRouter();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<ConnectorCategory | 'all'>('all');
-  const [hoveredCard, setHoveredCard] = useState<string | null>(null);
   const [dialog, setDialog] = useState<
     | { type: 'delete'; connectionId: string; handle: string }
     | { type: 'uninstall'; installId: string; name: string }
     | null
   >(null);
   const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
+  const [connectingId, setConnectingId] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
+  // Condition #5: "/" focuses search, everywhere except while the user is
+  // already typing into a field (an input/textarea/contenteditable, or any
+  // open modal's own fields — ConnectPanel/EditConnectionDialog render over
+  // this page rather than unmounting it).
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key !== '/') return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  /**
+   * Bug 1 (condition #4 — explain, don't fix): PROVIDERS is keyed off
+   * `installs`, not `connections`, so a connector with `connections` rows
+   * but no matching `connector_installs` row for the CURRENT actor scope
+   * is invisible here even though its data still exists.
+   *
+   * This can't happen through the normal create/uninstall paths — both are
+   * scope-guarded:
+   *   - create requires a connector_installs row in the SAME scope at
+   *     creation time (apps/api/src/services/connections.ts:193-202,
+   *     NOT_INSTALLED).
+   *   - uninstall refuses while any connection in the SAME scope still
+   *     references the connector (apps/api/src/services/connectors.ts:
+   *     123-137, CONNECTOR_IN_USE).
+   * Both guards filter by `workspaceWhere(scope, ...)`
+   * (apps/api/src/lib/workspaceScope.ts:13-15), where scope is
+   * `{ orgId }` if the actor currently has an org, else `{ ownerId }`.
+   * Neither `connections` nor `connector_installs` has a scope-independent
+   * link between them (connector_id is a free-text slug, not a foreign
+   * key — see connections.ts:190-192's own comment) — each row's org_id/
+   * owner_id is fixed at the moment IT was written, independently.
+   *
+   * So the only way to reach this state is a scope mismatch between when
+   * the connection was created and when it's later viewed: an install and
+   * its connection both written under one scope (e.g. a personal
+   * workspace, `{ ownerId }`), where the connection's `connections` row
+   * survives but the actor's *current* effective scope has since changed
+   * (e.g. they've joined/switched into an org, so every query now runs
+   * under `{ orgId }` instead) — that connection is still there, but
+   * `workspaceWhere` on `connector_installs` for the new scope returns no
+   * rows for that connector_id, even though a `connections` row (written
+   * under the old scope) still exists. The individual-workspace migrations
+   * (0003_owner_enum_value.sql, 0004_owner_rename.sql,
+   * 0005_individual_workspace.sql) are the most likely place this
+   * scope value could have shifted under an existing row without both
+   * tables being backfilled together — not confirmed against a real
+   * broken row, just the only mechanism the guards above leave open.
+   */
   const PROVIDERS: Provider[] = useMemo(() => {
     return installs.map((install) => {
       const catalogEntry = catalog.find((c) => c.id === install.connectorId);
@@ -444,23 +262,22 @@ export default function ConnectionsClient({
     });
   }, [installs, catalog, connections, currentUserId]);
 
-  const REAL_AVAILABLE: AvailableConnector[] = useMemo(() => {
-    return catalog
-      .filter((c) => !installs.some((i) => i.connectorId === c.id))
-      .map((c) => {
-        const meta = REAL_CONNECTOR_META[c.id];
-        return {
-          id: c.id,
-          index: '',
-          name: c.name,
-          description: meta?.description ?? '',
-          category: mapManifestCategory(c.category),
-          tags: meta?.tags ?? [],
-          graphic: meta?.graphic ?? 'cards',
-          real: true,
-        };
-      });
-  }, [catalog, installs]);
+  const installedIds = useMemo(() => new Set(installs.map((i) => i.connectorId)), [installs]);
+
+  // Condition #2: catalog grid is driven entirely by catalogMeta.ts's
+  // static 12-connector list — its `comingSoon` flag is the single source
+  // of truth for which cards render "Connect" vs "SOON"/roadmap (only the
+  // 4 ids with real manifests in registry.ts are `comingSoon: false`).
+  // Already-installed real connectors drop out of the grid (they're in the
+  // "Connected" section above; adding a 2nd+ connection to an already-
+  // installed connector stays canvas-only, per condition #1).
+  const catalogEntries = useMemo(
+    () =>
+      CATALOG_ORDER.map((id) => CONNECTOR_CATALOG_META[id]!).filter(
+        (meta) => meta.comingSoon || !installedIds.has(meta.id),
+      ),
+    [installedIds],
+  );
 
   const totalConnections = PROVIDERS.reduce((n, p) => n + p.connections.length, 0);
   const healthy = PROVIDERS.reduce((n, p) => n + p.connections.filter((c) => c.health === 'ok').length, 0);
@@ -477,14 +294,16 @@ export default function ConnectionsClient({
     });
   }, [PROVIDERS, search, category]);
 
-  const filteredAvailable = useMemo(() => {
+  const filteredCatalog = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return [...REAL_AVAILABLE, ...AVAILABLE].filter((c) => {
+    return catalogEntries.filter((c) => {
       if (category !== 'all' && c.category !== category) return false;
       if (q && !c.name.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [REAL_AVAILABLE, search, category]);
+  }, [catalogEntries, search, category]);
+
+  const connectingMeta = connectingId ? CONNECTOR_CATALOG_META[connectingId] : undefined;
 
   return (
     <>
@@ -510,13 +329,34 @@ export default function ConnectionsClient({
       </div>
 
       <div style={connectionsToolbarRowStyle}>
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search connectors \u00b7 press /"
-          style={connectionsSearchBoxStyle}
-        />
+        <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+          <input
+            ref={searchRef}
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search connectors"
+            style={{ ...connectionsSearchBoxStyle, width: '100%' }}
+          />
+          {!search && (
+            <span
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                right: 10,
+                fontSize: 11,
+                fontWeight: 600,
+                color: 'var(--text-4)',
+                border: '1px solid var(--line2)',
+                borderRadius: 4,
+                padding: '1px 5px',
+                pointerEvents: 'none',
+              }}
+            >
+              /
+            </span>
+          )}
+        </div>
         <div style={connectionsFilterListStyle} role="tablist">
           <button type="button" role="tab" aria-selected={category === 'all'} style={connectionsFilterPillStyle(category === 'all')} onClick={() => setCategory('all')}>
             All
@@ -554,7 +394,7 @@ export default function ConnectionsClient({
             {filteredProviders.map((p) => (
               <div key={p.id} style={connectionsProviderRowStyle(true)}>
                 <span style={connectionsProviderIconStyle}>
-                  <ConnectorLogo id={p.id} size={18} fallback={p.initials} />
+                  <ConnectorLogo id={p.id} size={18} />
                 </span>
                 <span style={connectionsProviderNameColStyle}>
                   <span style={connectionsProviderNameStyle}>{p.name}</span>
@@ -623,85 +463,39 @@ export default function ConnectionsClient({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={connectionsSectionHeaderStyle}>
           <span style={connectionsSectionTitleStyle}>Available</span>
-          <span style={connectionsSectionMetaStyle}>{filteredAvailable.length} connectors</span>
+          <span style={connectionsSectionMetaStyle}>{filteredCatalog.length} connectors</span>
         </div>
 
-        {filteredAvailable.length === 0 ? (
+        {filteredCatalog.length === 0 ? (
           <div style={connectionsEmptyResultsStyle}>No connectors match this filter.</div>
         ) : (
           <div style={connectionsAvailableGridStyle}>
-            {filteredAvailable.map((c) => (
-              <div
-                key={c.id}
-                style={{
-                  ...connectionsConnectorCardStyle,
-                  ...(hoveredCard === c.id ? connectionsConnectorCardHoverStyle : {}),
-                }}
-                onMouseEnter={() => setHoveredCard(c.id)}
-                onMouseLeave={() => setHoveredCard(null)}
-              >
-                {c.unavailable ? (
-                  <>
-                    <span aria-hidden="true" style={connectionsUnavailableGraphicStyle} />
-                    <span style={connectionsSoonBadgeStyle}>SOON</span>
-                    {c.index && <span style={connectionsConnectorIndexStyle}>{c.index}</span>}
-                    <span style={connectionsUnavailableNameStyle}>{c.name}</span>
-                    <span style={connectionsUnavailableDescStyle}>{c.description}</span>
-                    <div style={connectionsConnectorTagsStyle}>
-                      {c.tags.map((t) => (
-                        <span key={t} style={connectionsConnectorTagStyle}>
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                    <div style={connectionsRoadmapRowStyle}>
-                      <span style={connectionsRoadmapIconStyle}>
-                        <RoadmapIcon />
-                      </span>
-                      <span style={connectionsRoadmapLabelStyle}>On the roadmap</span>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <ConnectorGraphic type={c.graphic} />
-                    {CONNECTOR_ICONS[c.id] && (
-                      <span style={connectionsConnectorLogoStyle}>
-                        <ConnectorLogo id={c.id} size={22} fallback={c.name.slice(0, 2)} />
-                      </span>
-                    )}
-                    {c.index && <span style={connectionsConnectorIndexStyle}>{c.index}</span>}
-                    <span style={connectionsConnectorNameStyle}>{c.name}</span>
-                    <span style={connectionsConnectorDescStyle}>{c.description}</span>
-                    <div style={connectionsConnectorTagsStyle}>
-                      {c.tags.map((t) => (
-                        <span key={t} style={connectionsConnectorTagStyle}>
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                    {c.real ? (
-                      <InstallButton connectorId={c.id} connectorName={c.name} />
-                    ) : (
-                      <div style={connectionsInstallRowStyle}>
-                        <button
-                          type="button"
-                          style={{ ...connectionsInstallBtnStyle, cursor: 'not-allowed' }}
-                          disabled
-                          aria-label={`Install ${c.name}`}
-                          title="Coming soon"
-                        >
-                          {'\u2192'}
-                        </button>
-                        <span style={connectionsInstallLabelStyle}>Install</span>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+            {filteredCatalog.map((meta) => (
+              <ConnectorCard
+                key={meta.id}
+                meta={meta}
+                index={catalogIndexLabel(meta.id)}
+                onConnect={meta.comingSoon ? undefined : () => setConnectingId(meta.id)}
+              />
             ))}
           </div>
         )}
       </div>
+
+      {connectingId &&
+        connectingMeta &&
+        (() => {
+          const manifest = CONNECTOR_MANIFESTS[connectingId];
+          if (!manifest) return null;
+          return (
+            <ConnectPanel
+              connectorId={connectingId}
+              connectorName={connectingMeta.name}
+              configSchema={manifest.configSchema}
+              onClose={() => setConnectingId(null)}
+            />
+          );
+        })()}
 
       {dialog?.type === 'delete' && (
         <DeleteConfirmDialog

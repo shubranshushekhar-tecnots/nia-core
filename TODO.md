@@ -886,3 +886,11 @@
   leaks across runs and caused canvas.spec.ts:1194 flakiness. Add
   per-spec cleanup.
 - Subscription model — start after Console (superadmin) is complete. See docs/plans/subscription-model.md.
+- Connect panel: per-phase test results (host reached, TLS, signed in, can
+  read) need connector services to report each phase — then restore the
+  design's 5-row test step. "Can write" belongs to the grant flow, not
+  the connection test.
+- Some connections exist without a connector_installs row in the actor's
+  current scope (likely scope change across 0003–0005 individual-workspace
+  migrations; connections.ts:193-202, connectors.ts:123-137, no FK).
+  Investigate with a real row; consider a repair migration or FK.
