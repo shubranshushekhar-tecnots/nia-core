@@ -22,7 +22,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const notFound = vi.fn(() => {
   throw new Error("NEXT_NOT_FOUND");
 });
-vi.mock("next/navigation", () => ({ notFound }));
+const redirect = vi.fn((url: string) => {
+  throw new Error(`NEXT_REDIRECT:${url}`);
+});
+vi.mock("next/navigation", () => ({ notFound, redirect }));
 
 const pingConsole = vi.fn();
 vi.mock("@/lib/api/consoleServer", () => ({ pingConsole }));
@@ -34,6 +37,7 @@ const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 afterEach(() => {
   notFound.mockClear();
+  redirect.mockClear();
   pingConsole.mockReset();
   consoleErrorSpy.mockClear();
 });
@@ -79,5 +83,25 @@ describe("ConsoleLayout", () => {
     await expect(ConsoleLayout({ children: null })).rejects.toThrow("NEXT_NOT_FOUND");
     expect(notFound).toHaveBeenCalledOnce();
     expect(consoleErrorSpy).toHaveBeenCalledOnce();
+  });
+
+  it("redirects to /console-enroll for a STAFF_2FA_REQUIRED ApiError without logging", async () => {
+    pingConsole.mockRejectedValue(new ApiError(403, "STAFF_2FA_REQUIRED", "Staff must complete 2FA."));
+
+    await expect(ConsoleLayout({ children: null })).rejects.toThrow("NEXT_REDIRECT:/console-enroll");
+    expect(redirect).toHaveBeenCalledOnce();
+    expect(redirect).toHaveBeenCalledWith("/console-enroll");
+    expect(notFound).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it("redirects to /login for a STAFF_SESSION_EXPIRED ApiError without logging", async () => {
+    pingConsole.mockRejectedValue(new ApiError(403, "STAFF_SESSION_EXPIRED", "Staff session has expired."));
+
+    await expect(ConsoleLayout({ children: null })).rejects.toThrow("NEXT_REDIRECT:/login");
+    expect(redirect).toHaveBeenCalledOnce();
+    expect(redirect).toHaveBeenCalledWith("/login");
+    expect(notFound).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 });

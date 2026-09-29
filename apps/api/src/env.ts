@@ -198,6 +198,15 @@ const EnvSchema = z.object({
     .optional()
     .default("false")
     .transform((v) => v === "true"),
+  /**
+   * Console v1 Slice 4 (docs/plans/console-plan.md §4b, decision 17): max
+   * age, in seconds, of a staff session's `session.createdAt` before
+   * requireStaff rejects it with STAFF_SESSION_EXPIRED — independent of the
+   * session's normal rolling `expiresAt`. Forces staff to re-authenticate
+   * (and re-pass 2FA) periodically even if they stay continuously active.
+   * Default 28800 = 8 hours, per plan approval.
+   */
+  STAFF_SESSION_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(28_800),
 }).refine((e) => !(e.NODE_ENV === "production" && e.CONNECTOR_DEV_HOST), {
   message:
     "CONNECTOR_DEV_HOST must not be set when NODE_ENV=production — it overrides the connector service host to a dev-only address.",

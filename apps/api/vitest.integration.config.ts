@@ -22,6 +22,7 @@ export default defineConfig({
       "src/lib/sse.replay.test.ts",
       "src/lib/checksQueue.timeout.test.ts",
       "src/scripts/manageStaff.atomicity.integration.test.ts",
+      "src/scripts/manageStaff.resetTwoFactor.integration.test.ts",
       "src/lib/staffAudit.integration.test.ts",
       "src/lib/orgPlan.integration.test.ts",
       "src/lib/workflowLimit.integration.test.ts",

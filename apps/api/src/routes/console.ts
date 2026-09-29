@@ -8,6 +8,7 @@ import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { AppError } from "../lib/appError.js";
 import { dbPool } from "../lib/dbPool.js";
+import { sanitizeRunError } from "../lib/sanitizeRunError.js";
 
 /**
  * Console v1 (docs/plans/console-plan.md, build order step 4). Mounted at
@@ -513,6 +514,15 @@ consoleRouter.post(
  * genuinely have hundreds of orgs), a single org's run history is bounded
  * enough that "load more" isn't worth the extra complexity this slice —
  * revisit if that assumption stops holding.
+ *
+ * Small fix (2026-09-29): `error` is run through sanitizeRunError()
+ * (lib/sanitizeRunError.ts) before it leaves this route — a raw
+ * destination-write failure's error text can embed the customer's own row
+ * value (Postgres DETAIL's "Key (col)=(val) already exists"), which staff
+ * don't need and shouldn't see. Response shape changes from `{ message }`
+ * to `{ code, message }`. The customer-facing explain_last_error copilot
+ * tool (copilot/tools/explainLastError.ts) reads the same column directly
+ * and deliberately keeps the raw message — it's the customer's own data.
  */
 consoleRouter.get(
   "/orgs/:orgId/runs",
@@ -563,12 +573,368 @@ consoleRouter.get(
         id: row.id,
         workflowId: row.workflow_id,
         status: row.status,
-        error: row.error,
+        error: sanitizeRunError(row.error),
         rowsProcessed: row.rows_processed,
         durationMs: row.duration_ms,
         startedAt: row.started_at,
         finishedAt: row.finished_at,
       })),
     });
+  }),
+);
+
+/**
+ * Build order step 11 / Slice 3d (console-plan.md §3, §5a). Connector
+ * health for the org's Connectors tab: type, display name, last-test
+ * result, created date. Reads only `connections.connector_id/display_name/
+ * last_test_status/last_test_latency_ms/last_test_at/created_at` — an
+ * explicit column list, never `select *`, so a future column added to
+ * `connections` (e.g. `config`, which can carry a non-secret host/port, or
+ * `vault_secret_ref`, which never should) doesn't silently start leaking
+ * here. Org-scoped connections only (`connections.org_id = $1`) — personal
+ * (owner-scoped) connections have `org_id is null` and are out of scope
+ * for an org-detail screen by definition, same reasoning `GET .../runs`
+ * already applies to `workflow_runs.org_id`.
+ */
+consoleRouter.get(
+  "/orgs/:orgId/connectors",
+  validate({ params: orgIdParamsSchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { orgId } = req.params as unknown as { orgId: string };
+
+    const result = await withServiceRole(dbPool, async (db) => {
+      const orgResult = await db.query<{ id: string }>(`select id from public.organizations where id = $1`, [orgId]);
+      if (!orgResult.rows[0]) return null;
+
+      const connectorsResult = await db.query<{
+        id: string;
+        connector_id: string;
+        display_name: string;
+        last_test_status: "ok" | "error" | null;
+        last_test_latency_ms: number | null;
+        last_test_at: string | null;
+        created_at: string;
+      }>(
+        `select id, connector_id, display_name, last_test_status, last_test_latency_ms, last_test_at, created_at
+         from public.connections
+         where org_id = $1
+         order by created_at desc`,
+        [orgId],
+      );
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+        authUser.id,
+        "org.connectors_read",
+        null,
+        orgId,
+        JSON.stringify({ count: connectorsResult.rowCount }),
+      ]);
+
+      return connectorsResult.rows;
+    });
+
+    if (!result) throw new AppError(404, "NOT_FOUND", "Organization not found.");
+
+    res.json({
+      connectors: result.map((row) => ({
+        id: row.id,
+        connectorId: row.connector_id,
+        displayName: row.display_name,
+        lastTestStatus: row.last_test_status,
+        lastTestLatencyMs: row.last_test_latency_ms,
+        lastTestAt: row.last_test_at,
+        createdAt: row.created_at,
+      })),
+    });
+  }),
+);
+
+/**
+ * Build order step 12 / Slice 3e (console-plan.md §3, §5a). List/search
+ * users for the Users screen. Reads directly from `public."user"` — not
+ * joined through `organization_members` — so a personal/owner-scoped
+ * (individual, no-org) user is a first-class search result too, not just
+ * org members (console-plan.md's own note on `GET /console/orgs`'s
+ * type-filter scope: "confirming GET /console/users must include them, not
+ * just org members").
+ *
+ * Explicit column allowlist, same discipline as every other route in this
+ * file: `public."user"` has no password/token/2FA columns today (those
+ * live on `public.account`/`public.session`, never touched here), but the
+ * SELECT still lists exactly the columns needed rather than `select *`, so
+ * a future column added to `user` doesn't silently start leaking here.
+ *
+ * Same `limit`/`offset`/`total`/`hasMore` paging shape as `GET /console/orgs`
+ * (decision 10's "never silently truncate" rule applies identically here).
+ * `orgCount` (a `count(distinct om.org_id)`) is included as useful list
+ * context, same role `memberCount`/`runs30d` play on the org list row.
+ */
+const listUsersQuerySchema = z.object({
+  search: z.string().trim().optional(),
+  limit: z.coerce.number().int().positive().max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
+consoleRouter.get(
+  "/users",
+  validate({ query: listUsersQuerySchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const {
+      search = "",
+      limit = 50,
+      offset = 0,
+    } = req.query as unknown as { search?: string; limit?: number; offset?: number };
+
+    const { rows, total } = await withServiceRole(dbPool, async (db) => {
+      const countResult = await db.query<{ count: string }>(
+        `select count(*) as count
+         from public."user" u
+         where ($1 = '' or u.name ilike '%' || $1 || '%' or u.email ilike '%' || $1 || '%')`,
+        [search],
+      );
+
+      const result = await db.query<{
+        id: string;
+        name: string;
+        email: string;
+        created_at: string;
+        org_count: string;
+      }>(
+        `select
+           u.id,
+           u.name,
+           u.email,
+           u."createdAt" as created_at,
+           count(distinct om.org_id) as org_count
+         from public."user" u
+         left join public.organization_members om on om.user_id = u.id
+         where ($1 = '' or u.name ilike '%' || $1 || '%' or u.email ilike '%' || $1 || '%')
+         group by u.id
+         order by u."createdAt" desc
+         limit $2
+         offset $3`,
+        [search, limit, offset],
+      );
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+        authUser.id,
+        "user.list",
+        null,
+        null,
+        JSON.stringify({ search: search || null, limit, offset, count: result.rowCount }),
+      ]);
+
+      return { rows: result.rows, total: Number(countResult.rows[0]?.count ?? 0) };
+    });
+
+    res.json({
+      users: rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        email: row.email,
+        orgCount: Number(row.org_count),
+        createdAt: row.created_at,
+      })),
+      total,
+      limit,
+      offset,
+      hasMore: offset + rows.length < total,
+    });
+  }),
+);
+
+/**
+ * Build order step 12 / Slice 3e (console-plan.md §3, §5a). User detail:
+ * profile, org memberships (with role), and session metadata — count and
+ * most-recent `createdAt` only, **never** `session.token` (the live
+ * session credential) and never anything from `public.account` (which
+ * stores the password hash in its `password` column, plus OAuth access/
+ * refresh tokens) — this route's three queries touch `user`/
+ * `organization_members`+`organizations`/`session` only, and `session`'s
+ * own SELECT is an explicit column list that excludes `token` by
+ * construction, the same defense-in-depth allowlist discipline as
+ * `GET /orgs/:orgId/connectors`'s exclusion of `vault_secret_ref`/`config`.
+ * No 2FA columns exist yet to exclude (console-plan.md decision 7 — 2FA
+ * isn't implemented for v1).
+ */
+const userIdParamsSchema = z.object({ userId: z.string().uuid() });
+
+consoleRouter.get(
+  "/users/:userId",
+  validate({ params: userIdParamsSchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { userId } = req.params as unknown as { userId: string };
+
+    const result = await withServiceRole(dbPool, async (db) => {
+      const userResult = await db.query<{
+        id: string;
+        name: string;
+        email: string;
+        email_verified: boolean;
+        created_at: string;
+      }>(
+        `select id, name, email, "emailVerified" as email_verified, "createdAt" as created_at
+         from public."user"
+         where id = $1`,
+        [userId],
+      );
+
+      const user = userResult.rows[0];
+      if (!user) return null;
+
+      const [membershipsResult, sessionResult] = await Promise.all([
+        db.query<{
+          org_id: string;
+          org_name: string;
+          role: string;
+          created_at: string;
+        }>(
+          `select om.org_id, o.name as org_name, om.role, om.created_at
+           from public.organization_members om
+           join public.organizations o on o.id = om.org_id
+           where om.user_id = $1
+           order by om.created_at asc`,
+          [userId],
+        ),
+        db.query<{ count: string; last_sign_in_at: string | null }>(
+          `select count(*) as count, max("createdAt") as last_sign_in_at
+           from public."session"
+           where "userId" = $1`,
+          [userId],
+        ),
+      ]);
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+        authUser.id,
+        "user.read",
+        userId,
+        null,
+        JSON.stringify({}),
+      ]);
+
+      return {
+        user,
+        memberships: membershipsResult.rows,
+        sessionCount: Number(sessionResult.rows[0]?.count ?? 0),
+        lastSignInAt: sessionResult.rows[0]?.last_sign_in_at ?? null,
+      };
+    });
+
+    if (!result) throw new AppError(404, "NOT_FOUND", "User not found.");
+
+    res.json({
+      id: result.user.id,
+      name: result.user.name,
+      email: result.user.email,
+      emailVerified: result.user.email_verified,
+      createdAt: result.user.created_at,
+      memberships: result.memberships.map((m) => ({
+        orgId: m.org_id,
+        orgName: m.org_name,
+        role: m.role,
+        joinedAt: m.created_at,
+      })),
+      sessionCount: result.sessionCount,
+      lastSignInAt: result.lastSignInAt,
+    });
+  }),
+);
+
+/**
+ * Build order step 13 / Slice 3f (console-plan.md §3, §5a, decisions 3/4).
+ * `POST /console/users/:userId/revoke-sessions` — "Sign out everywhere".
+ * `reason` is required, same posture as org suspend's `reason` above.
+ *
+ * Raw `delete from public.session` via service role (decision 3, finalized
+ * 2026-09-28) — deliberately NOT better-auth's `admin` plugin, which bundles
+ * `revokeUserSessions` together with impersonate-user/ban-user/setRole as
+ * live HTTP endpoints the instant it's enabled, conflicting with this
+ * Console's "never: impersonation" principle. Deleting the session rows is
+ * sufficient on its own: better-auth's `getSession` looks up the session
+ * token against this same table on every request, so a deleted row fails
+ * that lookup immediately, on the user's very next request — no separate
+ * "revoke" flag or token-blocklist needed. Caveat for the future (console-
+ * plan.md line ~157): if `cookieCache`/`secondaryStorage` is ever turned on
+ * for this app's better-auth config, that in-memory/secondary cache would
+ * also need busting here, since a cached session could still validate after
+ * the row is gone. Not relevant today — neither is enabled.
+ *
+ * Audited per decision 4: one `staff_audit_log` row (action
+ * 'user.revoke_sessions', target_user_id set, org_id null — this action
+ * targets a user, not a single org, same shape as `user.read` above) plus
+ * one `audit_log` row in *every* org the target user belongs to (queried via
+ * `organization_members`, looped — `private.log_org_audit` requires a
+ * non-null org_id per call, it has no "batch"/null-org mode). A user with
+ * zero memberships (individual workspace) naturally produces zero
+ * `log_org_audit` calls, matching decision 4's explicit fallback.
+ *
+ * No special-case for a staff member revoking their own sessions: the
+ * current request already passed authentication before this handler runs,
+ * so it completes normally either way — deleting your own session rows only
+ * affects your *next* request, same as anyone else's. The "warn they'll be
+ * signed out" requirement is a frontend-only confirmation-copy concern
+ * (comparing the target userId to the signed-in staff user's own id), not a
+ * backend branch.
+ */
+const revokeSessionsBodySchema = z.object({
+  reason: z.string().trim().min(1).max(500),
+});
+
+consoleRouter.post(
+  "/users/:userId/revoke-sessions",
+  validate({ params: userIdParamsSchema, body: revokeSessionsBodySchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { userId } = req.params as unknown as { userId: string };
+    const { reason } = req.body as unknown as { reason: string };
+
+    const result = await withServiceRole(dbPool, async (db) => {
+      const userResult = await db.query<{ id: string }>(`select id from public."user" where id = $1`, [userId]);
+      if (!userResult.rows[0]) return null;
+
+      const deleteResult = await db.query(`delete from public."session" where "userId" = $1`, [userId]);
+      const revokedCount = deleteResult.rowCount ?? 0;
+
+      const membershipsResult = await db.query<{ org_id: string }>(
+        `select org_id from public.organization_members where user_id = $1`,
+        [userId],
+      );
+
+      const detail = JSON.stringify({ reason, revokedCount });
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+        authUser.id,
+        "user.revoke_sessions",
+        userId,
+        null,
+        detail,
+      ]);
+
+      for (const { org_id } of membershipsResult.rows) {
+        await db.query("select private.log_org_audit($1, $2, $3, $4)", [
+          org_id,
+          authUser.id,
+          "organization.member_sessions_revoked",
+          detail,
+        ]);
+      }
+
+      return { revokedCount };
+    });
+
+    if (!result) throw new AppError(404, "NOT_FOUND", "User not found.");
+
+    res.json({ revokedSessionCount: result.revokedCount });
   }),
 );

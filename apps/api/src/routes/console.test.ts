@@ -28,6 +28,15 @@ import { errorHandler, notFoundHandler } from "../middleware/errorHandler.js";
 const getSession = vi.fn();
 vi.mock("../lib/auth.js", () => ({ auth: { api: { getSession } } }));
 
+// Slice 4 (§4b, decision 17): requireStaff makes its OWN auth.api.getSession()
+// call (same mocked fn as requireAuth's) to read session.twoFactorVerifiedAt/
+// createdAt — every "staff-1" mock below must carry a passing `session` too,
+// not just `user`, or requireStaff's new 2FA/session-age gate 500s.
+const STAFF_SESSION = {
+  user: { id: "staff-1", email: "staff@nia.dev" },
+  session: { twoFactorVerifiedAt: new Date(), createdAt: new Date() },
+};
+
 const withServiceRole = vi.fn();
 // createDbPool is stubbed too: lib/dbPool.ts (imported transitively via
 // both requireStaff.ts and middleware/db.ts) calls it at module load time
@@ -68,7 +77,7 @@ afterEach(async () => {
 
 describe("GET /console/ping", () => {
   it("returns 200 for a session with an active platform_staff row", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     withServiceRole.mockResolvedValue({ rowCount: 1 });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -145,7 +154,7 @@ function mockOrgsQuery(orgRows: Record<string, string | null>[], total = orgRows
 
 describe("GET /console/orgs", () => {
   it("returns the mapped org list, total/hasMore, and writes one staff_audit_log row for a staff session", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
 
     const orgRow = {
       id: "org-1",
@@ -205,7 +214,7 @@ describe("GET /console/orgs", () => {
    * frontend knows there's more to load.
    */
   it("reports hasMore: true and the real total when more orgs exist than this page returned", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
 
     const orgRows = [
       { id: "org-1", name: "A", slug: "a", created_at: "2026-01-01T00:00:00.000Z", member_count: "1", runs_30d: "0" },
@@ -227,7 +236,7 @@ describe("GET /console/orgs", () => {
   });
 
   it("passes offset through to the query and into the response", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
 
     const query = mockOrgsQuery([], 5);
 
@@ -277,7 +286,7 @@ describe("GET /console/orgs", () => {
    * same technique the audit-row assertion above already uses.
    */
   it("defaults limit to 50 and offset to 0 when the query string omits them", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
 
     const query = mockOrgsQuery([]);
 
@@ -291,7 +300,7 @@ describe("GET /console/orgs", () => {
   });
 
   it("passes an explicit limit through to the query", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
 
     const query = mockOrgsQuery([]);
 
@@ -307,7 +316,7 @@ describe("GET /console/orgs", () => {
   });
 
   it("rejects a limit above the hard max (200) with a validation error, without querying orgs", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     withServiceRole.mockResolvedValue({ rowCount: 1 });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -359,7 +368,7 @@ function mockOrgDetailQuery(options: {
 
 describe("GET /console/orgs/:orgId", () => {
   it("returns profile, plan/limits/usage, and members, and writes one staff_audit_log row for a staff session", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
 
     const orgRow = {
       id: "11111111-1111-1111-1111-111111111111",
@@ -412,7 +421,7 @@ describe("GET /console/orgs/:orgId", () => {
   });
 
   it("reports status: Suspended and the suspendedBy staffer when the org is suspended", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
 
     const orgRow = {
       id: "11111111-1111-1111-1111-111111111111",
@@ -443,7 +452,7 @@ describe("GET /console/orgs/:orgId", () => {
   });
 
   it("returns 404 for an org that does not exist, without writing an audit row", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     const query = mockOrgDetailQuery({ org: null });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -481,7 +490,7 @@ describe("GET /console/orgs/:orgId", () => {
   });
 
   it("rejects a non-uuid orgId with a validation error, without querying the org", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     withServiceRole.mockResolvedValue({ rowCount: 1 });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -529,7 +538,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
   const orgId = "11111111-1111-1111-1111-111111111111";
 
   it("upserts org_plan and writes both audit rows with matching detail for a staff session", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     const query = mockPatchOrgPlanQuery({ orgExists: true, planTier: "Enterprise", workflowLimit: 100 });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -551,7 +560,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
   });
 
   it("accepts workflowLimit: null (unlimited)", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     mockPatchOrgPlanQuery({ orgExists: true, planTier: "Enterprise", workflowLimit: null });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -567,7 +576,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
   });
 
   it("returns 404 for an org that does not exist, without writing any audit row", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     const query = mockPatchOrgPlanQuery({ orgExists: false });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -585,7 +594,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
   });
 
   it("rejects an empty planTier with a validation error, without querying the org", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     withServiceRole.mockResolvedValue({ rowCount: 1 });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -602,7 +611,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
   });
 
   it("rejects a non-positive workflowLimit with a validation error", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     withServiceRole.mockResolvedValue({ rowCount: 1 });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -679,7 +688,7 @@ describe("POST /console/orgs/:orgId/suspend", () => {
   const orgId = "11111111-1111-1111-1111-111111111111";
 
   it("suspends the org and writes both audit rows with matching { reason } detail for a staff session", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     const query = mockSuspendOrgQuery({
       orgExists: true,
       suspendedAt: "2026-02-01T00:00:00.000Z",
@@ -709,7 +718,7 @@ describe("POST /console/orgs/:orgId/suspend", () => {
   });
 
   it("returns 404 for an org that does not exist, without writing any audit row", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     const query = mockSuspendOrgQuery({ orgExists: false });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -727,7 +736,7 @@ describe("POST /console/orgs/:orgId/suspend", () => {
   });
 
   it("rejects an empty reason with a validation error, without updating the org", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     withServiceRole.mockResolvedValue({ rowCount: 1 });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -744,7 +753,7 @@ describe("POST /console/orgs/:orgId/suspend", () => {
   });
 
   it("rejects a missing reason with a validation error", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     withServiceRole.mockResolvedValue({ rowCount: 1 });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -815,7 +824,7 @@ describe("POST /console/orgs/:orgId/unsuspend", () => {
   const orgId = "11111111-1111-1111-1111-111111111111";
 
   it("unsuspends the org and writes both audit rows with the given note for a staff session", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     const query = mockUnsuspendOrgQuery({ orgExists: true });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -837,7 +846,7 @@ describe("POST /console/orgs/:orgId/unsuspend", () => {
   });
 
   it("accepts an omitted note, writing { note: null } to both audit rows", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     const query = mockUnsuspendOrgQuery({ orgExists: true });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -857,7 +866,7 @@ describe("POST /console/orgs/:orgId/unsuspend", () => {
   });
 
   it("returns 404 for an org that does not exist, without writing any audit row", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     const query = mockUnsuspendOrgQuery({ orgExists: false });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -875,7 +884,7 @@ describe("POST /console/orgs/:orgId/unsuspend", () => {
   });
 
   it("rejects a note longer than 500 characters with a validation error", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     withServiceRole.mockResolvedValue({ rowCount: 1 });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -925,7 +934,7 @@ describe("GET /console/orgs/:orgId/runs", () => {
   const orgId = "11111111-1111-1111-1111-111111111111";
 
   it("returns run history with error metadata and writes one staff_audit_log row for a staff session", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
 
     const runRows = [
       {
@@ -973,7 +982,7 @@ describe("GET /console/orgs/:orgId/runs", () => {
           id: "run-1",
           workflowId: "wf-1",
           status: "failed",
-          error: { message: "Destination write failed: boom" },
+          error: { code: "RUN_FAILED", message: "Destination write failed: boom" },
           rowsProcessed: 42,
           durationMs: 1500,
           startedAt: "2026-02-01T00:00:00.000Z",
@@ -997,7 +1006,7 @@ describe("GET /console/orgs/:orgId/runs", () => {
   });
 
   it("returns 404 for an org that does not exist, without writing an audit row", async () => {
-    getSession.mockResolvedValue({ user: { id: "staff-1", email: "staff@nia.dev" } });
+    getSession.mockResolvedValue(STAFF_SESSION);
     const query = vi.fn(async (sql: string, _params?: unknown[]) => {
       if (sql.includes("platform_staff")) return { rowCount: 1 };
       if (sql.includes("from public.organizations")) return { rows: [], rowCount: 0 };
@@ -1016,5 +1025,450 @@ describe("GET /console/orgs/:orgId/runs", () => {
     expect(res.status).toBe(404);
     expect((await res.json()).error.code).toBe("NOT_FOUND");
     expect(query.mock.calls.some((call) => call[0].includes("private.log_staff_action"))).toBe(false);
+  });
+
+  // Small fix (2026-09-29): a destination-write duplicate-key failure's raw
+  // error text embeds the customer's own row value in Postgres's DETAIL
+  // fragment — the console (staff) response must never leak it.
+  it("strips the customer value from a duplicate-key error's DETAIL fragment", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+
+    const runRows = [
+      {
+        id: "run-1",
+        workflow_id: "wf-1",
+        status: "failed",
+        error: {
+          message:
+            'duplicate key value violates unique constraint "customers_email_key"\nDETAIL:  Key (email)=(user@example.com) already exists.',
+        },
+        rows_processed: 7,
+        duration_ms: 900,
+        started_at: "2026-02-01T00:00:00.000Z",
+        finished_at: "2026-02-01T00:00:01.000Z",
+      },
+    ];
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from public.organizations")) return { rows: [{ id: orgId }], rowCount: 1 };
+      if (sql.includes("from public.workflow_runs")) return { rows: runRows, rowCount: runRows.length };
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/runs`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.runs[0].error).toEqual({
+      code: "DUPLICATE_KEY",
+      message: 'duplicate key value violates unique constraint "customers_email_key"',
+    });
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("user@example.com");
+    expect(raw).not.toContain("Key (");
+    expect(raw).not.toContain("DETAIL");
+  });
+});
+
+describe("GET /console/orgs/:orgId/connectors", () => {
+  const orgId = "11111111-1111-1111-1111-111111111111";
+
+  it("returns connector health metadata and writes one staff_audit_log row for a staff session", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+
+    const connectionRows = [
+      {
+        id: "conn-1",
+        connector_id: "mysql",
+        display_name: "Sales DB",
+        last_test_status: "ok",
+        last_test_latency_ms: 42,
+        last_test_at: "2026-02-01T00:00:00.000Z",
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "conn-2",
+        connector_id: "mongodb",
+        display_name: "Events store",
+        last_test_status: null,
+        last_test_latency_ms: null,
+        last_test_at: null,
+        created_at: "2026-01-15T00:00:00.000Z",
+      },
+    ];
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from public.organizations")) return { rows: [{ id: orgId }], rowCount: 1 };
+      if (sql.includes("from public.connections")) return { rows: connectionRows, rowCount: connectionRows.length };
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/connectors`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      connectors: [
+        {
+          id: "conn-1",
+          connectorId: "mysql",
+          displayName: "Sales DB",
+          lastTestStatus: "ok",
+          lastTestLatencyMs: 42,
+          lastTestAt: "2026-02-01T00:00:00.000Z",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "conn-2",
+          connectorId: "mongodb",
+          displayName: "Events store",
+          lastTestStatus: null,
+          lastTestLatencyMs: null,
+          lastTestAt: null,
+          createdAt: "2026-01-15T00:00:00.000Z",
+        },
+      ],
+    });
+
+    const auditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(auditCall?.[1]).toEqual(["staff-1", "org.connectors_read", null, orgId, JSON.stringify({ count: 2 })]);
+  });
+
+  // Proves both that the route's own SQL never selects the secret-bearing
+  // columns, and that a response can never carry them even if a row somehow
+  // had them attached (e.g. a future column added to the mock/DB row) —
+  // this route's explicit SELECT/response-mapping should drop anything not
+  // named in its own allowlist.
+  it("never returns vault_secret_ref or config, even if the underlying row carries them", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+
+    const connectionRows = [
+      {
+        id: "conn-1",
+        connector_id: "mysql",
+        display_name: "Sales DB",
+        last_test_status: "ok",
+        last_test_latency_ms: 42,
+        last_test_at: "2026-02-01T00:00:00.000Z",
+        created_at: "2026-01-01T00:00:00.000Z",
+        // Not selected by the route's own SQL in real life — included here
+        // to prove the response mapping itself is an allowlist, not just
+        // reliant on the SELECT list never changing.
+        vault_secret_ref: "vault://secret/conn-1",
+        config: { host: "prod-db.internal", port: 3306, user: "admin" },
+      },
+    ];
+    let connectorsSql = "";
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from public.organizations")) return { rows: [{ id: orgId }], rowCount: 1 };
+      if (sql.includes("from public.connections")) {
+        connectorsSql = sql;
+        return { rows: connectionRows, rowCount: connectionRows.length };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/connectors`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Object.keys(body.connectors[0]).sort()).toEqual(
+      ["id", "connectorId", "displayName", "lastTestStatus", "lastTestLatencyMs", "lastTestAt", "createdAt"].sort(),
+    );
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("vault_secret_ref");
+    expect(raw).not.toContain("vault://");
+    expect(raw).not.toContain("prod-db.internal");
+    expect(raw).not.toContain("admin");
+    expect(connectorsSql).not.toMatch(/vault_secret_ref|\bconfig\b|select \*/i);
+  });
+});
+
+describe("GET /console/users", () => {
+  it("returns the mapped user list, total/hasMore, and writes one staff_audit_log row for a staff session", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+
+    const userRows = [
+      {
+        id: "user-1",
+        name: "Ada Lovelace",
+        email: "ada@example.com",
+        created_at: "2026-01-01T00:00:00.000Z",
+        org_count: "2",
+      },
+    ];
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("count(*) as count")) return { rows: [{ count: "1" }], rowCount: 1 };
+      if (sql.includes('from public."user"')) return { rows: userRows, rowCount: userRows.length };
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      users: [
+        {
+          id: "user-1",
+          name: "Ada Lovelace",
+          email: "ada@example.com",
+          orgCount: 2,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+      hasMore: false,
+    });
+
+    const auditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(auditCall?.[1]).toEqual([
+      "staff-1",
+      "user.list",
+      null,
+      null,
+      JSON.stringify({ search: null, limit: 50, offset: 0, count: 1 }),
+    ]);
+  });
+});
+
+describe("GET /console/users/:userId", () => {
+  const userId = "22222222-2222-2222-2222-222222222222";
+
+  it("returns profile, org memberships, and session metadata, and writes one staff_audit_log row for a staff session", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+
+    const userRow = {
+      id: userId,
+      name: "Ada Lovelace",
+      email: "ada@example.com",
+      email_verified: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+    };
+    const membershipRows = [
+      {
+        org_id: "org-1",
+        org_name: "Acme Inc",
+        role: "owner",
+        created_at: "2026-01-02T00:00:00.000Z",
+      },
+    ];
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes('from public."user"')) return { rows: [userRow], rowCount: 1 };
+      if (sql.includes("from public.organization_members")) return { rows: membershipRows, rowCount: 1 };
+      if (sql.includes('from public."session"')) {
+        return { rows: [{ count: "3", last_sign_in_at: "2026-02-01T00:00:00.000Z" }], rowCount: 1 };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      id: userId,
+      name: "Ada Lovelace",
+      email: "ada@example.com",
+      emailVerified: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      memberships: [{ orgId: "org-1", orgName: "Acme Inc", role: "owner", joinedAt: "2026-01-02T00:00:00.000Z" }],
+      sessionCount: 3,
+      lastSignInAt: "2026-02-01T00:00:00.000Z",
+    });
+
+    const auditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(auditCall?.[1]).toEqual(["staff-1", "user.read", userId, null, JSON.stringify({})]);
+  });
+
+  // Proves the route's session query never selects `session.token`, and
+  // that a response can never carry a password/token/2FA-secret field even
+  // if the underlying rows somehow had one attached (e.g. a future column
+  // added to the mock/DB row) — same allowlist-not-just-SELECT-list
+  // discipline as the connectors "never returns vault_secret_ref" test.
+  it("never returns a password, token, or 2FA-secret field, even if the underlying rows carry them", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+
+    const userRow = {
+      id: userId,
+      name: "Ada Lovelace",
+      email: "ada@example.com",
+      email_verified: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+      // Not selected by the route's own SQL in real life — included here to
+      // prove the response mapping itself is an allowlist.
+      password: "$2b$10$superhashedsecretvalue",
+      twoFactorSecret: "JBSWY3DPEHPK3PXP",
+    };
+    let sessionSql = "";
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes('from public."user"')) return { rows: [userRow], rowCount: 1 };
+      if (sql.includes("from public.organization_members")) return { rows: [], rowCount: 0 };
+      if (sql.includes('from public."session"')) {
+        sessionSql = sql;
+        return {
+          rows: [
+            {
+              count: "1",
+              last_sign_in_at: "2026-02-01T00:00:00.000Z",
+              // Also not selected in real life — proving the mapping drops it.
+              token: "sess_live_abc123secret",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Object.keys(body).sort()).toEqual(
+      ["id", "name", "email", "emailVerified", "createdAt", "memberships", "sessionCount", "lastSignInAt"].sort(),
+    );
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("superhashedsecretvalue");
+    expect(raw).not.toContain("JBSWY3DPEHPK3PXP");
+    expect(raw).not.toContain("sess_live_abc123secret");
+    expect(sessionSql).not.toMatch(/\btoken\b|select \*/i);
+  });
+});
+
+// Slice 3f (console-plan.md build order step 13, decisions 3/4):
+// POST /console/users/:userId/revoke-sessions. Lean per the user's own
+// instruction — exactly two tests: one proving the DELETE against
+// public.session actually runs (the thing that makes the user's *next*
+// request unauthenticated, since better-auth's getSession looks the token
+// up against this same table), and one proving both audit writes (one
+// staff_audit_log row + one audit_log row per org membership).
+describe("POST /console/users/:userId/revoke-sessions", () => {
+  const userId = "22222222-2222-2222-2222-222222222222";
+
+  function mockRevokeSessionsQuery(options: { userExists: boolean; orgIds?: string[] }) {
+    const { userExists, orgIds = [] } = options;
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("private.log_org_audit")) return { rows: [], rowCount: 0 };
+      if (sql.includes('select id from public."user"')) {
+        return { rows: userExists ? [{ id: userId }] : [], rowCount: userExists ? 1 : 0 };
+      }
+      if (sql.includes('delete from public."session"')) {
+        return { rows: [], rowCount: 2 };
+      }
+      if (sql.includes("from public.organization_members")) {
+        return { rows: orgIds.map((org_id) => ({ org_id })), rowCount: orgIds.length };
+      }
+      throw new Error(`mockRevokeSessionsQuery: unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+    return query;
+  }
+
+  it("deletes every row in public.session for the user, making their next request unauthenticated", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockRevokeSessionsQuery({ userExists: true, orgIds: [] });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}/revoke-sessions`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Suspected compromise" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ revokedSessionCount: 2 });
+
+    // The DELETE (unscoped by any session id, scoped only to this user) is
+    // what makes any of the user's existing session tokens fail
+    // better-auth's getSession lookup on their very next request — there is
+    // no separate revoke flag/blocklist, so proving this query ran with the
+    // right params is the proof of "next request is unauthenticated".
+    const deleteCall = query.mock.calls.find((call) => call[0].includes('delete from public."session"'));
+    expect(deleteCall?.[1]).toEqual([userId]);
+  });
+
+  it("writes one staff_audit_log row and one audit_log row per org the user belongs to", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockRevokeSessionsQuery({ userExists: true, orgIds: ["org-1", "org-2"] });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}/revoke-sessions`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Suspected compromise" }),
+    });
+
+    expect(res.status).toBe(200);
+
+    const detail = JSON.stringify({ reason: "Suspected compromise", revokedCount: 2 });
+
+    const staffAuditCalls = query.mock.calls.filter((call) => call[0].includes("private.log_staff_action"));
+    expect(staffAuditCalls).toHaveLength(1);
+    expect(staffAuditCalls[0]?.[1]).toEqual(["staff-1", "user.revoke_sessions", userId, null, detail]);
+
+    const orgAuditCalls = query.mock.calls.filter((call) => call[0].includes("private.log_org_audit"));
+    expect(orgAuditCalls).toHaveLength(2);
+    expect(orgAuditCalls.map((call) => call[1])).toEqual([
+      ["org-1", "staff-1", "organization.member_sessions_revoked", detail],
+      ["org-2", "staff-1", "organization.member_sessions_revoked", detail],
+    ]);
   });
 });

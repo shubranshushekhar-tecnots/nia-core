@@ -22,6 +22,17 @@ import { dbPool } from "../lib/dbPool.js";
  *   pnpm --filter @nia/api staff:grant <email> --bootstrap   (only once, when no active staff exists yet)
  *   pnpm --filter @nia/api staff:revoke <email> --by <active-staff-email>
  *   pnpm --filter @nia/api staff:list
+ *   pnpm --filter @nia/api staff:reset-2fa <email> --by <active-staff-email>
+ *
+ * reset-2fa (Console v1 Slice 4, console-plan.md §4b) clears a staff
+ * member's 2FA enrollment (deletes their public.twoFactor row(s), clears
+ * user.twoFactorEnabled) AND deletes every one of their public.session
+ * rows, so a lost/compromised authenticator can't be used to keep an
+ * already-2FA-verified session alive — the affected user is forced through
+ * a full sign-in + fresh enrollment next time. Same --by/audit/transaction
+ * pattern as grant/revoke, not scoped to platform_staff membership (any
+ * user's 2FA can be reset, same as any user's password via
+ * setUserPassword.ts — being staff only gates who may run this command).
  *
  * Every actual grant/revoke/bootstrap (i.e. every path that reaches the
  * insert/update below, not the "nothing to do" no-op paths) also writes a
@@ -199,6 +210,41 @@ async function revoke(email: string, byEmail: string | undefined) {
   await dbPool.end();
 }
 
+/**
+ * The actual reset: one transaction, reused as-is by both the CLI wrapper
+ * below and manageStaff.resetTwoFactor.integration.test.ts — same reason
+ * withTransaction/logStaffAction are exported rather than duplicated in
+ * that test file. Deliberately takes no process.exit/dbPool.end concerns;
+ * those are the CLI wrapper's job, not something a test reusing this
+ * primitive should trigger.
+ */
+export async function applyResetTwoFactor(userId: string, actorId: string, email: string): Promise<void> {
+  await withTransaction(async (client) => {
+    await client.query('delete from public."twoFactor" where "userId" = $1', [userId]);
+    await client.query('update public."user" set "twoFactorEnabled" = false where id = $1', [userId]);
+    await client.query('delete from public."session" where "userId" = $1', [userId]);
+    await logStaffAction(client, actorId, "staff.reset_2fa", userId, { email });
+  });
+}
+
+async function resetTwoFactor(email: string, byEmail: string | undefined) {
+  if (!byEmail) {
+    console.error("usage: pnpm --filter @nia/api staff:reset-2fa <email> --by <active-staff-email>");
+    process.exit(1);
+  }
+
+  const userId = await findUserIdByEmail(email);
+  if (!userId) {
+    console.error(`no user with email ${email}`);
+    process.exit(1);
+  }
+  const actorId = await requireActiveStaffByEmail(byEmail, "--by");
+
+  await applyResetTwoFactor(userId, actorId, email);
+  console.log(`reset 2FA for: ${email} (${userId}), by ${byEmail} (${actorId}) — all sessions revoked`);
+  await dbPool.end();
+}
+
 async function list() {
   const result = await dbPool.query<{
     email: string;
@@ -238,12 +284,15 @@ async function main() {
     await revoke(email, parseFlag(rest, "--by"));
   } else if (cmd === "list") {
     await list();
+  } else if (cmd === "reset-2fa" && email) {
+    await resetTwoFactor(email, parseFlag(rest, "--by"));
   } else {
     console.error("usage:");
     console.error("  pnpm --filter @nia/api staff:grant <email> --by <active-staff-email>");
     console.error("  pnpm --filter @nia/api staff:grant <email> --bootstrap");
     console.error("  pnpm --filter @nia/api staff:revoke <email> --by <active-staff-email>");
     console.error("  pnpm --filter @nia/api staff:list");
+    console.error("  pnpm --filter @nia/api staff:reset-2fa <email> --by <active-staff-email>");
     process.exit(1);
   }
 }

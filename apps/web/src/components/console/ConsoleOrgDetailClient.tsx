@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import Link from 'next/link';
-import type { ConsoleOrgDetail, ConsoleRun } from '@/lib/api/consoleServer';
+import type { ConsoleConnector, ConsoleOrgDetail, ConsoleRun } from '@/lib/api/consoleServer';
 import { suspendOrgAction, unsuspendOrgAction, updateOrgPlanAction } from '@/lib/console/actions';
 import { formatLowerLimitWarning } from '@/lib/console/planLimitWarning';
 import {
@@ -10,6 +10,10 @@ import {
   consoleBreadcrumbLinkStyle,
   consoleBreadcrumbRowStyle,
   consoleBreadcrumbSepStyle,
+  consoleColConnectorCreatedStyle,
+  consoleColConnectorHealthStyle,
+  consoleColConnectorNameStyle,
+  consoleColConnectorTypeStyle,
   consoleColEmailStyle,
   consoleColJoinedStyle,
   consoleColMemberStyle,
@@ -27,6 +31,7 @@ import {
   consoleHeaderRowStyle,
   consoleHeaderSubStyle,
   consoleHeaderTitleStyle,
+  consoleLoadMoreErrorStyle,
   consoleMonoStyle,
   consolePillStyle,
   consolePlanFieldLabelStyle,
@@ -37,8 +42,14 @@ import {
   consolePlanFormWarningStyle,
   consolePlanInputStyle,
   consolePrimaryBtnStyle,
+  consoleRowConnectorCreatedCellStyle,
+  consoleRowConnectorHealthCellStyle,
+  consoleRowConnectorHealthLatencyStyle,
+  consoleRowConnectorNameCellStyle,
+  consoleRowConnectorTypeCellStyle,
   consoleRowEmailCellStyle,
   consoleRowJoinedCellStyle,
+  consoleRowLinkStyle,
   consoleRowMemberCellStyle,
   consoleRowNameColStyle,
   consoleRowNameStyle,
@@ -48,6 +59,7 @@ import {
   consoleRowRunStartedCellStyle,
   consoleRowRunStatusCellStyle,
   consoleRowStyle,
+  consoleRunsCaptionStyle,
   consoleStatCardStyle,
   consoleStatLabelStyle,
   consoleStatsRowStyle,
@@ -104,10 +116,28 @@ import {
  * doc comment on GET /orgs/:orgId/runs) and is fetched eagerly alongside
  * org detail in page.tsx rather than on tab-click, so switching tabs is
  * instant and never shows a loading state.
+ *
+ * Slice 3d adds a third Connectors tab, same eager-fetch/no-loading-state
+ * pattern as Runs — connector type, display name, last-test health, and
+ * created date only, never config/vault_secret_ref (see routes/console.ts's
+ * own doc comment on GET /orgs/:orgId/connectors's explicit column
+ * allowlist).
+ *
+ * Slice 3e: each Members row now links to `/console/users/:userId` (User
+ * Detail), same row-click-to-detail pattern as ConsoleDirectoryClient's own
+ * rows — the one place besides the new Users list screen that reaches it.
  */
-export default function ConsoleOrgDetailClient({ org: initialOrg, runs }: { org: ConsoleOrgDetail; runs: ConsoleRun[] }) {
+export default function ConsoleOrgDetailClient({
+  org: initialOrg,
+  runs,
+  connectors,
+}: {
+  org: ConsoleOrgDetail;
+  runs: ConsoleRun[] | null;
+  connectors: ConsoleConnector[] | null;
+}) {
   const [org, setOrg] = useState(initialOrg);
-  const [activeTab, setActiveTab] = useState<'members' | 'runs'>('members');
+  const [activeTab, setActiveTab] = useState<'members' | 'runs' | 'connectors'>('members');
   const [isEditing, setIsEditing] = useState(false);
   const [planTier, setPlanTier] = useState(org.planTier);
   const [workflowLimit, setWorkflowLimit] = useState(org.workflowLimit === null ? '' : String(org.workflowLimit));
@@ -403,6 +433,13 @@ export default function ConsoleOrgDetailClient({ org: initialOrg, runs }: { org:
         <button type="button" onClick={() => setActiveTab('runs')} style={consoleTabStyle(activeTab === 'runs')}>
           Runs
         </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('connectors')}
+          style={consoleTabStyle(activeTab === 'connectors')}
+        >
+          Connectors
+        </button>
       </div>
 
       {activeTab === 'members' && (
@@ -417,48 +454,99 @@ export default function ConsoleOrgDetailClient({ org: initialOrg, runs }: { org:
           {org.members.length === 0 && <div style={consoleEmptyStyle}>No members.</div>}
 
           {org.members.map((m) => (
-            <div key={m.userId} style={consoleRowStyle}>
-              <span style={consoleRowMemberCellStyle}>
-                <span style={consoleMonoStyle}>{initialsOf(m.name)}</span>
-                <span style={consoleRowNameColStyle}>
-                  <span style={consoleRowNameStyle}>{m.name}</span>
+            <Link key={m.userId} href={`/console/users/${m.userId}`} style={consoleRowLinkStyle}>
+              <div style={consoleRowStyle}>
+                <span style={consoleRowMemberCellStyle}>
+                  <span style={consoleMonoStyle}>{initialsOf(m.name)}</span>
+                  <span style={consoleRowNameColStyle}>
+                    <span style={consoleRowNameStyle}>{m.name}</span>
+                  </span>
                 </span>
-              </span>
-              <span style={consoleRowEmailCellStyle}>{m.email}</span>
-              <span style={consoleRowRoleCellStyle}>{m.role}</span>
-              <span style={consoleRowJoinedCellStyle}>{formatDate(m.joinedAt)}</span>
-            </div>
+                <span style={consoleRowEmailCellStyle}>{m.email}</span>
+                <span style={consoleRowRoleCellStyle}>{m.role}</span>
+                <span style={consoleRowJoinedCellStyle}>{formatDate(m.joinedAt)}</span>
+              </div>
+            </Link>
           ))}
         </div>
       )}
 
       {activeTab === 'runs' && (
-        <div style={consoleTableStyle}>
-          <div style={consoleTableHeadRowStyle}>
-            <span style={consoleColRunStatusStyle}>Status</span>
-            <span style={consoleColRunStartedStyle}>Started</span>
-            <span style={consoleColRunDurationStyle}>Duration</span>
-            <span style={consoleColRunErrorStyle}>Error</span>
-          </div>
+        <>
+          {/* Small fix (2026-09-29): always label the cap so it never reads
+              as a silent truncation, whether the list is full, short, empty,
+              or failed to load. */}
+          <div style={consoleRunsCaptionStyle}>Showing the latest 50 runs</div>
 
-          {runs.length === 0 && <div style={consoleEmptyStyle}>No runs.</div>}
+          {runs === null ? (
+            <div style={consoleLoadMoreErrorStyle}>Couldn&apos;t load runs.</div>
+          ) : (
+            <div style={consoleTableStyle}>
+              <div style={consoleTableHeadRowStyle}>
+                <span style={consoleColRunStatusStyle}>Status</span>
+                <span style={consoleColRunStartedStyle}>Started</span>
+                <span style={consoleColRunDurationStyle}>Duration</span>
+                <span style={consoleColRunErrorStyle}>Error</span>
+              </div>
 
-          {runs.map((r) => (
-            <div key={r.id} style={consoleRowStyle}>
-              <span style={consoleRowRunStatusCellStyle}>
-                <span style={consolePillStyle(runStatusTone(r.status))}>{r.status}</span>
-              </span>
-              <span style={consoleRowRunStartedCellStyle}>{formatDate(r.startedAt)}</span>
-              <span style={consoleRowRunDurationCellStyle}>{formatDuration(r.durationMs)}</span>
-              <span style={consoleRowRunErrorCellStyle} title={r.error?.message ?? ''}>
-                {r.error?.message ?? '—'}
-              </span>
+              {runs.length === 0 && <div style={consoleEmptyStyle}>No runs.</div>}
+
+              {runs.map((r) => (
+                <div key={r.id} style={consoleRowStyle}>
+                  <span style={consoleRowRunStatusCellStyle}>
+                    <span style={consolePillStyle(runStatusTone(r.status))}>{r.status}</span>
+                  </span>
+                  <span style={consoleRowRunStartedCellStyle}>{formatDate(r.startedAt)}</span>
+                  <span style={consoleRowRunDurationCellStyle}>{formatDuration(r.durationMs)}</span>
+                  <span style={consoleRowRunErrorCellStyle} title={r.error?.message ?? ''}>
+                    {r.error?.message ?? '—'}
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
+
+      {activeTab === 'connectors' &&
+        (connectors === null ? (
+          <div style={consoleLoadMoreErrorStyle}>Couldn&apos;t load connectors.</div>
+        ) : (
+          <div style={consoleTableStyle}>
+            <div style={consoleTableHeadRowStyle}>
+              <span style={consoleColConnectorTypeStyle}>Type</span>
+              <span style={consoleColConnectorNameStyle}>Name</span>
+              <span style={consoleColConnectorHealthStyle}>Health</span>
+              <span style={consoleColConnectorCreatedStyle}>Created</span>
+            </div>
+
+            {connectors.length === 0 && <div style={consoleEmptyStyle}>No connectors.</div>}
+
+            {connectors.map((c) => (
+              <div key={c.id} style={consoleRowStyle}>
+                <span style={consoleRowConnectorTypeCellStyle}>{c.connectorId}</span>
+                <span style={consoleRowConnectorNameCellStyle}>{c.displayName}</span>
+                <span style={consoleRowConnectorHealthCellStyle}>
+                  <span style={consolePillStyle(connectorHealthTone(c.lastTestStatus))}>
+                    {c.lastTestStatus ?? 'Untested'}
+                  </span>
+                  {c.lastTestLatencyMs !== null && (
+                    <span style={consoleRowConnectorHealthLatencyStyle}>{c.lastTestLatencyMs}ms</span>
+                  )}
+                </span>
+                <span style={consoleRowConnectorCreatedCellStyle}>{formatDate(c.createdAt)}</span>
+              </div>
+            ))}
+          </div>
+        ))}
     </div>
   );
+}
+
+function connectorHealthTone(status: 'ok' | 'error' | null): 'ok' | 'bad' | 'neutral' {
+  if (status === 'ok') return 'ok';
+  if (status === 'error') return 'bad';
+  return 'neutral';
 }
 
 function runStatusTone(status: string): 'ok' | 'warn' | 'bad' | 'neutral' {

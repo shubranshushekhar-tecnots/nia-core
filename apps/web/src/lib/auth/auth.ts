@@ -22,9 +22,15 @@ import { getPool } from "@/lib/db/pool";
  * constructed at module-import time — only the first time a caller
  * actually invokes getAuth() (i.e. at request time).
  */
-let authInstance: Auth | undefined;
+// Console v1 Slice 4: Auth's TExtraPlugins tuple must match the `plugins`
+// array passed to createAuth() below exactly (see @nia/auth's config.ts) —
+// otherwise this collapses to Auth's no-extra-plugins default and the two
+// types stop being assignable to each other.
+type WebAuth = Auth<[ReturnType<typeof nextCookies>]>;
 
-export function getAuth(): Auth {
+let authInstance: WebAuth | undefined;
+
+export function getAuth(): WebAuth {
   if (!authInstance) {
     authInstance = createAuth(getPool(), {
       baseURL: process.env.SITE_URL!,

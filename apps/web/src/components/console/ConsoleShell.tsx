@@ -28,9 +28,23 @@ import {
 // 'directory' is a real route in Slice 1 (docs/plans/console-plan.md §5a);
 // the rest render inert (matches decision 3 — the full nav is shown for
 // design fidelity — without linking anywhere that doesn't exist yet).
+//
+// 'users' (Slice 3e) is the one entry NOT in the design's own NAV array
+// (confirmed via `grep -o 'NAV *= *\[[^]]*\]'` against the design file —
+// it lists exactly the 7 other ids below, nothing named "users"). The
+// design's Directory screen conceptually folds org/user search into one
+// screen with a type filter (console-plan.md §1's screen-mapping table),
+// but that filter was never built — see ConsoleDirectoryClient's own doc
+// comment. Since search-by-email/name is an explicit v1 requirement
+// (step 12) with no existing destination to reach it from, a real nav
+// entry is added here (peer to 'directory', both list/search screens);
+// its detail screen (`/console/users/:userId`) intentionally gets no nav
+// entry of its own, same as Org Detail — reached only by a row/member
+// click, never the sidebar.
 const NAV: Array<{ id: string; label: string; icon: string; href?: string }> = [
   { id: 'dash', label: 'Platform', icon: '\u25D1' },
   { id: 'directory', label: 'Directory', icon: '\u25A4', href: '/console' },
+  { id: 'users', label: 'Users', icon: '\u25CB', href: '/console/users' },
   { id: 'notify', label: 'Notifications', icon: '\u25CD' },
   { id: 'revenue', label: 'Revenue', icon: '\u25C8' },
   { id: 'invoices', label: 'Invoices', icon: '\u25A6' },

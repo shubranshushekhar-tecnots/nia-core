@@ -1,6 +1,12 @@
 import { notFound } from 'next/navigation';
 import { getSessionUser } from '@/lib/auth/session';
-import { getConsoleOrg, getConsoleOrgRuns, type ConsoleRun } from '@/lib/api/consoleServer';
+import {
+  getConsoleOrg,
+  getConsoleOrgConnectors,
+  getConsoleOrgRuns,
+  type ConsoleConnector,
+  type ConsoleRun,
+} from '@/lib/api/consoleServer';
 import { ApiError } from '@/lib/api/server';
 import ConsoleShell from '@/components/console/ConsoleShell';
 import ConsoleOrgDetailClient from '@/components/console/ConsoleOrgDetailClient';
@@ -21,7 +27,7 @@ import ConsoleOrgDetailClient from '@/components/console/ConsoleOrgDetailClient'
 export default async function ConsoleOrgDetailPage({ params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params;
 
-  const [user, org, runs] = await Promise.all([
+  const [user, org, runs, connectors] = await Promise.all([
     getSessionUser(),
     getConsoleOrg(orgId).catch((err) => {
       if (err instanceof ApiError) {
@@ -34,19 +40,32 @@ export default async function ConsoleOrgDetailPage({ params }: { params: Promise
       notFound();
     }),
     // Slice 3c: the Runs tab is secondary to the org detail itself, so a
-    // failure here degrades to an empty list rather than notFound() —
-    // unlike getConsoleOrg above, which is the page's own existence check.
+    // failure here degrades gracefully rather than notFound() — unlike
+    // getConsoleOrg above, which is the page's own existence check. Small
+    // fix (2026-09-29): degrade to `null` (fetch failed), not `[]` (org
+    // genuinely has zero runs) — ConsoleOrgDetailClient renders these two
+    // cases with different copy so a transport error never looks like a
+    // quiet "no runs yet".
     getConsoleOrgRuns(orgId)
       .then((page) => page.runs)
-      .catch((err): ConsoleRun[] => {
+      .catch((err): ConsoleRun[] | null => {
         console.error('[console] GET /console/orgs/:orgId/runs failed', err);
-        return [];
+        return null;
+      }),
+    // Slice 3d: same degrade-to-null-on-failure pattern as runs above — a
+    // transport/5xx failure must never render as "this org has zero
+    // connectors" (see ConsoleOrgDetailClient's Connectors tab).
+    getConsoleOrgConnectors(orgId)
+      .then((page) => page.connectors)
+      .catch((err): ConsoleConnector[] | null => {
+        console.error('[console] GET /console/orgs/:orgId/connectors failed', err);
+        return null;
       }),
   ]);
 
   return (
     <ConsoleShell activeNavId="directory" email={user?.email ?? ''}>
-      <ConsoleOrgDetailClient org={org} runs={runs} />
+      <ConsoleOrgDetailClient org={org} runs={runs} connectors={connectors} />
     </ConsoleShell>
   );
 }

@@ -1,7 +1,7 @@
 'use server';
 
 import { apiFetchServer, ApiError } from '@/lib/api/server';
-import type { ConsoleOrgsPage } from '@/lib/api/consoleServer';
+import type { ConsoleOrgsPage, ConsoleUsersPage } from '@/lib/api/consoleServer';
 
 /**
  * Console v1 Slice 1 review fix (docs/plans/console-plan.md decision 10).
@@ -14,6 +14,23 @@ import type { ConsoleOrgsPage } from '@/lib/api/consoleServer';
  */
 export async function loadMoreOrgsAction(offset: number): Promise<ConsoleOrgsPage> {
   return apiFetchServer<ConsoleOrgsPage>(`/console/orgs?offset=${offset}`);
+}
+
+/**
+ * Slice 3e (docs/plans/console-plan.md, build order step 12): ConsoleUsers
+ * Client.tsx's search box and "Load more" button both call this — unlike
+ * ConsoleDirectoryClient's `search` (a client-side-only filter over the
+ * already-loaded page, see its own doc comment), GET /console/users does
+ * real server-side search by email/name (the user's own explicit spec), so
+ * a search-term change has to re-fetch from offset 0, not just filter what's
+ * already in the browser.
+ */
+export async function searchUsersAction(search: string, offset: number): Promise<ConsoleUsersPage> {
+  const query = new URLSearchParams();
+  if (search) query.set('search', search);
+  if (offset) query.set('offset', String(offset));
+  const qs = query.toString();
+  return apiFetchServer<ConsoleUsersPage>(`/console/users${qs ? `?${qs}` : ''}`);
 }
 
 /**
@@ -86,5 +103,30 @@ export async function unsuspendOrgAction(
   } catch (err) {
     if (err instanceof ApiError) return { ok: false, error: err.message };
     return { ok: false, error: "Couldn't unsuspend the organization. Try again." };
+  }
+}
+
+/**
+ * Slice 3f (docs/plans/console-plan.md, build order step 13, decisions 3-4):
+ * submits ConsoleUserDetailClient's "Sign out everywhere" reason +
+ * confirmation form to POST /console/users/:userId/revoke-sessions — same
+ * useTransition-driven, non-ActionState shape as suspendOrgAction above.
+ */
+export async function revokeUserSessionsAction(
+  userId: string,
+  reason: string,
+): Promise<{ ok: true; revokedSessionCount: number } | { ok: false; error: string }> {
+  try {
+    const result = await apiFetchServer<{ revokedSessionCount: number }>(
+      `/console/users/${encodeURIComponent(userId)}/revoke-sessions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      },
+    );
+    return { ok: true, ...result };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't sign this user out. Try again." };
   }
 }

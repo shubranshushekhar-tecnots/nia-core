@@ -1,4 +1,4 @@
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { pingConsole } from '@/lib/api/consoleServer';
 import { ApiError } from '@/lib/api/server';
 
@@ -36,6 +36,19 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
     await pingConsole();
   } catch (err) {
     if (err instanceof ApiError) {
+      // Console v1 Slice 4 (docs/plans/console-plan.md §4b): unlike every
+      // other outcome here, these two are shown to the staff member as an
+      // actionable next step rather than folded into the generic "console
+      // doesn't exist" 404 — requireStaff.ts (apps/api) only ever throws
+      // these once the caller is already confirmed staff, so redirecting
+      // (instead of hiding the console's existence) doesn't leak anything
+      // a non-staff caller couldn't already infer from a plain 403.
+      if (err.code === 'STAFF_2FA_REQUIRED') {
+        redirect('/console-enroll');
+      }
+      if (err.code === 'STAFF_SESSION_EXPIRED') {
+        redirect('/login');
+      }
       if (err.status >= 500) {
         console.error('[console] GET /console/ping failed with a 5xx', err);
       }

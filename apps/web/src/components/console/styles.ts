@@ -425,6 +425,16 @@ export const consoleLoadMoreErrorStyle: CSSProperties = {
   color: 'var(--error-deep)',
 };
 
+// Small fixes (2026-09-29): the Runs tab's "Showing the latest 50 runs"
+// caption — same muted treatment as consoleEmptyStyle, but a caption sits
+// above the table (not inside it as the sole row), so it's a separate
+// style rather than reusing consoleEmptyStyle's row padding.
+export const consoleRunsCaptionStyle: CSSProperties = {
+  fontSize: 12.5,
+  color: 'var(--ink3)',
+  paddingBottom: 8,
+};
+
 // Org Detail screen (Slice 2, console-plan.md build order steps 6-7).
 // Breadcrumb/header/tabs ported pixel-for-pixel from designs/Nia Console
 // (superadmin).html's isOrgDetail template. See ConsoleOrgDetailClient's own
@@ -757,4 +767,55 @@ export const consoleRowRunErrorCellStyle: CSSProperties = {
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
+};
+
+// Connectors table (Slice 3d, docs/plans/console-plan.md build order step
+// 11). Same flex-basis convention as the Members/Runs tables above. "Type"
+// is the connector_id slug (e.g. "mysql"), "Health" is the last-test
+// status pill (same consolePillStyle helper the Runs tab's status column
+// already uses) plus latency when available.
+export const consoleColConnectorTypeStyle: CSSProperties = { flex: '0 1 110px', minWidth: 90 };
+export const consoleColConnectorNameStyle: CSSProperties = { flex: '2 1 200px', minWidth: 150 };
+export const consoleColConnectorHealthStyle: CSSProperties = { flex: '0 1 150px', minWidth: 130 };
+export const consoleColConnectorCreatedStyle: CSSProperties = {
+  flex: '0 1 130px',
+  minWidth: 106,
+  textAlign: 'right',
+};
+
+export const consoleRowConnectorTypeCellStyle: CSSProperties = {
+  flex: '0 1 110px',
+  minWidth: 90,
+  fontFamily: 'var(--font-data)',
+  fontSize: 11.5,
+  color: 'var(--ink3)',
+};
+export const consoleRowConnectorNameCellStyle: CSSProperties = {
+  flex: '2 1 200px',
+  minWidth: 150,
+  fontSize: 13,
+  color: 'var(--ink)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+export const consoleRowConnectorHealthCellStyle: CSSProperties = {
+  flex: '0 1 150px',
+  minWidth: 130,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+};
+export const consoleRowConnectorHealthLatencyStyle: CSSProperties = {
+  fontFamily: 'var(--font-data)',
+  fontSize: 11,
+  color: 'var(--ink4)',
+};
+export const consoleRowConnectorCreatedCellStyle: CSSProperties = {
+  flex: '0 1 130px',
+  minWidth: 106,
+  textAlign: 'right',
+  fontFamily: 'var(--font-data)',
+  fontSize: 11.5,
+  color: 'var(--ink4)',
 };
