@@ -2,20 +2,19 @@
 
 import { useRef, useState } from 'react';
 import { buildReadOnlyStatementText, getHelpSection, suggestReadOnlyUsername, type ConfigField } from '@nia/schemas';
-import { autoCompleteFor } from '@/lib/connections/formFields';
+import { autoCompleteFor, urlPastePlaceholder } from '@/lib/connections/formFields';
 import { parseExtraSchemas } from '@/lib/connections/parseExtraSchemas';
 import HelpPanel from './HelpPanel';
 import { modalErrorStyle, modalFieldStyle, modalLabelStyle, modalTitleStyle } from './styles';
 
-// Shared connect-form body for both AddConnectionDialog (single-step dialog,
-// Server Action submit) and ConnectPanel (3-step wizard, browser-fetch
-// submit — the Test step needs the created connection's id immediately, see
-// connectionsClient.ts's createConnection() header comment). Those two
-// callers keep their own shell: the <form> tag itself (different submit
-// mechanics), the Cancel/Submit actions row (different labels/disabled
-// logic), and — for ConnectPanel — the step tracker and Test/Done steps.
-// This component renders only the fields + help affordances in between,
-// as a fragment meant to be a direct child of the caller's own <form>.
+// Connect-form body, used by the canvas's AddConnectionDialog (single-step
+// dialog, Server Action submit) — the only entry point for adding a
+// connection (host, credentials, test). The Connections page itself only
+// installs/uninstalls connectors (ConnectorCard); it never renders this
+// form. The caller keeps its own shell: the <form> tag itself, and the
+// Cancel/Submit actions row. This component renders only the fields + help
+// affordances in between, as a fragment meant to be a direct child of the
+// caller's own <form>.
 
 // Generic structural check, not tied to a specific connectorId — any manifest
 // shaped like a plain Postgres/MySQL credential form (host/port/database/
@@ -76,10 +75,9 @@ export default function ConnectionForm({
   connectorName: string;
   connectorId: string;
   configSchema: ConfigField[];
-  // Distinguishes each caller's field ids: AddConnectionDialog uses
-  // "connection" (matches e2e's #connection-field-* locators in
-  // help-panel.spec.ts/canvas.spec.ts — do not change), ConnectPanel uses
-  // "connect".
+  // Namespaces this instance's field ids. AddConnectionDialog (the sole
+  // caller) passes "connection" — matches e2e's #connection-field-*
+  // locators in help-panel.spec.ts/canvas.spec.ts, do not change.
   idPrefix: string;
   errors?: ConnectionFormErrors;
 }) {
@@ -177,7 +175,7 @@ export default function ConnectionForm({
           <input
             id={`${idPrefix}-paste-url`}
             type="text"
-            placeholder="postgres://user:pass@host:5432/db?sslmode=require"
+            placeholder={urlPastePlaceholder(connectorId)}
             style={modalFieldStyle(false)}
             onChange={(e) => applyPastedUrl(e.target.value)}
           />

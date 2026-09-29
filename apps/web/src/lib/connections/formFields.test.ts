@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { ConfigField } from "@nia/schemas";
-import { autoCompleteFor } from "./formFields.js";
+import { autoCompleteFor, urlPastePlaceholder } from "./formFields.js";
 
 function field(overrides: Partial<ConfigField>): ConfigField {
   return { key: "x", label: "X", type: "text", required: true, secret: false, ...overrides };
@@ -17,5 +17,18 @@ describe("autoCompleteFor", () => {
 
   it("leaves non-credential fields (host, port, database) unset", () => {
     expect(autoCompleteFor(field({ key: "host", type: "text" }))).toBeUndefined();
+  });
+});
+
+describe("urlPastePlaceholder", () => {
+  it("shows each connector's own URI scheme, not a hardcoded default", () => {
+    expect(urlPastePlaceholder("postgres")).toMatch(/^postgres:\/\//);
+    expect(urlPastePlaceholder("supabase")).toMatch(/^postgres:\/\//);
+    expect(urlPastePlaceholder("mysql")).toMatch(/^mysql:\/\//);
+    expect(urlPastePlaceholder("mongodb")).toMatch(/^mongodb:\/\//);
+  });
+
+  it("falls back to a postgres example for an unrecognized connector id", () => {
+    expect(urlPastePlaceholder("some-future-connector")).toMatch(/^postgres:\/\//);
   });
 });

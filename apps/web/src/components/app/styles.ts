@@ -1297,6 +1297,241 @@ export const connectionsAvailableGridStyle: CSSProperties = {
   gap: 20,
 };
 
+// Step 2 (page layout redesign) — header, "Your connections" table and
+// catalog toolbar additions. Connector-card internals (Step 3) keep using
+// the styles below this block unchanged.
+
+export const connectionsPageHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 24,
+  flexWrap: 'wrap',
+};
+
+export const connectionsHeaderButtonsStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  flex: 'none',
+};
+
+// "Request a connector" has no backend action yet (no request-a-connector
+// endpoint/table exists) — rendered inert like the Upload CSV button above,
+// not wired to an invented action.
+export const connectionsRequestBtnStyle: CSSProperties = {
+  height: 36,
+  boxSizing: 'border-box',
+  padding: '0 16px',
+  borderRadius: 8,
+  fontFamily: 'inherit',
+  fontSize: 13.5,
+  fontWeight: 600,
+  color: 'var(--text-3)',
+  background: 'var(--surface)',
+  border: '1px solid var(--line)',
+  cursor: 'not-allowed',
+  whiteSpace: 'nowrap',
+};
+
+export const connectionsHealthFilterRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  flex: 'none',
+  flexWrap: 'wrap',
+};
+
+export function connectionsHealthFilterBtnStyle(active: boolean): CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    height: 28,
+    boxSizing: 'border-box',
+    padding: '0 11px',
+    borderRadius: 999,
+    fontFamily: 'inherit',
+    fontSize: 12.5,
+    fontWeight: 600,
+    cursor: 'pointer',
+    border: active ? '1px solid var(--text)' : '1px solid var(--line)',
+    background: active ? 'var(--text)' : 'var(--surface)',
+    color: active ? 'var(--onacc)' : 'var(--text-2)',
+  };
+}
+
+export const connectionsTableCardStyle: CSSProperties = {
+  borderRadius: 12,
+  border: '1px solid var(--line)',
+  background: 'var(--surface)',
+  overflow: 'hidden',
+  overflowX: 'auto',
+};
+
+export const connectionsTableStyle: CSSProperties = {
+  width: '100%',
+  borderCollapse: 'collapse',
+};
+
+export const connectionsTableHeadRowStyle: CSSProperties = {
+  borderBottom: '1px solid var(--line)',
+};
+
+export const connectionsTableThStyle: CSSProperties = {
+  textAlign: 'left',
+  padding: '10px 16px',
+  fontFamily: 'var(--font-mono)',
+  fontSize: 10.5,
+  fontWeight: 600,
+  letterSpacing: '.06em',
+  textTransform: 'uppercase',
+  color: 'var(--text-4)',
+  whiteSpace: 'nowrap',
+};
+
+export const connectionsTableRowStyle: CSSProperties = {
+  borderBottom: '1px solid var(--line)',
+};
+
+export const connectionsTableTdStyle: CSSProperties = {
+  padding: '14px 16px',
+  verticalAlign: 'middle',
+  fontSize: 13,
+  color: 'var(--text-2)',
+};
+
+export const connectionsTableConnCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+};
+
+export const connectionsTableTileStyle: CSSProperties = {
+  width: 36,
+  height: 36,
+  flex: 'none',
+  borderRadius: 10,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: '#fff',
+  border: '1px solid rgba(203,213,225,.6)',
+};
+
+export const connectionsTableHostStyle: CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: 12,
+  color: 'var(--text-2)',
+  maxWidth: 220,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  display: 'block',
+};
+
+export const connectionsTableActionsCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  gap: 8,
+  position: 'relative',
+};
+
+export const connectionsTableMenuBtnStyle: CSSProperties = {
+  width: 28,
+  height: 28,
+  flex: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 7,
+  border: '1px solid var(--line)',
+  background: 'var(--surface)',
+  color: 'var(--text-3)',
+  cursor: 'pointer',
+  fontSize: 15,
+  lineHeight: 1,
+};
+
+export const connectionsTableMenuStyle: CSSProperties = {
+  position: 'absolute',
+  top: '100%',
+  right: 0,
+  marginTop: 4,
+  minWidth: 160,
+  background: 'var(--surface)',
+  border: '1px solid var(--line)',
+  borderRadius: 10,
+  boxShadow: '0 8px 24px rgba(15,23,42,.14)',
+  padding: 4,
+  zIndex: 20,
+  display: 'flex',
+  flexDirection: 'column',
+};
+
+export const connectionsTableMenuItemStyle: CSSProperties = {
+  display: 'block',
+  width: '100%',
+  textAlign: 'left',
+  padding: '8px 10px',
+  borderRadius: 7,
+  border: 'none',
+  background: 'transparent',
+  fontFamily: 'inherit',
+  fontSize: 13,
+  color: 'var(--text)',
+  cursor: 'pointer',
+};
+
+export const connectionsCatalogHintStyle: CSSProperties = {
+  textAlign: 'center',
+  fontSize: 12.5,
+  color: 'var(--text-3)',
+};
+
+export const connectionsEmptyPanelStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1.1fr) minmax(0, .9fr)',
+  gap: 32,
+  padding: 28,
+  borderRadius: 14,
+  border: '1px solid var(--line)',
+  background: 'var(--surface)',
+};
+
+export const connectionsEmptyStepsColStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 18,
+};
+
+export const connectionsEmptyStepStyle: CSSProperties = {
+  display: 'flex',
+  gap: 12,
+  alignItems: 'flex-start',
+};
+
+export const connectionsEmptyStepNumStyle: CSSProperties = {
+  width: 24,
+  height: 24,
+  flex: 'none',
+  borderRadius: '50%',
+  background: 'var(--surface2)',
+  color: 'var(--text-2)',
+  fontSize: 12,
+  fontWeight: 700,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+export const connectionsEmptySuggestColStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+};
+
 // Glassmorphic card shell, ported 1:1 from the design's connector-card
 // markup (frosted background + soft indigo-tinted shadow).
 export const connectionsConnectorCardStyle: CSSProperties = {
@@ -1400,9 +1635,10 @@ export const connectionsInstallRowStyle: CSSProperties = {
 };
 
 // Default cursor is 'pointer' — this is shared by the real, clickable
-// InstallButton (see ConnectionsClient) as well as the always-disabled
-// decorative "Coming soon" button. Callers that render it disabled must
-// override cursor to 'not-allowed' themselves (inline styles win over the
+// install button (see ConnectorCard) as well as the always-disabled
+// decorative "Coming soon" button and the non-interactive "Installed"
+// state's checkmark. Callers that render it disabled must override cursor
+// to 'not-allowed'/'default' themselves (inline styles win over the
 // browser's native disabled-cursor default, so it can't be left implicit).
 export const connectionsInstallBtnStyle: CSSProperties = {
   width: 38,
@@ -1605,67 +1841,6 @@ export const connectionsUnavailableGraphicStyle: CSSProperties = {
     'repeating-linear-gradient(135deg, var(--line) 0, var(--line) 1px, transparent 1px, transparent 14px)',
   maskImage: 'radial-gradient(circle at 70% 70%, black 0%, transparent 70%)',
   WebkitMaskImage: 'radial-gradient(circle at 70% 70%, black 0%, transparent 70%)',
-};
-
-// ConnectPanel (Details -> Test -> Done). Reuses modalOverlayStyle/
-// modalCardStyle etc. for the shell — these are just the extra bits that
-// dialog doesn't need: a 3-step header and the single aggregate
-// test-result row (see AskUserQuestion answer in the plan: the design's
-// 5-row per-phase checklist is deferred to TODO.md until the connector
-// services actually report per-phase results).
-export const connectPanelStepsStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  marginBottom: 4,
-};
-
-export function connectPanelStepStyle(state: 'done' | 'active' | 'pending'): CSSProperties {
-  return {
-    fontSize: 11.5,
-    fontWeight: 600,
-    letterSpacing: '.02em',
-    color: state === 'pending' ? 'var(--text-4)' : state === 'active' ? 'var(--ink)' : 'var(--live-fill)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-  };
-}
-
-export const connectPanelStepDividerStyle: CSSProperties = {
-  width: 14,
-  height: 1,
-  background: 'var(--line2)',
-};
-
-export function connectPanelTestRowStyle(status: 'pending' | 'ok' | 'error'): CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    padding: '12px 14px',
-    borderRadius: 10,
-    border: `1px solid ${status === 'ok' ? 'var(--live-fill)' : status === 'error' ? 'var(--bad, #d64545)' : 'var(--line2)'}`,
-    background: 'var(--surface)',
-  };
-}
-
-export const connectPanelTestDotStyle: CSSProperties = {
-  width: 9,
-  height: 9,
-  borderRadius: '50%',
-  flex: 'none',
-};
-
-export const connectPanelTestLabelStyle: CSSProperties = {
-  fontSize: 13.5,
-  fontWeight: 600,
-  color: 'var(--ink)',
-};
-
-export const connectPanelTestMetaStyle: CSSProperties = {
-  fontSize: 12,
-  color: 'var(--ink4)',
 };
 
 // Chat surface (/app/chat). Style values are ported from the exact CSS

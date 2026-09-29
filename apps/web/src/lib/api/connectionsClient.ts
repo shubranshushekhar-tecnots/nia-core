@@ -1,6 +1,6 @@
 import type { EntityProfile, EntityRef, IntrospectResponse } from '@nia/schemas';
 import { ensureBearerToken } from '@/lib/auth/browserSession';
-import type { Connection, ConnectorInstall } from '@/lib/connections/types';
+import type { Connection } from '@/lib/connections/types';
 
 /**
  * Browser-side calls for connection-scoped reads needed by client components
@@ -282,66 +282,6 @@ export async function getConnectionUsages(connectionId: string): Promise<{ workf
     );
   }
   return res.json() as Promise<{ workflows: ConnectionUsage[] }>;
-}
-
-/**
- * ConnectPanel's Details step, called only after a `NOT_INSTALLED` (409)
- * error from createConnection() below — `POST /connections` is guarded by
- * an install-before-connect check (apps/api/src/services/connections.ts
- * ~line 200) with no auto-install path server-side, so the client must
- * install first, then retry. Same route/contract as
- * `installConnectorAction` in lib/connections/actions.ts, just called
- * directly instead of through a Server Action so ConnectPanel can await it
- * inline before its createConnection() retry.
- */
-export async function installConnector(connectorId: string): Promise<ConnectorInstall> {
-  const res = await fetch('/api/backend/connectors/installs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(await authHeaders()) },
-    body: JSON.stringify({ connectorId }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new ConnectionsApiError(
-      res.status,
-      body?.error?.code ?? 'UNKNOWN',
-      body?.error?.message ?? res.statusText,
-      body?.error?.details,
-    );
-  }
-  return res.json() as Promise<ConnectorInstall>;
-}
-
-/**
- * ConnectPanel's Details step. Browser-side (not a Server Action) so the
- * created connection's id is available immediately for the Test step —
- * `lib/connections/actions.ts`'s `createConnectionAction` (used by
- * AddConnectionDialog) discards the POST response body and only returns a
- * bare `ActionState`, which has no id field. Same route/contract as that
- * Server Action (`POST /connections` with `{ connectorId, displayName,
- * fields }`), just returning the parsed `Connection` instead of throwing it
- * away — no backend change.
- */
-export async function createConnection(
-  connectorId: string,
-  displayName: string,
-  fields: Record<string, unknown>,
-): Promise<Connection> {
-  const res = await fetch('/api/backend/connections', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(await authHeaders()) },
-    body: JSON.stringify({ connectorId, displayName, fields }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new ConnectionsApiError(
-      res.status,
-      body?.error?.code ?? 'UNKNOWN',
-      body?.error?.message ?? res.statusText,
-      body?.error?.details,
-    );
-  }
-  return res.json() as Promise<Connection>;
 }
 
 /**

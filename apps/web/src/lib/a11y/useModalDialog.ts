@@ -10,13 +10,12 @@ const FOCUSABLE_SELECTOR =
  * Esc-to-close + real Tab containment + focus restore for a modal dialog.
  * Extends HelpPanel.tsx's original inline effect (mount-only: focus the
  * panel, wire Esc, restore focus to whatever was focused before the modal
- * opened — later extracted to hooks/useModalA11y.ts for ConnectPanel/
- * HelpPanel to share) with actual focus trapping: Tab/Shift+Tab cycle
- * within the dialog's focusable elements instead of escaping into the page
- * behind the overlay. This is the single canonical modal a11y hook —
- * hooks/useModalA11y.ts's simpler (no-trap) version was retired in favor
- * of this one; every dialog (AddConnectionDialog, EditConnectionDialog,
- * ConnectPanel, HelpPanel) uses this.
+ * opened — later extracted to hooks/useModalA11y.ts for dialogs to share)
+ * with actual focus trapping: Tab/Shift+Tab cycle within the dialog's
+ * focusable elements instead of escaping into the page behind the overlay.
+ * This is the single canonical modal a11y hook — hooks/useModalA11y.ts's
+ * simpler (no-trap) version was retired in favor of this one; every dialog
+ * (AddConnectionDialog, EditConnectionDialog, HelpPanel) uses this.
  *
  * Attach the returned ref to the dialog's outer element (role="dialog",
  * tabIndex={-1}). On mount, focus moves to the dialog's first focusable

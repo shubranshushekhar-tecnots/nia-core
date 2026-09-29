@@ -1,94 +1,65 @@
 'use client';
 
-import { useActionState, useEffect, useMemo, useRef, useState } from 'react';
+import { useActionState, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { CONNECTOR_MANIFESTS } from '@nia/schemas';
 import type { Connection, ConnectorCatalogEntry, ConnectorInstall } from '@/lib/connections/types';
+import { connectionRegion } from '@/lib/connections/types';
 import type { WriteGrant } from '@/lib/api/connectionsClient';
 import { summarizeGrants } from '@/lib/connections/grantsSummary';
-import { testConnectionAction, refreshConnectionSchemaAction, deleteConnectionAction, uninstallConnectorAction } from '@/lib/connections/actions';
+import {
+  testConnectionAction,
+  refreshConnectionSchemaAction,
+  deleteConnectionAction,
+  uninstallConnectorAction,
+  installConnectorAction,
+} from '@/lib/connections/actions';
 import { CATALOG_ORDER, CONNECTOR_CATALOG_META, catalogIndexLabel } from '@/lib/connections/catalogMeta';
 import { relativeTime } from '@/lib/time';
 import type { ConnectionHealth, ConnectorCategory } from './styles';
 import {
-  categoryDotColor,
+  healthDotColor,
   connectionsAvailableGridStyle,
-  connectionsBadgeDotStyle,
-  connectionsBadgeHandleStyle,
   connectionsBadgeLinkStyle,
   connectionsBadgeMetaStyle,
-  connectionsBadgeStyle,
-  connectionsBadgesRowStyle,
+  connectionsCatalogHintStyle,
+  connectionsEmptyPanelStyle,
   connectionsEmptyResultsStyle,
+  connectionsEmptyStepStyle,
+  connectionsEmptyStepNumStyle,
+  connectionsEmptyStepsColStyle,
+  connectionsEmptySuggestColStyle,
   connectionsFilterListStyle,
   connectionsFilterPillStyle,
-  connectionsHealthDotStyle,
-  connectionsHealthDotsStyle,
-  connectionsHealthStripStyle,
-  connectionsProviderActionsStyle,
-  connectionsProviderIconStyle,
-  connectionsProviderListStyle,
-  connectionsProviderMetaStyle,
-  connectionsProviderNameColStyle,
-  connectionsProviderNameStyle,
-  connectionsProviderRowStyle,
+  connectionsHeaderButtonsStyle,
+  connectionsHealthFilterBtnStyle,
+  connectionsHealthFilterRowStyle,
+  connectionsPageHeaderStyle,
+  connectionsRequestBtnStyle,
   connectionsSearchBoxStyle,
   connectionsSectionHeaderStyle,
   connectionsSectionMetaStyle,
   connectionsSectionTitleStyle,
   connectionsSubtitleStyle,
+  connectionsTableActionsCellStyle,
+  connectionsTableCardStyle,
+  connectionsTableConnCellStyle,
+  connectionsTableHeadRowStyle,
+  connectionsTableHostStyle,
+  connectionsTableMenuBtnStyle,
+  connectionsTableMenuItemStyle,
+  connectionsTableMenuStyle,
+  connectionsTableRowStyle,
+  connectionsTableStyle,
+  connectionsTableTdStyle,
+  connectionsTableThStyle,
+  connectionsTableTileStyle,
   connectionsToolbarRowStyle,
-  connectionsUninstallBtnStyle,
-  connectionsUploadBtnStyle,
-  connectionsUploadIconStyle,
-  connectionsUploadRowStyle,
-  pageEmptyCardStyle,
   pageTitleStyle,
 } from './styles';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
 import EditConnectionDialog from './EditConnectionDialog';
 import ConnectorCard from './ConnectorCard';
 import ConnectorLogo from './ConnectorLogo';
-import ConnectPanel from './ConnectPanel';
-
-type ConnectionBadge = {
-  id: string;
-  handle: string;
-  owner: string;
-  health: ConnectionHealth;
-  latencyMs?: number;
-  errorNote?: string;
-};
-
-type Provider = {
-  id: string;
-  installId: string;
-  name: string;
-  initials: string;
-  version: string;
-  lastUsed: string;
-  category: ConnectorCategory;
-  connections: ConnectionBadge[];
-};
-
-// The manifest's own category enum (database/server/product/ai_vector/bi/
-// files) predates and doesn't line up 1:1 with this page's design-derived
-// ConnectorCategory — every shipped manifest is "database" today, so this
-// only matters once a non-database manifest ships.
-function mapManifestCategory(category: string): ConnectorCategory {
-  switch (category) {
-    case 'server':
-      return 'warehouses';
-    case 'bi':
-      return 'bi';
-    case 'ai_vector':
-      return 'ai-vector';
-    case 'files':
-      return 'files';
-    default:
-      return 'databases';
-  }
-}
 
 const CATEGORY_LABEL: Record<ConnectorCategory, string> = {
   databases: 'Databases',
@@ -100,9 +71,17 @@ const CATEGORY_LABEL: Record<ConnectorCategory, string> = {
 
 const CATEGORIES: ConnectorCategory[] = ['databases', 'warehouses', 'bi', 'ai-vector', 'files'];
 
-function badgeLabel(health: ConnectionHealth) {
-  if (health === 'idle') return 'idle';
-  return null;
+const HEALTH_FILTERS: { key: ConnectionHealth | 'all'; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'ok', label: 'Healthy' },
+  { key: 'idle', label: 'Idle' },
+  { key: 'error', label: 'Needs attention' },
+];
+
+function healthLabel(health: ConnectionHealth): string {
+  if (health === 'ok') return 'Healthy';
+  if (health === 'error') return 'Needs attention';
+  return 'Idle';
 }
 
 function TestButton({ connectionId }: { connectionId: string }) {
@@ -125,7 +104,7 @@ function RefreshSchemaButton({ connectionId }: { connectionId: string }) {
   const [state, formAction, pending] = useActionState(refreshConnectionSchemaAction.bind(null, connectionId), null);
   return (
     <form action={formAction} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <button type="submit" disabled={pending} style={connectionsBadgeLinkStyle}>
+      <button type="submit" disabled={pending} style={connectionsTableMenuItemStyle}>
         {pending ? 'Refreshing\u2026' : 'Refresh schema'}
       </button>
       {state?.error && <ActionErrorDetail error={state.error} fix={state.errorFix} details={state.errorDetails} />}
@@ -189,8 +168,74 @@ function WriteAccessStatus({ grants }: { grants: WriteGrant[] | null }) {
   );
 }
 
+// One "Install" form for the empty-state's suggested-connectors list — the
+// exact same installConnectorAction the catalog grid's ConnectorCard uses,
+// just rendered compactly since the full card doesn't fit a 2-column panel.
+function SuggestedConnectorRow({ id, name, onInstalled }: { id: string; name: string; onInstalled: (connectorId: string) => void }) {
+  const [state, formAction, pending] = useActionState(installConnectorAction.bind(null, id), null);
+  useEffect(() => {
+    if (state?.success) onInstalled(id);
+  }, [state, id, onInstalled]);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span style={connectionsTableTileStyle}>
+        <ConnectorLogo id={id} size={18} />
+      </span>
+      <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)', flex: 1 }}>{name}</span>
+      <form action={formAction}>
+        <button type="submit" disabled={pending} style={connectionsRequestBtnStyle}>
+          {pending ? 'Installing\u2026' : 'Install'}
+        </button>
+      </form>
+      {state?.error && <ActionErrorDetail error={state.error} fix={state.errorFix} details={state.errorDetails} />}
+    </div>
+  );
+}
+
+// The row menu's outside-click handler needs a stable way to scope clicks
+// to the currently-open menu without a per-row ref map; a data attribute
+// keyed by the open row's own id is simpler than tracking N refs.
+function RowMenu({ rowKey, open, onToggle, children }: { rowKey: string; open: boolean; onToggle: (key: string | null) => void; children: ReactNode }) {
+  return (
+    <div data-row-menu={rowKey} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="More actions"
+        style={connectionsTableMenuBtnStyle}
+        onClick={() => onToggle(open ? null : rowKey)}
+      >
+        {'\u22ef'}
+      </button>
+      {open && (
+        <div role="menu" style={connectionsTableMenuStyle}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type ConnectionRow = {
+  kind: 'connection';
+  key: string;
+  connectorId: string;
+  providerName: string;
+  connection: Connection;
+  health: ConnectionHealth;
+};
+
+type EmptyProviderRow = {
+  kind: 'empty';
+  key: string;
+  connectorId: string;
+  providerName: string;
+  installId: string;
+};
+
 export default function ConnectionsClient({
-  currentUserId,
+  currentUserId: _currentUserId,
   catalog,
   installs,
   connections,
@@ -205,19 +250,28 @@ export default function ConnectionsClient({
   const router = useRouter();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<ConnectorCategory | 'all'>('all');
+  const [healthFilter, setHealthFilter] = useState<ConnectionHealth | 'all'>('all');
+  const [openMenuRowId, setOpenMenuRowId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<
     | { type: 'delete'; connectionId: string; handle: string }
     | { type: 'uninstall'; installId: string; name: string }
     | null
   >(null);
   const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
-  const [connectingId, setConnectingId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  // Install flow: a real connector card installs directly (no credentials
+  // form on this page — adding a connection is canvas-only, per the
+  // intended product model). Once installConnectorAction succeeds and the
+  // revalidated `installs` prop includes the connector, scroll to its row
+  // and briefly highlight it.
+  const providerRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+  const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
+  const [highlightedProviderId, setHighlightedProviderId] = useState<string | null>(null);
 
   // Condition #5: "/" focuses search, everywhere except while the user is
   // already typing into a field (an input/textarea/contenteditable, or any
-  // open modal's own fields — ConnectPanel/EditConnectionDialog render over
-  // this page rather than unmounting it).
+  // open modal's own fields — EditConnectionDialog renders over this page
+  // rather than unmounting it).
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== '/') return;
@@ -231,105 +285,112 @@ export default function ConnectionsClient({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  /**
-   * Bug 1 (condition #4 — explain, don't fix): PROVIDERS is keyed off
-   * `installs`, not `connections`, so a connector with `connections` rows
-   * but no matching `connector_installs` row for the CURRENT actor scope
-   * is invisible here even though its data still exists.
-   *
-   * This can't happen through the normal create/uninstall paths — both are
-   * scope-guarded:
-   *   - create requires a connector_installs row in the SAME scope at
-   *     creation time (apps/api/src/services/connections.ts:193-202,
-   *     NOT_INSTALLED).
-   *   - uninstall refuses while any connection in the SAME scope still
-   *     references the connector (apps/api/src/services/connectors.ts:
-   *     123-137, CONNECTOR_IN_USE).
-   * Both guards filter by `workspaceWhere(scope, ...)`
-   * (apps/api/src/lib/workspaceScope.ts:13-15), where scope is
-   * `{ orgId }` if the actor currently has an org, else `{ ownerId }`.
-   * Neither `connections` nor `connector_installs` has a scope-independent
-   * link between them (connector_id is a free-text slug, not a foreign
-   * key — see connections.ts:190-192's own comment) — each row's org_id/
-   * owner_id is fixed at the moment IT was written, independently.
-   *
-   * So the only way to reach this state is a scope mismatch between when
-   * the connection was created and when it's later viewed: an install and
-   * its connection both written under one scope (e.g. a personal
-   * workspace, `{ ownerId }`), where the connection's `connections` row
-   * survives but the actor's *current* effective scope has since changed
-   * (e.g. they've joined/switched into an org, so every query now runs
-   * under `{ orgId }` instead) — that connection is still there, but
-   * `workspaceWhere` on `connector_installs` for the new scope returns no
-   * rows for that connector_id, even though a `connections` row (written
-   * under the old scope) still exists. The individual-workspace migrations
-   * (0003_owner_enum_value.sql, 0004_owner_rename.sql,
-   * 0005_individual_workspace.sql) are the most likely place this
-   * scope value could have shifted under an existing row without both
-   * tables being backfilled together — not confirmed against a real
-   * broken row, just the only mechanism the guards above leave open.
-   */
-  const PROVIDERS: Provider[] = useMemo(() => {
-    return installs.map((install) => {
-      const catalogEntry = catalog.find((c) => c.id === install.connectorId);
-      const providerConnections = connections.filter((c) => c.connectorId === install.connectorId);
-      const lastUsedAt = providerConnections
-        .map((c) => c.lastUsedAt)
-        .filter((v): v is string => Boolean(v))
-        .sort()
-        .pop();
+  // Closes the open "\u22ef" row menu on outside click or Escape.
+  useEffect(() => {
+    if (!openMenuRowId) return;
+    function handleClick(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (!target.closest(`[data-row-menu="${openMenuRowId}"]`)) setOpenMenuRowId(null);
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpenMenuRowId(null);
+    }
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [openMenuRowId]);
 
-      return {
-        id: install.connectorId,
+  /**
+   * Condition #6 fix: the table is now built primarily from `connections`
+   * (every real connection always gets a row, regardless of whether its
+   * `connector_installs` row is visible in the current actor scope — see
+   * providers.ts's header comment for the scope-mismatch mechanism this
+   * closes), with installed-but-connectionless connectors appended after so
+   * a fresh install still shows up immediately (rule: "the connector
+   * appears under Your connections/Connected at the top").
+   */
+  const rows: (ConnectionRow | EmptyProviderRow)[] = useMemo(() => {
+    const out: (ConnectionRow | EmptyProviderRow)[] = [];
+    for (const c of connections) {
+      const meta = CONNECTOR_CATALOG_META[c.connectorId];
+      const catalogEntry = catalog.find((ce) => ce.id === c.connectorId);
+      const health: ConnectionHealth = c.lastTestStatus === 'ok' ? 'ok' : c.lastTestStatus === 'error' ? 'error' : 'idle';
+      out.push({
+        kind: 'connection',
+        key: c.id,
+        connectorId: c.connectorId,
+        providerName: meta?.name ?? catalogEntry?.name ?? c.connectorId,
+        connection: c,
+        health,
+      });
+    }
+    const connectedConnectorIds = new Set(connections.map((c) => c.connectorId));
+    for (const install of installs) {
+      if (connectedConnectorIds.has(install.connectorId)) continue;
+      const meta = CONNECTOR_CATALOG_META[install.connectorId];
+      const catalogEntry = catalog.find((ce) => ce.id === install.connectorId);
+      out.push({
+        kind: 'empty',
+        key: install.id,
+        connectorId: install.connectorId,
+        providerName: meta?.name ?? catalogEntry?.name ?? install.connectorId,
         installId: install.id,
-        name: catalogEntry?.name ?? install.connectorId,
-        initials: (catalogEntry?.name ?? install.connectorId).slice(0, 2),
-        version: catalogEntry?.version ?? '',
-        lastUsed: lastUsedAt ? relativeTime(lastUsedAt) : 'never used',
-        category: mapManifestCategory(catalogEntry?.category ?? 'database'),
-        connections: providerConnections.map((c) => ({
-          id: c.id,
-          handle: c.handle,
-          owner: c.ownerUserId === currentUserId ? 'you' : '',
-          health: (c.lastTestStatus === 'ok' ? 'ok' : c.lastTestStatus === 'error' ? 'error' : 'idle') as ConnectionHealth,
-          latencyMs: c.lastTestLatencyMs ?? undefined,
-          errorNote: c.lastTestStatus === 'error' ? 'test failed' : undefined,
-        })),
-      };
-    });
-  }, [installs, catalog, connections, currentUserId]);
+      });
+    }
+    return out;
+  }, [connections, installs, catalog]);
+
+  // Ref/highlight target for a connectorId is the first row belonging to
+  // it, whichever kind that turns out to be.
+  const firstRowKeyByConnector = useMemo(() => {
+    const seen = new Set<string>();
+    const map: Record<string, string> = {};
+    for (const r of rows) {
+      if (!seen.has(r.connectorId)) {
+        seen.add(r.connectorId);
+        map[r.connectorId] = r.key;
+      }
+    }
+    return map;
+  }, [rows]);
 
   const installedIds = useMemo(() => new Set(installs.map((i) => i.connectorId)), [installs]);
+  const installIdByConnector = useMemo(() => new Map(installs.map((i) => [i.connectorId, i.id])), [installs]);
 
-  // Condition #2: catalog grid is driven entirely by catalogMeta.ts's
-  // static 12-connector list — its `comingSoon` flag is the single source
-  // of truth for which cards render "Connect" vs "SOON"/roadmap (only the
-  // 4 ids with real manifests in registry.ts are `comingSoon: false`).
-  // Already-installed real connectors drop out of the grid (they're in the
-  // "Connected" section above; adding a 2nd+ connection to an already-
-  // installed connector stays canvas-only, per condition #1).
-  const catalogEntries = useMemo(
-    () =>
-      CATALOG_ORDER.map((id) => CONNECTOR_CATALOG_META[id]!).filter(
-        (meta) => meta.comingSoon || !installedIds.has(meta.id),
-      ),
-    [installedIds],
-  );
+  // Catalog grid is driven entirely by catalogMeta.ts's static 12-connector
+  // list — its `comingSoon` flag is the single source of truth for which
+  // cards render "Install"/"SOON"/roadmap (only the 4 ids with real
+  // manifests in registry.ts are `comingSoon: false`).
+  const catalogEntries = useMemo(() => CATALOG_ORDER.map((id) => CONNECTOR_CATALOG_META[id]!), []);
+  const realCatalogEntries = useMemo(() => catalogEntries.filter((c) => !c.comingSoon), [catalogEntries]);
 
-  const totalConnections = PROVIDERS.reduce((n, p) => n + p.connections.length, 0);
-  const healthy = PROVIDERS.reduce((n, p) => n + p.connections.filter((c) => c.health === 'ok').length, 0);
-  const idle = PROVIDERS.reduce((n, p) => n + p.connections.filter((c) => c.health === 'idle').length, 0);
-  const needsAttention = PROVIDERS.reduce((n, p) => n + p.connections.filter((c) => c.health === 'error').length, 0);
-  const healthDots = PROVIDERS.flatMap((p) => p.connections.map((c) => c.health));
+  // Once installConnectorAction succeeds (ConnectorCard's onInstalled) and
+  // the server-revalidated `installs` prop actually includes the connector,
+  // scroll its row into view and briefly highlight it.
+  useEffect(() => {
+    if (!pendingScrollId || !installedIds.has(pendingScrollId)) return;
+    const id = pendingScrollId;
+    setPendingScrollId(null);
+    providerRowRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightedProviderId(id);
+    const timer = setTimeout(() => setHighlightedProviderId((current) => (current === id ? null : current)), 1800);
+    return () => clearTimeout(timer);
+  }, [installedIds, pendingScrollId]);
 
-  const filteredProviders = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return PROVIDERS.filter((p) => {
-      if (category !== 'all' && p.category !== category) return false;
-      if (q && !p.name.toLowerCase().includes(q)) return false;
-      return true;
+  const healthy = connections.filter((c) => c.lastTestStatus === 'ok').length;
+  const idle = connections.filter((c) => c.lastTestStatus === null).length;
+  const needsAttention = connections.filter((c) => c.lastTestStatus === 'error').length;
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((r) => {
+      if (healthFilter === 'all') return true;
+      if (r.kind === 'empty') return false;
+      return r.health === healthFilter;
     });
-  }, [PROVIDERS, search, category]);
+  }, [rows, healthFilter]);
 
   const filteredCatalog = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -340,183 +401,257 @@ export default function ConnectionsClient({
     });
   }, [catalogEntries, search, category]);
 
-  const connectingMeta = connectingId ? CONNECTOR_CATALOG_META[connectingId] : undefined;
+  // No connectors installed at all yet — show the getting-started panel
+  // instead of an empty table (see "Connections — no connections yet").
+  const showEmptyState = installs.length === 0;
 
   return (
     <>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <span style={pageTitleStyle}>Connections</span>
-        <span style={connectionsSubtitleStyle}>
-          Everything your data can flow through {'\u2014'} connected sources first, the rest below.
-        </span>
-      </div>
-
-      <div style={connectionsHealthStripStyle}>
-        <div style={connectionsHealthDotsStyle}>
-          {healthDots.map((h, i) => (
-            <span key={i} style={connectionsHealthDotStyle(h)} />
-          ))}
+      <div style={connectionsPageHeaderStyle}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <span style={pageTitleStyle}>Connections</span>
+          <span style={connectionsSubtitleStyle}>The databases, warehouses and tools your workflows read from and write to.</span>
         </div>
-        <span>
-          <strong style={{ color: 'var(--text)' }}>{totalConnections} connections</strong> · {healthy} healthy · {idle} idle ·{' '}
-          <span style={{ color: needsAttention > 0 ? 'var(--bad)' : undefined, fontWeight: needsAttention > 0 ? 600 : 400 }}>
-            {needsAttention} needs attention
-          </span>
-        </span>
-      </div>
-
-      <div style={connectionsToolbarRowStyle}>
-        <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
-          <input
-            ref={searchRef}
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search connectors"
-            style={{ ...connectionsSearchBoxStyle, width: '100%' }}
-          />
-          {!search && (
-            <span
-              aria-hidden="true"
-              style={{
-                position: 'absolute',
-                right: 10,
-                fontSize: 11,
-                fontWeight: 600,
-                color: 'var(--text-4)',
-                border: '1px solid var(--line2)',
-                borderRadius: 4,
-                padding: '1px 5px',
-                pointerEvents: 'none',
-              }}
-            >
-              /
-            </span>
-          )}
-        </div>
-        <div style={connectionsFilterListStyle} role="tablist">
-          <button type="button" role="tab" aria-selected={category === 'all'} style={connectionsFilterPillStyle(category === 'all')} onClick={() => setCategory('all')}>
-            All
+        <div style={connectionsHeaderButtonsStyle}>
+          {/* No request-a-connector endpoint exists yet — inert like the
+              Upload CSV button below, not wired to an invented action. */}
+          <button type="button" style={connectionsRequestBtnStyle} disabled title="Coming soon">
+            Request a connector
           </button>
-          {CATEGORIES.map((c) => (
-            <button
-              key={c}
-              type="button"
-              role="tab"
-              aria-selected={category === c}
-              style={connectionsFilterPillStyle(category === c)}
-              onClick={() => setCategory(c)}
-            >
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: categoryDotColor(c), flex: 'none' }} />
-              {CATEGORY_LABEL[c]}
-            </button>
-          ))}
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={connectionsSectionHeaderStyle}>
-          <span style={connectionsSectionTitleStyle}>Connected</span>
-          <span style={connectionsSectionMetaStyle}>
-            {filteredProviders.length} of {PROVIDERS.length} providers · {filteredProviders.reduce((n, p) => n + p.connections.length, 0)} connections
-          </span>
-        </div>
-
-        {filteredProviders.length === 0 ? (
-          <div style={pageEmptyCardStyle}>
-            {PROVIDERS.length === 0 ? 'No connectors installed yet — install one below to get started.' : 'No connected providers match this filter.'}
-          </div>
-        ) : (
-          <div style={connectionsProviderListStyle}>
-            {filteredProviders.map((p) => (
-              <div key={p.id} style={connectionsProviderRowStyle(true)}>
-                <span style={connectionsProviderIconStyle}>
-                  <ConnectorLogo id={p.id} size={18} />
-                </span>
-                <span style={connectionsProviderNameColStyle}>
-                  <span style={connectionsProviderNameStyle}>{p.name}</span>
-                  <span style={connectionsProviderMetaStyle}>
-                    {p.version} · {p.connections.length} connection{p.connections.length === 1 ? '' : 's'} · last used {p.lastUsed}
-                  </span>
-                </span>
-                <div style={connectionsBadgesRowStyle}>
-                  {p.connections.map((c) => (
-                    <span key={c.handle} data-testid={`connection-badge-${c.handle}`} style={connectionsBadgeStyle(c.health)}>
-                      <span style={connectionsBadgeDotStyle(c.health)} />
-                      <span style={connectionsBadgeHandleStyle}>{c.handle}</span>
-                      {c.errorNote ? <span style={connectionsBadgeMetaStyle}>{'\u2014'} {c.errorNote}</span> : null}
-                      {c.latencyMs !== undefined && <span style={connectionsBadgeMetaStyle}>{c.latencyMs}ms</span>}
-                      {badgeLabel(c.health) && <span style={connectionsBadgeMetaStyle}>{badgeLabel(c.health)}</span>}
-                      {c.owner && <span style={connectionsBadgeMetaStyle}>{c.owner}</span>}
-                      <TestButton connectionId={c.id} />
-                      <RefreshSchemaButton connectionId={c.id} />
-                      <button type="button" style={connectionsBadgeLinkStyle} onClick={() => setEditingConnectionId(c.id)}>
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        style={connectionsBadgeLinkStyle}
-                        onClick={() => setDialog({ type: 'delete', connectionId: c.id, handle: c.handle })}
-                      >
-                        Delete
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                {p.connections.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
-                    {p.connections.map((c) => (
-                      <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                        <span style={connectionsBadgeMetaStyle}>{c.handle}:</span>
-                        <WriteAccessStatus grants={grantsByConnection[c.id] ?? null} />
-                        <span
-                          style={connectionsBadgeMetaStyle}
-                          title="Grant/revoke write access from a destination node's drawer in a workflow canvas"
-                        >
-                          Manage from the canvas
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div style={connectionsProviderActionsStyle}>
-                  <span style={connectionsProviderMetaStyle} title="Right-click this connector's node in a workflow canvas">
-                    Add a connection from the canvas
-                  </span>
-                  <span style={connectionsProviderMetaStyle} title="Grant/revoke write access from a destination node's drawer in a workflow canvas">
-                    Manage write access from the canvas
-                  </span>
-                  <button
-                    type="button"
-                    style={connectionsUninstallBtnStyle}
-                    onClick={() => setDialog({ type: 'uninstall', installId: p.installId, name: p.name })}
-                  >
-                    Uninstall
-                  </button>
-                </div>
-              </div>
-            ))}
-
-            <div style={connectionsUploadRowStyle}>
-              <span style={connectionsUploadIconStyle}>{'\u25a4'}</span>
-              <span style={connectionsProviderNameColStyle}>
-                <span style={connectionsProviderNameStyle}>Upload CSV / Excel</span>
-                <span style={connectionsProviderMetaStyle}>Drop a one-off file and query it like any other source.</span>
-              </span>
-              <div style={connectionsProviderActionsStyle}>
-                <button type="button" style={connectionsUploadBtnStyle} disabled title="Coming soon">
-                  {'\u21a5'} Choose a file
-                </button>
-              </div>
+      {showEmptyState ? (
+        <div style={connectionsEmptyPanelStyle}>
+          <div style={connectionsEmptyStepsColStyle}>
+            <span style={connectionsSectionTitleStyle}>Get started</span>
+            <div style={connectionsEmptyStepStyle}>
+              <span style={connectionsEmptyStepNumStyle}>1</span>
+              <span style={connectionsSectionMetaStyle}>Install a connector below.</span>
+            </div>
+            <div style={connectionsEmptyStepStyle}>
+              <span style={connectionsEmptyStepNumStyle}>2</span>
+              <span style={connectionsSectionMetaStyle}>Open a workflow canvas.</span>
+            </div>
+            <div style={connectionsEmptyStepStyle}>
+              <span style={connectionsEmptyStepNumStyle}>3</span>
+              <span style={connectionsSectionMetaStyle}>Add a connection from a connector node — adding a connection always happens on the canvas.</span>
             </div>
           </div>
-        )}
-      </div>
+          <div style={connectionsEmptySuggestColStyle}>
+            <span style={connectionsSectionTitleStyle}>Suggested connectors</span>
+            {realCatalogEntries.map((meta) => (
+              <SuggestedConnectorRow key={meta.id} id={meta.id} name={meta.name} onInstalled={setPendingScrollId} />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ ...connectionsSectionHeaderStyle, justifyContent: 'space-between' }}>
+            <span style={connectionsSectionTitleStyle}>Your connections ({connections.length})</span>
+            <div style={connectionsHealthFilterRowStyle}>
+              {HEALTH_FILTERS.map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  style={connectionsHealthFilterBtnStyle(healthFilter === f.key)}
+                  onClick={() => setHealthFilter(f.key)}
+                >
+                  {f.key !== 'all' && <span style={{ width: 6, height: 6, borderRadius: '50%', background: healthDotColor(f.key), flex: 'none' }} />}
+                  {f.label} ({f.key === 'all' ? connections.length : f.key === 'ok' ? healthy : f.key === 'idle' ? idle : needsAttention})
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {filteredRows.length === 0 ? (
+            <div style={connectionsEmptyResultsStyle}>No connections match this filter.</div>
+          ) : (
+            <div style={connectionsTableCardStyle}>
+              <table style={connectionsTableStyle}>
+                <thead>
+                  <tr style={connectionsTableHeadRowStyle}>
+                    <th style={connectionsTableThStyle}>Connection</th>
+                    <th style={connectionsTableThStyle}>Host</th>
+                    <th style={connectionsTableThStyle}>Health</th>
+                    <th style={connectionsTableThStyle}>Used by</th>
+                    <th style={connectionsTableThStyle}>Last test</th>
+                    <th style={connectionsTableThStyle} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRows.map((row) => {
+                    const isFirstForConnector = firstRowKeyByConnector[row.connectorId] === row.key;
+                    const highlighted = highlightedProviderId === row.connectorId && isFirstForConnector;
+                    const rowStyle = {
+                      ...connectionsTableRowStyle,
+                      ...(highlighted ? { background: 'color-mix(in srgb, var(--live-fill) 10%, var(--surface))', transition: 'background 1.2s ease' } : { transition: 'background 1.2s ease' }),
+                    };
+                    const installId = row.kind === 'empty' ? row.installId : installIdByConnector.get(row.connectorId);
+
+                    return (
+                      <tr
+                        key={row.key}
+                        data-testid={row.kind === 'connection' ? `connection-row-${row.connection.handle}` : `provider-row-${row.connectorId}`}
+                        ref={(el) => {
+                          if (isFirstForConnector) providerRowRefs.current[row.connectorId] = el;
+                        }}
+                        style={rowStyle}
+                      >
+                        <td style={connectionsTableTdStyle}>
+                          <div style={connectionsTableConnCellStyle}>
+                            <span style={connectionsTableTileStyle}>
+                              <ConnectorLogo id={row.connectorId} size={18} />
+                            </span>
+                            <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                              <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)' }}>
+                                {row.kind === 'connection' ? row.connection.displayName || row.connection.handle : `${row.providerName} — no connections yet`}
+                              </span>
+                              <span style={connectionsSectionMetaStyle}>{row.providerName}</span>
+                            </span>
+                          </div>
+                        </td>
+                        <td style={connectionsTableTdStyle}>
+                          {row.kind === 'connection' && typeof row.connection.config.host === 'string' ? (
+                            <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                              <span style={connectionsTableHostStyle} title={row.connection.config.host}>
+                                {row.connection.config.host}
+                              </span>
+                              {connectionRegion(row.connection) && <span style={connectionsSectionMetaStyle}>{connectionRegion(row.connection)}</span>}
+                            </span>
+                          ) : (
+                            <span style={connectionsSectionMetaStyle}>{'\u2014'}</span>
+                          )}
+                        </td>
+                        <td style={connectionsTableTdStyle}>
+                          {row.kind === 'connection' ? (
+                            <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ width: 8, height: 8, borderRadius: '50%', flex: 'none', background: healthDotColor(row.health) }} />
+                                {healthLabel(row.health)}
+                              </span>
+                              <WriteAccessStatus grants={grantsByConnection[row.connection.id] ?? null} />
+                            </span>
+                          ) : (
+                            <span style={connectionsSectionMetaStyle}>{'\u2014'}</span>
+                          )}
+                        </td>
+                        <td style={connectionsTableTdStyle}>
+                          <span style={connectionsSectionMetaStyle}>{'\u2014'}</span>
+                        </td>
+                        <td style={connectionsTableTdStyle}>
+                          <span style={connectionsSectionMetaStyle}>
+                            {row.kind === 'connection' && row.connection.lastTestAt ? relativeTime(row.connection.lastTestAt) : '\u2014'}
+                          </span>
+                        </td>
+                        <td style={connectionsTableTdStyle}>
+                          <div style={connectionsTableActionsCellStyle}>
+                            {row.kind === 'connection' ? (
+                              <>
+                                <TestButton connectionId={row.connection.id} />
+                                <RowMenu rowKey={row.key} open={openMenuRowId === row.key} onToggle={setOpenMenuRowId}>
+                                  <RefreshSchemaButton connectionId={row.connection.id} />
+                                  <button type="button" style={connectionsTableMenuItemStyle} onClick={() => setEditingConnectionId(row.connection.id)}>
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    style={connectionsTableMenuItemStyle}
+                                    onClick={() => setDialog({ type: 'delete', connectionId: row.connection.id, handle: row.connection.handle })}
+                                  >
+                                    Delete
+                                  </button>
+                                  {installId && (
+                                    <button
+                                      type="button"
+                                      style={connectionsTableMenuItemStyle}
+                                      onClick={() => setDialog({ type: 'uninstall', installId, name: row.providerName })}
+                                    >
+                                      Uninstall {row.providerName}
+                                    </button>
+                                  )}
+                                </RowMenu>
+                              </>
+                            ) : (
+                              <>
+                                <span style={connectionsSectionMetaStyle} title="Right-click this connector's node in a workflow canvas">
+                                  Add a connection from the canvas
+                                </span>
+                                <RowMenu rowKey={row.key} open={openMenuRowId === row.key} onToggle={setOpenMenuRowId}>
+                                  <button
+                                    type="button"
+                                    style={connectionsTableMenuItemStyle}
+                                    onClick={() => setDialog({ type: 'uninstall', installId: row.installId, name: row.providerName })}
+                                  >
+                                    Uninstall {row.providerName}
+                                  </button>
+                                </RowMenu>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={connectionsSectionHeaderStyle}>
-          <span style={connectionsSectionTitleStyle}>Available</span>
+          <span style={connectionsSectionTitleStyle}>Add a connection</span>
           <span style={connectionsSectionMetaStyle}>{filteredCatalog.length} connectors</span>
+        </div>
+
+        <div style={connectionsToolbarRowStyle}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+            <input
+              ref={searchRef}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search connectors"
+              style={{ ...connectionsSearchBoxStyle, width: '100%' }}
+            />
+            {!search && (
+              <span
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  right: 10,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: 'var(--text-4)',
+                  border: '1px solid var(--line2)',
+                  borderRadius: 4,
+                  padding: '1px 5px',
+                  pointerEvents: 'none',
+                }}
+              >
+                /
+              </span>
+            )}
+          </div>
+          <div style={connectionsFilterListStyle} role="tablist">
+            <button type="button" role="tab" aria-selected={category === 'all'} style={connectionsFilterPillStyle(category === 'all')} onClick={() => setCategory('all')}>
+              All
+            </button>
+            {CATEGORIES.map((c) => (
+              <button
+                key={c}
+                type="button"
+                role="tab"
+                aria-selected={category === c}
+                style={connectionsFilterPillStyle(category === c)}
+                onClick={() => setCategory(c)}
+              >
+                {CATEGORY_LABEL[c]}
+              </button>
+            ))}
+          </div>
         </div>
 
         {filteredCatalog.length === 0 ? (
@@ -528,27 +663,20 @@ export default function ConnectionsClient({
                 key={meta.id}
                 meta={meta}
                 index={catalogIndexLabel(meta.id)}
-                onConnect={meta.comingSoon ? undefined : () => setConnectingId(meta.id)}
+                installed={installedIds.has(meta.id)}
+                onInstalled={setPendingScrollId}
               />
             ))}
           </div>
         )}
-      </div>
 
-      {connectingId &&
-        connectingMeta &&
-        (() => {
-          const manifest = CONNECTOR_MANIFESTS[connectingId];
-          if (!manifest) return null;
-          return (
-            <ConnectPanel
-              connectorId={connectingId}
-              connectorName={connectingMeta.name}
-              configSchema={manifest.configSchema}
-              onClose={() => setConnectingId(null)}
-            />
-          );
-        })()}
+        <span style={connectionsCatalogHintStyle}>
+          Missing something?{' '}
+          <button type="button" disabled title="Coming soon" style={{ ...connectionsBadgeLinkStyle, cursor: 'not-allowed' }}>
+            Request a connector
+          </button>
+        </span>
+      </div>
 
       {dialog?.type === 'delete' && (
         <DeleteConfirmDialog
@@ -587,3 +715,4 @@ export default function ConnectionsClient({
     </>
   );
 }
+
