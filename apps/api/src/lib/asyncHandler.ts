@@ -10,6 +10,10 @@ export function asyncHandler(
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void>,
 ): RequestHandler {
   return (req, res, next) => {
-    fn(req, res, next).catch(next);
+    // Returning the promise (rather than firing-and-forgetting it) is what
+    // lets tests `await handler(req, res, next)` and reliably observe the
+    // handler's full effect on next() — Express itself never awaits a
+    // middleware's return value, so this is invisible to real requests.
+    return fn(req, res, next).catch(next);
   };
 }
