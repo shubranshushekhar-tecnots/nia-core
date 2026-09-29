@@ -47,7 +47,17 @@ export default async function BillingPage() {
   const plan = getPlanUsage(stats.workflowCount, stats.projectCount, stats.planTier, stats.workflowLimit, stats.projectLimit);
 
   return (
-    <AppShell topBar={<TopBar orgName={user.org?.name ?? null} email={user.email} userId={user.userId} />}>
+    <AppShell
+      topBar={
+        <TopBar
+          orgName={user.org?.name ?? null}
+          email={user.email}
+          userId={user.userId}
+          orgs={user.orgs}
+          activeOrgId={user.org?.id ?? null}
+        />
+      }
+    >
       <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
       <div style={mainColStyle}>
         <div style={homeScrollStyle}>

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { logout } from '@/lib/auth/actions';
+import { logout, switchOrg } from '@/lib/auth/actions';
 import { clearStoredBearerToken } from '@/lib/auth/browserSession';
 import Avatar from '@/components/Avatar';
 import {
@@ -33,12 +33,23 @@ export default function TopBar({
   email,
   userId,
   crumbs,
+  orgs,
+  activeOrgId,
 }: {
   orgName: string | null;
   email: string;
   /** Seed for the generated avatar — the current user's id. */
   userId: string;
   crumbs?: TopBarCrumb[];
+  /**
+   * Org switcher (Subscription Phase 2): every org this user belongs to.
+   * Optional so call sites that haven't been updated yet (e.g. the
+   * Connections redesign) keep compiling/rendering unchanged — with this
+   * omitted, the switcher falls back to its pre-switcher single-org
+   * display.
+   */
+  orgs?: { id: string; name: string; slug: string }[];
+  activeOrgId?: string | null;
 }) {
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -53,9 +64,29 @@ export default function TopBar({
         </button>
         {orgMenuOpen && (
           <div style={dropdownStyle} onMouseLeave={() => setOrgMenuOpen(false)}>
-            <div style={{ ...dropdownItemStyle, fontWeight: 600, cursor: 'default' }}>
-              {orgName ?? 'Personal workspace'}
-            </div>
+            {orgs && orgs.length > 1 ? (
+              <>
+                {orgs.map((org) => (
+                  <form key={org.id} action={switchOrg.bind(null, org.id)}>
+                    <button
+                      type="submit"
+                      style={{
+                        ...dropdownItemStyle,
+                        fontWeight: org.id === activeOrgId ? 600 : 400,
+                        color: org.id === activeOrgId ? 'var(--text-1)' : undefined,
+                      }}
+                      disabled={org.id === activeOrgId}
+                    >
+                      {org.name}
+                    </button>
+                  </form>
+                ))}
+              </>
+            ) : (
+              <div style={{ ...dropdownItemStyle, fontWeight: 600, cursor: 'default' }}>
+                {orgName ?? 'Personal workspace'}
+              </div>
+            )}
             <div style={{ height: 1, background: 'var(--line)', margin: '4px 0' }} />
             {orgName === null ? (
               <a href="/onboarding" style={{ ...dropdownItemStyle, textDecoration: 'none', display: 'block' }}>

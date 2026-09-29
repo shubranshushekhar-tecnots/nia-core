@@ -2,12 +2,12 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
+import { headers, cookies } from "next/headers";
 import { z } from "zod";
 import { APIError } from "better-auth/api";
 import { withActingUser } from "@nia/db";
 import { getAuth } from "@/lib/auth/auth";
-import { getSessionUser } from "@/lib/auth/session";
+import { ACTIVE_ORG_COOKIE, getSessionUser } from "@/lib/auth/session";
 import { getPool } from "@/lib/db/pool";
 
 export type ActionState = {
@@ -324,4 +324,42 @@ export async function createOrganization(_prevState: ActionState, formData: Form
 
   revalidatePath("/", "layout");
   redirect(`/app?org=${orgId}`);
+}
+
+/**
+ * Org switcher (Subscription Phase 2): sets ACTIVE_ORG_COOKIE so the next
+ * requireUser() call (this file, session.ts) — and apps/api's attachActor,
+ * which reads the same cookie via the browser's same-origin
+ * /api/backend/:path* rewrite — resolve to this org instead of the oldest
+ * membership. Validates the caller is actually a member of orgId first
+ * (RLS-scoped query, not trusted client input) so a stale/forged cookie
+ * value can never grant access to an org the user isn't in — worst case,
+ * pickActiveMembership()'s fallback just treats it as a non-match and
+ * falls back to the oldest membership, but rejecting it here keeps a bad
+ * value from ever being set to begin with.
+ */
+export async function switchOrg(orgId: string): Promise<void> {
+  const user = await getSessionUser();
+  if (!user) redirect("/login");
+
+  const result = await withActingUser(getPool(), user.id, (db) =>
+    db.query<{ org_id: string }>(
+      "select org_id from public.organization_members where org_id = $1 and user_id = $2",
+      [orgId, user.id],
+    ),
+  );
+  if (result.rows.length === 0) {
+    throw new Error("You are not a member of that organization.");
+  }
+
+  const cookieStore = await cookies();
+  cookieStore.set(ACTIVE_ORG_COOKIE, orgId, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365,
+  });
+
+  revalidatePath("/", "layout");
 }

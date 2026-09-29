@@ -13,7 +13,17 @@ export default async function ProjectsListPage() {
   const [projectsList, sidebarProjects] = await Promise.all([getProjectsList(), getSidebarProjects()]);
 
   return (
-    <AppShell topBar={<TopBar orgName={user.org?.name ?? null} email={user.email} userId={user.userId} />}>
+    <AppShell
+      topBar={
+        <TopBar
+          orgName={user.org?.name ?? null}
+          email={user.email}
+          userId={user.userId}
+          orgs={user.orgs}
+          activeOrgId={user.org?.id ?? null}
+        />
+      }
+    >
       <Sidebar orgId={orgId} role={user.role} projects={sidebarProjects} email={user.email} />
       <div style={mainColStyle}>
         <div style={projectScrollStyle}>

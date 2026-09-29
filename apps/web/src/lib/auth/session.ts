@@ -1,10 +1,19 @@
 import { cache } from "react";
 import { redirect } from "next/navigation";
-import { headers } from "next/headers";
+import { headers, cookies } from "next/headers";
 import { withActingUser } from "@nia/db";
 import { getAuth } from "@/lib/auth/auth";
 import { getPool } from "@/lib/db/pool";
 import type { ActorRole, OrgRole } from "@nia/schemas";
+import { pickActiveMembership, type MembershipRow } from "@/lib/auth/pickActiveMembership";
+
+/**
+ * Cookie set by switchOrg() (lib/auth/actions.ts) when a multi-org user
+ * picks which org to act in. Same name/shape duplicated in apps/api's
+ * middleware/actor.ts (separate package, no shared runtime module — see
+ * that file's header comment) since both sides need to read it.
+ */
+export const ACTIVE_ORG_COOKIE = "nia_active_org";
 
 export type UserContext = {
   userId: string;
@@ -22,6 +31,8 @@ export type UserContext = {
     | null;
   /** "individual" when the user has no organization membership at all. */
   role: ActorRole;
+  /** Every org this user belongs to, oldest first — for the TopBar switcher. */
+  orgs: { id: string; name: string; slug: string; role: OrgRole }[];
 };
 
 export type UserWithOrg = {
@@ -60,11 +71,17 @@ export async function getSessionUser(): Promise<{ id: string; email: string } | 
  * actor operating in their own personal workspace (see
  * 0005_individual_workspace.sql).
  *
- * A user can belong to multiple orgs later (switcher is a stub for now),
- * so this picks the oldest membership — first org created/joined — as the
- * default (mirrors apps/api's attachActor middleware exactly — see that
- * file's header comment). All queries are plain RLS-scoped reads: no
- * service role, no bypassing the same policies a real client hits.
+ * Org switcher (Subscription Phase 2): a user can belong to multiple orgs,
+ * so this fetches every membership (oldest first) and picks whichever
+ * matches the ACTIVE_ORG_COOKIE if present and valid, else falls back to
+ * the oldest membership — identical fallback to pre-switcher behaviour for
+ * users who have never switched or whose cookie no longer points to a real
+ * membership. Mirrors apps/api's attachActor middleware exactly (see that
+ * file's header comment) — including that this is what makes the
+ * suspension check below correctly follow the *active* org, not any other
+ * org the user happens to belong to. All queries are plain RLS-scoped
+ * reads: no service role, no bypassing the same policies a real client
+ * hits.
  *
  * Wrapped in React's cache() so that app/app/layout.tsx's own suspension
  * check and each page's independent requireUser() call within the same
@@ -77,34 +94,29 @@ export const requireUser = cache(async function requireUser(): Promise<UserConte
     redirect("/login");
   }
 
+  const cookieStore = await cookies();
+  const activeOrgId = cookieStore.get(ACTIVE_ORG_COOKIE)?.value ?? null;
+
   const [profileResult, membershipResult] = await Promise.all([
     withActingUser(getPool(), user.id, (db) =>
       db.query<{ full_name: string | null }>("select full_name from public.profiles where id = $1", [user.id]),
     ),
     withActingUser(getPool(), user.id, (db) =>
-      db.query<{
-        role: string;
-        created_at: string;
-        org_id: string;
-        org_name: string;
-        org_slug: string;
-        suspended_at: string | null;
-        suspended_reason: string | null;
-      }>(
+      db.query<MembershipRow>(
         `select m.role, m.created_at, o.id as org_id, o.name as org_name, o.slug as org_slug,
                 o.suspended_at, o.suspended_reason
          from public.organization_members m
          join public.organizations o on o.id = m.org_id
          where m.user_id = $1
-         order by m.created_at asc
-         limit 1`,
+         order by m.created_at asc`,
         [user.id],
       ),
     ),
   ]);
 
   const profile = profileResult.rows[0] ?? null;
-  const membership = membershipResult.rows[0];
+  const memberships = membershipResult.rows;
+  const membership = pickActiveMembership(memberships, activeOrgId);
   const org = membership
     ? {
         id: membership.org_id,
@@ -121,6 +133,7 @@ export const requireUser = cache(async function requireUser(): Promise<UserConte
     fullName: profile?.full_name ?? null,
     org: membership && org ? org : null,
     role: membership && org ? (membership.role as OrgRole) : "individual",
+    orgs: memberships.map((m) => ({ id: m.org_id, name: m.org_name, slug: m.org_slug, role: m.role as OrgRole })),
   };
 });
 

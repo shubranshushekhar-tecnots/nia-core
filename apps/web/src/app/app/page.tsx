@@ -22,7 +22,17 @@ export default async function AppHomePage() {
   const greeting = greetingForHour(new Date().getHours());
 
   return (
-    <AppShell topBar={<TopBar orgName={user.org?.name ?? null} email={user.email} userId={user.userId} />}>
+    <AppShell
+      topBar={
+        <TopBar
+          orgName={user.org?.name ?? null}
+          email={user.email}
+          userId={user.userId}
+          orgs={user.orgs}
+          activeOrgId={user.org?.id ?? null}
+        />
+      }
+    >
       <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
       <div style={mainColStyle}>
         <HomeContent

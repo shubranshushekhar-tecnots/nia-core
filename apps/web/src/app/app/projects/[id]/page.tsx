@@ -23,6 +23,8 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           orgName={user.org?.name ?? null}
           email={user.email}
           userId={user.userId}
+          orgs={user.orgs}
+          activeOrgId={user.org?.id ?? null}
           crumbs={[{ label: 'Projects', href: '/app/projects' }, { label: project.name }]}
         />
       }
