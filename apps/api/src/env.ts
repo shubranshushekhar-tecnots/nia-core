@@ -183,6 +183,21 @@ const EnvSchema = z.object({
    * see readSignature.ts's header comment and DEPLOYMENT.md.
    */
   WRITE_DISPATCH_SIGNING_SECRET: z.string().min(32),
+  /**
+   * Console v1 (docs/plans/console-plan.md, build order step 4): master
+   * switch for mounting consoleRouter at all. Defaults to "false" — the
+   * console stays off in production until staff 2FA is actually enforced
+   * (decision 7), even once its routes/screens are built and tested.
+   * `z.enum(["true","false"])` + explicit transform, not `z.coerce.boolean()`
+   * — the same pattern routes/connections.ts's `confirmed` query param
+   * uses — since `z.coerce.boolean()` would make the literal string
+   * "false" coerce to `true` (`Boolean("false") === true`).
+   */
+  CONSOLE_ENABLED: z
+    .enum(["true", "false"])
+    .optional()
+    .default("false")
+    .transform((v) => v === "true"),
 }).refine((e) => !(e.NODE_ENV === "production" && e.CONNECTOR_DEV_HOST), {
   message:
     "CONNECTOR_DEV_HOST must not be set when NODE_ENV=production — it overrides the connector service host to a dev-only address.",

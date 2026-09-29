@@ -5,6 +5,7 @@ import { friendlyConnectionError, getConnectorManifest, type ConfigField } from 
 import type { Connection } from '@/lib/connections/types';
 import { updateConnection, ConnectionsApiError, type ConnectionUsage } from '@/lib/api/connectionsClient';
 import { autoCompleteFor } from '@/lib/connections/formFields';
+import HelpPanel from './HelpPanel';
 import {
   modalActionsStyle,
   modalBtnGhostStyle,
@@ -16,6 +17,17 @@ import {
   modalOverlayStyle,
   modalTitleStyle,
 } from './styles';
+
+const helpTriggerStyle = {
+  fontSize: 12,
+  fontWeight: 600,
+  color: 'var(--ink)',
+  background: 'var(--surface)',
+  border: '1px solid var(--line2)',
+  borderRadius: 6,
+  padding: '5px 10px',
+  cursor: 'pointer',
+} as const;
 
 function inputType(field: ConfigField): string {
   if (field.type === 'password') return 'password';
@@ -75,9 +87,11 @@ export default function EditConnectionDialog({
   const manifest = getConnectorManifest(connection.connectorId);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorFix, setErrorFix] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [usageWarning, setUsageWarning] = useState<ConnectionUsage[] | null>(null);
   const [pendingSave, setPendingSave] = useState<SavePayload | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   if (!manifest) {
     return (
@@ -98,6 +112,7 @@ export default function EditConnectionDialog({
   const submit = async (payload: SavePayload, confirmed: boolean) => {
     setPending(true);
     setError(null);
+    setErrorFix(null);
     setErrorDetails(null);
     try {
       const updated = await updateConnection(connection.id, { ...payload, confirmed });
@@ -116,8 +131,9 @@ export default function EditConnectionDialog({
       // pattern-match it into a friendly summary, keep the raw text behind
       // "Show details".
       if (err instanceof ConnectionsApiError) {
-        const { summary, details } = friendlyConnectionError(err.message);
+        const { summary, fix, details } = friendlyConnectionError(err.message);
         setError(summary);
+        setErrorFix(fix ?? null);
         setErrorDetails(details);
       } else {
         setError("Couldn't save the connection. Try again.");
@@ -139,7 +155,15 @@ export default function EditConnectionDialog({
   return (
     <div style={modalOverlayStyle} onClick={onClose}>
       <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
-        <span style={modalTitleStyle}>Edit connection</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={modalTitleStyle}>Edit connection</span>
+          <button type="button" style={helpTriggerStyle} onClick={() => setShowHelp(true)}>
+            Help with this step
+          </button>
+        </div>
+        {showHelp && (
+          <HelpPanel step="test-connection" connectorId={connection.connectorId} onClose={() => setShowHelp(false)} />
+        )}
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label htmlFor="edit-connection-display-name" style={modalLabelStyle}>
@@ -211,6 +235,7 @@ export default function EditConnectionDialog({
           {error && (
             <span style={modalErrorStyle}>
               {error}
+              {errorFix && <span style={{ display: 'block', marginTop: 2 }}>{errorFix}</span>}
               {errorDetails && errorDetails !== error && (
                 <details style={{ marginTop: 4 }}>
                   <summary style={{ cursor: 'pointer' }}>Show details</summary>

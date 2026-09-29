@@ -71,7 +71,6 @@ import {
   connectionsUploadRowStyle,
   pageEmptyCardStyle,
   pageTitleStyle,
-  soonBtnStyle,
 } from './styles';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
 import EditConnectionDialog from './EditConnectionDialog';
@@ -331,7 +330,7 @@ function InstallButton({ connectorId, connectorName }: { connectorId: string; co
         </button>
         <span style={connectionsInstallLabelStyle}>{pending ? 'Installing\u2026' : 'Install'}</span>
       </div>
-      {state?.error && <ActionErrorDetail error={state.error} details={state.errorDetails} />}
+      {state?.error && <ActionErrorDetail error={state.error} fix={state.errorFix} details={state.errorDetails} />}
     </form>
   );
 }
@@ -343,7 +342,7 @@ function TestButton({ connectionId }: { connectionId: string }) {
       <button type="submit" disabled={pending} style={connectionsBadgeLinkStyle}>
         {pending ? 'Testing\u2026' : 'Test'}
       </button>
-      {state?.error && <ActionErrorDetail error={state.error} details={state.errorDetails} />}
+      {state?.error && <ActionErrorDetail error={state.error} fix={state.errorFix} details={state.errorDetails} />}
     </form>
   );
 }
@@ -359,7 +358,7 @@ function RefreshSchemaButton({ connectionId }: { connectionId: string }) {
       <button type="submit" disabled={pending} style={connectionsBadgeLinkStyle}>
         {pending ? 'Refreshing\u2026' : 'Refresh schema'}
       </button>
-      {state?.error && <ActionErrorDetail error={state.error} details={state.errorDetails} />}
+      {state?.error && <ActionErrorDetail error={state.error} fix={state.errorFix} details={state.errorDetails} />}
     </form>
   );
 }
@@ -368,12 +367,15 @@ function RefreshSchemaButton({ connectionId }: { connectionId: string }) {
  * Item 5 (fix-chain plan): renders the friendly `error` summary inline, plus
  * the raw `details` (original driver/connector text) behind a "Show
  * details" toggle when present and distinct from the summary — never
- * dropped, just not shown by default.
+ * dropped, just not shown by default. Learning-mode plan, Layer 3: `fix`
+ * (from friendlyAppError/friendlyConnectionError) renders between the
+ * summary and the "Show details" toggle when present.
  */
-function ActionErrorDetail({ error, details }: { error: string; details?: string }) {
+function ActionErrorDetail({ error, fix, details }: { error: string; fix?: string; details?: string }) {
   return (
     <span style={connectionsBadgeMetaStyle}>
       {'\u2014'} {error}
+      {fix && <span style={{ display: 'block' }}>{fix}</span>}
       {details && details !== error && (
         <details style={{ display: 'inline', marginLeft: 4 }}>
           <summary style={{ display: 'inline', cursor: 'pointer' }}>Show details</summary>
@@ -588,9 +590,9 @@ export default function ConnectionsClient({
                   <span style={connectionsProviderMetaStyle} title="Right-click this connector's node in a workflow canvas">
                     Add a connection from the canvas
                   </span>
-                  <button type="button" style={soonBtnStyle} disabled title="Coming soon">
-                    Manage
-                  </button>
+                  <span style={connectionsProviderMetaStyle} title="Grant/revoke write access from a destination node's drawer in a workflow canvas">
+                    Manage write access from the canvas
+                  </span>
                   <button
                     type="button"
                     style={connectionsUninstallBtnStyle}

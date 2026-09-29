@@ -18,6 +18,14 @@ export type ActionState = {
   // friendlyApiErrorMessage). Additive/optional so auth actions (which never
   // set it) are unaffected.
   errorDetails?: string;
+  // Learning-mode plan, Layer 3: the concrete "how to fix this" line from
+  // `friendlyAppError`/`friendlyConnectionError` (packages/schemas), shown
+  // under `error` and above the "Show details" toggle. `helpStepKey` rides
+  // along for Step 3/4's HelpPanel to key off of — not rendered as a link
+  // yet, just carried through so wiring it later doesn't need another pass
+  // over every action/dialog. Both additive/optional, same as errorDetails.
+  errorFix?: string;
+  helpStepKey?: string;
   fieldErrors?: Record<string, string[]>;
   success?: boolean;
   // Set by login/signup only: the raw session token (docs/plans/auth.md) —

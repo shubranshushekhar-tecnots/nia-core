@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { execSync } from 'node:child_process';
 import { personas } from './fixtures/personas';
+import { createProjectAndWorkflow, gotoWorkflow } from './fixtures/flows';
 
 /**
  * Phase 5 Session 5, Block 2 — the drift e2e's mutation step. `nia_ro` (the
@@ -44,22 +45,6 @@ function ensureEmptyPostgresDatabase() {
 }
 
 /**
- * Navigates via real UI links (project list -> project detail -> workflow),
- * not a hardcoded /app/workflows/:id URL — workflow ids are gen_random_uuid()
- * at seed time, so the id is only knowable by actually clicking through.
- */
-async function gotoWorkflow(page: Page, projectName: string, workflowName: string) {
-  await page.goto('/app/projects');
-  await page.getByRole('link', { name: projectName, exact: true }).click();
-  // .first(): the sidebar's project tree can already be expanded around this
-  // project (persisted openProject UI state) at the same time the project
-  // detail page's own workflow list renders it too — both links share the
-  // same href, so either is a valid click target.
-  await page.getByRole('link', { name: workflowName }).first().click();
-  await expect(page).toHaveURL(/\/app\/workflows\/[0-9a-f-]{36}/);
-}
-
-/**
  * A workflow reload re-fetches its latest conversation server-side
  * (Phase 5 Session 4, migration 0015) — if this shared fixture carries real
  * chat history (e.g. from command-bar.spec.ts), the command bar's thread
@@ -86,7 +71,11 @@ async function dismissThreadIfOpen(page: Page) {
  * the old PaletteDock modal), so there's no "Add node" button to open first.
  */
 async function dragPaletteItemOnto(page: Page, label: string, point: { x: number; y: number }) {
-  const item = page.getByText(label, { exact: true });
+  // Scoped to the rail, not page-wide: CanvasHeader.tsx's own view tablist
+  // has an unrelated disabled "Schedule" tab (Editor/Runs/Schedule, "Coming
+  // soon") that collides with the rail's locked trigger row of the same
+  // name — an unscoped exact-text match resolves to both.
+  const item = page.getByTestId('nodes-rail').getByText(label, { exact: true });
   const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
   await item.dispatchEvent('dragstart', { dataTransfer });
   const surface = page.getByTestId('canvas-surface');
@@ -128,35 +117,45 @@ async function dragNodeBy(page: Page, nodeIndex: number, dx: number, dy: number)
 }
 
 /**
- * Same drag as dragPaletteItemOnto, but scoped to a specific rail section
- * (Sources/Destinations) — needed for connectors like supabase that have
- * both etl_source and etl_sink capabilities and so render the same label
- * ("Dev sandbox (supabase)") once per section (NodesRail.tsx's buildEntries),
- * which a bare page.getByText(label) would hit as a strict-mode violation.
+ * Drags a rail entry onto the canvas, resolving it to the given role. The
+ * redesign (NodesRail.tsx) collapsed the old per-role duplicate rows (one
+ * under "Sources", one under "Destinations") into a single row per
+ * connection carrying every role it supports — every seeded connector here
+ * (mysql/mongodb/supabase/postgres) now has both etl_source and etl_sink,
+ * so dropping any of them opens an inline "Use as Source" / "Use as
+ * Destination" picker (FlowCanvas.tsx's dropPicker, data-testid
+ * "drop-role-picker") instead of the role being implied by which section it
+ * was dragged from. Still the same real dragstart/dragover/drop DOM event
+ * sequence dragPaletteItemOnto uses; this just also resolves the picker
+ * when one appears (single-role payloads, e.g. Transform, never show one).
  */
-async function dragRailSectionItemOnto(page: Page, section: string, label: string, point: { x: number; y: number }) {
+async function dragRailSectionItemOnto(page: Page, role: 'source' | 'destination', label: string, point: { x: number; y: number }) {
   const rail = page.getByTestId('nodes-rail');
-  const sectionContainer = rail.getByText(section, { exact: true }).locator('..');
-  const item = sectionContainer.getByText(label, { exact: true });
+  const item = rail.getByText(label, { exact: true });
   const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
   await item.dispatchEvent('dragstart', { dataTransfer });
   const surface = page.getByTestId('canvas-surface');
   await surface.dispatchEvent('dragover', { dataTransfer, clientX: point.x, clientY: point.y });
   await surface.dispatchEvent('drop', { dataTransfer, clientX: point.x, clientY: point.y });
+
+  const picker = page.getByTestId('drop-role-picker');
+  if (await picker.isVisible().catch(() => false)) {
+    const roleLabel = role === 'source' ? 'Source' : 'Destination';
+    await picker.getByRole('menuitem', { name: `Use as ${roleLabel}` }).click();
+  }
 }
 
 /**
- * Same section-scoping as dragRailSectionItemOnto, but for a plain click —
- * a not-yet-connected connector's rail row (buildEntries' zero-connections
- * branch) isn't draggable at all, and clicking it directly opens
- * AddConnectionDialog (NodesRail.tsx). A manifest with both etl_source and
- * etl_sink (e.g. postgres) renders this same "not connected" label once per
- * section, so this needs the same strict-mode scoping.
+ * Clicks a not-yet-connected connector's rail row to open
+ * AddConnectionDialog (NodesRail.tsx). The old per-section duplication (and
+ * the strict-mode scoping it required — a manifest with both etl_source and
+ * etl_sink used to render its "not connected" placeholder once per section)
+ * is gone under the merged "Connections" group: each connector now renders
+ * that placeholder exactly once, so no section scoping is needed anymore.
  */
-async function clickRailSectionItem(page: Page, section: string, label: string) {
+async function clickRailSectionItem(page: Page, label: string) {
   const rail = page.getByTestId('nodes-rail');
-  const sectionContainer = rail.getByText(section, { exact: true }).locator('..');
-  await sectionContainer.getByText(label, { exact: true }).click();
+  await rail.getByText(label, { exact: true }).click();
 }
 
 /**
@@ -233,12 +232,19 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // handle at ~x444, still under the rail's z-index:20 overlay, so real
     // mouse-driven connectNodes()/dragNodeBy() clicks land on the rail
     // instead of the node/handle.
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mongodb)', { x: 450, y: 420 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mongodb)', { x: 450, y: 420 });
     await dragPaletteItemOnto(page, 'Transform', { x: 800, y: 310 });
     await expect(page.locator('.react-flow__node')).toHaveCount(3);
 
     await connectNodes(page, 0, 2);
+    // React Flow's internal "connecting" gesture state needs a tick to reset
+    // after mouseup before it'll register a second drag-to-connect gesture —
+    // firing connectNodes back-to-back with no wait between them is a proven
+    // flake (confirmed live: the 2nd edge is silently dropped ~half the time
+    // without this). Waiting for the 1st edge to actually render is a real
+    // signal, not an arbitrary timeout.
+    await expect(page.locator('.react-flow__edge')).toHaveCount(1);
     await connectNodes(page, 1, 2);
     await expect(page.locator('.react-flow__edge')).toHaveCount(2);
 
@@ -264,7 +270,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // under the rail is still there, but a plain .click() on it (unlike the
     // mouse-based drags the other tests use) fails Playwright's actionability
     // check because the rail div intercepts the pointer event.
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
     await page.locator('.react-flow__node').first().click();
     const drawer = page.getByTestId('node-drawer');
     await expect(drawer).toBeVisible();
@@ -329,7 +335,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // node unmount timing or NodePopover holding stale selection state)
     // before either this or the screenshot test above can be trusted in
     // the full suite. See also that test's own skipped screenshot assertion.
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
     await page.locator('.react-flow__node').first().click();
     const drawer = page.getByTestId('node-drawer');
     await expect(drawer).toBeVisible();
@@ -358,7 +364,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
   });
 
   test('transform drawer: build a filter step, autosave, reload keeps it, and shows the pushdown summary', async ({ page }) => {
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
     await dragPaletteItemOnto(page, 'Transform', { x: 800, y: 310 });
     await connectNodes(page, 0, 1);
 
@@ -405,7 +411,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
   });
 
   test('transform drawer: invalid computed-field expression is never autosaved', async ({ page }) => {
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
     await dragPaletteItemOnto(page, 'Transform', { x: 800, y: 310 });
     await connectNodes(page, 0, 1);
 
@@ -456,8 +462,8 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // See the note on the first test in this block: x >= 450 keeps the
     // node's body clear of NodesRail's overlay, which dragNodeBy's
     // real-mouse click-and-drag (below) needs to actually land on the node.
-    await dragRailSectionItemOnto(setupPage, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
-    await dragRailSectionItemOnto(setupPage, 'Sources', 'Dev sandbox (mongodb)', { x: 450, y: 420 });
+    await dragRailSectionItemOnto(setupPage, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(setupPage, 'source', 'Dev sandbox (mongodb)', { x: 450, y: 420 });
     await expect(setupPage.getByText('Saved')).toBeVisible({ timeout: 5_000 });
     await setupCtx.close();
 
@@ -512,7 +518,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // Session 3 visual-diff baselines: dock-open/failing and dock-open/
     // all-pass states.
     await page.setViewportSize({ width: 1440, height: 900 });
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (supabase)', { x: 300, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (supabase)', { x: 300, y: 200 });
     // The checks route reads the SERVER's persisted graph (not client state),
     // so the drag's autosave must flush before "Run checks" is clicked, or
     // the run executes against whatever graph was last persisted.
@@ -577,7 +583,7 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // A fixed client-pixel drop point can no longer be trusted to land
     // clear of the now-centered node, so derive the drop point from node
     // 0's live (post-pan) bounding box instead of a hardcoded coordinate.
-    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', {
+    await dragRailSectionItemOnto(page, 'destination', 'Dev sandbox (supabase)', {
       x: sourceBox.x + sourceBox.width + 150,
       y: sourceBox.y,
     });
@@ -627,8 +633,8 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // immediately (no re-centering step in this test), so it must clear
     // NodesRail's overlay from the start — see the first test in this
     // block's note for why.
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (supabase)', { x: 450, y: 200 });
-    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (supabase)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'destination', 'Dev sandbox (supabase)', { x: 800, y: 200 });
     await connectNodes(page, 0, 1);
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
@@ -662,8 +668,8 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     // captures (mapping editor open) — see the NodeDrawer visual test's own
     // comment on why this is safe within a .serial block.
     await page.setViewportSize({ width: 1440, height: 900 });
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
-    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'destination', 'Dev sandbox (supabase)', { x: 800, y: 200 });
     await connectNodes(page, 0, 1);
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
@@ -777,8 +783,8 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
    * pre-filled value.
    */
   test('destination drawer: a brand-new destination table never offers another table\'s columns in the "to" dropdown', async ({ page }) => {
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
-    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'destination', 'Dev sandbox (supabase)', { x: 800, y: 200 });
     await connectNodes(page, 0, 1);
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
@@ -791,7 +797,13 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
     const employeesValue = await sourceTableSelect.locator('option', { hasText: 'employees' }).getAttribute('value');
     await sourceTableSelect.selectOption(employeesValue!);
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
-    await page.locator('.react-flow__pane').click({ position: { x: 300, y: 500 } });
+    // No explicit position: NodeConfigPanel is a real flex sibling (see
+    // styles.ts's configPanelShellStyle), so the pane visibly shrinks while
+    // it's open — a hardcoded offset can land past the pane's own (now
+    // narrower) edge and get intercepted by the docked panel next to it.
+    // The default click targets the element's own (correctly shrunk)
+    // visible center instead, which is always inside the pane.
+    await page.locator('.react-flow__pane').click();
 
     // Destination node: "+ Create new…" a table that doesn't exist yet, in
     // the same `sandbox` database that already holds sandbox_items/employees.
@@ -833,8 +845,8 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
    * live-infra requirement as the checks-dock/mapping tests above.
    */
   test('destination drawer: preview is gated on approval + passing checks, then renders real rows from the source sandbox', async ({ page }) => {
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
-    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'destination', 'Dev sandbox (supabase)', { x: 800, y: 200 });
     await connectNodes(page, 0, 1);
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
@@ -935,8 +947,8 @@ test.describe.serial('canvas: seeded workflow drag / connect / reload / conflict
   test('schema drift: renaming the mapped source column fails checks, refreshing schema surfaces it in the drawer, fixing + re-approving passes again', async ({ page }) => {
     test.setTimeout(120_000);
 
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
-    await dragRailSectionItemOnto(page, 'Destinations', 'Dev sandbox (supabase)', { x: 800, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'destination', 'Dev sandbox (supabase)', { x: 800, y: 200 });
     await connectNodes(page, 0, 1);
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
@@ -1106,7 +1118,9 @@ test.describe('canvas: personal workspace', () => {
 
     // Triggers is listed first but isn't backed by any manifest yet
     // (NodesRail.tsx) — locked, non-draggable, "Soon" badge, not a real node.
-    const trigger = rail.getByText('Trigger', { exact: true });
+    // Redesign: the row's own label changed from "Trigger" to "Schedule"
+    // (group header "Triggers" is unchanged).
+    const trigger = rail.getByText('Schedule', { exact: true });
     await expect(trigger).toBeVisible();
     await expect(rail.getByText('Soon', { exact: true })).toBeVisible();
     await expect(trigger.locator('..')).not.toHaveAttribute('draggable', 'true');
@@ -1121,7 +1135,11 @@ test.describe('canvas: unknown tool renders without crashing', () => {
   test('workflow with an unrecognized manifestId renders a muted node instead of crashing', async ({ page }) => {
     await gotoWorkflow(page, 'Canvas E2E Project', 'Canvas E2E Unknown Tool');
     await expect(page.locator('.react-flow__node')).toHaveCount(1);
-    await expect(page.getByText('Unknown tool "not-a-real-connector"')).toBeVisible();
+    // .first(): GraphFlowNode.tsx legitimately renders the same unknownReason
+    // string twice for an unresolved node — once as the header title, once as
+    // the footer status line (both intentionally fall back to it) — so an
+    // unscoped text match resolves to both elements.
+    await expect(page.getByText('Unknown tool "not-a-real-connector"').first()).toBeVisible();
     // Still selectable/deletable — no special-casing in delete/select handlers.
     // Delete lives in the floating NodeConfigPanel, reachable once selected.
     await page.locator('.react-flow__node').first().click();
@@ -1152,7 +1170,9 @@ test.describe('canvas: palette purity — Triggers moat', () => {
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
 
     const rail = page.getByTestId('nodes-rail');
-    const trigger = rail.getByText('Trigger', { exact: true });
+    // Redesign: the row's own label changed from "Trigger" to "Schedule"
+    // (group header "Triggers" is unchanged).
+    const trigger = rail.getByText('Schedule', { exact: true });
     await expect(trigger).toBeVisible();
     await expect(rail.getByText('Soon', { exact: true })).toBeVisible();
     await expect(trigger.locator('..')).not.toHaveAttribute('draggable', 'true');
@@ -1163,7 +1183,7 @@ test.describe('canvas: palette purity — Triggers moat', () => {
     // (NodesRail.tsx), so no dataTransfer payload ever reaches the
     // canvas's onDrop, which bails out on an empty payload (FlowCanvas.tsx)
     // and creates nothing.
-    await dragPaletteItemOnto(page, 'Trigger', { x: 450, y: 300 });
+    await dragPaletteItemOnto(page, 'Schedule', { x: 450, y: 300 });
     await expect(page.locator('.react-flow__node')).toHaveCount(0);
   });
 });
@@ -1178,28 +1198,31 @@ test.describe('canvas: palette purity — connection-driven sections', () => {
     await gotoWorkflow(page, 'Canvas E2E Project', 'Canvas E2E Workflow');
     const rail = page.getByTestId('nodes-rail');
 
-    await expect(rail.getByText('Sources', { exact: true })).toBeVisible();
-    await expect(rail.getByText('Dev sandbox (mysql)', { exact: true }).first()).toBeVisible();
-    await expect(rail.getByText('Dev sandbox (mongodb)', { exact: true }).first()).toBeVisible();
+    // Redesign (NodesRail.tsx): the old "Sources"/"Destinations" split is
+    // gone — connection-driven entries now render under one "Connections"
+    // group, one row per connection (not one row per matching capability),
+    // carrying every role that connection's manifest supports. A dual-role
+    // connection (all three seeded here: mysql/mongodb/supabase carry both
+    // etl_source and etl_sink — mysql/mongodb gained etl_sink in Phase 6
+    // Block 5, supabase since Phase 5 Session 3; see packages/schemas/src/
+    // connectors/{mysql,mongodb,supabase}.ts) still offers both roles, just
+    // via a single row + FlowCanvas.tsx's inline "Use as Source" / "Use as
+    // Destination" drop picker instead of two separate rows.
+    await expect(rail.getByText('Connections', { exact: true })).toBeVisible();
+    await expect(rail.getByText('Dev sandbox (mysql)', { exact: true })).toBeVisible();
+    await expect(rail.getByText('Dev sandbox (mongodb)', { exact: true })).toBeVisible();
+    await expect(rail.getByText('Dev sandbox (supabase)', { exact: true })).toBeVisible();
 
-    // canvasA (canvas-e2e org) has mysql + mongodb + supabase connections
-    // (dev-bootstrap.ts). All three manifests now carry "etl_sink"
-    // (mysql/mongodb gained it in Phase 6 Block 5's write-path
-    // generalization — connector-mysql/connector-mongodb both expose
-    // POST /write now, same as connector-supabase since Phase 5 Session 3;
-    // see packages/schemas/src/connectors/{mysql,mongodb,supabase}.ts), so
-    // every one of them legitimately appears as BOTH a Sources entry and a
-    // Destinations entry (buildEntries in NodesRail.tsx pushes one row per
-    // matching capability, not one row per connection).
-    await expect(rail.getByText('Dev sandbox (mysql)', { exact: true })).toHaveCount(2);
-    await expect(rail.getByText('Dev sandbox (mongodb)', { exact: true })).toHaveCount(2);
-    await expect(rail.getByText('Dev sandbox (supabase)', { exact: true })).toHaveCount(2);
-    await expect(rail.getByText('Destinations', { exact: true })).toBeVisible();
+    // canvasA (canvas-e2e org) has exactly mysql + mongodb + supabase
+    // connections (dev-bootstrap.ts) — one row each now, not two.
+    await expect(rail.getByText('Dev sandbox (mysql)', { exact: true })).toHaveCount(1);
+    await expect(rail.getByText('Dev sandbox (mongodb)', { exact: true })).toHaveCount(1);
+    await expect(rail.getByText('Dev sandbox (supabase)', { exact: true })).toHaveCount(1);
 
-    // Exactly 7 draggable entries total: 3 Sources (mysql, mongodb,
-    // supabase) + 3 Destinations (mysql, mongodb, supabase) + the one
-    // generic (non-tool) Transform node — nothing invented, nothing extra.
-    await expect(rail.locator('[draggable="true"]')).toHaveCount(7);
+    // Exactly 4 draggable entries total: the 3 connections (each one row,
+    // dual-role) + the one generic (non-tool) Transform node — nothing
+    // invented, nothing extra.
+    await expect(rail.locator('[draggable="true"]')).toHaveCount(4);
   });
 });
 
@@ -1214,30 +1237,17 @@ test.describe('canvas: palette purity — zero-connection persona', () => {
     const projectName = `Palette Purity ${Date.now()}`;
     const workflowName = 'Palette Purity Check';
 
-    await page.goto('/app');
-    await page.getByRole('button', { name: 'New workflow' }).first().click();
-    await page.getByRole('button', { name: 'New project', exact: true }).click();
-    await page.locator('#project-name').fill(projectName);
-    await page.getByRole('button', { name: 'Create project' }).click();
-    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
-
-    await page.getByRole('button', { name: 'New workflow' }).first().click();
-    await page.getByRole('button', { name: 'New workflow', exact: true }).nth(1).click();
-    // Explicit select: the dialog's project dropdown defaults to
-    // projects[0] (CreateWorkflowDialog.tsx) whenever it's opened without a
-    // defaultProjectId, which is NOT necessarily the project just created
-    // above once this persona already has other projects (e.g. leftover
-    // from a prior run of this same test) — picking by label keeps this
-    // deterministic regardless of workspace history.
-    await page.locator('#workflow-project').selectOption({ label: projectName });
-    await page.locator('#workflow-name').fill(workflowName);
-    await page.getByRole('button', { name: 'Create workflow' }).click();
-
+    await createProjectAndWorkflow(page, projectName, workflowName);
     await gotoWorkflow(page, projectName, workflowName);
     const rail = page.getByTestId('nodes-rail');
     await expect(rail).toBeVisible();
 
-    await expect(rail.getByText('Trigger', { exact: true })).toBeVisible();
+    // Redesign (NodesRail.tsx): the locked trigger row's own label changed
+    // from "Trigger" to "Schedule" — the group header above it ("Triggers")
+    // is unchanged, but the row text itself is a real drift, not a
+    // relabeling this test can ignore.
+    await expect(rail.getByText('Triggers', { exact: true })).toBeVisible();
+    await expect(rail.getByText('Schedule', { exact: true })).toBeVisible();
     await expect(rail.getByText('Soon', { exact: true })).toBeVisible();
     await expect(rail.getByText('Sources', { exact: true })).toHaveCount(0);
     await expect(rail.getByText('Destinations', { exact: true })).toHaveCount(0);
@@ -1289,49 +1299,50 @@ test.describe('canvas: destination drawer — empty-database postgres connection
     // connection and shouldn't share state with the shared serial fixture.
     const projectName = `Empty DB E2E ${Date.now()}`;
     const workflowName = 'Empty DB E2E Check';
-    await page.goto('/app');
-    // Unlike the zero-connection persona test above, canvasA already has a
-    // project/workflow (dev-bootstrap.ts seeding), so the dashboard shows the
-    // "Continue" card instead of an empty-state "New workflow" CTA — the
-    // create flow has to go through the sidebar's "New" dropdown
-    // (Sidebar.tsx) instead of a page-level button.
-    await page.getByRole('button', { name: 'New', exact: true }).click();
-    await page.getByRole('button', { name: 'New project', exact: true }).click();
-    await page.locator('#project-name').fill(projectName);
-    await page.getByRole('button', { name: 'Create project' }).click();
-    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
-
-    await page.getByRole('button', { name: 'New', exact: true }).click();
-    await page.getByRole('button', { name: 'New workflow', exact: true }).click();
-    await page.locator('#workflow-project').selectOption({ label: projectName });
-    await page.locator('#workflow-name').fill(workflowName);
-    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await createProjectAndWorkflow(page, projectName, workflowName);
     await gotoWorkflow(page, projectName, workflowName);
 
     // mysql source first — its "employees" table is what the mapping /
     // column preview below reads from.
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
 
-    // PostgreSQL is installed but not yet connected for this org — clicking
-    // its "not connected" Destinations row opens AddConnectionDialog
-    // directly (NodesRail.tsx's buildEntries + onClick handler).
-    await clickRailSectionItem(page, 'Destinations', 'PostgreSQL');
-    await expect(page.getByText('Add PostgreSQL connection')).toBeVisible();
-    await page.locator('#connection-display-name').fill('Empty DB E2E');
-    await page.locator('#connection-field-host').fill('dev-postgres');
-    await page.locator('#connection-field-port').fill('5432');
-    await page.locator('#connection-field-database').fill('empty_e2e');
-    // Bug 4's fix defaults "Use TLS" to checked; this local sandbox
-    // container doesn't speak TLS, so it must be explicitly unchecked.
-    await page.locator('#connection-field-ssl').uncheck();
-    await page.locator('#connection-field-user').fill('nia_ro');
-    await page.locator('#connection-field-password').fill('nia_ro_pw');
-    await page.getByRole('button', { name: 'Add connection' }).click();
-    await expect(page.getByText('Add PostgreSQL connection')).not.toBeVisible();
+    // PostgreSQL may already be connected for canvasA's org from a prior run
+    // of this exact test — connection displayName is unique per org
+    // (migration 0029_connection_name_unique.sql), and this test always uses
+    // the same fixed name ('Empty DB E2E', not timestamped, since the drag
+    // below also needs a stable label), so a second run can't recreate it —
+    // reuse the existing connection instead.
+    //
+    // Probe via the add-another button's title, not by matching "PostgreSQL"
+    // text: a connected row also renders a secondary/subtitle label that
+    // falls back to the bare manifest name ("PostgreSQL", no region) when
+    // connectionRegion can't parse one — an exact text match against that
+    // subtitle is a false positive for "unconnected", and clicking it is a
+    // no-op (its onClick guard skips once `connected` is true).
+    const rail = page.getByTestId('nodes-rail');
+    const alreadyConnected = await rail.locator('[title="Add another PostgreSQL connection"]').isVisible().catch(() => false);
+    if (!alreadyConnected) {
+      // Not yet connected — clicking its "not connected" row opens
+      // AddConnectionDialog directly (NodesRail.tsx's buildEntries + onClick
+      // handler).
+      await clickRailSectionItem(page, 'PostgreSQL');
+      await expect(page.getByText('Add PostgreSQL connection')).toBeVisible();
+      await page.locator('#connection-display-name').fill('Empty DB E2E');
+      await page.locator('#connection-field-host').fill('dev-postgres');
+      await page.locator('#connection-field-port').fill('5432');
+      await page.locator('#connection-field-database').fill('empty_e2e');
+      // Bug 4's fix defaults "Use TLS" to checked; this local sandbox
+      // container doesn't speak TLS, so it must be explicitly unchecked.
+      await page.locator('#connection-field-ssl').uncheck();
+      await page.locator('#connection-field-user').fill('nia_ro');
+      await page.locator('#connection-field-password').fill('nia_ro_pw');
+      await page.getByRole('button', { name: 'Add connection' }).click();
+      await expect(page.getByText('Add PostgreSQL connection')).not.toBeVisible();
+    }
 
     // Now connected — the same rail row becomes a draggable entry labeled
     // with the connection's own displayName (buildEntries' connected branch).
-    await dragRailSectionItemOnto(page, 'Destinations', 'Empty DB E2E', { x: 800, y: 200 });
+    await dragRailSectionItemOnto(page, 'destination', 'Empty DB E2E', { x: 800, y: 200 });
     await connectNodes(page, 0, 1);
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
@@ -1351,11 +1362,16 @@ test.describe('canvas: destination drawer — empty-database postgres connection
     await sourceTableSelect.selectOption(employeesValue!);
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
-    // The floating config panel (NodeConfigPanel.tsx) is still open for the
-    // just-configured source node and physically overlaps the destination
-    // node — deselect via a pane click before selecting node 1, same fix as
-    // the sibling "run" test below.
-    await page.locator('.react-flow__pane').click({ position: { x: 300, y: 500 } });
+    // NodeConfigPanel is a real flex sibling now (workflow canvas redesign —
+    // see styles.ts's configPanelShellStyle), not an absolute overlay, so
+    // the pane itself visibly shrinks to make room for it (as little as
+    // ~110px wide at this viewport) — a hardcoded offset like {x:300,y:500}
+    // can land well past the pane's own (now much narrower) right edge and
+    // get intercepted by the docked panel next to it. Click with no
+    // explicit position instead: Playwright targets the element's own
+    // (correctly shrunk) visible center, which is always inside the pane
+    // regardless of how narrow it currently is.
+    await page.locator('.react-flow__pane').click();
 
     // Destination node: item 1 + item 2 assertions, on the default "Setup" tab.
     await page.locator('.react-flow__node').nth(1).click();
@@ -1461,44 +1477,33 @@ test.describe('canvas: destination drawer — empty-database postgres connection
 
     const projectName = `Empty DB E2E Run ${Date.now()}`;
     const workflowName = 'Empty DB E2E Run Check';
-    await page.goto('/app');
-    await page.getByRole('button', { name: 'New', exact: true }).click();
-    await page.getByRole('button', { name: 'New project', exact: true }).click();
-    await page.locator('#project-name').fill(projectName);
-    await page.getByRole('button', { name: 'Create project' }).click();
-    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
-
-    await page.getByRole('button', { name: 'New', exact: true }).click();
-    await page.getByRole('button', { name: 'New workflow', exact: true }).click();
-    await page.locator('#workflow-project').selectOption({ label: projectName });
-    await page.locator('#workflow-name').fill(workflowName);
-    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await createProjectAndWorkflow(page, projectName, workflowName);
     await gotoWorkflow(page, projectName, workflowName);
 
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
 
     // PostgreSQL may already be connected for canvasA's org (the sibling
     // test above, or a prior run) — buildEntries' zero-connections branch
     // ("PostgreSQL", unconnected) and its one-or-more-connections branch
-    // ("Add PostgreSQL connection") are mutually exclusive, so probe for
-    // whichever is actually present instead of assuming execution order.
-    // Scoped to the Destinations section specifically (not the whole rail):
-    // PostgreSQL's manifest has both etl_source and etl_sink, so its
-    // unconnected placeholder row renders under BOTH Sources and
-    // Destinations — an unscoped exact-text locator would strict-mode-
-    // violate across the two, and isVisible()'s .catch(() => false) would
-    // silently swallow that into a wrong "false" instead of surfacing it.
-    const destinationsSection = page.getByTestId('nodes-rail').getByText('Destinations', { exact: true }).locator('..');
-    const unconnectedRow = destinationsSection.getByText('PostgreSQL', { exact: true });
-    if (await unconnectedRow.isVisible().catch(() => false)) {
-      await clickRailSectionItem(page, 'Destinations', 'PostgreSQL');
+    // ("+ New connection", title="Add another PostgreSQL connection") are
+    // mutually exclusive, so probe for whichever is actually present
+    // instead of assuming execution order. Redesign (NodesRail.tsx): each
+    // connector now renders exactly once under the single "Connections"
+    // group (no more per-section duplication), so no section scoping is
+    // needed to avoid a strict-mode violation here anymore.
+    //
+    // Probe via the add-another button's title, not by matching "PostgreSQL"
+    // text: a connected row also renders a secondary/subtitle label that
+    // falls back to the bare manifest name ("PostgreSQL", no region) when
+    // connectionRegion can't parse one — an exact text match against that
+    // subtitle is a false positive for "unconnected", and clicking it is a
+    // no-op (its onClick guard skips once `connected` is true).
+    const rail = page.getByTestId('nodes-rail');
+    const addAnotherBtn = rail.locator('[title="Add another PostgreSQL connection"]');
+    if (await addAnotherBtn.isVisible().catch(() => false)) {
+      await addAnotherBtn.click();
     } else {
-      // The rail's add-another-connection row visibly renders as just "Add
-      // connection" (NodesRail.tsx), shared verbatim across every connector
-      // in the section — its connector-specific `title` attribute (not its
-      // text) is what's actually unique, so target that instead of
-      // clickRailSectionItem's exact-text match.
-      await destinationsSection.locator('[title="Add another PostgreSQL connection"]').click();
+      await clickRailSectionItem(page, 'PostgreSQL');
     }
     await expect(page.getByText('Add PostgreSQL connection')).toBeVisible();
     const connectionName = `Empty DB E2E Run ${Date.now()}`;
@@ -1512,7 +1517,7 @@ test.describe('canvas: destination drawer — empty-database postgres connection
     await page.getByRole('button', { name: 'Add connection' }).click();
     await expect(page.getByText('Add PostgreSQL connection')).not.toBeVisible();
 
-    await dragRailSectionItemOnto(page, 'Destinations', connectionName, { x: 800, y: 200 });
+    await dragRailSectionItemOnto(page, 'destination', connectionName, { x: 800, y: 200 });
     await connectNodes(page, 0, 1);
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
@@ -1524,13 +1529,19 @@ test.describe('canvas: destination drawer — empty-database postgres connection
     await sourceTableSelect.selectOption(employeesValue!);
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
-    // The floating config panel (NodeConfigPanel.tsx, right:12/width:360,
-    // absolutely positioned over the canvas surface) is still open for the
-    // just-configured source node and physically overlaps the destination
-    // node's (800, 200) drop point at this viewport size — deselect via a
-    // pane click (FlowCanvas.tsx's onPaneClick) before selecting node 1, or
-    // the click on node 1 is intercepted by node 0's own panel.
-    await page.locator('.react-flow__pane').click({ position: { x: 300, y: 500 } });
+    // NodeConfigPanel is still open for the just-configured source node and
+    // physically overlaps the destination node's (800, 200) drop point at
+    // this viewport size — deselect via a pane click (FlowCanvas.tsx's
+    // onPaneClick) before selecting node 1, or the click on node 1 is
+    // intercepted by node 0's own panel.
+    //
+    // No explicit position: NodeConfigPanel is a real flex sibling (see
+    // styles.ts's configPanelShellStyle, workflow canvas redesign), so the
+    // pane visibly shrinks while it's open — a hardcoded offset can land
+    // past the pane's own (now narrower) edge and get intercepted by the
+    // docked panel next to it. The default click targets the element's own
+    // (correctly shrunk) visible center instead, which is always inside it.
+    await page.locator('.react-flow__pane').click();
     await page.locator('.react-flow__node').nth(1).click();
     const drawer = page.getByTestId('node-drawer');
     await page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema'));
@@ -1587,7 +1598,12 @@ test.describe('canvas: destination drawer — empty-database postgres connection
     await expect(runBtn).toBeEnabled();
     await runBtn.click();
 
-    await expect(page.getByText('Complete', { exact: true })).toBeVisible({ timeout: 30_000 });
+    // run-status-value's text is "{destLabel} — {status}" as sibling JSX
+    // text nodes inside one span (FlowCanvas.tsx), never the bare string
+    // "Complete" alone — getByText(..., {exact:true}) requires an element
+    // whose ENTIRE text content matches exactly, which no element here has.
+    // Scope to the testid and assert on a substring instead.
+    await expect(page.getByTestId('run-status-value')).toContainText('Complete', { timeout: 30_000 });
     await expect(page.getByText(/row.*written/)).toBeVisible();
 
     // The deliverable itself: assert directly against the database, not
@@ -1651,21 +1667,10 @@ test.describe('canvas: node context menu', () => {
   test('right-clicking a resolved source node opens the menu and "Test connection" shows a success toast', async ({ page }) => {
     const projectName = `Context Menu E2E ${Date.now()}`;
     const workflowName = 'Context Menu E2E Check';
-    await page.goto('/app');
-    await page.getByRole('button', { name: 'New', exact: true }).click();
-    await page.getByRole('button', { name: 'New project', exact: true }).click();
-    await page.locator('#project-name').fill(projectName);
-    await page.getByRole('button', { name: 'Create project' }).click();
-    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
-
-    await page.getByRole('button', { name: 'New', exact: true }).click();
-    await page.getByRole('button', { name: 'New workflow', exact: true }).click();
-    await page.locator('#workflow-project').selectOption({ label: projectName });
-    await page.locator('#workflow-name').fill(workflowName);
-    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await createProjectAndWorkflow(page, projectName, workflowName);
     await gotoWorkflow(page, projectName, workflowName);
 
-    await dragRailSectionItemOnto(page, 'Sources', 'Dev sandbox (mysql)', { x: 450, y: 200 });
+    await dragRailSectionItemOnto(page, 'source', 'Dev sandbox (mysql)', { x: 450, y: 200 });
     await expect(page.getByText('Saved')).toBeVisible({ timeout: 5_000 });
 
     const node = page.locator('.react-flow__node').first();

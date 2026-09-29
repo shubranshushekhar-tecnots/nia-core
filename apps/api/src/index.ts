@@ -13,6 +13,7 @@ import { grantsRouter } from "./routes/grants.js";
 import { chatRouter } from "./routes/chat.js";
 import { runsRouter } from "./routes/runs.js";
 import { copilotAgentRouter } from "./routes/copilotAgent.js";
+import { consoleRouter } from "./routes/console.js";
 // Copilot agent (Part 1/2): importing this registers every v1 tool
 // (registerTool side effect at each module's bottom) before any request
 // can reach copilotAgentRouter below.
@@ -62,6 +63,20 @@ app.use("/connectors", connectorsRouter);
 app.use("/connections", connectionsRouter);
 app.use("/connections/:connectionId/grants", grantsRouter);
 
+// Console v1 (docs/plans/console-plan.md, build order step 4) — off by
+// default (env.CONSOLE_ENABLED); per that step's own spec, "flag off" must
+// mean the router isn't mounted at all, not just gated per-route. Mounted
+// here, BEFORE chatRouter's "/" mount below: chatRouter has a blanket
+// .use(requireCookieAuth, ...) that runs for every request path once
+// registered (same reasoning runsRouter's header comment documents for
+// workflowsRouter) — a cookie-auth failure there calls next(err), which
+// skips straight to the error handler and never reaches a router mounted
+// after it, so /console/* must be registered first to get its own
+// requireAuth/requireStaff chain a chance to run at all.
+if (env.CONSOLE_ENABLED) {
+  app.use("/console", consoleRouter);
+}
+
 // POST /chat, GET /chat/stream — cookie-authenticated, mounted at "/" LAST
 // (chatRouter has a blanket cookie-auth .use() of its own; mounting it at
 // "/" before any Bearer-authed router above would intercept and 401 all of
@@ -80,7 +95,13 @@ app.use("/copilot-agent", copilotAgentRouter);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-const server = app.listen(env.PORT, () => {
+// Exported (not just a local const) so index.test.ts can dynamically
+// re-import this module with env.CONSOLE_ENABLED stubbed true/false and
+// inspect the resulting server directly — see that file's header comment
+// for why a genuine import of this file, not a hand-built substitute app,
+// is needed to prove the `if (env.CONSOLE_ENABLED)` line itself gates
+// mounting.
+export const server = app.listen(env.PORT, () => {
   console.log(`[api] listening on :${env.PORT} (web origin: ${env.WEB_ORIGIN})`);
   // Best-effort, non-blocking: warns if a running connector container's
   // image predates its current source (see connectorFreshness.ts).

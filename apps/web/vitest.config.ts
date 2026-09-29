@@ -1,10 +1,13 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
 
-// Scoped to lib/**: today that's only lib/canvas/mapping.ts's pure
-// GraphDoc<->React Flow round-trip tests. Nothing here touches Next's App
-// Router runtime, so no jsdom/next-test-env setup is needed yet — add one
-// if/when a test needs to render a component.
+// Scoped to lib/** plus a handful of app/** server-only files (see below):
+// today that's lib/canvas/mapping.ts's pure GraphDoc<->React Flow
+// round-trip tests, plus app/console/layout.test.ts. Nothing here touches
+// Next's App Router rendering — app/console/layout.tsx is a plain async
+// function called directly, not rendered — so no jsdom/next-test-env setup
+// is needed yet; add one if/when a test needs to actually render a
+// component.
 export default defineConfig({
   resolve: {
     // Mirrors tsconfig.json's "@/*" -> "./src/*" path alias (Next's own
@@ -14,6 +17,6 @@ export default defineConfig({
     alias: { "@": path.resolve(__dirname, "src") },
   },
   test: {
-    include: ["src/lib/**/*.test.ts"],
+    include: ["src/lib/**/*.test.ts", "src/app/console/**/*.test.ts"],
   },
 });

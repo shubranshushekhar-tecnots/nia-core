@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildDropRoleStatementText, buildGrantStatementText, friendlyAppError, friendlyConnectionError, parseNodeConfig, transformOutputFields, type CheckResult, type EntityRef, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildDropRoleStatementText, buildGrantStatementText, friendlyAppError, friendlyConnectionError, parseNodeConfig, transformOutputFields, type CheckResult, type EntityRef, type HelpSqlValues, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
 import { resolveTableFieldState } from '@/lib/canvas/tableFieldState';
 import { filterEntities } from '@/lib/canvas/entityFiltering';
@@ -15,6 +15,7 @@ import {
   revokeWriteGrant,
   type WriteGrant,
 } from '@/lib/api/connectionsClient';
+import HelpPanel from '@/components/app/HelpPanel';
 import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
 import ProfileTab from './ProfileTab';
@@ -234,14 +235,19 @@ function GrantAccessPanel({
   const [grant, setGrant] = useState<WriteGrant | undefined>(pendingGrant);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorFix, setErrorFix] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   const statementText = connectorId ? buildGrantStatementText(connectorId, namespace, credential.user, credential.password) : null;
+  /** The generated role/password already exist at mount (see useState above), so Layer 2's help panel always has real values to show — never the shared placeholder credential. */
+  const helpValues: HelpSqlValues = { database: '', namespace, roleUser: credential.user, rolePassword: credential.password };
 
   async function handleCreate() {
     setBusy(true);
     setError(null);
+    setErrorFix(null);
     setErrorDetails(null);
     try {
       const created = await createWriteGrant(connectionId, { schemas: [namespace] });
@@ -252,8 +258,9 @@ function GrantAccessPanel({
       // friendlyAppError's source-of-truth is "add-connection" — override
       // it to "grant-write-access" here, where it actually happened.
       if (err instanceof ConnectionsApiError && err.code === 'CREATE_FAILED') {
-        const { summary, details } = friendlyAppError(err.code, err.message, 'grant-write-access');
+        const { summary, fix, details } = friendlyAppError(err.code, err.message, 'grant-write-access');
         setError(summary);
+        setErrorFix(fix ?? null);
         setErrorDetails(details);
       } else {
         setError(err instanceof Error ? err.message : 'Failed to create write grant.');
@@ -267,6 +274,7 @@ function GrantAccessPanel({
     if (!grant) return;
     setBusy(true);
     setError(null);
+    setErrorFix(null);
     setErrorDetails(null);
     try {
       await confirmWriteGrant(connectionId, grant.id, credential);
@@ -279,8 +287,14 @@ function GrantAccessPanel({
       // Vault write or DB update error) aren't raw driver text, so they
       // pass through as-is.
       if (err instanceof ConnectionsApiError && err.code === 'WRITE_GRANT_TEST_FAILED') {
-        const { summary, details } = friendlyConnectionError(err.message);
+        const { summary, fix, details } = friendlyConnectionError(err.message);
         setError(summary);
+        setErrorFix(fix ?? null);
+        setErrorDetails(details);
+      } else if (err instanceof ConnectionsApiError && err.code === 'CONFIRM_FAILED') {
+        const { summary, fix, details } = friendlyAppError(err.code, err.message);
+        setError(summary);
+        setErrorFix(fix ?? null);
         setErrorDetails(details);
       } else {
         setError(err instanceof Error ? err.message : 'Failed to confirm write grant.');
@@ -299,7 +313,15 @@ function GrantAccessPanel({
 
   return (
     <div style={grantPanelStyle}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', marginBottom: 6 }}>Grant write access to &quot;{namespace}&quot;</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>Grant write access to &quot;{namespace}&quot;</div>
+        <button type="button" style={grantButtonStyle} onClick={() => setShowHelp(true)}>
+          Help with this step
+        </button>
+      </div>
+      {showHelp && (
+        <HelpPanel step="grant-write-access" connectorId={connectorId ?? ''} values={helpValues} onClose={() => setShowHelp(false)} />
+      )}
       {!grant ? (
         <>
           <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 8 }}>
@@ -348,6 +370,7 @@ function GrantAccessPanel({
       {error && (
         <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>
           {error}
+          {errorFix && <span style={{ display: 'block', marginTop: 2 }}>{errorFix}</span>}
           {errorDetails && errorDetails !== error && (
             <details style={{ marginTop: 4 }}>
               <summary style={{ cursor: 'pointer' }}>Show details</summary>
@@ -383,19 +406,35 @@ function RevokeAccessPanel({
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorFix, setErrorFix] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   const dropStatement =
     connectorId && grant.writeRoleName ? buildDropRoleStatementText(connectorId, grant.writeRoleName) : null;
+  /** Only real once the grant actually carries a role name — falls back to HelpPanel's illustration mode (no Copy button) otherwise, same invariant as GrantAccessPanel above. */
+  const helpValues: HelpSqlValues | undefined = grant.writeRoleName
+    ? { database: '', namespace, roleUser: grant.writeRoleName, rolePassword: '' }
+    : undefined;
 
   async function handleRevoke() {
     setBusy(true);
     setError(null);
+    setErrorFix(null);
+    setErrorDetails(null);
     try {
       await revokeWriteGrant(connectionId, grant.id);
       await queryClient.invalidateQueries({ queryKey: ['connection-write-grants', connectionId] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to revoke write grant.');
+      if (err instanceof ConnectionsApiError && err.code === 'REVOKE_FAILED') {
+        const { summary, fix, details } = friendlyAppError(err.code, err.message);
+        setError(summary);
+        setErrorFix(fix ?? null);
+        setErrorDetails(details);
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to revoke write grant.');
+      }
     } finally {
       setBusy(false);
     }
@@ -410,9 +449,17 @@ function RevokeAccessPanel({
 
   return (
     <div style={grantPanelStyle}>
-      <div style={{ fontSize: 11.5, color: 'var(--ok)', marginBottom: 8 }}>
-        Write access granted to &quot;{namespace}&quot;{grant.writeRoleName ? <> as role <code>{grant.writeRoleName}</code></> : null}.
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, gap: 8 }}>
+        <div style={{ fontSize: 11.5, color: 'var(--ok)' }}>
+          Write access granted to &quot;{namespace}&quot;{grant.writeRoleName ? <> as role <code>{grant.writeRoleName}</code></> : null}.
+        </div>
+        <button type="button" style={{ ...grantButtonStyle, flexShrink: 0 }} onClick={() => setShowHelp(true)}>
+          Help with this step
+        </button>
       </div>
+      {showHelp && (
+        <HelpPanel step="revoke-access" connectorId={connectorId ?? ''} values={helpValues} onClose={() => setShowHelp(false)} />
+      )}
       {dropStatement && (
         <details style={{ marginBottom: 8 }}>
           <summary style={{ fontSize: 11.5, color: 'var(--ink4)', cursor: 'pointer' }}>Show role removal statement</summary>
@@ -440,7 +487,18 @@ function RevokeAccessPanel({
       <button type="button" style={grantButtonStyle} disabled={busy} onClick={handleRevoke}>
         {busy ? 'Revoking…' : 'Revoke access'}
       </button>
-      {error && <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>{error}</div>}
+      {error && (
+        <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>
+          {error}
+          {errorFix && <span style={{ display: 'block', marginTop: 2 }}>{errorFix}</span>}
+          {errorDetails && errorDetails !== error && (
+            <details style={{ marginTop: 4 }}>
+              <summary style={{ cursor: 'pointer' }}>Show details</summary>
+              <span style={{ display: 'block', marginTop: 2 }}>{errorDetails}</span>
+            </details>
+          )}
+        </div>
+      )}
     </div>
   );
 }

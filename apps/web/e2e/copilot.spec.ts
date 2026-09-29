@@ -3,6 +3,7 @@ import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { Pool } from 'pg';
 import { personas } from './fixtures/personas';
+import { createProjectAndWorkflow, gotoWorkflow } from './fixtures/flows';
 
 /**
  * The Playwright test process is plain node — it never runs through
@@ -45,13 +46,6 @@ loadWebEnv();
  * which the same policy's `or (org_id is null and owner_id = auth.uid())`
  * branch lets its own owner self-read with no admin-role juggling.
  */
-
-async function gotoWorkflow(page: Page, projectName: string, workflowName: string) {
-  await page.goto('/app/projects');
-  await page.getByRole('link', { name: projectName, exact: true }).click();
-  await page.getByRole('link', { name: workflowName }).first().click();
-  await expect(page).toHaveURL(/\/app\/workflows\/[0-9a-f-]{36}/);
-}
 
 /**
  * apps/web's Better Auth session cookie (`better-auth.session_token`, set
@@ -433,18 +427,7 @@ test.describe('copilot: agent tool-use loop (Part 3/4)', () => {
 
     const projectName = `Copilot Agent E2E ${Date.now()}`;
     const workflowName = 'Copilot Agent E2E Workflow';
-    await page.goto('/app');
-    await page.getByRole('button', { name: 'New', exact: true }).click();
-    await page.getByRole('button', { name: 'New project', exact: true }).click();
-    await page.locator('#project-name').fill(projectName);
-    await page.getByRole('button', { name: 'Create project' }).click();
-    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
-
-    await page.getByRole('button', { name: 'New', exact: true }).click();
-    await page.getByRole('button', { name: 'New workflow', exact: true }).click();
-    await page.locator('#workflow-project').selectOption({ label: projectName });
-    await page.locator('#workflow-name').fill(workflowName);
-    await page.getByRole('button', { name: 'Create workflow' }).click();
+    await createProjectAndWorkflow(page, projectName, workflowName);
     await gotoWorkflow(page, projectName, workflowName);
 
     const workflowId = page.url().match(/\/app\/workflows\/([0-9a-f-]{36})/)?.[1];

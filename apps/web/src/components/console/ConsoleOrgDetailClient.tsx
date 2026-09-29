@@ -1,0 +1,267 @@
+'use client';
+
+import { useState, useTransition } from 'react';
+import Link from 'next/link';
+import type { ConsoleOrgDetail } from '@/lib/api/consoleServer';
+import { updateOrgPlanAction } from '@/lib/console/actions';
+import { formatLowerLimitWarning } from '@/lib/console/planLimitWarning';
+import {
+  consoleBreadcrumbCurrentStyle,
+  consoleBreadcrumbLinkStyle,
+  consoleBreadcrumbRowStyle,
+  consoleBreadcrumbSepStyle,
+  consoleColEmailStyle,
+  consoleColJoinedStyle,
+  consoleColMemberStyle,
+  consoleColRoleStyle,
+  consoleContentStyle,
+  consoleDetailHeaderTitleColStyle,
+  consoleEmptyStyle,
+  consoleGhostBtnStyle,
+  consoleHeaderRowStyle,
+  consoleHeaderSubStyle,
+  consoleHeaderTitleStyle,
+  consoleMonoStyle,
+  consolePlanFieldLabelStyle,
+  consolePlanFieldStyle,
+  consolePlanFormActionsStyle,
+  consolePlanFormErrorStyle,
+  consolePlanFormStyle,
+  consolePlanFormWarningStyle,
+  consolePlanInputStyle,
+  consolePrimaryBtnStyle,
+  consoleRowEmailCellStyle,
+  consoleRowJoinedCellStyle,
+  consoleRowMemberCellStyle,
+  consoleRowNameColStyle,
+  consoleRowNameStyle,
+  consoleRowRoleCellStyle,
+  consoleRowStyle,
+  consoleSectionTitleStyle,
+  consoleStatCardStyle,
+  consoleStatLabelStyle,
+  consoleStatsRowStyle,
+  consoleStatValueStyle,
+  consoleTableHeadRowStyle,
+  consoleTableStyle,
+} from './styles';
+
+/**
+ * Console v1 Org Detail screen (docs/plans/console-plan.md build order
+ * steps 6-7, Slice 2). Breadcrumb, header, and Members table markup/styles
+ * ported from designs/Nia Console (superadmin).html's `isOrgDetail`
+ * template. Deliberately narrower than the design, following
+ * ConsoleDirectoryClient's own precedent (omit controls with no real
+ * capability behind them yet, rather than render them inert):
+ *  - No "View as" / Suspend / Delete header buttons: impersonation,
+ *    suspension, and delete are all later build-order steps (§1's
+ *    screen-mapping table), not this slice.
+ *  - No Projects/Workflows/Activity tabs: only Members has real data wired
+ *    up this slice; a tab bar with three dead tabs would be a non-functional
+ *    control, exactly what ConsoleDirectoryClient's own filter-dropdown
+ *    precedent already avoids.
+ *  - No per-row "···" member menu: its actions (suspend/remove a member)
+ *    don't exist yet either.
+ *  - Members table shows "Joined" instead of the design's "Last active" /
+ *    "Status" columns: no last-active tracking or member-suspension
+ *    mechanism exists yet, and `joinedAt` (organization_members.created_at)
+ *    is real data the API already returns.
+ *
+ * Plan/limits/usage (a stat-card row below the header) has no slot in the
+ * design at all — the design only folds `plan` into the header's meta line
+ * — but console-plan.md decision 8 requires it on this screen, so it's
+ * added directly, styled consistently with the rest of Console (same
+ * surface/border tokens as everywhere else) rather than left out.
+ *
+ * Slice 3a adds the one real write action this screen has: an "Edit plan"
+ * ghost button next to the stat row toggles it into an inline form (two
+ * fields, Save/Cancel) rather than a modal — consistent with the
+ * minimalist convention above, and PATCH /console/orgs/:orgId/plan is a
+ * two-field write, not worth a dialog. An empty "Workflow limit" field
+ * submits `null` (unlimited), matching org_plan's own semantics (see
+ * consoleServer.ts's ConsoleOrgDetail doc comment).
+ */
+export default function ConsoleOrgDetailClient({ org: initialOrg }: { org: ConsoleOrgDetail }) {
+  const [org, setOrg] = useState(initialOrg);
+  const [isEditing, setIsEditing] = useState(false);
+  const [planTier, setPlanTier] = useState(org.planTier);
+  const [workflowLimit, setWorkflowLimit] = useState(org.workflowLimit === null ? '' : String(org.workflowLimit));
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  const orgMeta = `${org.planTier} · ${org.members.length} people · ${org.runs30d} runs in 30 days · ${org.status}`;
+
+  // Live preview while typing: the trigger only blocks NEW inserts (it
+  // fires on INSERT, never UPDATE/DELETE), so lowering the limit below
+  // org.workflowsUsed never touches existing rows — this is purely an
+  // informational heads-up for staff before they click Save, not a
+  // client-side validation error (a limit below current usage is a valid,
+  // intentional save).
+  const trimmedLimitPreview = workflowLimit.trim();
+  const parsedLimitPreview =
+    trimmedLimitPreview && Number.isInteger(Number(trimmedLimitPreview)) && Number(trimmedLimitPreview) > 0
+      ? Number(trimmedLimitPreview)
+      : null;
+  const lowerLimitWarning = formatLowerLimitWarning(org.workflowsUsed, parsedLimitPreview);
+
+  function startEditing() {
+    setPlanTier(org.planTier);
+    setWorkflowLimit(org.workflowLimit === null ? '' : String(org.workflowLimit));
+    setFormError(null);
+    setIsEditing(true);
+  }
+
+  function handleSave() {
+    const trimmedTier = planTier.trim();
+    if (!trimmedTier) {
+      setFormError('Plan is required.');
+      return;
+    }
+    const trimmedLimit = workflowLimit.trim();
+    let parsedLimit: number | null = null;
+    if (trimmedLimit) {
+      const n = Number(trimmedLimit);
+      if (!Number.isInteger(n) || n <= 0) {
+        setFormError('Workflow limit must be a positive whole number, or blank for unlimited.');
+        return;
+      }
+      parsedLimit = n;
+    }
+
+    setFormError(null);
+    startTransition(async () => {
+      const result = await updateOrgPlanAction(org.id, trimmedTier, parsedLimit);
+      if (!result.ok) {
+        setFormError(result.error);
+        return;
+      }
+      setOrg((prev) => ({ ...prev, planTier: result.planTier, workflowLimit: result.workflowLimit }));
+      setIsEditing(false);
+    });
+  }
+
+  return (
+    <div style={consoleContentStyle}>
+      <div style={consoleBreadcrumbRowStyle}>
+        <Link href="/console" style={consoleBreadcrumbLinkStyle}>
+          Directory
+        </Link>
+        <span style={consoleBreadcrumbSepStyle}>/</span>
+        <span style={consoleBreadcrumbCurrentStyle}>{org.name}</span>
+      </div>
+
+      <div style={consoleHeaderRowStyle}>
+        <div style={consoleDetailHeaderTitleColStyle}>
+          <span style={consoleHeaderTitleStyle}>{org.name}</span>
+          <span style={consoleHeaderSubStyle}>{orgMeta}</span>
+        </div>
+      </div>
+
+      <div style={consoleStatsRowStyle}>
+        {isEditing ? (
+          <div style={consolePlanFormStyle}>
+            <div style={consolePlanFieldStyle}>
+              <label htmlFor="console-plan-tier" style={consolePlanFieldLabelStyle}>
+                Plan
+              </label>
+              <input
+                id="console-plan-tier"
+                value={planTier}
+                onChange={(e) => setPlanTier(e.target.value)}
+                disabled={isPending}
+                style={consolePlanInputStyle}
+              />
+            </div>
+            <div style={consolePlanFieldStyle}>
+              <label htmlFor="console-workflow-limit" style={consolePlanFieldLabelStyle}>
+                Workflow limit
+              </label>
+              <input
+                id="console-workflow-limit"
+                value={workflowLimit}
+                onChange={(e) => setWorkflowLimit(e.target.value)}
+                placeholder="Unlimited"
+                inputMode="numeric"
+                disabled={isPending}
+                style={consolePlanInputStyle}
+              />
+            </div>
+            <div style={consolePlanFormActionsStyle}>
+              <button type="button" onClick={handleSave} disabled={isPending} style={consolePrimaryBtnStyle}>
+                {isPending ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditing(false)}
+                disabled={isPending}
+                style={consoleGhostBtnStyle}
+              >
+                Cancel
+              </button>
+            </div>
+            {!formError && lowerLimitWarning && <span style={consolePlanFormWarningStyle}>{lowerLimitWarning}</span>}
+            {formError && <span style={consolePlanFormErrorStyle}>{formError}</span>}
+          </div>
+        ) : (
+          <>
+            <div style={consoleStatCardStyle}>
+              <span style={consoleStatLabelStyle}>Plan</span>
+              <span style={consoleStatValueStyle}>{org.planTier}</span>
+            </div>
+            <div style={consoleStatCardStyle}>
+              <span style={consoleStatLabelStyle}>Workflow limit</span>
+              <span style={consoleStatValueStyle}>{org.workflowLimit === null ? 'Unlimited' : org.workflowLimit}</span>
+            </div>
+            <div style={consoleStatCardStyle}>
+              <span style={consoleStatLabelStyle}>Workflows used</span>
+              <span style={consoleStatValueStyle}>{org.workflowsUsed}</span>
+            </div>
+            <button type="button" onClick={startEditing} style={consoleGhostBtnStyle}>
+              Edit plan
+            </button>
+          </>
+        )}
+      </div>
+
+      <div style={consoleSectionTitleStyle}>Members</div>
+
+      <div style={consoleTableStyle}>
+        <div style={consoleTableHeadRowStyle}>
+          <span style={consoleColMemberStyle}>Member</span>
+          <span style={consoleColEmailStyle}>Email</span>
+          <span style={consoleColRoleStyle}>Role</span>
+          <span style={consoleColJoinedStyle}>Joined</span>
+        </div>
+
+        {org.members.length === 0 && <div style={consoleEmptyStyle}>No members.</div>}
+
+        {org.members.map((m) => (
+          <div key={m.userId} style={consoleRowStyle}>
+            <span style={consoleRowMemberCellStyle}>
+              <span style={consoleMonoStyle}>{initialsOf(m.name)}</span>
+              <span style={consoleRowNameColStyle}>
+                <span style={consoleRowNameStyle}>{m.name}</span>
+              </span>
+            </span>
+            <span style={consoleRowEmailCellStyle}>{m.email}</span>
+            <span style={consoleRowRoleCellStyle}>{m.role}</span>
+            <span style={consoleRowJoinedCellStyle}>{formatDate(m.joinedAt)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function initialsOf(name: string): string {
+  return name
+    .split(' ')
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}

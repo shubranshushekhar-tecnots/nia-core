@@ -855,3 +855,20 @@
   respects `maxHeight`, flips above/below) checks out and is covered by
   `command-bar.spec.ts`, but that's moot until the surrounding shell
   itself becomes responsive. Out of scope for that UI-only task.
+- **`chatRouter` is mounted at `"/"` with a blanket `requireCookieAuth`**,
+  so an unauthenticated request to any unknown path (including a
+  not-yet-mounted `/console/*` route) returns 401 instead of 404 —
+  found verifying Console v1 build order step 4's env-gate test
+  (`apps/api/src/index.test.ts`). Consider scoping `chatRouter` to its
+  own prefix so unmatched paths correctly 404 regardless of auth state.
+- MongoDB staged writes unconditionally refused — topology detection/
+  replica-set support not implemented.
+- MongoDB destinations default to writeMode 'staged' (resolveWriteMode,
+  nodeConfig.ts:146-161), which connector-mongodb always refuses — every
+  new MongoDB destination fails unless the user switches to 'direct'.
+  Make the default connector-aware (MongoDB → direct) or block staged
+  for MongoDB at validation time with a clear message.
+- apps/worker golden-suite eval harness seeds workflows per fixture case
+  in one org with no limit check — will hit workflow_limit (25) if the
+  suite grows past 25 cases. Use a dedicated eval org with an unlimited
+  plan.

@@ -37,6 +37,8 @@ export type DashboardStats = {
   projectCount: number;
   workflowCount: number;
   activeWorkflowCount: number;
+  planTier: string;
+  workflowLimit: number | null;
 };
 
 export type ProjectDetail = {

@@ -1992,6 +1992,138 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 54 — 0042_org_plan.sql + 0044_org_plan_member_select.sql (Console
+-- v1 Step 7, then a "Slice 2 follow-ups" narrowing: org_plan shipped with
+-- zero policies/grants at all in 0042 — same posture as platform_staff/
+-- staff_audit_log, Probes 51-52 — then 0044 added exactly one SELECT grant
+-- + a member-scoped SELECT policy, nothing else. An outsider's SELECT is
+-- now RLS-filtered to zero rows (the grant exists, so it's no longer a
+-- statement-level permission error) — INSERT still hard-fails with
+-- permission denied for anyone, since no INSERT grant was added.)
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_org      uuid := (select id from test_ids where key = 'org');
+  n_visible int;
+  insert_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_outsider);
+
+  select count(*) into n_visible from public.org_plan;
+
+  begin
+    insert into public.org_plan (org_id, plan_tier, workflow_limit) values (v_org, 'Pro', 25);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  reset role;
+
+  if n_visible = 0 and insert_denied then
+    insert into probe_results values (54, 'org_plan: outsider SELECT is RLS-filtered to zero rows (not a grant error); INSERT still raises permission denied', true);
+  else
+    insert into probe_results values (54, 'org_plan: outsider SELECT is RLS-filtered to zero rows (not a grant error); INSERT still raises permission denied', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (54, 'org_plan RLS probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 55 — 0044_org_plan_member_select.sql: a member of the org CAN read
+-- their own org's org_plan row (correct plan_tier/workflow_limit values,
+-- not just "some row").
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org    uuid := (select id from test_ids where key = 'org');
+  v_plan_tier text;
+  v_workflow_limit int;
+begin
+  perform pg_temp.act_as(v_member);
+  select plan_tier, workflow_limit into v_plan_tier, v_workflow_limit
+  from public.org_plan where org_id = v_org;
+  reset role;
+
+  if v_plan_tier = 'Pro' and v_workflow_limit = 25 then
+    insert into probe_results values (55, 'org_plan: a member can read their own org''s plan row (0043''s Pro/25 default)', true);
+  else
+    insert into probe_results values (55, 'org_plan: a member can read their own org''s plan row (0043''s Pro/25 default)', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (55, 'org_plan member-can-read-own-org probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 56 — 0044_org_plan_member_select.sql: a member of org A CANNOT
+-- read org B's org_plan row (private.is_member(org_id) actually scopes by
+-- org, not just "any org the caller happens to be a member of somewhere").
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org_b  uuid := (select id from test_ids where key = 'org_b');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_visible from public.org_plan where org_id = v_org_b;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (56, 'org_plan: a member of org A cannot read org B''s plan row', true);
+  else
+    insert into probe_results values (56, 'org_plan: a member of org A cannot read org B''s plan row', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (56, 'org_plan member-cannot-read-other-org probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 57 — 0044_org_plan_member_select.sql only ever added a SELECT
+-- grant/policy — confirm an org member (not just an outsider) still cannot
+-- INSERT, UPDATE, or DELETE org_plan at all; it remains write-only via
+-- service_role/postgres (today: only the 0043 trigger).
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org    uuid := (select id from test_ids where key = 'org');
+  insert_denied boolean := false;
+  update_denied boolean := false;
+  delete_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+  begin
+    insert into public.org_plan (org_id, plan_tier, workflow_limit) values (v_org, 'Pro', 25);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  begin
+    update public.org_plan set workflow_limit = 999 where org_id = v_org;
+  exception when insufficient_privilege then
+    update_denied := true;
+  end;
+  begin
+    delete from public.org_plan where org_id = v_org;
+  exception when insufficient_privilege then
+    delete_denied := true;
+  end;
+  reset role;
+
+  if insert_denied and update_denied and delete_denied then
+    insert into probe_results values (57, 'org_plan: an org member still cannot INSERT/UPDATE/DELETE (SELECT-only grant)', true);
+  else
+    insert into probe_results values (57, 'org_plan: an org member still cannot INSERT/UPDATE/DELETE (SELECT-only grant)', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (57, 'org_plan member-cannot-write probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

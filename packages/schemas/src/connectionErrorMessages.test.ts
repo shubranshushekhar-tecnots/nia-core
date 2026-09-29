@@ -41,4 +41,18 @@ describe("friendlyConnectionError", () => {
       expect(friendlyConnectionError(raw).details).toBe(raw);
     }
   });
+
+  it("gives every matched rule a non-empty, actionable fix line", () => {
+    for (const { raw, summaryContains } of cases) {
+      if (summaryContains === "Connection failed") continue; // the unmatched fallback, checked separately below
+      const result = friendlyConnectionError(raw);
+      expect(result.fix).toBeTruthy();
+    }
+  });
+
+  it("has no fix for the unmatched fallback", () => {
+    const result = friendlyConnectionError("some completely unrecognized driver error");
+    expect(result.summary).toBe("Connection failed.");
+    expect(result.fix).toBeUndefined();
+  });
 });

@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { personas } from './fixtures/personas';
+import { gotoWorkflow } from './fixtures/flows';
 
 /**
  * CommandBar.tsx (Phase 5 Session 4) — the canvas's floating "Ask or
@@ -12,13 +13,11 @@ import { personas } from './fixtures/personas';
  * file's (a real round trip, not a mock).
  */
 
-async function gotoWorkflow(page: Page, projectName: string, workflowName: string) {
-  await page.goto('/app/projects');
-  await page.getByRole('link', { name: projectName, exact: true }).click();
-  await page.getByRole('link', { name: workflowName }).first().click();
-  await expect(page).toHaveURL(/\/app\/workflows\/[0-9a-f-]{36}/);
-}
-
+// Every connector this file drags ("Dev sandbox (mysql/mongodb)") is now
+// dual-role (etl_source + etl_sink) — a plain drop leaves FlowCanvas's
+// inline "Use as Source/Destination" picker (data-testid="drop-role-picker")
+// open with no node actually created. Same fix as canvas.spec.ts's
+// dragRailSectionItemOnto; this file only ever drags nodes as sources.
 async function dragPaletteItemOnto(page: Page, label: string, point: { x: number; y: number }) {
   const item = page.getByText(label, { exact: true });
   const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
@@ -26,6 +25,11 @@ async function dragPaletteItemOnto(page: Page, label: string, point: { x: number
   const surface = page.getByTestId('canvas-surface');
   await surface.dispatchEvent('dragover', { dataTransfer, clientX: point.x, clientY: point.y });
   await surface.dispatchEvent('drop', { dataTransfer, clientX: point.x, clientY: point.y });
+
+  const picker = page.getByTestId('drop-role-picker');
+  if (await picker.isVisible().catch(() => false)) {
+    await picker.getByRole('menuitem', { name: 'Use as Source' }).click();
+  }
 }
 
 // Same fix as visual.spec.ts (Phase 5 Session 5 exit review): `next dev`'s
@@ -85,7 +89,16 @@ test.describe.serial('command bar: scope precedence, chat, / hint, reload persis
     // selection/pins — the "canvas (N connections)" fallback chip text).
     await page.setViewportSize({ width: 1440, height: 900 });
     await hideNextDevIndicator(page);
-    await expect(page).toHaveScreenshot('command-bar-resting-1440.png', { maxDiffPixels: 200 });
+    // Mask the primary nav's Projects tree: it lists every project ever
+    // created against this local dev DB across e2e runs (nothing in this
+    // suite deletes the scratch projects other specs create), so its
+    // rendered height — and thus every full-page pixel below it — grows
+    // unboundedly run over run. Unrelated to anything this assertion
+    // actually checks (the command bar's own resting state).
+    await expect(page).toHaveScreenshot('command-bar-resting-1440.png', {
+      maxDiffPixels: 200,
+      mask: [page.getByRole('navigation', { name: 'Primary' })],
+    });
 
     // Select the mysql node -> scope narrows to that node's own connection,
     // rendered as a single non-removable chip (no × button — it tracks
@@ -340,7 +353,9 @@ test.describe('command bar: personal (org-less) workspace', () => {
     // class, so a fixed headroom is an appropriate (not unbounded) fix.
     await expect(page).toHaveScreenshot('command-bar-thread-open-1440.png', {
       maxDiffPixels: 900,
-      mask: [page.getByTestId('command-bar-message-text'), sql],
+      // Primary nav mask: same unbounded Projects-tree growth as the
+      // resting baseline above.
+      mask: [page.getByTestId('command-bar-message-text'), sql, page.getByRole('navigation', { name: 'Primary' })],
     });
     await widthPin.evaluate((el: HTMLElement) => el.remove());
     await heightPin.evaluate((el: HTMLElement) => el.remove());
@@ -363,7 +378,9 @@ test.describe('command bar: personal (org-less) workspace', () => {
     await hideNextDevIndicator(page);
     await expect(page).toHaveScreenshot('checks-dock-logs-populated-1440.png', {
       maxDiffPixels: 400,
-      mask: [logsBody.locator('div > span:nth-child(1)'), sql],
+      // Primary nav mask: same unbounded Projects-tree growth as the
+      // resting baseline above.
+      mask: [logsBody.locator('div > span:nth-child(1)'), sql, page.getByRole('navigation', { name: 'Primary' })],
     });
     await page.getByRole('button', { name: 'Checks', exact: true }).click();
 

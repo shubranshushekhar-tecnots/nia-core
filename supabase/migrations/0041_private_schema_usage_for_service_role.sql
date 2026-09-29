@@ -1,0 +1,14 @@
+-- 0041_private_schema_usage_for_service_role.sql
+-- Console v1, Slice 1 (docs/plans/console-plan.md §5, step 5): fixes a gap
+-- left by 0001_auth_orgs.sql / 0040_staff_audit_log.sql.
+--
+-- 0001_auth_orgs.sql granted `usage on schema private` to `authenticated`
+-- only. 0040_staff_audit_log.sql then explicitly granted EXECUTE on
+-- private.log_staff_action() to `service_role`, with a comment saying it's
+-- "meant to be called directly by service_role connections" — but schema
+-- USAGE and function EXECUTE are separate grants; without USAGE on the
+-- schema itself, service_role cannot even resolve `private.log_staff_action`
+-- by name, regardless of the EXECUTE grant. Caught live: calling it via
+-- withServiceRole (apps/api's GET /console/orgs) failed with "permission
+-- denied for schema private" (42501), not a function-level error.
+grant usage on schema private to service_role;

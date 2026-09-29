@@ -52,6 +52,7 @@ export default function DeleteConfirmDialog({
           {state?.error && (
             <span style={modalErrorStyle}>
               {state.error}
+              {state.errorFix && <span style={{ display: 'block', marginTop: 2 }}>{state.errorFix}</span>}
               {state.errorDetails && state.errorDetails !== state.error && (
                 <details style={{ marginTop: 4 }}>
                   <summary style={{ cursor: 'pointer' }}>Show details</summary>

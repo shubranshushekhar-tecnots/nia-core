@@ -49,11 +49,23 @@ export const KNOWN_APP_ERROR_CODES = [
   "CONFIRM_FAILED",
   "REVOKE_FAILED",
   "INTROSPECT_FAILED",
+  // Install/uninstall/delete's own codes (apps/api/src/services/connectors.ts,
+  // connections.ts) — added alongside the original 8 so those routes' errors
+  // also get a plain message + fix + help step instead of falling into the
+  // generic unrecognized-code fallback below.
+  "UNKNOWN_CONNECTOR",
+  "ALREADY_INSTALLED",
+  "INSTALL_FAILED",
+  "NOT_FOUND",
+  "CONNECTOR_IN_USE",
+  "UNINSTALL_FAILED",
+  "IN_USE",
+  "DELETE_FAILED",
 ] as const;
 
 export type KnownAppErrorCode = (typeof KNOWN_APP_ERROR_CODES)[number];
 
-type AppErrorEntry = { fix: string; helpStepKey: HelpStepKey } & (
+type AppErrorEntry = { helpStepKey: HelpStepKey } & (
   | { message: string }
   // The raw AppError message is already specific/user-facing enough
   // (e.g. NAME_TAKEN's `A connection named "X" already exists.`) —
@@ -66,7 +78,18 @@ type AppErrorEntry = { fix: string; helpStepKey: HelpStepKey } & (
   // (`result.error.message`) — route it through friendlyConnectionError's
   // driver-text pattern matching instead of a fixed summary.
   | { delegatesToConnectorError: true }
-);
+) &
+  (
+    | { fix: string }
+    // IN_USE (deleteConnection) is the only code whose 4th AppError
+    // constructor arg carries structured data — `{ workflows: [{name, ...}] }`
+    // (apps/api/src/services/connections.ts's listConnectionUsages) — so its
+    // fix line can name the actual workflows instead of a generic "check
+    // what's using it". CONNECTOR_IN_USE (uninstallConnector) looks like the
+    // same shape but only ever throws a plain message with a connection
+    // *count*, no structured details — so it stays a static `fix` below.
+    | { fixFromDetails: (details: unknown) => string }
+  );
 
 const APP_ERROR_MESSAGES: Record<KnownAppErrorCode, AppErrorEntry> = {
   // apps/api/src/services/connections.ts:201 (createConnection)
@@ -123,26 +146,103 @@ const APP_ERROR_MESSAGES: Record<KnownAppErrorCode, AppErrorEntry> = {
     fix: "Check the credentials and permissions this connection uses, then refresh again.",
     helpStepKey: "test-connection",
   },
+  // apps/api/src/services/connectors.ts:74 (installConnector)
+  UNKNOWN_CONNECTOR: {
+    passthrough: true, // message names the connector id, e.g. `No manifest for connector "x".`
+    fix: "Pick a connector from the list — this one isn't recognized.",
+    helpStepKey: "add-connection",
+  },
+  // apps/api/src/services/connectors.ts:98 (installConnector)
+  ALREADY_INSTALLED: {
+    passthrough: true, // message names the connector, e.g. `"mysql" is already installed.`
+    fix: "It's already installed — no action needed.",
+    helpStepKey: "add-connection",
+  },
+  // apps/api/src/services/connectors.ts:101 (installConnector) — wraps an
+  // unexpected DB error inserting the connector_installs row.
+  INSTALL_FAILED: {
+    message: "Couldn't install this connector — something went wrong on our end.",
+    fix: "Try again. If it keeps happening, contact support.",
+    helpStepKey: "add-connection",
+  },
+  // apps/api/src/services/connectors.ts:121 (uninstallConnector) AND
+  // apps/api/src/services/connections.ts:329/461 (update/deleteConnection)
+  // share this code — the message already names what wasn't found (e.g.
+  // "Connector install not found.", "Connection not found."), so it's
+  // specific enough to show as-is.
+  NOT_FOUND: {
+    passthrough: true,
+    fix: "Refresh the page — it may have already been removed.",
+    helpStepKey: "add-connection",
+  },
+  // apps/api/src/services/connectors.ts:132-136 (uninstallConnector) —
+  // message names a *connection count* (e.g. "...while 2 connection(s)
+  // still use it."), not workflow names; no structured details are passed
+  // to this AppError, so unlike IN_USE below there's no workflow list to
+  // surface here.
+  CONNECTOR_IN_USE: {
+    passthrough: true,
+    fix: "Remove or switch those connections to a different connector first, then uninstall.",
+    helpStepKey: "add-connection",
+  },
+  // apps/api/src/services/connectors.ts:146 (uninstallConnector) — wraps an
+  // unexpected DB error deleting the connector_installs row.
+  UNINSTALL_FAILED: {
+    message: "Couldn't uninstall this connector — something went wrong on our end.",
+    fix: "Try again. If it keeps happening, contact support.",
+    helpStepKey: "add-connection",
+  },
+  // apps/api/src/services/connections.ts:466 (deleteConnection) — thrown
+  // with a 4th arg, `{ workflows: [{ name, nodeCount, cleanPlanCount }] }`
+  // (listConnectionUsages), when deleting unconfirmed. Names the workflows
+  // when the caller passes them through as `details`.
+  IN_USE: {
+    message: "This connection is used by other workflows.",
+    fixFromDetails: (details) => {
+      const workflows = (details as { workflows?: { name: string }[] } | undefined)?.workflows ?? [];
+      if (workflows.length === 0) return "Remove it from any workflows that use it first, or confirm the delete anyway.";
+      const names = workflows.map((w) => w.name).join(", ");
+      return `Used by: ${names}. Remove it from those workflows first, or confirm the delete anyway.`;
+    },
+    helpStepKey: "add-connection",
+  },
+  // apps/api/src/services/connections.ts:487 (deleteConnection) — wraps an
+  // unexpected DB error deleting the connection row.
+  DELETE_FAILED: {
+    message: "Couldn't delete this — something went wrong on our end.",
+    fix: "Try again. If it keeps happening, contact support.",
+    helpStepKey: "add-connection",
+  },
 };
 
 /**
  * `helpStepKeyOverride` lets a call site correct the default help step for
  * codes shared across more than one operation (see CREATE_FAILED above).
- * An unrecognized code falls back to showing the raw message as both
- * `summary` and `details` with no `fix`/`helpStepKey` — never hidden, just
- * not (yet) mapped to a friendlier one.
+ * `appErrorDetails` is only consulted for codes whose table entry uses
+ * `fixFromDetails` (currently just IN_USE) — pass the AppError's own
+ * `details` field (e.g. `err.details` on `ApiError`/`ConnectionsApiError`)
+ * straight through; it's ignored for every other code. An unrecognized code
+ * falls back to showing the raw message as both `summary` and `details`
+ * with no `fix`/`helpStepKey` — never hidden, just not (yet) mapped to a
+ * friendlier one.
  */
-export function friendlyAppError(code: string, rawMessage: string, helpStepKeyOverride?: HelpStepKey): FriendlyAppError {
+export function friendlyAppError(
+  code: string,
+  rawMessage: string,
+  helpStepKeyOverride?: HelpStepKey,
+  appErrorDetails?: unknown,
+): FriendlyAppError {
   const entry = APP_ERROR_MESSAGES[code as KnownAppErrorCode];
   if (!entry) return { summary: rawMessage, details: rawMessage };
 
   const helpStepKey = helpStepKeyOverride ?? entry.helpStepKey;
+  const fix = "fix" in entry ? entry.fix : entry.fixFromDetails(appErrorDetails);
 
   if ("delegatesToConnectorError" in entry) {
     const { summary, details } = friendlyConnectionError(rawMessage);
-    return { summary, fix: entry.fix, helpStepKey, details };
+    return { summary, fix, helpStepKey, details };
   }
 
   const summary = "passthrough" in entry ? rawMessage : entry.message;
-  return { summary, fix: entry.fix, helpStepKey, details: rawMessage };
+  return { summary, fix, helpStepKey, details: rawMessage };
 }

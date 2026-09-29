@@ -57,7 +57,7 @@ export default function HomeContent({
           </span>
         </div>
 
-        {plan.used / plan.limit >= 0.8 && (
+        {plan.limit !== null && plan.used / plan.limit >= 0.8 && (
           <div style={planBannerStyle}>
             <span>
               {plan.used} of {plan.limit} workflows used on the {plan.plan} plan. An Organization plan adds seats, roles

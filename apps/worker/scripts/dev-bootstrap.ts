@@ -1,46 +1,38 @@
 /**
- * One-command recovery for local dev data after `supabase db reset`.
+ * One-command recovery for local dev data after a Postgres reset.
  *
- * `supabase db reset` re-applies every migration plus supabase/seed.sql,
- * which already creates the demo user (demo@nia.dev / password) and the
- * "Ice Cream Co" org (slug icecream-co), plus the canvas-e2e/canvas-e2e-b
- * orgs and canvas-e2e-c personal workspace used by the canvas Playwright
- * suite — see supabase/seed.sql. What it does NOT do is install connectors
- * or create connections (those write to Vault via an RPC, not plain SQL,
- * so they don't belong in a SQL seed file). This script does that half:
- * idempotently ensures a MySQL, a Mongo, and a Supabase(Postgres) connection
- * exist against docker-compose's sandbox DBs, pointed at both the demo org
- * and the canvas-e2e org (the latter gives canvas-e2e-a@nia.dev real source
- * nodes to drag onto the canvas, plus a real destination node now that the
- * supabase manifest declares "etl_sink" — Phase 5 Session 3), so a fresh
- * `supabase db reset` is fully recoverable with:
+ * Re-applying every migration plus supabase/seed.sql already creates the
+ * demo user (demo@nia.dev / password) and the "Ice Cream Co" org (slug
+ * icecream-co), plus the canvas-e2e/canvas-e2e-b orgs and canvas-e2e-c
+ * personal workspace used by the canvas Playwright suite — see
+ * supabase/seed.sql. What it does NOT do is install connectors or create
+ * connections (those write a Vault-backed secret via nia_secrets, not plain
+ * SQL, so they don't belong in a SQL seed file). This script does that
+ * half: idempotently ensures a MySQL, a Mongo, and a Supabase(Postgres)
+ * connection exist against docker-compose's sandbox DBs, pointed at both
+ * the demo org and the canvas-e2e org (the latter gives canvas-e2e-a@nia.dev
+ * real source nodes to drag onto the canvas, plus a real destination node
+ * now that the supabase manifest declares "etl_sink" — Phase 5 Session 3),
+ * so a fresh reset is fully recoverable with:
  *
- *   supabase db reset
  *   pnpm --filter @nia/worker bootstrap
  *
  * Reuses the exact seeding shape proven in scripts/chat-smoke.ts and
- * scripts/dispatch-smoke.ts (service-role client, docker-compose service
+ * scripts/dispatch-smoke.ts (service-role, docker-compose service
  * names/internal ports in `config` since the connector SERVICE containers
  * dial that, not this script).
  *
+ * Talks to Postgres directly via @nia/db's withServiceRole (RLS-bypassed,
+ * same pattern as lib/secretStore.ts/resolveConnection.ts) — not
+ * @supabase/supabase-js, since local dev no longer runs the Supabase CLI
+ * (docs/plans/local-dev.md's "Supabase CLI -> plain Postgres" migration).
+ *
  * Run with (from apps/worker/): npx tsx scripts/dev-bootstrap.ts
- * Needs apps/worker/.env: SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY/REDIS_URL.
+ * Needs apps/worker/.env: DATABASE_URL/REDIS_URL.
  */
-import { createClient } from "@supabase/supabase-js";
-import { env } from "../src/env.js";
+import { withServiceRole } from "@nia/db";
 import { getSecretStore } from "../src/lib/secretStore.js";
 import { dbPool } from "../src/lib/dbPool.js";
-
-if (!/^https?:\/\/(127\.0\.0\.1|localhost)/.test(env.SUPABASE_URL)) {
-  throw new Error(
-    `Refusing to run: SUPABASE_URL (${env.SUPABASE_URL}) doesn't look like local Supabase. ` +
-      "This script seeds throwaway dev data and must never run against a remote project.",
-  );
-}
-
-const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
 
 // Fixture users now come from Better Auth's real signUpEmail path
 // (pnpm --filter @nia/api seed:fixtures), which mints its own generated
@@ -77,83 +69,89 @@ function log(msg: string): void {
 }
 
 async function getOrgId(slug: string): Promise<string> {
-  const { data, error } = await supabase.from("organizations").select("id").eq("slug", slug).single();
-  if (error || !data) {
-    throw new Error(
-      `Could not find seed.sql's org (slug=${slug}). Run \`supabase db reset\` first. (${error?.message})`,
-    );
+  const { rows } = await withServiceRole(dbPool, (db) =>
+    db.query<{ id: string }>(`select id from public.organizations where slug = $1`, [slug]),
+  );
+  if (!rows[0]) {
+    throw new Error(`Could not find seed.sql's org (slug=${slug}). Run the migrations + seed.sql first.`);
   }
-  return data.id as string;
+  return rows[0].id;
 }
 
 async function getUserId(email: string): Promise<string> {
-  const { data, error } = await supabase.from("user").select("id").eq("email", email).single();
-  if (error || !data) {
+  const { rows } = await withServiceRole(dbPool, (db) =>
+    db.query<{ id: string }>(`select id from public."user" where email = $1`, [email]),
+  );
+  if (!rows[0]) {
     throw new Error(
-      `Could not find Better Auth user (email=${email}). Run \`pnpm --filter @nia/api seed:fixtures\` first. (${error?.message})`,
+      `Could not find Better Auth user (email=${email}). Run \`pnpm --filter @nia/api seed:fixtures\` first.`,
     );
   }
-  return data.id as string;
+  return rows[0].id;
+}
+
+// Same org_id/owner_id xor filter shape used everywhere else in this repo
+// (resolveConnection.ts, connections service, RLS policies) — never both,
+// never neither. The returned `column` is always one of these two literal
+// names, never external input, so interpolating it into SQL text below is
+// safe (no injection surface — it's not derived from `scope`'s values).
+function scopeColumn(scope: Scope): { column: "org_id" | "owner_id"; value: string } {
+  return scope.orgId !== undefined ? { column: "org_id", value: scope.orgId } : { column: "owner_id", value: scope.ownerId };
 }
 
 async function seedConnection(scope: Scope, connectorId: ConnectorId, installedByUserId: string): Promise<string> {
   const { host, port, database, user, password } = SANDBOX[connectorId];
-  // Same org_id/owner_id xor filter shape used everywhere else in this repo
-  // (resolveConnection.ts, connections service, RLS policies) — never both,
-  // never neither.
-  const scopeCols = scope.orgId !== undefined ? { org_id: scope.orgId, owner_id: null } : { org_id: null, owner_id: scope.ownerId };
+  const { column, value } = scopeColumn(scope);
+  const config = JSON.stringify({ host, port, database });
 
-  let installQuery = supabase
-    .from("connector_installs")
-    .select("id", { count: "exact", head: true })
-    .eq("connector_id", connectorId);
-  installQuery =
-    scope.orgId !== undefined ? installQuery.eq("org_id", scope.orgId) : installQuery.eq("owner_id", scope.ownerId);
-  const { count: installCount } = await installQuery;
-  if (!installCount) {
-    const { error } = await supabase
-      .from("connector_installs")
-      .insert({ ...scopeCols, connector_id: connectorId, installed_by_user_id: installedByUserId });
-    if (error) throw new Error(`install ${connectorId} failed: ${error.message}`);
+  const { rows: installRows } = await withServiceRole(dbPool, (db) =>
+    db.query<{ count: string }>(
+      `select count(*)::text as count from public.connector_installs where connector_id = $1 and ${column} = $2`,
+      [connectorId, value],
+    ),
+  );
+  if (Number(installRows[0]?.count ?? 0) === 0) {
+    await withServiceRole(dbPool, (db) =>
+      db.query(
+        `insert into public.connector_installs (org_id, owner_id, connector_id, installed_by_user_id)
+         values ($1, $2, $3, $4)`,
+        [scope.orgId ?? null, scope.ownerId ?? null, connectorId, installedByUserId],
+      ),
+    );
   }
 
   const handle = `@${connectorId}-dev`;
-  let existingQuery = supabase.from("connections").select("id").eq("handle", handle);
-  existingQuery =
-    scope.orgId !== undefined ? existingQuery.eq("org_id", scope.orgId) : existingQuery.eq("owner_id", scope.ownerId);
-  const { data: existing } = await existingQuery.maybeSingle();
-  if (existing) {
-    const { error } = await supabase
-      .from("connections")
-      .update({ config: { host, port, database } })
-      .eq("id", existing.id as string);
-    if (error) throw new Error(`connection config update for ${connectorId} failed: ${error.message}`);
-    return existing.id as string;
+  const { rows: existingRows } = await withServiceRole(dbPool, (db) =>
+    db.query<{ id: string }>(`select id from public.connections where handle = $1 and ${column} = $2`, [handle, value]),
+  );
+  if (existingRows[0]) {
+    await withServiceRole(dbPool, (db) =>
+      db.query(`update public.connections set config = $1 where id = $2`, [config, existingRows[0].id]),
+    );
+    return existingRows[0].id;
   }
 
-  let vaultRef: string;
-  try {
-    vaultRef = await getSecretStore(dbPool).put({ user, password }, scope);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`secret write for ${connectorId} failed: ${message}`);
-  }
+  const vaultRef = await getSecretStore(dbPool).put({ user, password }, scope);
 
-  const { data, error } = await supabase
-    .from("connections")
-    .insert({
-      ...scopeCols,
-      connector_id: connectorId,
-      handle,
-      display_name: `Dev sandbox (${connectorId})`,
-      owner_user_id: installedByUserId,
-      config: { host, port, database },
-      vault_secret_ref: vaultRef as string,
-    })
-    .select("id")
-    .single();
-  if (error || !data) throw new Error(`connection insert for ${connectorId} failed: ${error?.message}`);
-  return data.id as string;
+  const { rows: insertedRows } = await withServiceRole(dbPool, (db) =>
+    db.query<{ id: string }>(
+      `insert into public.connections
+         (org_id, owner_id, connector_id, handle, display_name, owner_user_id, config, vault_secret_ref)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       returning id`,
+      [
+        scope.orgId ?? null,
+        scope.ownerId ?? null,
+        connectorId,
+        handle,
+        `Dev sandbox (${connectorId})`,
+        installedByUserId,
+        config,
+        vaultRef,
+      ],
+    ),
+  );
+  return insertedRows[0].id;
 }
 
 async function main(): Promise<void> {

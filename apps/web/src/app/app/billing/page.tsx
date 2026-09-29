@@ -10,7 +10,7 @@ export default async function BillingPage() {
   const user = await requireUser();
   const orgId = user.org?.id ?? null;
   const [projects, stats] = await Promise.all([getSidebarProjects(), getDashboardStats()]);
-  const plan = getPlanUsage(stats.workflowCount);
+  const plan = getPlanUsage(stats.workflowCount, stats.planTier, stats.workflowLimit);
 
   return (
     <AppShell topBar={<TopBar orgName={user.org?.name ?? null} email={user.email} userId={user.userId} />}>
@@ -26,7 +26,8 @@ export default async function BillingPage() {
 
           <div style={pageEmptyCardStyle}>
             <span style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text)' }}>
-              {plan.plan} plan {'\u00b7'} {plan.used} of {plan.limit} workflows used
+              {plan.plan} plan {'\u00b7'} {plan.used}{' '}
+              {plan.limit === null ? 'workflows used (unlimited)' : `of ${plan.limit} workflows used`}
             </span>
             <span>
               An Organization plan adds seats, roles and unlimited workflows. Plan management and invoicing are

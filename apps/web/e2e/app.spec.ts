@@ -21,17 +21,30 @@ test.describe('authenticated /app dashboard', () => {
     await expect(page.getByText(new RegExp(`^${greeting}`))).toBeVisible();
   });
 
-  test('sidebar "New workflow" -> "New project" creates a project visible in the tree', async ({ page }) => {
-    await page.goto('/app');
+  test('"New project" on the Projects page creates a project visible in the sidebar tree', async ({ page }) => {
+    // The old "New workflow" dashboard button (and the sidebar's "New"
+    // dropdown it opened) no longer exist — the home-dashboard redesign
+    // (commit 3040260) removed them; Sidebar.tsx's own showCreateWorkflow
+    // state is dead code today. "New project" now lives on the Projects
+    // page itself (ProjectsListClient.tsx).
+    await page.goto('/app/projects');
 
     const projectName = `E2E Project ${Date.now()}`;
-    await page.getByRole('button', { name: 'New workflow' }).first().click();
+    // exact:true: the sidebar's own "+ New project" button (Sidebar.tsx) is
+    // also on screen (navProjectsOpen defaults true) and its accessible name
+    // contains "New project" as a substring — an unscoped match resolves to
+    // both buttons.
     await page.getByRole('button', { name: 'New project', exact: true }).click();
 
     await page.locator('#project-name').fill(projectName);
     await page.getByRole('button', { name: 'Create project' }).click();
 
-    await expect(page.getByRole('link', { name: projectName })).toBeVisible();
+    // exact:true: the Projects list's own row link additionally contains
+    // the workflow count and a nested "Delete" button in its accessible
+    // name, so an unscoped match would resolve to two elements (this row +
+    // the sidebar's tree row) — exact narrows to the sidebar's link, whose
+    // accessible name is just the project name (chevron is aria-hidden).
+    await expect(page.getByRole('link', { name: projectName, exact: true })).toBeVisible();
   });
 });
 

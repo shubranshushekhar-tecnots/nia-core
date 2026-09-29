@@ -25,8 +25,8 @@ import type { ActionState } from '@/lib/auth/actions';
  */
 function friendlyApiErrorMessage(err: unknown, fallback: string): ActionState {
   if (!(err instanceof ApiError) || !err.message) return { error: fallback };
-  const { summary, details } = friendlyConnectionError(err.message);
-  return { error: summary, errorDetails: details };
+  const { summary, fix, details } = friendlyConnectionError(err.message);
+  return { error: summary, errorFix: fix, errorDetails: details };
 }
 
 /**
@@ -43,8 +43,8 @@ function friendlyApiErrorMessage(err: unknown, fallback: string): ActionState {
  */
 function friendlyAppErrorMessage(err: unknown, fallback: string): ActionState {
   if (!(err instanceof ApiError) || !err.message) return { error: fallback };
-  const { summary, details } = friendlyAppError(err.code, err.message);
-  return { error: summary, errorDetails: details };
+  const { summary, fix, helpStepKey, details } = friendlyAppError(err.code, err.message, undefined, err.details);
+  return { error: summary, errorFix: fix, helpStepKey, errorDetails: details };
 }
 
 export async function installConnectorAction(

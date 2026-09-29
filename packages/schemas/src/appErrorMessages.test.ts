@@ -79,4 +79,58 @@ describe("friendlyAppError", () => {
     expect(result.fix).toBeUndefined();
     expect(result.helpStepKey).toBeUndefined();
   });
+
+  it("UNKNOWN_CONNECTOR and ALREADY_INSTALLED pass their already-specific install-path messages through as the summary", () => {
+    const unknown = friendlyAppError("UNKNOWN_CONNECTOR", 'No manifest for connector "not-a-real-connector".');
+    expect(unknown.summary).toBe('No manifest for connector "not-a-real-connector".');
+    expect(unknown.fix).toContain("Pick a connector");
+
+    const already = friendlyAppError("ALREADY_INSTALLED", '"mysql" is already installed.');
+    expect(already.summary).toBe('"mysql" is already installed.');
+    expect(already.fix).toContain("already installed");
+  });
+
+  it("INSTALL_FAILED and UNINSTALL_FAILED map to their own fixed 'something went wrong' messages", () => {
+    expect(friendlyAppError("INSTALL_FAILED", "insert or update on table violates constraint").summary).toBe(
+      "Couldn't install this connector — something went wrong on our end.",
+    );
+    expect(friendlyAppError("UNINSTALL_FAILED", "some db error").summary).toBe(
+      "Couldn't uninstall this connector — something went wrong on our end.",
+    );
+  });
+
+  it("NOT_FOUND passes its already-specific 'X not found' message through as the summary for any of its call sites", () => {
+    expect(friendlyAppError("NOT_FOUND", "Connector install not found.").summary).toBe("Connector install not found.");
+    expect(friendlyAppError("NOT_FOUND", "Connection not found.").summary).toBe("Connection not found.");
+  });
+
+  it("CONNECTOR_IN_USE passes its connection-count message through — it has no structured workflow details to name", () => {
+    const raw = 'Cannot uninstall "mysql" while 2 connection(s) still use it.';
+    const result = friendlyAppError("CONNECTOR_IN_USE", raw);
+    expect(result.summary).toBe(raw);
+    expect(result.fix).toContain("connections");
+  });
+
+  it("IN_USE names the affected workflows from the AppError's details when provided", () => {
+    const withDetails = friendlyAppError("IN_USE", "This connection is used by other workflows.", undefined, {
+      workflows: [
+        { id: "w1", name: "ETL kill-resume smoke", nodeCount: 2, cleanPlanCount: 0 },
+        { id: "w2", name: "Nightly sync", nodeCount: 1, cleanPlanCount: 1 },
+      ],
+    });
+    expect(withDetails.summary).toBe("This connection is used by other workflows.");
+    expect(withDetails.fix).toBe("Used by: ETL kill-resume smoke, Nightly sync. Remove it from those workflows first, or confirm the delete anyway.");
+    expect(withDetails.helpStepKey).toBe("add-connection");
+  });
+
+  it("IN_USE falls back to a generic fix line when no workflow details are provided", () => {
+    const withoutDetails = friendlyAppError("IN_USE", "This connection is used by other workflows.");
+    expect(withoutDetails.fix).toBe("Remove it from any workflows that use it first, or confirm the delete anyway.");
+  });
+
+  it("DELETE_FAILED maps to its own fixed 'something went wrong' message", () => {
+    expect(friendlyAppError("DELETE_FAILED", "foreign key constraint violation").summary).toBe(
+      "Couldn't delete this — something went wrong on our end.",
+    );
+  });
 });

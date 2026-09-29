@@ -1,0 +1,105 @@
+import type { ReactNode } from 'react';
+import Link from 'next/link';
+import { logout } from '@/lib/auth/actions';
+import {
+  consoleBodyRowStyle,
+  consoleBrandMarkStyle,
+  consoleBrandTextStyle,
+  consoleGhostBtnStyle,
+  consoleIdentityAvatarStyle,
+  consoleIdentityColStyle,
+  consoleIdentityNameStyle,
+  consoleIdentitySubStyle,
+  consoleIdentityWrapStyle,
+  consoleInternalBadgeStyle,
+  consoleMainColStyle,
+  consoleNavIconStyle,
+  consoleNavItemStyle,
+  consoleShellRootStyle,
+  consoleSidebarFooterLabelStyle,
+  consoleSidebarFooterStyle,
+  consoleSidebarFooterValueStyle,
+  consoleSidebarStyle,
+  consoleTopBarSpacerStyle,
+  consoleTopBarStyle,
+} from './styles';
+
+// Ported from designs/Nia Console (superadmin).html's NAV array. Only
+// 'directory' is a real route in Slice 1 (docs/plans/console-plan.md §5a);
+// the rest render inert (matches decision 3 — the full nav is shown for
+// design fidelity — without linking anywhere that doesn't exist yet).
+const NAV: Array<{ id: string; label: string; icon: string; href?: string }> = [
+  { id: 'dash', label: 'Platform', icon: '\u25D1' },
+  { id: 'directory', label: 'Directory', icon: '\u25A4', href: '/console' },
+  { id: 'notify', label: 'Notifications', icon: '\u25CD' },
+  { id: 'revenue', label: 'Revenue', icon: '\u25C8' },
+  { id: 'invoices', label: 'Invoices', icon: '\u25A6' },
+  { id: 'support', label: 'Support', icon: '\u25D4' },
+  { id: 'settings', label: 'Settings', icon: '\u2699' },
+];
+
+export default function ConsoleShell({
+  activeNavId,
+  email,
+  children,
+}: {
+  activeNavId: string;
+  email: string;
+  children: ReactNode;
+}) {
+  const initials = email.slice(0, 2).toUpperCase();
+
+  return (
+    <div data-app-theme="" data-om-theme="light" style={consoleShellRootStyle}>
+      <header style={consoleTopBarStyle}>
+        <span style={consoleBrandMarkStyle}>N</span>
+        <span style={consoleBrandTextStyle}>Nia Console</span>
+        <span style={consoleInternalBadgeStyle}>INTERNAL</span>
+        <span style={consoleTopBarSpacerStyle} />
+        <div style={consoleIdentityWrapStyle}>
+          <span style={consoleIdentityAvatarStyle}>{initials}</span>
+          <div style={consoleIdentityColStyle}>
+            <span style={consoleIdentityNameStyle}>{email}</span>
+            <span style={consoleIdentitySubStyle}>Nia staff</span>
+          </div>
+        </div>
+        <form action={logout}>
+          <button type="submit" style={consoleGhostBtnStyle}>
+            Sign out
+          </button>
+        </form>
+      </header>
+
+      <div style={consoleBodyRowStyle}>
+        <nav style={consoleSidebarStyle}>
+          {NAV.map((n) => {
+            const active = n.id === activeNavId;
+            const enabled = Boolean(n.href);
+            const content = (
+              <>
+                <span style={consoleNavIconStyle(active)}>{n.icon}</span>
+                <span style={{ flex: 1, textAlign: 'left', fontSize: 13 }}>{n.label}</span>
+              </>
+            );
+            return enabled ? (
+              <Link key={n.id} href={n.href!} style={consoleNavItemStyle(active, true)}>
+                {content}
+              </Link>
+            ) : (
+              <span key={n.id} style={consoleNavItemStyle(active, false)}>
+                {content}
+              </span>
+            );
+          })}
+          <span style={{ flex: 1 }} />
+          <div style={consoleSidebarFooterStyle}>
+            <span style={consoleSidebarFooterLabelStyle}>Console build</span>
+            <span style={consoleSidebarFooterValueStyle}>Slice 1</span>
+          </div>
+        </nav>
+
+        <div style={consoleMainColStyle}>{children}</div>
+      </div>
+    </div>
+  );
+}
