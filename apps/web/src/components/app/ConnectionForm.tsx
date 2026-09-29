@@ -163,7 +163,6 @@ export default function ConnectionForm({
           id={`${idPrefix}-display-name`}
           name="displayName"
           type="text"
-          autoFocus
           placeholder={`My ${connectorName} connection`}
           style={modalFieldStyle(Boolean(errors?.fieldErrors?.displayName))}
         />

@@ -93,7 +93,7 @@ export default function EditConnectionDialog({
   const [usageWarning, setUsageWarning] = useState<ConnectionUsage[] | null>(null);
   const [pendingSave, setPendingSave] = useState<SavePayload | null>(null);
   const [showHelp, setShowHelp] = useState(false);
-  const dialogRef = useModalA11y(onClose);
+  const dialogRef = useModalA11y<HTMLDivElement>(onClose);
 
   if (!manifest) {
     return (
