@@ -38,7 +38,7 @@
  * on close/unmount — same pattern any keyboard-only or screen-reader user
  * needs from a modal.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   getHelpSection,
   HELP_CONNECTOR_LABEL,
@@ -48,6 +48,7 @@ import {
 } from '@nia/schemas';
 import type { HelpStepKey } from '@nia/schemas';
 import { resolveHelpSql, shouldShowCopyButton } from '@/lib/help/resolveHelpSql';
+import { useModalA11y } from '@/lib/hooks/useModalA11y';
 import {
   modalActionsStyle,
   modalBtnGhostStyle,
@@ -85,33 +86,7 @@ export default function HelpPanel({
   const resolvedSql = resolveHelpSql(step, connectorId, values);
   const showCopyButton = shouldShowCopyButton(resolvedSql);
 
-  const panelRef = useRef<HTMLDivElement>(null);
-  const onCloseRef = useRef(onClose);
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
-  // Mount-only: capture the trigger, move focus into the panel, wire Esc,
-  // and restore focus to the trigger on unmount. Deliberately an empty
-  // dependency array (via the "latest ref" pattern above for onClose) so
-  // this never re-captures `document.activeElement` mid-lifecycle.
-  useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
-
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onCloseRef.current();
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      previouslyFocused?.focus();
-    };
-  }, []);
+  const panelRef = useModalA11y<HTMLDivElement>(onClose);
 
   async function handleCopy() {
     if (resolvedSql.mode !== 'real') return;

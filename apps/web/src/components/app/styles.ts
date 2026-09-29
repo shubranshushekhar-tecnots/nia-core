@@ -1607,6 +1607,67 @@ export const connectionsUnavailableGraphicStyle: CSSProperties = {
   WebkitMaskImage: 'radial-gradient(circle at 70% 70%, black 0%, transparent 70%)',
 };
 
+// ConnectPanel (Details -> Test -> Done). Reuses modalOverlayStyle/
+// modalCardStyle etc. for the shell — these are just the extra bits that
+// dialog doesn't need: a 3-step header and the single aggregate
+// test-result row (see AskUserQuestion answer in the plan: the design's
+// 5-row per-phase checklist is deferred to TODO.md until the connector
+// services actually report per-phase results).
+export const connectPanelStepsStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  marginBottom: 4,
+};
+
+export function connectPanelStepStyle(state: 'done' | 'active' | 'pending'): CSSProperties {
+  return {
+    fontSize: 11.5,
+    fontWeight: 600,
+    letterSpacing: '.02em',
+    color: state === 'pending' ? 'var(--text-4)' : state === 'active' ? 'var(--ink)' : 'var(--live-fill)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  };
+}
+
+export const connectPanelStepDividerStyle: CSSProperties = {
+  width: 14,
+  height: 1,
+  background: 'var(--line2)',
+};
+
+export function connectPanelTestRowStyle(status: 'pending' | 'ok' | 'error'): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '12px 14px',
+    borderRadius: 10,
+    border: `1px solid ${status === 'ok' ? 'var(--live-fill)' : status === 'error' ? 'var(--bad, #d64545)' : 'var(--line2)'}`,
+    background: 'var(--surface)',
+  };
+}
+
+export const connectPanelTestDotStyle: CSSProperties = {
+  width: 9,
+  height: 9,
+  borderRadius: '50%',
+  flex: 'none',
+};
+
+export const connectPanelTestLabelStyle: CSSProperties = {
+  fontSize: 13.5,
+  fontWeight: 600,
+  color: 'var(--ink)',
+};
+
+export const connectPanelTestMetaStyle: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--ink4)',
+};
+
 // Chat surface (/app/chat). Style values are ported from the exact CSS
 // strings in designs/Nia Core App.html's `// ---------- chat ----------`
 // view-model block — that block is otherwise orphaned (no JSX template in
