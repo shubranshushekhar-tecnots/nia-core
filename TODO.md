@@ -885,3 +885,4 @@
 - E2E: no teardown for scratch connections/projects created during runs —
   leaks across runs and caused canvas.spec.ts:1194 flakiness. Add
   per-spec cleanup.
+- Subscription model — start after Console (superadmin) is complete. See docs/plans/subscription-model.md.
