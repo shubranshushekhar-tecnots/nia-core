@@ -777,12 +777,19 @@ export const headerBreadcrumbCellStyle: CSSProperties = {
 
 // Wraps the "Projects / <project> /" lead-in so it can be hidden as one
 // unit under 1200px (CanvasHeader.tsx's <style> block) — the workflow
-// name crumb (headerCrumbTextStyle usage) always stays visible.
+// name crumb (headerCrumbTextStyle usage) always stays visible. flex
+// '1 1 auto' (not 'none'): this group must be the one that yields space
+// first — the workflow name span is flex:'none' (rigid) so it always gets
+// to render its full up-to-280px width; if the two together don't fit,
+// this group shrinks (down to 0 if needed) and clips via its own
+// overflow:hidden instead of the workflow name getting cut off by the
+// breadcrumb cell's outer overflow:hidden (the bug this fixes — "full
+// name isn't visible").
 export const headerCrumbEarlyGroupStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  flex: 'none',
+  flex: '1 1 auto',
   minWidth: 0,
   overflow: 'hidden',
 };
