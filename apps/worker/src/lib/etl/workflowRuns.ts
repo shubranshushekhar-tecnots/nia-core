@@ -82,6 +82,17 @@ export async function getRunCheckpoint(runId: string): Promise<RunCheckpoint> {
  * pub/sub via publishRunEvent) is transient and gone once the SSE stream
  * closes. Only ever passed by runEtl.ts's `fail()` (status: "failed");
  * `undefined` for "succeeded"/"cancelled" leaves the column null.
+ *
+ * Subscription Phase 3, Slice 2 (docs/plans/subscription-model.md, decision
+ * 2): also records this run's usage_events row here, at the one point a
+ * run's row count is finally settled — "rows successfully written to the
+ * destination" per that decision, which counts rows already landed even if
+ * a LATER chunk fails, so this fires for every terminal status, not just
+ * "succeeded". `on conflict (kind, subject_id) do nothing` makes this safe
+ * against finishRun ever being invoked twice for the same run (defensive;
+ * runEtl.ts only calls it once per run today). Skipped entirely when
+ * rows_processed is 0 — a run that failed before writing anything has
+ * nothing to meter.
  */
 export async function finishRun(
   runId: string,
@@ -89,9 +100,13 @@ export async function finishRun(
   error?: { message: string },
 ): Promise<number> {
   const selectResult = await withServiceRole(dbPool, (db) =>
-    db.query<{ started_at: string | null }>("select started_at from public.workflow_runs where id = $1", [runId]),
+    db.query<{ started_at: string | null; rows_processed: number; org_id: string | null; owner_id: string | null }>(
+      "select started_at, rows_processed, org_id, owner_id from public.workflow_runs where id = $1",
+      [runId],
+    ),
   );
-  const startedAt = selectResult.rows[0]?.started_at ?? null;
+  const row = selectResult.rows[0];
+  const startedAt = row?.started_at ?? null;
   const finishedAt = new Date();
   const durationMs = startedAt ? finishedAt.getTime() - new Date(startedAt).getTime() : 0;
   await withServiceRole(dbPool, (db) =>
@@ -100,5 +115,15 @@ export async function finishRun(
       [status, finishedAt.toISOString(), durationMs, error ? JSON.stringify(error) : null, runId],
     ),
   );
+  if (row && row.rows_processed > 0) {
+    await withServiceRole(dbPool, (db) =>
+      db.query(
+        `insert into public.usage_events (org_id, owner_id, kind, quantity, subject_id)
+         values ($1, $2, 'rows_moved', $3, $4)
+         on conflict (kind, subject_id) do nothing`,
+        [row.org_id, row.owner_id, row.rows_processed, runId],
+      ),
+    );
+  }
   return durationMs;
 }

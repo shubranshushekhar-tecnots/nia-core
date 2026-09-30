@@ -208,6 +208,64 @@ async function blockedRunnerReason(orgId: string, workflowId: string, userId: st
 }
 
 /**
+ * Subscription Phase 3, Slice 2 (docs/plans/subscription-model.md, decisions
+ * 4-5): resolves this workspace's plan + rows_per_month limit (org_plan/
+ * owner_plan -> plans — no override-flag columns for rows_per_month exist,
+ * unlike workflow_limit/project_limit, so this reads straight from `plans`)
+ * and this calendar month's already-recorded usage ("sum on read" over
+ * usage_events — see finishRun's own doc comment for why that table is the
+ * source of truth for rows moved), then applies decision 5's asymmetric
+ * rule: ONLY the Free plan hard-stops at 100% — Pro/Team must never block
+ * server-side here (only warn client-side, per decision 5's "never block"),
+ * and Legacy/Enterprise are unmetered (rows_per_month is null for both, so
+ * the `rows_limit === null` check skips them before the plan-id branch is
+ * even reached).
+ *
+ * Checked only on `job.cursor === null`, same "once per run, not once per
+ * chunk" reasoning as isOrgSuspended/blockedRunnerReason above — a
+ * workspace that crosses its limit mid-run is caught by the *next* run's
+ * own first chunk, matching decision 5's "in-flight runs finish".
+ *
+ * withServiceRole (not withUser — the worker has no live session/JWT),
+ * same posture as isOrgSuspended/blockedRunnerReason. Applies to BOTH
+ * orgId and ownerId scopes (personal workspaces can be on the Free plan
+ * too), unlike those two org-only checks.
+ */
+async function rowsLimitBlockMessage(scope: WorkspaceScope): Promise<string | null> {
+  const isPersonal = !("orgId" in scope);
+  const table = isPersonal ? "owner_plan" : "org_plan";
+  const scopeColumn = isPersonal ? "user_id" : "org_id";
+  const scopeValue = isPersonal ? scope.ownerId : scope.orgId;
+
+  const planResult = await withServiceRole(dbPool, (db) =>
+    db.query<{ plan_id: string; rows_limit: number | null }>(
+      `select pl.id as plan_id, pl.rows_per_month as rows_limit
+       from public.${table} op
+       join public.plans pl on pl.id = op.plan_id
+       where op.${scopeColumn} = $1`,
+      [scopeValue],
+    ),
+  );
+  const plan = planResult.rows[0];
+  if (!plan || plan.plan_id !== "free" || plan.rows_limit === null) return null;
+
+  const usageResult = await withServiceRole(dbPool, (db) =>
+    db.query<{ used: string | null }>(
+      `select sum(quantity)::bigint as used
+       from public.usage_events
+       where kind = 'rows_moved'
+         and ${isPersonal ? "owner_id" : "org_id"} = $1
+         and occurred_at >= date_trunc('month', now())`,
+      [scopeValue],
+    ),
+  );
+  const used = Number(usageResult.rows[0]?.used ?? 0);
+  if (used < plan.rows_limit) return null;
+
+  return `Your Free plan includes ${plan.rows_limit.toLocaleString()} rows a month, and this workspace has already used ${used.toLocaleString()}. Upgrade to Pro to keep running workflows this month.`;
+}
+
+/**
  * Phase 9 Part 1: bounds a stateful residual op's (aggregate's) in-memory
  * group accumulator — see types.ts's ResidualAccumulator doc comment and
  * the stateful branch below. Configurable via env var so tests don't need
@@ -580,6 +638,11 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
       if (blockedReason) {
         return fail(scope, job.runId, job.nodeId, blockedReason);
       }
+    }
+
+    const rowsLimitMessage = await rowsLimitBlockMessage(scope);
+    if (rowsLimitMessage) {
+      return fail(scope, job.runId, job.nodeId, rowsLimitMessage);
     }
   }
 

@@ -25,5 +25,10 @@ export default defineConfig({
       WRITE_DISPATCH_SIGNING_SECRET: "test-write-dispatch-signing-secret-32b",
       NIA_GATEWAY_API_KEY: "test-gateway-key",
     },
+    // Real-Postgres tests are excluded here, same convention as
+    // apps/api/vitest.config.ts — run them explicitly with
+    // `pnpm test:integration` (vitest.integration.config.ts) once local
+    // Postgres is up.
+    exclude: ["**/node_modules/**", "**/dist/**", "src/lib/etl/workflowRuns.integration.test.ts"],
   },
 });

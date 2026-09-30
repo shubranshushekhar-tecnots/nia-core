@@ -403,7 +403,12 @@ describe("runEtl — suspended org (Console v1 Slice 3b)", () => {
 
     await runEtl(job, queue);
 
-    expect(orgSuspensionQueryMock).not.toHaveBeenCalled();
+    // isOrgSuspended/blockedRunnerReason are both org-only and never fire
+    // here — the only call left on the shared mock is Slice 2's own
+    // rows-usage check (docs/decisions.md has the full reasoning for why
+    // this assertion changed from a blanket "not called" here).
+    expect(orgSuspensionQueryMock).toHaveBeenCalledTimes(1);
+    expect(orgSuspensionQueryMock).toHaveBeenCalledWith(expect.stringContaining("owner_plan"), ["user-1"]);
   });
 });
 
@@ -431,6 +436,50 @@ describe("runEtl — blocked runner (Subscription Phase 2, Slice 6)", () => {
     orgSuspensionQueryMock
       .mockResolvedValueOnce({ rows: [{ suspended_at: null }] })
       .mockResolvedValueOnce({ rows: [{ role: "admin", is_project_member: false }] });
+    const queue = queueStub();
+    const job = baseJob({ chunkSize: 10 });
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({ status: "done" });
+    expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Subscription Phase 3, Slice 2 (docs/plans/subscription-model.md, decision
+// 5): rows_moved usage gate — same "first chunk only" shared-mock sequencing
+// as the suspended-org/blocked-runner blocks above (suspension, then
+// blockedRunnerReason, then this check's plan query, then its usage-sum
+// query, in that call order).
+describe("runEtl — rows usage limit (Subscription Phase 3, Slice 2)", () => {
+  it("fails the run on the first chunk when a Free-plan workspace is at 100% of its rows_per_month", async () => {
+    orgSuspensionQueryMock
+      .mockResolvedValueOnce({ rows: [{ suspended_at: null }] })
+      .mockResolvedValueOnce({ rows: [{ role: "admin", is_project_member: true }] })
+      .mockResolvedValueOnce({ rows: [{ plan_id: "free", rows_limit: 100000 }] })
+      .mockResolvedValueOnce({ rows: [{ used: "100000" }] });
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({
+      status: "failed",
+      message:
+        "Your Free plan includes 100,000 rows a month, and this workspace has already used 100,000. Upgrade to Pro to keep running workflows this month.",
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(dispatchWriteMock).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed", { message: result.message });
+  });
+
+  it("never blocks a Pro-plan workspace even at 100% of its rows_per_month — warn-only per decision 5", async () => {
+    orgSuspensionQueryMock
+      .mockResolvedValueOnce({ rows: [{ suspended_at: null }] })
+      .mockResolvedValueOnce({ rows: [{ role: "admin", is_project_member: true }] })
+      .mockResolvedValueOnce({ rows: [{ plan_id: "pro", rows_limit: 2000000 }] })
+      .mockResolvedValueOnce({ rows: [{ used: "2000000" }] });
     const queue = queueStub();
     const job = baseJob({ chunkSize: 10 });
 

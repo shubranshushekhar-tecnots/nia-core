@@ -51,6 +51,62 @@ async function assertGraphConnectionsExist(withUser: WithUser, scope: WorkspaceS
 }
 
 /**
+ * Subscription Phase 3, Slice 2 (docs/plans/subscription-model.md, decisions
+ * 4-6): fast, friendly pre-check — same shape as apps/web's own
+ * checkWorkflowLimit/checkProjectLimit (lib/dashboard/actions.ts), except
+ * the source of truth this phase enforces against isn't a DB trigger, it's
+ * apps/worker's own first-chunk gate (runEtl.ts's rowsLimitBlockMessage,
+ * whose doc comment has the full reasoning for the Free-only hard-stop
+ * rule — not duplicated here). This pre-check exists purely so a request
+ * that's already over the limit fails fast with a clear message instead of
+ * silently enqueueing a job the worker will immediately fail; a request
+ * that races past this check and loses is still caught by the worker.
+ *
+ * Reads via the caller's own withUser: org_plan/owner_plan and usage_events
+ * both carry member/owner-scoped SELECT RLS policies (0044/0051 and this
+ * phase's own 0066_usage_events.sql), so an acting-user query already
+ * returns only what this actor may see — no service-role escalation needed
+ * for a plain read.
+ */
+async function assertRowsLimitNotExceeded(withUser: WithUser, scope: WorkspaceScope): Promise<void> {
+  const isPersonal = !("orgId" in scope);
+  const table = isPersonal ? "owner_plan" : "org_plan";
+  const scopeColumn = isPersonal ? "user_id" : "org_id";
+  const scopeValue = isPersonal ? scope.ownerId : scope.orgId;
+
+  const { rows: planRows } = await withUser((db) =>
+    db.query<{ plan_id: string; rows_limit: number | null }>(
+      `select pl.id as plan_id, pl.rows_per_month as rows_limit
+       from public.${table} op
+       join public.plans pl on pl.id = op.plan_id
+       where op.${scopeColumn} = $1`,
+      [scopeValue],
+    ),
+  );
+  const plan = planRows[0];
+  if (!plan || plan.plan_id !== "free" || plan.rows_limit === null) return;
+
+  const { rows: usageRows } = await withUser((db) =>
+    db.query<{ used: string | null }>(
+      `select sum(quantity)::bigint as used
+       from public.usage_events
+       where kind = 'rows_moved'
+         and ${isPersonal ? "owner_id" : "org_id"} = $1
+         and occurred_at >= date_trunc('month', now())`,
+      [scopeValue],
+    ),
+  );
+  const used = Number(usageRows[0]?.used ?? 0);
+  if (used < plan.rows_limit) return;
+
+  throw new AppError(
+    403,
+    "ROWS_LIMIT_EXCEEDED",
+    `Your Free plan includes ${plan.rows_limit.toLocaleString()} rows a month, and this workspace has already used ${used.toLocaleString()}. Upgrade to Pro to keep running workflows this month.`,
+  );
+}
+
+/**
  * Phase 6 Block 3 — starting and re-attaching to an ETL run.
  *
  * Block 5 (Part 3d): scope-generic, org XOR personal — `workflow_runs` has
@@ -90,6 +146,7 @@ export async function startWorkflowRun(
 ): Promise<{ runs: { destNodeId: string; runId: string }[] }> {
   await assertWorkflowInScope(withUser, scope, workflowId);
   await assertGraphConnectionsExist(withUser, scope, workflowId);
+  await assertRowsLimitNotExceeded(withUser, scope);
 
   const runs: { destNodeId: string; runId: string }[] = [];
   for (const destNodeId of destNodeIds) {

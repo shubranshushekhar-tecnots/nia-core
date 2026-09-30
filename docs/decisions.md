@@ -6320,3 +6320,24 @@ rename a row's primary key. Treated as a safe tightening, not a
 regression. `supabase/tests/rls_probes.sql` probe 111 is the positive-path
 check that the columns owners actually use (name/slug, for org rename)
 still work after the re-grant.
+
+## runEtl.test.ts: "skips the suspension check entirely for personal
+## (org-less) workspace scopes" assertion updated for Slice 2's rows-usage gate
+
+Subscription Phase 3, Slice 2 added `rowsLimitBlockMessage()` to
+`runEtl.ts`'s first-chunk gate, applying to BOTH `orgId` and `ownerId`
+scopes (unlike `isOrgSuspended`/`blockedRunnerReason`, which are org-only —
+personal workspaces can be on the Free plan too, per decision 1's "usage
+counters per workspace (org or personal owner)"). It shares the same
+`withServiceRole`-backed mock (`orgSuspensionQueryMock`) as those two
+org-only checks (runEtl.test.ts's single module-level `vi.mock("@nia/db",
+...)`), so the pre-existing assertion `expect(orgSuspensionQueryMock)
+.not.toHaveBeenCalled()` for a personal-scope job is no longer literally
+true — the rows-usage check's own query now does fire for that job. This
+is not a regression or a narrowed test: `isOrgSuspended`/`blockedRunnerReason`
+are still correctly org-gated and never fire for a personal scope. The
+assertion was changed to `toHaveBeenCalledTimes(1)` +
+`toHaveBeenCalledWith(expect.stringContaining("owner_plan"), ["user-1"])`,
+which still proves the org-only checks are skipped (only one call, and it's
+the owner_plan query, not organizations/suspended_at) while accommodating
+the new, intentionally-personal-scope-inclusive check.

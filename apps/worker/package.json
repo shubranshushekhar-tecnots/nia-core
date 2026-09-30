@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "build:deps": "pnpm --filter @nia/schemas --filter @nia/guardrails build",
     "presmoke": "pnpm run build:deps",
     "smoke": "tsx scripts/dispatch-smoke.ts",
