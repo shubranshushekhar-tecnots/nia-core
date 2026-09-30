@@ -728,22 +728,120 @@ export const headerCopilotToggleBtnStyle = (active: boolean): CSSProperties => (
 // 64px nxTopBarStyle row, contiguous, 0-radius, with `.nx-wipe` for the
 // hover fill.
 
-// Editor/Runs/Schedule tab cell — pair with className="nx-wipe nx-active-
-// cell" (Editor) or "nx-wipe nx-row-disabled" (Runs/Schedule), same classes
-// Sidebar's nav rows already use for active/disabled colouring.
-export const headerTabCellStyle: CSSProperties = {
+// ---------- UI-10: top bar layout fix (single line, ellipsis, Run always visible) ----------
+//
+// Every cell in the row is flex:'none' (rigid, never shrinks below its own
+// content) EXCEPT the breadcrumb cell below, which is the sole flex:1
+// cell and absorbs all the squeeze. Overflowing text gets an ellipsis with
+// the full value restored via a `title` attribute at the call site
+// (CanvasHeader.tsx), never a silent truncation.
+
+// Org switcher cell — 16px padding (tighter than the generic
+// nxTopBarCellStyle's 20px). Spread over `nxTopBarCellStyle(true)` at the
+// call site; this only overrides padding + pins it rigid.
+export const headerOrgSwitcherCellStyle: CSSProperties = {
+  padding: '0 16px',
+  flex: 'none',
+};
+
+// Truncates the org name text itself (not the whole button/cell), so the
+// dropdown chevron never gets pushed out of view by a long org name.
+export const headerOrgNameStyle: CSSProperties = {
+  display: 'inline-block',
+  maxWidth: 200,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  verticalAlign: 'middle',
+};
+
+// Breadcrumb cell — the ONE flexible cell in the header row (flex:1,
+// minWidth:0); every other cell above/below is flex:'none'. `overflow:
+// hidden` is the backstop in case its children's ellipsis widths still
+// don't fit; `gap` matches the previous inline breadcrumb spacing.
+export const headerBreadcrumbCellStyle: CSSProperties = {
+  flex: '1 1 auto',
+  minWidth: 0,
+  height: '100%',
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '0 20px',
+  overflow: 'hidden',
+  borderRight: '1px solid var(--nx-line)',
+};
+
+// Wraps the "Projects / <project> /" lead-in so it can be hidden as one
+// unit under 1200px (CanvasHeader.tsx's <style> block) — the workflow
+// name crumb (headerCrumbTextStyle usage) always stays visible.
+export const headerCrumbEarlyGroupStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flex: 'none',
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+export const HEADER_CRUMB_EARLY_CLASS = 'nx-ch-crumb-early';
+
+// Individual crumb link/current text — mono 12px (matches the shared
+// nxPageCrumbLinkStyle/nxPageCrumbCurrentStyle these are spread over at
+// the call site), single line with ellipsis. `maxWidth` differs per crumb
+// (project 160px, workflow 280px) per the layout spec.
+export function headerCrumbTextStyle(maxWidth: number): CSSProperties {
+  return {
+    display: 'inline-block',
+    maxWidth,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    verticalAlign: 'middle',
+    flex: 'none',
+  };
+}
+
+// Search cell — 220px on the canvas route (the shared nxTopBarSearchCellStyle
+// TopBar.tsx uses is 300px; the canvas needs the narrower width to leave
+// room for the Run cell). Collapses to a 64px icon-only square under
+// 1440px via the .nx-ch-search-cell/.nx-ch-search-label classes
+// (CanvasHeader.tsx's <style> block, !important needed there to beat this
+// inline width/padding).
+export const HEADER_SEARCH_CELL_CLASS = 'nx-ch-search-cell';
+export const HEADER_SEARCH_LABEL_CLASS = 'nx-ch-search-label';
+export const headerSearchCellStyle: CSSProperties = {
+  flex: 'none',
+  width: 220,
   height: '100%',
   boxSizing: 'border-box',
   padding: '0 20px',
+  borderLeft: '1px solid var(--nx-line)',
+};
+
+// Editor/Runs/Schedule tab cell — pair with className="nx-wipe nx-active-
+// cell" (Editor) or "nx-wipe nx-row-disabled" (Runs/Schedule), same classes
+// Sidebar's nav rows already use for active/disabled colouring.
+// UI-10 (top bar layout fix): flex:'none' + whiteSpace:'nowrap' so this
+// cell never wraps/shrinks — the breadcrumb cell is the only one that
+// absorbs squeeze now (see headerBreadcrumbCellStyle below); font/padding
+// tightened (12px/20px -> 11px/18px) to buy back room for the Run cell,
+// which must never be pushed off-screen.
+export const headerTabCellStyle: CSSProperties = {
+  flex: 'none',
+  height: '100%',
+  boxSizing: 'border-box',
+  padding: '0 18px',
   display: 'flex',
   alignItems: 'center',
   border: 'none',
   borderRight: '1px solid var(--nx-line)',
   fontFamily: 'var(--nx-font-mono)',
-  fontSize: 12,
+  fontSize: 11,
   fontWeight: 600,
   textTransform: 'uppercase',
   letterSpacing: '0.06em',
+  whiteSpace: 'nowrap',
   cursor: 'pointer',
   background: 'none',
   color: 'inherit',
@@ -768,17 +866,23 @@ export const headerCopilotCellStyle = (active: boolean): CSSProperties => ({
 
 // Static (never mutates workflow.status) — no publish/draft transition flow
 // exists today, so this only ever reflects the value already on the record.
-// Flattened to square + mono per the header shell rebuild.
+// Flattened to square + mono per the header shell rebuild. UI-10: fixed
+// 22px height (was line-height-derived) + tighter padding so it sits
+// dead-center in the 64px row and never wraps.
 export const headerDraftChipStyle: CSSProperties = {
   fontFamily: 'var(--nx-font-mono)',
-  fontSize: 11,
+  fontSize: 10.5,
   fontWeight: 600,
+  height: 22,
+  boxSizing: 'border-box',
+  display: 'inline-flex',
+  alignItems: 'center',
   color: 'var(--nx-ink-3)',
   background: 'var(--nx-raised)',
   border: '1px solid var(--nx-line)',
   borderRadius: 'var(--nx-radius)',
-  padding: '2px 7px',
-  lineHeight: 1.4,
+  padding: '0 8px',
+  whiteSpace: 'nowrap',
   flex: 'none',
 };
 
@@ -804,44 +908,52 @@ export const headerRenameBtnStyle: CSSProperties = {
 // of the Editor/Runs/Schedule group). Disabled/running state comes from the
 // "nx-row-disabled" class + the `disabled` attribute, same as every other
 // disabled row in this app.
+// UI-10: flex:'none' + whiteSpace:'nowrap', padding tightened 20px -> 18px
+// (see headerTabCellStyle above for the same pass on the tab cells).
 export const headerRunChecksCellStyle: CSSProperties = {
+  flex: 'none',
   height: '100%',
   boxSizing: 'border-box',
-  padding: '0 20px',
+  padding: '0 18px',
   display: 'flex',
   alignItems: 'center',
   border: 'none',
   fontFamily: 'var(--nx-font-mono)',
-  fontSize: 12,
+  fontSize: 11,
   fontWeight: 600,
   textTransform: 'uppercase',
   letterSpacing: '0.06em',
+  whiteSpace: 'nowrap',
   cursor: 'pointer',
   background: 'none',
   color: 'var(--nx-ink-3)',
 };
 
-// Primary-CTA "Run" cell — full height, --nx-blue-cta fill when enabled/
-// in-flight, --nx-raised/disabled-ink otherwise. Pair with className=
-// "nx-wipe" plus the --wipe-fill/--wipe-on custom-property overrides
-// (ink/bg) only while enabled — matches the app-wide primary-CTA wipe
-// bucket (Commit B), no wipe vars while disabled.
+// Primary-CTA "Run" cell — fixed 112px width (never shrinks, never hidden
+// by the responsive rules below), --nx-blue-cta fill when enabled/
+// in-flight, --nx-raised/disabled-ink otherwise. UI-10: switched from the
+// small mono/uppercase tab typography to plain 14px UI text + a trailing
+// play-arrow icon (RunArrowIcon, navIcons.tsx), justify-content:
+// space-between spreads the two across the fixed width. Pair with
+// className="nx-wipe" plus the --wipe-fill/--wipe-on custom-property
+// overrides (ink/bg) only while enabled — matches the app-wide primary-CTA
+// wipe bucket (Commit B), no wipe vars while disabled.
 export const headerRunCellStyle = (enabled: boolean, inFlight: boolean): CSSProperties => ({
-  flex: 'none',
+  flex: '0 0 112px',
+  width: 112,
   height: '100%',
   boxSizing: 'border-box',
-  padding: '0 24px',
+  padding: '0 16px',
   display: 'flex',
   alignItems: 'center',
-  justifyContent: 'center',
+  justifyContent: 'space-between',
   borderLeft: '1px solid var(--nx-line)',
   background: enabled || inFlight ? 'var(--nx-blue-cta)' : 'var(--nx-raised)',
   color: enabled || inFlight ? 'var(--nx-blue-cta-text)' : 'var(--nx-ink-disabled)',
-  fontFamily: 'var(--nx-font-mono)',
-  fontSize: 12,
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 14,
   fontWeight: 600,
-  textTransform: 'uppercase',
-  letterSpacing: '0.06em',
+  whiteSpace: 'nowrap',
   cursor: enabled ? 'pointer' : 'not-allowed',
 });
 

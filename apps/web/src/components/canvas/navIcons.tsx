@@ -195,6 +195,15 @@ export const EditIcon: IconComponent = ({ size = 16 }) => (
   </svg>
 );
 
+/** Small filled play-triangle — pairs with CanvasHeader's 112px "Run" cell
+ * text (UI-10 top bar layout fix), matching the design reference's
+ * play-arrow glyph (designs/nia-design-source/Workflow.dc.html). */
+export const RunArrowIcon: IconComponent = ({ size = 11 }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+    <path d="M4 2.5v11l9-5.5z" />
+  </svg>
+);
+
 /**
  * Precision Dark redesign (Step 2): Sidebar/TopBar nav icon set — 20px
  * viewBox, stroke-only geometric glyphs (square caps, miter joins — NOT

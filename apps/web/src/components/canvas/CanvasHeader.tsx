@@ -11,25 +11,32 @@ import {
   nxPageCrumbLinkStyle,
   nxTopBarCellStyle,
   nxTopBarLogoCellStyle,
-  nxTopBarSearchCellStyle,
   nxTopBarStyle,
   topBarKbdStyle,
   topBarSearchBtnFillStyle,
-  topBarSearchLabelStyle,
 } from '@/components/app/styles';
 import { useAppShellStore } from '@/components/app/store';
 import CommandPalette from '@/components/app/CommandPalette';
 import Logo from '@/components/Logo';
 import type { WorkflowStatus } from '@/lib/dashboard/types';
 import {
+  HEADER_CRUMB_EARLY_CLASS,
+  HEADER_SEARCH_CELL_CLASS,
+  HEADER_SEARCH_LABEL_CLASS,
+  headerBreadcrumbCellStyle,
   headerCopilotCellStyle,
+  headerCrumbEarlyGroupStyle,
+  headerCrumbTextStyle,
   headerDraftChipStyle,
+  headerOrgNameStyle,
+  headerOrgSwitcherCellStyle,
   headerRenameBtnStyle,
   headerRunCellStyle,
   headerRunChecksCellStyle,
+  headerSearchCellStyle,
   headerTabCellStyle,
 } from './styles';
-import { EditIcon, NxSearchIcon } from './navIcons';
+import { EditIcon, NxSearchIcon, RunArrowIcon } from './navIcons';
 
 // Wordmark hides below this cell width so "NIA CORE" never clips against
 // the logo cell's right border while the sidebar (which this cell's width
@@ -44,6 +51,14 @@ const LOGO_CELL_WORDMARK_MIN_WIDTH = 120;
  * canvas route's header no longer visually jumps against the rest of the
  * app shell. Every handler/prop below is unchanged from the previous
  * version — this is a pure JSX/styles rewrite.
+ *
+ * UI-10 (top bar layout fix): every cell is single-line (white-space:
+ * nowrap + ellipsis on overflow, full value in `title`) and flex:'none'
+ * (never shrinks) EXCEPT the breadcrumb cell, which is flex:1/minWidth:0
+ * and absorbs all the squeeze. Two width breakpoints (<1440px collapses
+ * search to an icon; <1200px hides the "Projects / <project> /" lead-in,
+ * keeping only the workflow name) keep the Run cell visible at all times
+ * without it ever needing to shrink itself.
  */
 export default function CanvasHeader({
   orgName,
@@ -85,6 +100,7 @@ export default function CanvasHeader({
   const searchBtnRef = useRef<HTMLButtonElement>(null);
   const railW = useAppShellStore((s) => s.railW);
   const showWordmark = railW >= LOGO_CELL_WORDMARK_MIN_WIDTH;
+  const orgLabel = orgName ?? 'Personal workspace';
 
   // ⌘K/Ctrl+K focuses the search box (not the canvas's own shortcuts —
   // FlowCanvas.tsx has no ⌘K handling to conflict with).
@@ -117,53 +133,82 @@ export default function CanvasHeader({
         {showWordmark && <span style={navWordmarkStyle}>Nia Core</span>}
       </div>
 
-      <div className="nx-wipe" style={{ ...nxTopBarCellStyle(), position: 'relative' }}>
-        <button type="button" style={nxOrgSwitcherBtnStyle} onClick={() => setOrgMenuOpen((v) => !v)}>
-          <span>{orgName ?? 'Personal workspace'}</span>
-          <span aria-hidden style={{ fontSize: 10, color: 'var(--nx-ink-2)', lineHeight: 1 }}>{'\u25BE'}</span>
+      <div
+        className="nx-wipe"
+        style={{ ...nxTopBarCellStyle(), ...headerOrgSwitcherCellStyle, position: 'relative' }}
+      >
+        <button
+          type="button"
+          style={{ ...nxOrgSwitcherBtnStyle, fontSize: 14 }}
+          onClick={() => setOrgMenuOpen((v) => !v)}
+        >
+          <span style={headerOrgNameStyle} title={orgLabel}>
+            {orgLabel}
+          </span>
+          <span aria-hidden style={{ fontSize: 10, color: 'var(--nx-ink-2)', lineHeight: 1, flex: 'none' }}>
+            {'\u25BE'}
+          </span>
         </button>
         {orgMenuOpen && (
           <div style={nxDropdownStyle} onMouseLeave={() => setOrgMenuOpen(false)}>
-            <div style={{ ...nxDropdownItemStyle, fontWeight: 600, cursor: 'default' }}>
-              {orgName ?? 'Personal workspace'}
-            </div>
+            <div style={{ ...nxDropdownItemStyle, fontWeight: 600, cursor: 'default' }}>{orgLabel}</div>
           </div>
         )}
       </div>
 
-      <div className="nx-wipe" style={nxTopBarCellStyle()}>
-        <span style={nxBreadcrumbSepStyle}>/</span>
-        <a href="/app/projects" style={nxPageCrumbLinkStyle}>
-          Projects
-        </a>
-        <span style={nxBreadcrumbSepStyle}>/</span>
-        <a href={projectHref} style={nxPageCrumbLinkStyle}>
-          {projectName}
-        </a>
-        <span style={nxBreadcrumbSepStyle}>/</span>
-        <span style={nxPageCrumbCurrentStyle}>{workflowName}</span>
+      <div
+        className="nx-wipe"
+        style={headerBreadcrumbCellStyle}
+        title={`Projects / ${projectName} / ${workflowName}`}
+      >
+        <span className={HEADER_CRUMB_EARLY_CLASS} style={headerCrumbEarlyGroupStyle}>
+          <span style={nxBreadcrumbSepStyle}>/</span>
+          <a href="/app/projects" style={nxPageCrumbLinkStyle}>
+            Projects
+          </a>
+          <span style={nxBreadcrumbSepStyle}>/</span>
+          <a href={projectHref} style={{ ...nxPageCrumbLinkStyle, ...headerCrumbTextStyle(160) }} title={projectName}>
+            {projectName}
+          </a>
+          <span style={nxBreadcrumbSepStyle}>/</span>
+        </span>
+        <span style={{ ...nxPageCrumbCurrentStyle, ...headerCrumbTextStyle(280) }} title={workflowName}>
+          {workflowName}
+        </span>
         {/* Always disabled — no PATCH /workflows/:id (rename) endpoint exists
             yet. Signals where renaming will live without faking that it works. */}
         <button type="button" disabled style={headerRenameBtnStyle} title="Renaming isn't available yet" aria-label="Rename workflow">
-          <EditIcon size={13} />
+          <EditIcon size={14} />
         </button>
         {workflowStatus === 'draft' && <span style={headerDraftChipStyle}>Draft</span>}
         {readOnly && (
-          <span style={{ fontSize: 12, color: 'var(--nx-ink-3)', border: '1px dashed var(--nx-line)', borderRadius: 'var(--nx-radius)', padding: '3px 8px' }}>
+          <span
+            style={{
+              flex: 'none',
+              whiteSpace: 'nowrap',
+              fontSize: 12,
+              color: 'var(--nx-ink-3)',
+              border: '1px dashed var(--nx-line)',
+              borderRadius: 'var(--nx-radius)',
+              padding: '3px 8px',
+            }}
+          >
             View only
           </span>
         )}
         {saveState !== 'conflict' && saveState !== 'idle' && (
-          <>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 'none', whiteSpace: 'nowrap' }}>
             <span style={nxBreadcrumbSepStyle}>·</span>
             <span style={{ fontSize: 12, color: 'var(--nx-ink-3)' }}>{saveState === 'saving' ? 'Saving…' : 'Saved'}</span>
-          </>
+          </span>
         )}
         {saveState === 'conflict' && (
           <button
             type="button"
             onClick={onReloadAfterConflict}
             style={{
+              flex: 'none',
+              whiteSpace: 'nowrap',
               fontSize: 12.5,
               fontWeight: 600,
               color: 'var(--nx-danger-text)',
@@ -197,17 +242,19 @@ export default function CanvasHeader({
 
       <div style={{ marginLeft: 'auto' }} />
 
-      <div className="nx-wipe" style={nxTopBarSearchCellStyle}>
+      <div className={`nx-wipe ${HEADER_SEARCH_CELL_CLASS}`} style={headerSearchCellStyle}>
         <button
           ref={searchBtnRef}
           type="button"
-          style={topBarSearchBtnFillStyle}
+          style={{ ...topBarSearchBtnFillStyle, justifyContent: 'center' }}
           onClick={() => setPaletteOpen(true)}
           onKeyDown={handleSearchKeyDown}
+          title="Search or run (\u2318K)"
         >
           <NxSearchIcon size={15} />
-          <span style={topBarSearchLabelStyle}>Search or run</span>
-          <span style={topBarKbdStyle}>{'\u2318K'}</span>
+          <span className={HEADER_SEARCH_LABEL_CLASS} style={{ ...topBarKbdStyle, marginLeft: 0 }}>
+            {'\u2318K'}
+          </span>
         </button>
       </div>
 
@@ -219,7 +266,7 @@ export default function CanvasHeader({
         aria-pressed={copilotOpen}
         title={copilotOpen ? 'Hide Nia AI' : 'Show Nia AI'}
       >
-        <Logo size={16} showWordmark={false} />
+        <Logo size={18} showWordmark={false} />
       </button>
 
       {!readOnly && (
@@ -242,15 +289,27 @@ export default function CanvasHeader({
           className="nx-wipe"
           style={{ ...headerRunCellStyle(true, runInFlight), '--wipe-fill': 'var(--nx-ink)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
         >
-          Run
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>Run</span>
+          <RunArrowIcon size={11} />
         </button>
       ) : (
         <button type="button" disabled title={runTooltip} style={headerRunCellStyle(false, runInFlight)}>
-          {runInFlight ? 'Running…' : 'Run'}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{runInFlight ? 'Running…' : 'Run'}</span>
+          <RunArrowIcon size={11} />
         </button>
       )}
 
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+
+      <style>{`
+        @media (max-width: 1439px) {
+          .${HEADER_SEARCH_CELL_CLASS} { width: 64px !important; padding: 0 !important; }
+          .${HEADER_SEARCH_LABEL_CLASS} { display: none; }
+        }
+        @media (max-width: 1199px) {
+          .${HEADER_CRUMB_EARLY_CLASS} { display: none; }
+        }
+      `}</style>
     </header>
   );
 }
