@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useRef, useState } from 'react';
 import type { OrgRole } from '@nia/schemas';
 import { createInvite, revokeInvite, type InviteActionState, type InviteLink } from '@/lib/invites/actions';
 import { nxModalLabelStyle, nxModalFieldStyle, nxModalErrorStyle } from '@/components/app/styles';
@@ -16,6 +16,7 @@ import {
   nxMembersLinkRowStyle,
   nxMembersLinkChipStyle,
   nxMembersCopyBtnStyle,
+  nxMembersCopyFallbackStyle,
   nxMembersCreatedBodyStyle,
   nxMembersCreateAnotherStyle,
   nxMembersInviteListStyle,
@@ -58,6 +59,8 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyFallback, setCopyFallback] = useState(false);
+  const linkChipRef = useRef<HTMLSpanElement>(null);
 
   async function handleRevoke(id: string) {
     setRevokeError(null);
@@ -68,9 +71,28 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
   }
 
   async function handleCopy(link: string) {
-    await navigator.clipboard.writeText(link);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(link);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+        return;
+      } catch {
+        // Fall through to the selection fallback below.
+      }
+    }
+    // No Clipboard API (or it rejected, e.g. insecure context/permissions) —
+    // select the link text so the user can still copy it with ⌘C, and never
+    // claim "Copied" for something that didn't actually happen.
+    if (linkChipRef.current) {
+      const range = document.createRange();
+      range.selectNodeContents(linkChipRef.current);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    setCopyFallback(true);
+    setTimeout(() => setCopyFallback(false), 2000);
   }
 
   return (
@@ -145,11 +167,12 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
           <div style={nxMembersCreatedCardStyle}>
             <span style={nxMembersCreatedHeadingStyle}>Invite link created</span>
             <div style={nxMembersLinkRowStyle}>
-              <span style={nxMembersLinkChipStyle}>{state.link}</span>
+              <span ref={linkChipRef} style={nxMembersLinkChipStyle}>{state.link}</span>
               <button type="button" style={nxMembersCopyBtnStyle} onClick={() => handleCopy(state.link!)}>
                 {copied ? 'Copied' : 'Copy'}
               </button>
             </div>
+            {copyFallback && <span style={nxMembersCopyFallbackStyle}>Press {'\u2318'}C to copy</span>}
             <p style={nxMembersCreatedBodyStyle}>
               This is shown once — copy it now. It won&apos;t be shown again.
             </p>

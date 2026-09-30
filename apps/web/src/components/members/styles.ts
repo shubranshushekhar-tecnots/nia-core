@@ -438,6 +438,14 @@ export const nxMembersCopyBtnStyle: CSSProperties = {
   cursor: 'pointer',
 };
 
+// Shown for 2s in place of "Copied" when navigator.clipboard is unavailable
+// or writeText() rejects — the link text is selected instead so ⌘C still works.
+export const nxMembersCopyFallbackStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  color: 'var(--nx-ink-3)',
+};
+
 export const nxMembersCreatedBodyStyle: CSSProperties = {
   margin: 0,
   fontSize: 13,
