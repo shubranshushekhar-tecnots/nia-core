@@ -350,8 +350,9 @@ function mockOrgDetailQuery(options: {
   projectsUsed?: number;
   runs30d?: number;
   memberRows?: Record<string, string>[];
+  usageRows?: { kind: string; used: string }[];
 }) {
-  const { org, workflowsUsed = 0, projectsUsed = 0, runs30d = 0, memberRows = [] } = options;
+  const { org, workflowsUsed = 0, projectsUsed = 0, runs30d = 0, memberRows = [], usageRows = [] } = options;
   const query = vi.fn(async (sql: string, _params?: unknown[]) => {
     if (sql.includes("platform_staff")) return { rowCount: 1 };
     if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
@@ -360,6 +361,7 @@ function mockOrgDetailQuery(options: {
     if (sql.includes("from public.projects")) return { rows: [{ count: projectsUsed }], rowCount: 1 };
     if (sql.includes("from public.workflow_runs")) return { rows: [{ count: runs30d }], rowCount: 1 };
     if (sql.includes("organization_members om")) return { rows: memberRows, rowCount: memberRows.length };
+    if (sql.includes("from public.usage_events")) return { rows: usageRows, rowCount: usageRows.length };
     throw new Error(`mockOrgDetailQuery: unexpected SQL: ${sql}`);
   });
   withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
@@ -385,6 +387,8 @@ describe("GET /console/orgs/:orgId", () => {
       project_limit: 10,
       project_limit_override_set: false,
       project_limit_override: null,
+      rows_limit: 2000000,
+      copilot_limit: 500,
       suspended_at: null,
       suspended_reason: null,
       suspended_by: null,
@@ -397,7 +401,17 @@ describe("GET /console/orgs/:orgId", () => {
       role: "owner",
       created_at: "2026-01-02T00:00:00.000Z",
     };
-    const query = mockOrgDetailQuery({ org: orgRow, workflowsUsed: 7, projectsUsed: 3, runs30d: 12, memberRows: [memberRow] });
+    const query = mockOrgDetailQuery({
+      org: orgRow,
+      workflowsUsed: 7,
+      projectsUsed: 3,
+      runs30d: 12,
+      memberRows: [memberRow],
+      usageRows: [
+        { kind: "rows_moved", used: "150000" },
+        { kind: "copilot_action", used: "42" },
+      ],
+    });
 
     const started = await startServer(buildApp({ mountConsole: true }));
     server = started.server;
@@ -422,6 +436,10 @@ describe("GET /console/orgs/:orgId", () => {
       projectLimitOverrideSet: false,
       projectLimitOverride: null,
       projectsUsed: 3,
+      rowsLimit: 2000000,
+      rowsUsed: 150000,
+      copilotLimit: 500,
+      copilotUsed: 42,
       runs30d: 12,
       suspendedAt: null,
       suspendedReason: null,

@@ -132,6 +132,11 @@ import {
  * Slice 3e: each Members row now links to `/console/users/:userId` (User
  * Detail), same row-click-to-detail pattern as ConsoleDirectoryClient's own
  * rows — the one place besides the new Users list screen that reaches it.
+ *
+ * Subscription Phase 3, Slice 5 (decision 8): two more stat cards, rows
+ * moved and Copilot actions this month, appended to the existing
+ * plan/limits/usage row — display-only (no edit form, unlike workflow/
+ * project limit, since org_plan has no override columns for these).
  */
 export default function ConsoleOrgDetailClient({
   org: initialOrg,
@@ -538,6 +543,20 @@ export default function ConsoleOrgDetailClient({
             <div style={consoleStatCardStyle}>
               <span style={consoleStatLabelStyle}>Projects used</span>
               <span style={consoleStatValueStyle}>{org.projectsUsed}</span>
+            </div>
+            <div style={consoleStatCardStyle}>
+              <span style={consoleStatLabelStyle}>Rows moved this month</span>
+              <span style={consoleStatValueStyle}>
+                {org.rowsUsed.toLocaleString()}
+                {org.rowsLimit !== null && ` / ${org.rowsLimit.toLocaleString()}`}
+              </span>
+            </div>
+            <div style={consoleStatCardStyle}>
+              <span style={consoleStatLabelStyle}>Copilot actions this month</span>
+              <span style={consoleStatValueStyle}>
+                {org.copilotUsed.toLocaleString()}
+                {org.copilotLimit !== null && ` / ${org.copilotLimit.toLocaleString()}`}
+              </span>
             </div>
             <button type="button" onClick={startEditing} style={consoleGhostBtnStyle}>
               Edit plan

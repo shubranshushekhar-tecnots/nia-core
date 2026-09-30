@@ -188,6 +188,18 @@ consoleRouter.get(
  * GET /orgs above, scoped here to exactly one org's membership rather than
  * every org.
  *
+ * `rowsLimit`/`copilotLimit`/`rowsUsed`/`copilotUsed` (Subscription Phase 3,
+ * Slice 5, decision 8) read straight from `plans.rows_per_month`/
+ * `plans.copilot_actions_per_month` — unlike workflow/project limits there
+ * is no org_plan override column for these (confirmed: those two columns
+ * exist only in 0049_plans_table.sql), so no case-when override logic is
+ * needed. Usage is a grouped current-calendar-month sum over
+ * `usage_events`, same query shape as
+ * apps/api/src/services/dashboard.ts's getUsageThisMonth, just scoped to
+ * this org instead of the caller's own workspace — display-only, no
+ * override/edit affordance in this slice (matching decision 8's "staff see
+ * an org's usage", not "staff set an org's usage limit").
+ *
  * `status`/`runs30d` are included for the same reason GET /orgs already
  * returns them: the design's org header meta line
  * (`designs/Nia Console (superadmin).html`'s `orgMeta`) is
@@ -228,6 +240,8 @@ consoleRouter.get(
         project_limit: number | null;
         project_limit_override_set: boolean;
         project_limit_override: number | null;
+        rows_limit: number | null;
+        copilot_limit: number | null;
         suspended_at: string | null;
         suspended_reason: string | null;
         suspended_by: string | null;
@@ -246,6 +260,8 @@ consoleRouter.get(
            case when op.project_limit_set then op.project_limit else pl.project_limit end as project_limit,
            op.project_limit_set as project_limit_override_set,
            op.project_limit as project_limit_override,
+           pl.rows_per_month as rows_limit,
+           pl.copilot_actions_per_month as copilot_limit,
            o.suspended_at,
            o.suspended_reason,
            o.suspended_by,
@@ -261,7 +277,7 @@ consoleRouter.get(
       const org = orgResult.rows[0];
       if (!org) return null;
 
-      const [workflowUsageResult, projectUsageResult, runsResult, membersResult] = await Promise.all([
+      const [workflowUsageResult, projectUsageResult, runsResult, membersResult, usageResult] = await Promise.all([
         db.query<{ count: number }>(`select count(*)::int as count from public.workflows where org_id = $1`, [
           orgId,
         ]),
@@ -287,6 +303,16 @@ consoleRouter.get(
            order by om.created_at asc`,
           [orgId],
         ),
+        // Subscription Phase 3, Slice 5 (decision 8) — same grouped-sum shape
+        // as apps/api/src/services/dashboard.ts's getUsageThisMonth, scoped
+        // to this one org rather than the caller's own workspace.
+        db.query<{ kind: string; used: string | null }>(
+          `select kind, sum(quantity)::bigint as used
+           from public.usage_events
+           where org_id = $1 and occurred_at >= date_trunc('month', now())
+           group by kind`,
+          [orgId],
+        ),
       ]);
 
       await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
@@ -303,6 +329,8 @@ consoleRouter.get(
         projectsUsed: projectUsageResult.rows[0]?.count ?? 0,
         runs30d: runsResult.rows[0]?.count ?? 0,
         members: membersResult.rows,
+        rowsUsed: Number(usageResult.rows.find((r) => r.kind === "rows_moved")?.used ?? 0),
+        copilotUsed: Number(usageResult.rows.find((r) => r.kind === "copilot_action")?.used ?? 0),
       };
     });
 
@@ -327,6 +355,10 @@ consoleRouter.get(
       projectLimitOverrideSet: result.org.project_limit_override_set,
       projectLimitOverride: result.org.project_limit_override,
       projectsUsed: result.projectsUsed,
+      rowsLimit: result.org.rows_limit,
+      rowsUsed: result.rowsUsed,
+      copilotLimit: result.org.copilot_limit,
+      copilotUsed: result.copilotUsed,
       runs30d: result.runs30d,
       members: result.members.map((m) => ({
         userId: m.user_id,

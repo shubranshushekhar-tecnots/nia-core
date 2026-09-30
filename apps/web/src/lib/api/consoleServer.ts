@@ -66,7 +66,13 @@ export type ConsoleOrgMember = {
  * `runs30d` mirror ConsoleOrg's fields above (same hardcoded-'Active'/
  * real-count semantics) so the detail screen's header meta line can reuse
  * the Directory screen's exact "{plan} · {N} people · {M} runs in 30 days
- * · {status}" format.
+ * · {status}" format. `rowsLimit`/`copilotLimit`/`rowsUsed`/`copilotUsed`
+ * (Subscription Phase 3, Slice 5) are display-only, current-calendar-month
+ * usage against `plans.rows_per_month`/`plans.copilot_actions_per_month` —
+ * `null` limit means unmetered, same semantics as everywhere else in this
+ * file. No override fields for these two (unlike workflow/project limit):
+ * org_plan has no override columns for rows/Copilot, so there's nothing to
+ * edit yet.
  */
 export type ConsoleOrgDetail = {
   id: string;
@@ -87,6 +93,10 @@ export type ConsoleOrgDetail = {
   projectLimitOverrideSet: boolean;
   projectLimitOverride: number | null;
   projectsUsed: number;
+  rowsLimit: number | null;
+  rowsUsed: number;
+  copilotLimit: number | null;
+  copilotUsed: number;
   runs30d: number;
   members: ConsoleOrgMember[];
 };
