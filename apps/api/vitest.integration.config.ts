@@ -28,6 +28,7 @@ export default defineConfig({
       "src/lib/workflowLimit.integration.test.ts",
       "src/lib/projectLimit.integration.test.ts",
       "src/services/dashboard.integration.test.ts",
+      "src/lib/invites.integration.test.ts",
     ],
     env: {
       SUPABASE_URL: "http://localhost:54321",

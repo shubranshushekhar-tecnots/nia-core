@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import AuthShell from './AuthShell';
 import { signup, type ActionState } from '@/lib/auth/actions';
 import { setStoredBearerToken } from '@/lib/auth/browserSession';
@@ -22,6 +22,8 @@ const initialState: ActionState = null;
 
 export default function SignupForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const next = searchParams.get('next') ?? '';
   const [state, formAction, pending] = useActionState(signup, initialState);
   const [pwShown, setPwShown] = useState(false);
   const hasError = Boolean(state?.error);
@@ -41,7 +43,7 @@ export default function SignupForm() {
       footer={
         <>
           <span style={{ fontSize: 14.5, color: 'var(--text-2)' }}>Already have an account? </span>
-          <Link href="/login" style={createLinkStyle}>Sign in</Link>
+          <Link href={next ? `/login?next=${encodeURIComponent(next)}` : '/login'} style={createLinkStyle}>Sign in</Link>
         </>
       }
     >
@@ -49,6 +51,7 @@ export default function SignupForm() {
       <p style={subtitleStyle}>One account, any number of organizations.</p>
 
       <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {next && <input type="hidden" name="next" value={next} />}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
           <label htmlFor="fullName" style={fieldLabelStyle}>Full name</label>
           <input id="fullName" name="fullName" type="text" placeholder="Shub Kumar" style={fieldStyle(false, false)} />

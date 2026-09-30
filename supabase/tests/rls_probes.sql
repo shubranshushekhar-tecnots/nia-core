@@ -3352,6 +3352,174 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 97 — an admin (non-owner) can create a member-role invite via
+-- create_invite, and can SELECT it back — invite_links_select_admin covers
+-- both admin and owner, not just owner (0058_invite_links.sql).
+-- =========================================================================
+do $$
+declare
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_invite_id uuid;
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_admin);
+
+  select id into v_invite_id
+  from public.create_invite(v_org, 'member', 'rls-probe-invite-member', now() + interval '7 days', null, null);
+
+  select count(*) into n_visible from public.invite_links where id = v_invite_id;
+
+  reset role;
+
+  insert into test_ids values ('invite_member', v_invite_id);
+
+  if v_invite_id is not null and n_visible = 1 then
+    insert into probe_results values (97, 'admin can create a member-role invite and SELECT it back', true);
+  else
+    insert into probe_results values (97, 'admin can create a member-role invite and SELECT it back', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (97, 'admin-create-invite probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 98 — that same admin cannot create an owner-role invite (raises
+-- "only an owner may create an owner-role invite"), but the org's owner
+-- can.
+-- =========================================================================
+do $$
+declare
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_org uuid := (select id from test_ids where key = 'org');
+  admin_denied boolean := false;
+  v_owner_invite_id uuid;
+begin
+  perform pg_temp.act_as(v_admin);
+  begin
+    perform public.create_invite(v_org, 'owner', 'rls-probe-invite-owner-denied', now() + interval '7 days', null, null);
+  exception when others then
+    if sqlerrm like '%only an owner may create an owner-role invite%' then
+      admin_denied := true;
+    end if;
+  end;
+  reset role;
+
+  perform pg_temp.act_as(v_owner);
+  select id into v_owner_invite_id
+  from public.create_invite(v_org, 'owner', 'rls-probe-invite-owner', now() + interval '7 days', null, null);
+  reset role;
+
+  if admin_denied and v_owner_invite_id is not null then
+    insert into probe_results values (98, 'admin cannot create an owner-role invite, owner can', true);
+  else
+    insert into probe_results values (98, 'admin cannot create an owner-role invite, owner can', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (98, 'admin-cannot-create-owner-invite probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 99 — a plain member cannot SELECT any invite_links row for their
+-- own org, even though invite_member (probe 97) exists — the select policy
+-- is admin/owner-only, membership alone isn't enough.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org uuid := (select id from test_ids where key = 'org');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_visible from public.invite_links where org_id = v_org;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (99, 'plain member cannot SELECT any invite_links row for their org', true);
+  else
+    insert into probe_results values (99, 'plain member cannot SELECT any invite_links row for their org', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (99, 'member-cannot-see-invites probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 100 — a plain member cannot directly INSERT/UPDATE/DELETE
+-- invite_links, bypassing create_invite/revoke_invite — writes are revoked
+-- from authenticated wholesale (0058_invite_links.sql), so every attempt
+-- must fail with insufficient_privilege, not merely 0 affected rows.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_invite uuid := (select id from test_ids where key = 'invite_member');
+  insert_denied boolean := false;
+  update_denied boolean := false;
+  delete_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+
+  begin
+    insert into public.invite_links (org_id, role, token_hash, expires_at, created_by)
+    values (v_org, 'member', 'rls-probe-invite-direct-insert', now() + interval '7 days', v_member);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+
+  begin
+    update public.invite_links set max_uses = 1 where id = v_invite;
+  exception when insufficient_privilege then
+    update_denied := true;
+  end;
+
+  begin
+    delete from public.invite_links where id = v_invite;
+  exception when insufficient_privilege then
+    delete_denied := true;
+  end;
+
+  reset role;
+
+  if insert_denied and update_denied and delete_denied then
+    insert into probe_results values (100, 'plain member cannot directly INSERT/UPDATE/DELETE invite_links', true);
+  else
+    insert into probe_results values (100, 'plain member cannot directly INSERT/UPDATE/DELETE invite_links', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (100, 'member-cannot-write-invite_links probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 101 — a total outsider (not an org member at all) cannot SELECT
+-- any invite_links row for the org either.
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_org uuid := (select id from test_ids where key = 'org');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_visible from public.invite_links where org_id = v_org;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (101, 'outsider cannot SELECT any invite_links row for the org', true);
+  else
+    insert into probe_results values (101, 'outsider cannot SELECT any invite_links row for the org', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (101, 'outsider-cannot-see-invites probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

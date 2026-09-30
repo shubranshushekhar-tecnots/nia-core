@@ -61,7 +61,7 @@ export default function LoginForm() {
       footer={
         <>
           <span style={{ fontSize: 14.5, color: 'var(--text-2)' }}>New to Nia Core? </span>
-          <Link href="/signup" style={createLinkStyle}>Create an account</Link>
+          <Link href={next ? `/signup?next=${encodeURIComponent(next)}` : '/signup'} style={createLinkStyle}>Create an account</Link>
         </>
       }
     >

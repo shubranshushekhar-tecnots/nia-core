@@ -174,8 +174,11 @@ export async function signup(_prevState: ActionState, formData: FormData): Promi
 
   // autoSignIn (packages/auth/src/config.ts) means this is already a real
   // session, and there's no email-confirmation step — signup behaves like
-  // an immediate login straight into the app.
-  return { success: true, token, next: "/app" };
+  // an immediate login straight into the app. safeNext (same helper login()
+  // uses) forwards an invite/other `next` target carried from /login's
+  // "Create an account" link (LoginForm.tsx) so a brand-new user lands back
+  // where they started (e.g. /invite/<token>) instead of always at /app.
+  return { success: true, token, next: safeNext(formData.get("next")) };
 }
 
 // Console v1 Slice 4 (docs/plans/console-plan.md §4b, build order step 14):
