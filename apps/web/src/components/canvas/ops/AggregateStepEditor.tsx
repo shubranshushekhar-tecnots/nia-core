@@ -102,18 +102,18 @@ export function AggregateStepEditor({
 
   return (
     <div>
-      <div style={{ fontSize: 11, color: 'var(--ink4)', marginBottom: 4 }}>Group by (none = whole-table aggregate)</div>
+      <div style={{ fontSize: 11, color: 'var(--nx-ink-disabled)', marginBottom: 4 }}>Group by (none = whole-table aggregate)</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-        {fields.length === 0 && <div style={{ fontSize: 11.5, color: 'var(--ink4)' }}>No upstream fields yet — connect a source.</div>}
+        {fields.length === 0 && <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)' }}>No upstream fields yet — connect a source.</div>}
         {fields.map((f) => (
-          <label key={f} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontFamily: 'var(--font-data)', color: 'var(--ink)' }}>
+          <label key={f} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontFamily: 'var(--nx-font-mono)', color: 'var(--nx-ink)' }}>
             <input type="checkbox" checked={step.groupBy.includes(f)} onChange={() => toggleGroupBy(f)} />
             {f}
           </label>
         ))}
       </div>
 
-      <div style={{ fontSize: 11, color: 'var(--ink4)', marginBottom: 4 }}>Aggregations</div>
+      <div style={{ fontSize: 11, color: 'var(--nx-ink-disabled)', marginBottom: 4 }}>Aggregations</div>
       {step.aggregations.map((agg, i) => {
         const collides = agg.alias !== '' && (outputNames.get(agg.alias) ?? 0) > 1;
         return (
@@ -132,13 +132,13 @@ export function AggregateStepEditor({
             {agg.fn !== 'count' ? (
               <FieldSelect value={agg.field ?? ''} onChange={(v) => updateAggregation(i, { field: v })} fields={fields} />
             ) : (
-              <span style={{ flex: 1, fontSize: 11.5, color: 'var(--ink4)' }}>*</span>
+              <span style={{ flex: 1, fontSize: 11.5, color: 'var(--nx-ink-disabled)' }}>*</span>
             )}
             <input
               value={agg.alias}
               onChange={(e) => updateAggregation(i, { alias: e.target.value })}
               placeholder="output name"
-              style={{ ...inputStyle, width: 110, fontFamily: 'var(--font-data)', borderColor: collides ? 'var(--bad)' : 'var(--line2)' }}
+              style={{ ...inputStyle, width: 110, fontFamily: 'var(--nx-font-mono)', borderColor: collides ? 'var(--nx-danger)' : 'var(--nx-line)' }}
             />
             <button type="button" aria-label="Remove aggregation" onClick={() => removeAggregation(i)} style={removeBtnStyle}>
               {'\u2715'}
@@ -147,7 +147,7 @@ export function AggregateStepEditor({
         );
       })}
       {step.aggregations.some((agg) => agg.alias !== '' && (outputNames.get(agg.alias) ?? 0) > 1) && (
-        <div style={{ fontSize: 11.5, color: 'var(--bad)', marginBottom: 6 }}>
+        <div style={{ fontSize: 11.5, color: 'var(--nx-danger)', marginBottom: 6 }}>
           Two outputs share the same name — every aggregation alias and groupBy field must be unique.
         </div>
       )}
@@ -155,11 +155,11 @@ export function AggregateStepEditor({
         + Aggregation
       </button>
 
-      <div style={{ fontSize: 11, color: 'var(--ink4)', marginBottom: 4 }}>
+      <div style={{ fontSize: 11, color: 'var(--nx-ink-disabled)', marginBottom: 4 }}>
         Having (filters on the aggregated output — alias or groupBy field only)
       </div>
       {havingConditions === null ? (
-        <div style={{ fontSize: 12, color: 'var(--ink4)', fontStyle: 'italic', marginBottom: 6 }}>
+        <div style={{ fontSize: 12, color: 'var(--nx-ink-disabled)', fontStyle: 'italic', marginBottom: 6 }}>
           This having expression is too complex for this editor (built by hand or by Copilot). It will keep running
           as-is; edit it via the expression source to change it.
         </div>
@@ -198,7 +198,7 @@ export function AggregateStepEditor({
                   value={String(cond.value ?? '')}
                   onChange={(e) => updateHaving(i, { value: coerceValue(e.target.value) })}
                   placeholder="value"
-                  style={{ ...inputStyle, width: 90, fontFamily: 'var(--font-data)' }}
+                  style={{ ...inputStyle, width: 90, fontFamily: 'var(--nx-font-mono)' }}
                 />
               )}
               <button type="button" aria-label="Remove having condition" onClick={() => removeHaving(i)} style={removeBtnStyle}>

@@ -18,29 +18,29 @@ import type { PreviewValue } from '@nia/schemas';
  */
 
 const tableWrapStyle = {
-  border: '1px solid var(--line2)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 8,
   overflow: 'hidden',
 } as const;
 
 const headerRowStyle = {
   display: 'flex',
-  background: 'var(--surface2)',
-  borderBottom: '1px solid var(--line2)',
+  background: 'var(--nx-raised)',
+  borderBottom: '1px solid var(--nx-line)',
 } as const;
 
 const rowStyle = {
   display: 'flex',
-  borderBottom: '1px solid var(--line)',
+  borderBottom: '1px solid var(--nx-line)',
 } as const;
 
 const cellStyle = {
   flex: '1 0 0',
   minWidth: 90,
   padding: '6px 8px',
-  fontFamily: 'var(--font-data)',
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 12,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -49,7 +49,7 @@ const cellStyle = {
 const headerCellStyle = {
   ...cellStyle,
   fontWeight: 600,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
   fontSize: 11,
 } as const;
 
@@ -69,16 +69,16 @@ function AutoChart({ preview }: { preview: PreviewValue }) {
   const max = Math.max(1, ...bars.map((b) => b.value));
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink4)', marginBottom: 6 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--nx-ink-disabled)', marginBottom: 6 }}>
         {valueColumn} by {labelColumn}
       </div>
       {bars.map((b, i) => (
         <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-          <span style={{ width: 90, fontSize: 11.5, color: 'var(--ink3)', flex: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.label}</span>
-          <div style={{ flex: 1, background: 'var(--surface2)', borderRadius: 3, height: 12 }}>
-            <div style={{ width: `${(b.value / max) * 100}%`, background: 'var(--accent, #6366f1)', height: 12, borderRadius: 3 }} />
+          <span style={{ width: 90, fontSize: 11.5, color: 'var(--nx-ink-3)', flex: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.label}</span>
+          <div style={{ flex: 1, background: 'var(--nx-raised)', borderRadius: 3, height: 12 }}>
+            <div style={{ width: `${(b.value / max) * 100}%`, background: 'var(--nx-blue-panel)', height: 12, borderRadius: 3 }} />
           </div>
-          <span style={{ fontSize: 11, fontFamily: 'var(--font-data)', color: 'var(--ink4)', flex: 'none' }}>{b.value}</span>
+          <span style={{ fontSize: 11, fontFamily: 'var(--nx-font-mono)', color: 'var(--nx-ink-disabled)', flex: 'none' }}>{b.value}</span>
         </div>
       ))}
     </div>
@@ -107,14 +107,14 @@ export default function PreviewTable({ preview }: { preview: PreviewValue }) {
           </div>
         ))}
         {preview.rows.length === 0 && (
-          <div style={{ padding: '10px 8px', fontSize: 12, color: 'var(--ink4)' }}>No rows returned.</div>
+          <div style={{ padding: '10px 8px', fontSize: 12, color: 'var(--nx-ink-disabled)' }}>No rows returned.</div>
         )}
       </div>
       {preview.truncated && (
-        <div style={{ fontSize: 11, color: 'var(--ink4)', marginTop: 6 }}>Preview capped at 50 rows.</div>
+        <div style={{ fontSize: 11, color: 'var(--nx-ink-disabled)', marginTop: 6 }}>Preview capped at 50 rows.</div>
       )}
       {preview.residualCount > 0 && (
-        <div style={{ fontSize: 11, color: 'var(--warn)', marginTop: 6 }}>
+        <div style={{ fontSize: 11, color: 'var(--nx-warn)', marginTop: 6 }}>
           {preview.residualCount} in-stream transform{preview.residualCount === 1 ? '' : 's'} will apply at run time — not shown in this preview.
         </div>
       )}

@@ -34,11 +34,11 @@ import { addStepBtnStyle, removeBtnStyle } from './ops/shared';
  */
 
 const stepCardStyle = {
-  border: '1px solid var(--line2)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 8,
   padding: 10,
   marginBottom: 10,
-  background: 'var(--surface2)',
+  background: 'var(--nx-raised)',
 } as const;
 
 export default function TransformEditor({
@@ -142,7 +142,7 @@ export default function TransformEditor({
         return (
           <div key={i} style={stepCardStyle} data-testid={`transform-step-${step.kind}`}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink3)', textTransform: 'uppercase', letterSpacing: '.03em' }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--nx-ink-3)', textTransform: 'uppercase', letterSpacing: '.03em' }}>
                 {entry.label}
               </span>
               <button type="button" aria-label="Remove step" onClick={() => removeStep(i)} style={removeBtnStyle}>
@@ -163,22 +163,22 @@ export default function TransformEditor({
       </div>
 
       {config.steps.length > 0 && (
-        <div style={{ borderTop: '1px solid var(--line2)', paddingTop: 12 }}>
-          <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>
+        <div style={{ borderTop: '1px solid var(--nx-line)', paddingTop: 12 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--nx-ink-disabled)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>
             Pushdown
           </div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink)', marginBottom: 8 }}>
+          <div style={{ fontSize: 12.5, color: 'var(--nx-ink)', marginBottom: 8 }}>
             Pushed down: {plan.pushedDownCount} · In-stream: {plan.residualCount}
           </div>
           {fragmentText && (
             <div style={{ position: 'relative' }}>
               <pre
                 style={{
-                  fontFamily: 'var(--font-data)',
+                  fontFamily: 'var(--nx-font-mono)',
                   fontSize: 11.5,
-                  color: 'var(--ink)',
-                  background: 'var(--surface)',
-                  border: '1px solid var(--line2)',
+                  color: 'var(--nx-ink)',
+                  background: 'var(--nx-surface)',
+                  border: '1px solid var(--nx-line)',
                   borderRadius: 6,
                   padding: '8px 10px',
                   overflowX: 'auto',
@@ -200,54 +200,54 @@ export default function TransformEditor({
                   top: 6,
                   right: 6,
                   fontSize: 11,
-                  border: '1px solid var(--line2)',
-                  background: 'var(--surface2)',
+                  border: '1px solid var(--nx-line)',
+                  background: 'var(--nx-raised)',
                   borderRadius: 6,
                   padding: '2px 8px',
                   cursor: 'pointer',
-                  color: 'var(--ink3)',
+                  color: 'var(--nx-ink-3)',
                 }}
               >
                 {copied ? 'Copied' : 'Copy'}
               </button>
             </div>
           )}
-          {!fragmentText && <div style={{ fontSize: 11.5, color: 'var(--ink4)' }}>Nothing pushes down for this connection yet.</div>}
+          {!fragmentText && <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)' }}>Nothing pushes down for this connection yet.</div>}
         </div>
       )}
 
-      <div style={{ borderTop: '1px solid var(--line2)', paddingTop: 12, marginTop: 16 }}>
-        <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink4)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>
+      <div style={{ borderTop: '1px solid var(--nx-line)', paddingTop: 12, marginTop: 16 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--nx-ink-disabled)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>
           Clean proposal
         </div>
         <button type="button" onClick={handleProposeCleaning} disabled={proposing} style={addStepBtnStyle}>
           {proposing ? 'Proposing\u2026' : 'Propose cleaning'}
         </button>
-        {proposeError && <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>{proposeError}</div>}
+        {proposeError && <div style={{ fontSize: 11.5, color: 'var(--nx-danger)', marginTop: 6 }}>{proposeError}</div>}
 
         {activeProposal && (
           <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 12.5, color: 'var(--ink)', marginBottom: 8 }}>{activeProposal.diff.summary}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--nx-ink)', marginBottom: 8 }}>{activeProposal.diff.summary}</div>
 
             {activeProposal.columns.map((col) => (
               <div key={col.column} style={stepCardStyle}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                   <span style={{ fontWeight: 600, fontSize: 12.5 }}>{col.column}</span>
-                  <span style={{ fontSize: 11, color: 'var(--ink4)' }}>
+                  <span style={{ fontSize: 11, color: 'var(--nx-ink-disabled)' }}>
                     {col.specialist} · {col.included ? 'included' : 'dropped'}
                   </span>
                 </div>
-                <div style={{ fontSize: 11.5, color: 'var(--ink3)', marginTop: 4 }}>{col.routeReason}</div>
-                <div style={{ fontSize: 12, color: 'var(--ink)', marginTop: 2 }}>{col.rationale}</div>
-                <div style={{ fontSize: 11, color: 'var(--ink4)', marginTop: 4 }}>
+                <div style={{ fontSize: 11.5, color: 'var(--nx-ink-3)', marginTop: 4 }}>{col.routeReason}</div>
+                <div style={{ fontSize: 12, color: 'var(--nx-ink)', marginTop: 2 }}>{col.rationale}</div>
+                <div style={{ fontSize: 11, color: 'var(--nx-ink-disabled)', marginTop: 4 }}>
                   onFailure: {col.onFailure} · sample {col.sampleSize} · failures {col.failureCount} (
                   {(col.failureRate * 100).toFixed(1)}% / max {(col.maxFailureRate * 100).toFixed(1)}%)
                 </div>
                 {!col.included && col.dropReason && (
-                  <div style={{ fontSize: 11, color: 'var(--warn)', marginTop: 4 }}>Dropped: {col.dropReason}</div>
+                  <div style={{ fontSize: 11, color: 'var(--nx-warn)', marginTop: 4 }}>Dropped: {col.dropReason}</div>
                 )}
                 {col.included && col.before.length > 0 && (
-                  <div style={{ fontFamily: 'var(--font-data)', fontSize: 11, color: 'var(--ink3)', marginTop: 4, overflowX: 'auto' }}>
+                  <div style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 11, color: 'var(--nx-ink-3)', marginTop: 4, overflowX: 'auto' }}>
                     {col.before
                       .slice(0, 3)
                       .map((b, idx) => `${JSON.stringify(b)} \u2192 ${JSON.stringify(col.after[idx])}`)
@@ -259,9 +259,9 @@ export default function TransformEditor({
 
             {activeProposal.skipped.length > 0 && (
               <div style={{ marginTop: 6 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink4)', marginBottom: 4 }}>Skipped</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--nx-ink-disabled)', marginBottom: 4 }}>Skipped</div>
                 {activeProposal.skipped.map((s, i) => (
-                  <div key={i} style={{ fontSize: 11.5, color: 'var(--ink3)' }}>
+                  <div key={i} style={{ fontSize: 11.5, color: 'var(--nx-ink-3)' }}>
                     {s.column} ({s.specialist}): {s.reason}
                   </div>
                 ))}
@@ -270,16 +270,16 @@ export default function TransformEditor({
 
             {activeProposal.skippedIdentifierLike.length > 0 && (
               <div style={{ marginTop: 6 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink4)', marginBottom: 4 }}>Skipped (identifier-like)</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--nx-ink-disabled)', marginBottom: 4 }}>Skipped (identifier-like)</div>
                 {activeProposal.skippedIdentifierLike.map((s, i) => (
-                  <div key={i} style={{ fontSize: 11.5, color: 'var(--ink3)' }}>
+                  <div key={i} style={{ fontSize: 11.5, color: 'var(--nx-ink-3)' }}>
                     {s.column}: {s.reason}
                   </div>
                 ))}
               </div>
             )}
 
-            <div style={{ fontSize: 11, color: 'var(--ink4)', marginTop: 8 }}>
+            <div style={{ fontSize: 11, color: 'var(--nx-ink-disabled)', marginTop: 8 }}>
               Review the diff banner above the canvas to apply or discard.
             </div>
           </div>

@@ -57,9 +57,9 @@ export default function NodeContextMenu({
         left: menu.x,
         zIndex: 50,
         minWidth: 190,
-        background: 'var(--surface)',
-        border: '1px solid var(--panel-line)',
-        borderRadius: 8,
+        background: 'var(--nx-surface)',
+        border: '1px solid var(--nx-line)',
+        borderRadius: 'var(--nx-radius)',
         boxShadow: 'var(--floating-panel-shadow)',
         padding: 4,
       }}
@@ -67,13 +67,13 @@ export default function NodeContextMenu({
     >
       {items.map((item, i) =>
         item.kind === 'separator' ? (
-          <div key={`sep-${i}`} style={{ borderTop: '1px solid var(--panel-line)', margin: '4px 0' }} />
+          <div key={`sep-${i}`} style={{ borderTop: '1px solid var(--nx-line)', margin: '4px 0' }} />
         ) : (
           <button
             key={item.action}
             type="button"
             role="menuitem"
-            style={{ ...railContextMenuItemStyle, color: item.danger ? 'var(--bad)' : 'var(--ink)' }}
+            style={{ ...railContextMenuItemStyle, color: item.danger ? 'var(--nx-danger)' : 'var(--nx-ink)' }}
             onClick={() => {
               onAction(item.action, menu.nodeId);
               onClose();

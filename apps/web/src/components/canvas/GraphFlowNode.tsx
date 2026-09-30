@@ -20,29 +20,31 @@ export const KIND_LABEL: Record<CanvasNode['data']['graphNodeType'], string> = {
 // (identityColor). Kept in sync with the new tile-color scheme below rather
 // than the old 3-color KIND_COLOR so both surfaces agree.
 export const KIND_COLOR: Record<CanvasNode['data']['graphNodeType'], string> = {
-  source: 'var(--data-store-icon)',
-  transform: 'var(--transform-icon)',
-  destination: 'var(--data-store-icon)',
+  source: 'var(--nx-blue-panel)',
+  transform: 'var(--nx-bg)',
+  destination: 'var(--nx-blue-panel)',
 };
 
-// Icon tile colors per the redesign brief: source/destination read as
-// "data store" (green), transform gets its own accent tile.
+// Icon tile colors: source/destination render as a quiet mono tile
+// (--nx-raised bg / --nx-blue-panel icon); transform is inverted for
+// contrast (--nx-ink bg / --nx-bg icon) — per Step 5 answer #9 ("proceed
+// as proposed").
 function tileColors(kind: CanvasNode['data']['graphNodeType']) {
   return kind === 'transform'
-    ? { bg: 'var(--transform-bg)', icon: 'var(--transform-icon)' }
-    : { bg: 'var(--data-store-bg)', icon: 'var(--data-store-icon)' };
+    ? { bg: 'var(--nx-ink)', icon: 'var(--nx-bg)' }
+    : { bg: 'var(--nx-raised)', icon: 'var(--nx-blue-panel)' };
 }
 
 const STATUS_STYLE: Record<
   NodeStatusKind,
   { dot: string; text: string; border: string; shadow: string; actionLabel?: string }
 > = {
-  ready: { dot: 'var(--ink-300)', text: 'var(--ink-200)', border: 'var(--line-200)', shadow: 'var(--card-shadow)' },
-  running: { dot: 'var(--acc)', text: 'var(--acc)', border: 'var(--acc)', shadow: '0 0 0 3px var(--acc-soft), var(--card-shadow)' },
-  succeeded: { dot: 'var(--success)', text: 'var(--success)', border: 'var(--line-200)', shadow: 'var(--card-shadow)' },
-  needsAction: { dot: 'var(--warning)', text: 'var(--warning)', border: 'var(--warning-border)', shadow: 'var(--card-shadow)', actionLabel: 'Review' },
-  failed: { dot: 'var(--danger)', text: 'var(--danger)', border: 'var(--danger-border)', shadow: 'var(--card-shadow)', actionLabel: 'Retry' },
-  disabled: { dot: 'var(--ink-300)', text: 'var(--ink-300)', border: 'var(--line-100)', shadow: 'none' },
+  ready: { dot: 'var(--nx-ink-3)', text: 'var(--nx-ink-2)', border: 'var(--nx-line)', shadow: 'var(--card-shadow)' },
+  running: { dot: 'var(--nx-blue-panel)', text: 'var(--nx-blue-panel)', border: 'var(--nx-blue-panel)', shadow: '0 0 0 3px var(--nx-blue-tint), var(--card-shadow)' },
+  succeeded: { dot: 'var(--nx-success)', text: 'var(--nx-success)', border: 'var(--nx-line)', shadow: 'var(--card-shadow)' },
+  needsAction: { dot: 'var(--nx-warn)', text: 'var(--nx-warn)', border: 'var(--nx-warn)', shadow: 'var(--card-shadow)', actionLabel: 'Review' },
+  failed: { dot: 'var(--nx-danger)', text: 'var(--nx-danger)', border: 'var(--nx-danger)', shadow: 'var(--card-shadow)', actionLabel: 'Retry' },
+  disabled: { dot: 'var(--nx-ink-3)', text: 'var(--nx-ink-3)', border: 'var(--nx-line-inner)', shadow: 'none' },
 };
 
 // Best-effort, additive-only read of SourceDestConfig's `entity`/`writeMode`
@@ -98,8 +100,21 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
     : diffStatus
       ? '1.5px dashed var(--copilot-accent)'
       : selected
-        ? '1.5px solid var(--acc)'
+        ? '1.5px solid var(--nx-blue-panel)'
         : `1px solid ${statusStyle.border}`;
+
+  // Running/failed top strip — 2px, absolutely positioned inside the node
+  // (pointer-events: none), never a new flow element or border-top/padding
+  // change, so outer node geometry is untouched. Running pulses; disabled
+  // (respects prefers-reduced-motion) via the .nx-node-strip-pulse class
+  // defined in theme.css. Failed has no existing header/footer slot that
+  // doesn't shift the already-tight 256px layout, so per Step 5 answer #8
+  // it renders strip-only (no ✕ glyph).
+  const topStripColor = !isGhost && !diffStatus && statusKind === 'running'
+    ? 'var(--nx-blue-panel)'
+    : !isGhost && !diffStatus && statusKind === 'failed'
+      ? 'var(--nx-danger)'
+      : null;
 
   return (
     <div
@@ -122,9 +137,9 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
         width: 256,
         minHeight: 64,
         borderRadius: 12,
-        background: 'var(--surface)',
+        background: 'var(--nx-surface)',
         border,
-        boxShadow: isGhost ? 'none' : selected ? `0 0 0 3px var(--acc-soft), var(--card-shadow)` : statusStyle.shadow,
+        boxShadow: isGhost ? 'none' : selected ? `0 0 0 3px var(--nx-blue-tint), var(--card-shadow)` : statusStyle.shadow,
         opacity: isGhost || isDiffRemoved || statusKind === 'disabled' ? 'var(--ghost-opacity)' : 1,
         boxSizing: 'border-box',
         overflow: 'visible',
@@ -132,10 +147,26 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
         userSelect: 'none',
       }}
     >
+      {topStripColor && (
+        <span
+          aria-hidden
+          className={statusKind === 'running' ? 'nx-node-strip-pulse' : undefined}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 2,
+            borderRadius: '12px 12px 0 0',
+            background: topStripColor,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
       {showTargetHandle && <Port type="target" position={Position.Left} />}
 
       {/* Header — 64px, icon tile / role label / title / overflow menu */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 64, padding: '0 12px', borderBottom: '1px solid var(--line-100)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 64, padding: '0 12px', borderBottom: '1px solid var(--nx-line-inner)' }}>
         <span
           aria-hidden
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', width: 34, height: 34, borderRadius: 8, background: tileBg, color: tileIcon }}
@@ -143,7 +174,7 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
           <Icon size={16} />
         </span>
         <div style={{ minWidth: 0, flex: '1 1 auto' }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, letterSpacing: '.04em', color: 'var(--ink-300)', textTransform: 'uppercase' }}>
+          <div style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 10, fontWeight: 600, letterSpacing: '.04em', color: 'var(--nx-ink-3)', textTransform: 'uppercase' }}>
             {KIND_LABEL[data.graphNodeType]}
           </div>
           <div
@@ -151,7 +182,7 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
             style={{
               fontSize: 13.5,
               fontWeight: 600,
-              color: data.resolved ? 'var(--ink-100)' : 'var(--warning)',
+              color: data.resolved ? 'var(--nx-ink)' : 'var(--nx-warn)',
               marginTop: 2,
               whiteSpace: 'nowrap',
               overflow: 'hidden',
@@ -183,7 +214,7 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
               justifyContent: 'center',
               border: 'none',
               background: 'transparent',
-              color: 'var(--ink-300)',
+              color: 'var(--nx-ink-3)',
               cursor: 'pointer',
               borderRadius: 6,
               fontSize: 15,
@@ -201,7 +232,7 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
               fontSize: 10,
               fontWeight: 600,
               color: 'var(--copilot-accent)',
-              background: 'var(--surface)',
+              background: 'var(--nx-surface)',
               border: '1px solid var(--copilot-accent)',
               borderRadius: 999,
               padding: '1px 6px',
@@ -218,7 +249,7 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
               fontSize: 10,
               fontWeight: 600,
               color: 'var(--copilot-accent)',
-              background: 'var(--surface)',
+              background: 'var(--nx-surface)',
               border: '1px solid var(--copilot-accent)',
               borderRadius: 999,
               padding: '1px 6px',
@@ -235,26 +266,26 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
         <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 4 }}>
           {data.manifestName && (
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5 }}>
-              <span style={{ color: 'var(--ink-300)' }}>Provider</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--ink-200)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{data.manifestName}</span>
+              <span style={{ color: 'var(--nx-ink-3)' }}>Provider</span>
+              <span style={{ fontFamily: 'var(--nx-font-mono)', color: 'var(--nx-ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{data.manifestName}</span>
             </div>
           )}
           {data.region && (
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5 }}>
-              <span style={{ color: 'var(--ink-300)' }}>Region</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--ink-200)' }}>{data.region}</span>
+              <span style={{ color: 'var(--nx-ink-3)' }}>Region</span>
+              <span style={{ fontFamily: 'var(--nx-font-mono)', color: 'var(--nx-ink-2)' }}>{data.region}</span>
             </div>
           )}
           {entityLabel && (
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5 }}>
-              <span style={{ color: 'var(--ink-300)' }}>Table</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--ink-200)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entityLabel}</span>
+              <span style={{ color: 'var(--nx-ink-3)' }}>Table</span>
+              <span style={{ fontFamily: 'var(--nx-font-mono)', color: 'var(--nx-ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entityLabel}</span>
             </div>
           )}
           {writeModeLabel && (
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11.5 }}>
-              <span style={{ color: 'var(--ink-300)' }}>Write mode</span>
-              <span style={{ color: 'var(--ink-200)' }}>{writeModeLabel}</span>
+              <span style={{ color: 'var(--nx-ink-3)' }}>Write mode</span>
+              <span style={{ color: 'var(--nx-ink-2)' }}>{writeModeLabel}</span>
             </div>
           )}
         </div>
@@ -267,7 +298,7 @@ export default function GraphFlowNode({ id, data, selected }: NodeProps<CanvasNo
           alignItems: 'center',
           gap: 6,
           padding: '8px 12px',
-          borderTop: '1px solid var(--line-100)',
+          borderTop: '1px solid var(--nx-line-inner)',
           fontSize: 11.5,
         }}
       >

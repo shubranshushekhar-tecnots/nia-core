@@ -47,12 +47,12 @@ import type { NodeStatus, NodeStatusKind } from '@/lib/canvas/mapping';
 // STATUS_STYLE (both read the exact same merged `data.status`), so a node's
 // color language never disagrees between the canvas card and its inspector.
 const DRAWER_STATUS_STYLE: Record<NodeStatusKind, { dot: string; text: string }> = {
-  ready: { dot: 'var(--ink-300)', text: 'var(--ink-200)' },
-  running: { dot: 'var(--acc)', text: 'var(--acc)' },
-  succeeded: { dot: 'var(--success)', text: 'var(--success)' },
-  needsAction: { dot: 'var(--warning)', text: 'var(--warning-deep, var(--warning))' },
-  failed: { dot: 'var(--danger)', text: 'var(--danger)' },
-  disabled: { dot: 'var(--ink-300)', text: 'var(--ink-300)' },
+  ready: { dot: 'var(--nx-ink-3)', text: 'var(--nx-ink-2)' },
+  running: { dot: 'var(--nx-blue-panel)', text: 'var(--nx-blue-panel)' },
+  succeeded: { dot: 'var(--nx-success)', text: 'var(--nx-success)' },
+  needsAction: { dot: 'var(--nx-warn)', text: 'var(--nx-warn)' },
+  failed: { dot: 'var(--nx-danger)', text: 'var(--nx-danger)' },
+  disabled: { dot: 'var(--nx-ink-3)', text: 'var(--nx-ink-3)' },
 };
 
 /**
@@ -178,17 +178,17 @@ function useGrantedNamespaces(grants: WriteGrant[]): Set<string> {
 const grantPanelStyle = {
   marginTop: 10,
   padding: 10,
-  border: '1px solid var(--line2)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 8,
-  background: 'var(--surface2)',
+  background: 'var(--nx-raised)',
 } as const;
 
 const grantButtonStyle = {
   fontSize: 12,
   fontWeight: 600,
-  color: 'var(--ink)',
-  background: 'var(--surface)',
-  border: '1px solid var(--line2)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 6,
   padding: '5px 10px',
   cursor: 'pointer',
@@ -326,7 +326,7 @@ function GrantAccessPanel({
     return (
       <div style={grantPanelStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>Grant write access to &quot;{namespace}&quot;</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--nx-ink)' }}>Grant write access to &quot;{namespace}&quot;</div>
           <div style={{ display: 'flex', gap: 6 }}>
             <button
               type="button"
@@ -345,7 +345,7 @@ function GrantAccessPanel({
         {showHelp && (
           <HelpPanel step="grant-write-access" connectorId={connectorId ?? ''} values={helpValues} onClose={() => setShowHelp(false)} />
         )}
-        <div style={{ fontSize: 11.5, color: 'var(--ink4)' }}>Ask an admin or owner to grant write access.</div>
+        <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)' }}>Ask an admin or owner to grant write access.</div>
       </div>
     );
   }
@@ -353,7 +353,7 @@ function GrantAccessPanel({
   return (
     <div style={grantPanelStyle}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>Grant write access to &quot;{namespace}&quot;</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--nx-ink)' }}>Grant write access to &quot;{namespace}&quot;</div>
         <div style={{ display: 'flex', gap: 6 }}>
           <button
             type="button"
@@ -374,7 +374,7 @@ function GrantAccessPanel({
       )}
       {!grant ? (
         <>
-          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 8 }}>
+          <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', marginBottom: 8 }}>
             Mints a role/password for this schema and shows a statement to run against your database.
           </div>
           <button type="button" style={grantButtonStyle} disabled={busy} onClick={handleCreate}>
@@ -383,7 +383,7 @@ function GrantAccessPanel({
         </>
       ) : !grant.confirmedAt ? (
         <>
-          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 6 }}>
+          <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', marginBottom: 6 }}>
             Run this against the connection&apos;s database, then confirm below.
           </div>
           {statementText ? (
@@ -393,10 +393,10 @@ function GrantAccessPanel({
                 aria-label="Grant write access SQL statement"
                 tabIndex={0}
                 style={{
-                  fontFamily: 'var(--font-data)',
+                  fontFamily: 'var(--nx-font-mono)',
                   fontSize: 11,
-                  background: 'var(--surface)',
-                  border: '1px solid var(--line2)',
+                  background: 'var(--nx-surface)',
+                  border: '1px solid var(--nx-line)',
                   borderRadius: 6,
                   padding: 8,
                   whiteSpace: 'pre-wrap',
@@ -411,17 +411,17 @@ function GrantAccessPanel({
               </button>
             </>
           ) : (
-            <div style={{ fontSize: 11.5, color: 'var(--warn)', marginBottom: 8 }}>No statement text for this connector yet — ask your database admin.</div>
+            <div style={{ fontSize: 11.5, color: 'var(--nx-warn)', marginBottom: 8 }}>No statement text for this connector yet — ask your database admin.</div>
           )}
           <button type="button" style={grantButtonStyle} disabled={busy} onClick={handleConfirm}>
             {busy ? 'Confirming…' : "I've run this — confirm access"}
           </button>
         </>
       ) : (
-        <div style={{ fontSize: 11.5, color: 'var(--ok)' }}>Confirmed.</div>
+        <div style={{ fontSize: 11.5, color: 'var(--nx-success)' }}>Confirmed.</div>
       )}
       {error && (
-        <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>
+        <div style={{ fontSize: 11.5, color: 'var(--nx-danger)', marginTop: 6 }}>
           {error}
           {errorFix && <span style={{ display: 'block', marginTop: 2 }}>{errorFix}</span>}
           {errorDetails && errorDetails !== error && (
@@ -504,7 +504,7 @@ function RevokeAccessPanel({
   return (
     <div style={grantPanelStyle}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, gap: 8 }}>
-        <div style={{ fontSize: 11.5, color: 'var(--ok)' }}>
+        <div style={{ fontSize: 11.5, color: 'var(--nx-success)' }}>
           Write access granted to &quot;{namespace}&quot;{grant.writeRoleName ? <> as role <code>{grant.writeRoleName}</code></> : null}.
         </div>
         <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -527,16 +527,16 @@ function RevokeAccessPanel({
       )}
       {dropStatement && (
         <details style={{ marginBottom: 8 }}>
-          <summary style={{ fontSize: 11.5, color: 'var(--ink4)', cursor: 'pointer' }}>Show role removal statement</summary>
+          <summary style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', cursor: 'pointer' }}>Show role removal statement</summary>
           <pre
             role="region"
             aria-label="Drop role SQL statement"
             tabIndex={0}
             style={{
-              fontFamily: 'var(--font-data)',
+              fontFamily: 'var(--nx-font-mono)',
               fontSize: 11,
-              background: 'var(--surface)',
-              border: '1px solid var(--line2)',
+              background: 'var(--nx-surface)',
+              border: '1px solid var(--nx-line)',
               borderRadius: 6,
               padding: 8,
               whiteSpace: 'pre-wrap',
@@ -556,7 +556,7 @@ function RevokeAccessPanel({
         {busy ? 'Revoking…' : 'Revoke access'}
       </button>
       {error && (
-        <div style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 6 }}>
+        <div style={{ fontSize: 11.5, color: 'var(--nx-danger)', marginTop: 6 }}>
           {error}
           {errorFix && <span style={{ display: 'block', marginTop: 2 }}>{errorFix}</span>}
           {errorDetails && errorDetails !== error && (
@@ -695,7 +695,7 @@ function SourceDestForm({
             );
           })}
         </div>
-        {anyVerbLocked && <span style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 4, display: 'block' }}>{lockedReason}</span>}
+        {anyVerbLocked && <span style={{ fontSize: 10.5, color: 'var(--nx-ink-disabled)', marginTop: 4, display: 'block' }}>{lockedReason}</span>}
       </div>
 
       <div style={configPanelDividerStyle} />
@@ -713,16 +713,16 @@ function SourceDestForm({
             errorMessage: entitiesErrorMessage,
           });
           if (state.kind === 'select-connection') {
-            return <span style={{ fontSize: 12, color: 'var(--ink4)', whiteSpace: 'nowrap' }}>Select a connection first.</span>;
+            return <span style={{ fontSize: 12, color: 'var(--nx-ink-disabled)', whiteSpace: 'nowrap' }}>Select a connection first.</span>;
           }
           if (state.kind === 'new-target') {
             return <NewTargetInputs entity={config.entity} onChange={(entity) => onChange({ ...config, entity })} onCancel={() => setNewTargetMode(false)} />;
           }
           if (state.kind === 'loading') {
-            return <span style={{ fontSize: 12, color: 'var(--ink4)', whiteSpace: 'nowrap' }}>Loading tables…</span>;
+            return <span style={{ fontSize: 12, color: 'var(--nx-ink-disabled)', whiteSpace: 'nowrap' }}>Loading tables…</span>;
           }
           if (state.kind === 'error') {
-            return <span style={{ fontSize: 12, color: 'var(--bad)' }}>{state.message}</span>;
+            return <span style={{ fontSize: 12, color: 'var(--nx-danger)' }}>{state.message}</span>;
           }
           // state.kind === 'select' — entities may legitimately be [] here (a
           // real database with zero tables); the select still renders so
@@ -750,22 +750,22 @@ function SourceDestForm({
                 {/* Schema layer Part 4: "choose an existing target or type a new name" — destination only, since ensureDestination.ts (apps/worker) auto-creates a missing destination target from the contract, but a source still requires a pre-existing table to read from. */}
                 {nodeType === 'destination' && <option value={NEW_TARGET_SENTINEL}>+ Create new…</option>}
               </select>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--ink4)', marginTop: 6 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--nx-ink-disabled)', marginTop: 6 }}>
                 <input type="checkbox" checked={showSystemSchemas} onChange={(e) => setShowSystemSchemas(e.target.checked)} />
                 Show system schemas
               </label>
               {nodeType === 'source' && selectedEntity?.rlsBlocksRead && (
                 <>
-                  <span style={{ fontSize: 12, color: 'var(--bad)', display: 'block', marginTop: 4 }}>
+                  <span style={{ fontSize: 12, color: 'var(--nx-danger)', display: 'block', marginTop: 4 }}>
                     Row-level security is enabled on this table with no policy covering this connection&apos;s role — reads will return 0 rows.
                   </span>
                   {selectedEntity.rlsFixSql && (
                     <pre
                       style={{
-                        fontFamily: 'var(--font-data)',
+                        fontFamily: 'var(--nx-font-mono)',
                         fontSize: 11,
-                        background: 'var(--surface2)',
-                        border: '1px solid var(--line2)',
+                        background: 'var(--nx-raised)',
+                        border: '1px solid var(--nx-line)',
                         borderRadius: 6,
                         padding: 8,
                         whiteSpace: 'pre-wrap',
@@ -813,20 +813,20 @@ function NewTargetInputs({
         value={entity?.namespace ?? ''}
         onChange={(e) => onChange({ namespace: e.target.value, name: entity?.name ?? '' })}
         placeholder="namespace"
-        style={{ ...configPanelSelectStyle, width: 90, fontFamily: 'var(--font-data)' }}
+        style={{ ...configPanelSelectStyle, width: 90, fontFamily: 'var(--nx-font-mono)' }}
       />
-      <span style={{ color: 'var(--ink4)', fontSize: 12 }}>.</span>
+      <span style={{ color: 'var(--nx-ink-disabled)', fontSize: 12 }}>.</span>
       <input
         value={entity?.name ?? ''}
         onChange={(e) => onChange({ namespace: entity?.namespace ?? '', name: e.target.value })}
         placeholder="new table name"
-        style={{ ...configPanelSelectStyle, flex: 1, fontFamily: 'var(--font-data)' }}
+        style={{ ...configPanelSelectStyle, flex: 1, fontFamily: 'var(--nx-font-mono)' }}
       />
       <button
         type="button"
         aria-label="Back to existing tables"
         onClick={onCancel}
-        style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+        style={{ border: 'none', background: 'none', color: 'var(--nx-ink-disabled)', cursor: 'pointer', fontSize: 12, padding: 0 }}
       >
         {'\u2715'}
       </button>
@@ -857,7 +857,7 @@ export default function NodeDrawer({
   const { data } = node;
   const manifest = data.manifestId ? CONNECTOR_MANIFESTS[data.manifestId] : undefined;
   const parsed = parseNodeConfig(data.graphNodeType, data.config);
-  const identityColor = data.resolved ? KIND_COLOR[data.graphNodeType] : 'var(--warn)';
+  const identityColor = data.resolved ? KIND_COLOR[data.graphNodeType] : 'var(--nx-warn)';
   const IdentityIcon = getConnectorIcon(data.manifestId, data.graphNodeType);
   const identityName = data.resolved ? (data.manifestName ?? 'Unconfigured') : (data.unknownReason ?? 'Unknown');
   const identityTitle = `${identityName}${data.connectionLabel ? ` · ${data.connectionLabel}` : ''}`;
@@ -905,7 +905,7 @@ export default function NodeDrawer({
               style={{
                 fontSize: 12.5,
                 fontWeight: 600,
-                color: data.resolved ? 'var(--ink)' : 'var(--warn)',
+                color: data.resolved ? 'var(--nx-ink)' : 'var(--nx-warn)',
                 maxWidth: 140,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -921,7 +921,7 @@ export default function NodeDrawer({
               <span
                 style={{
                   fontSize: 11,
-                  color: 'var(--ink4)',
+                  color: 'var(--nx-ink-disabled)',
                   whiteSpace: 'normal',
                   wordBreak: 'break-word',
                   minWidth: 0,
@@ -1040,10 +1040,10 @@ export default function NodeDrawer({
 
         {data.resolved && parsed.unrecognized && (
           <div>
-            <div style={{ fontSize: 12.5, color: 'var(--warn)', marginBottom: 8 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--nx-warn)', marginBottom: 8 }}>
               Config from an older format — shown read-only, not modified.
             </div>
-            <pre style={{ fontFamily: 'var(--font-data)', fontSize: 11.5, background: 'var(--surface2)', border: '1px solid var(--line2)', borderRadius: 6, padding: 8, whiteSpace: 'pre-wrap', overflowX: 'auto' }}>
+            <pre style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 11.5, background: 'var(--nx-raised)', border: '1px solid var(--nx-line)', borderRadius: 6, padding: 8, whiteSpace: 'pre-wrap', overflowX: 'auto' }}>
               {JSON.stringify(parsed.raw, null, 2)}
             </pre>
           </div>

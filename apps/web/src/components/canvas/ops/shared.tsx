@@ -28,22 +28,22 @@ export const rowStyle = { display: 'flex', gap: 6, marginBottom: 6, alignItems: 
 export const inputStyle = {
   height: 28,
   borderRadius: 6,
-  border: '1px solid var(--line2)',
+  border: '1px solid var(--nx-line)',
   padding: '0 8px',
   fontSize: 12.5,
   boxSizing: 'border-box',
-  color: 'var(--ink)',
-  background: 'var(--surface)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-surface)',
 } as const;
-export const removeBtnStyle = { border: 'none', background: 'none', color: 'var(--bad)', cursor: 'pointer', fontSize: 12, padding: 0 } as const;
+export const removeBtnStyle = { border: 'none', background: 'none', color: 'var(--nx-danger)', cursor: 'pointer', fontSize: 12, padding: 0 } as const;
 export const addStepBtnStyle = {
   fontSize: 12,
-  border: '1px dashed var(--line2)',
+  border: '1px dashed var(--nx-line)',
   background: 'none',
   borderRadius: 6,
   padding: '5px 9px',
   cursor: 'pointer',
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 } as const;
 
 export function FieldSelect({
@@ -63,7 +63,7 @@ export function FieldSelect({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder ?? 'field name'}
-        style={{ ...inputStyle, flex: 1, fontFamily: 'var(--font-data)' }}
+        style={{ ...inputStyle, flex: 1, fontFamily: 'var(--nx-font-mono)' }}
       />
     );
   }
@@ -107,7 +107,7 @@ export function OnFailureSelect({
 }) {
   return (
     <div style={rowStyle}>
-      <span style={{ fontSize: 12, color: 'var(--ink4)', width: 90 }}>On failure</span>
+      <span style={{ fontSize: 12, color: 'var(--nx-ink-disabled)', width: 90 }}>On failure</span>
       <select
         value={value ?? 'fail'}
         onChange={(e) => onChange(e.target.value as OnFailurePolicy)}

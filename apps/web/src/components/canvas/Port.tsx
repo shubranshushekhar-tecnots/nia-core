@@ -16,10 +16,10 @@ import { Handle, useConnection, useNodeConnections, type HandleType, type Positi
 type PortState = 'open' | 'connected' | 'valid' | 'invalid';
 
 const PORT_STYLE: Record<PortState, { background: string; border: string }> = {
-  open: { background: 'var(--surface)', border: 'var(--line-200)' },
-  connected: { background: 'var(--acc)', border: 'var(--acc)' },
-  valid: { background: 'var(--success-bg)', border: 'var(--success)' },
-  invalid: { background: 'var(--danger-bg)', border: 'var(--danger)' },
+  open: { background: 'var(--nx-bg)', border: 'var(--nx-ink-2)' },
+  connected: { background: 'var(--nx-ink-2)', border: 'var(--nx-ink-2)' },
+  valid: { background: 'var(--nx-blue-panel)', border: 'var(--nx-blue-panel)' },
+  invalid: { background: 'var(--nx-danger)', border: 'var(--nx-danger)' },
 };
 
 export function Port({ type, position, handleId }: { type: HandleType; position: Position; handleId?: string }) {
@@ -38,12 +38,18 @@ export function Port({ type, position, handleId }: { type: HandleType; position:
       type={type}
       position={position}
       id={handleId}
+      // data-port-state drives the "open" hover recolour (border only, no
+      // fill change) via the .nx-port-open:hover rule in theme.css — a
+      // pure-CSS pseudo-class can't be expressed through the inline style
+      // object below, so this state needs to reach the DOM node too.
+      data-port-state={state}
+      className={state === 'open' ? 'nx-port-open' : undefined}
       style={{
         width: 12,
         height: 12,
         background,
         border: `1.5px solid ${border}`,
-        borderRadius: '50%',
+        borderRadius: 'var(--nx-radius)',
       }}
     />
   );

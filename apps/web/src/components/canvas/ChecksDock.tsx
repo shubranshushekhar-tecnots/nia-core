@@ -38,8 +38,8 @@ const dockStyle = {
   // past this container's right edge and visually spill onto whatever sits
   // to the right (CopilotSidebar/CommandBar) at narrow canvas-surface widths.
   overflow: 'hidden',
-  background: 'var(--surface)',
-  borderTop: '1px solid var(--line2)',
+  background: 'var(--nx-surface)',
+  borderTop: '1px solid var(--nx-line)',
   boxShadow: '0 -4px 16px rgba(15,23,42,.08)',
 } as const;
 
@@ -69,10 +69,10 @@ const tabStyle = (active: boolean) =>
   ({
     fontSize: 12,
     fontWeight: 600,
-    color: active ? 'var(--ink)' : 'var(--ink4)',
+    color: active ? 'var(--nx-ink)' : 'var(--nx-ink-disabled)',
     background: 'none',
     border: 'none',
-    borderBottom: active ? '2px solid var(--acc)' : '2px solid transparent',
+    borderBottom: active ? '2px solid var(--nx-blue-panel)' : '2px solid transparent',
     padding: '10px 10px 8px',
     cursor: active ? 'default' : 'pointer',
     flex: 'none',
@@ -83,8 +83,8 @@ const logRowStyle = {
   display: 'flex',
   gap: 10,
   padding: '5px 0',
-  borderBottom: '1px solid var(--line)',
-  fontFamily: 'var(--font-data)',
+  borderBottom: '1px solid var(--nx-line)',
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 12,
 } as const;
 
@@ -92,28 +92,31 @@ function bodyStyleFor(height: number) {
   return {
     height,
     overflowY: 'auto',
-    borderTop: '1px solid var(--line2)',
+    borderTop: '1px solid var(--nx-line)',
     padding: '8px 16px',
   } as const;
 }
 
+// nx has no dedicated success/warn tint tokens (only --nx-danger-tint) —
+// pass/warn/skip reuse --nx-raised as a neutral tinted background,
+// consistent with configPanelAlertCardStyle's warning-tone treatment.
 const STATUS_STYLES: Record<CheckStatus, { color: string; bg: string; label: string }> = {
-  pass: { color: 'var(--ok)', bg: 'var(--ok-bg)', label: 'Pass' },
-  fail: { color: 'var(--bad)', bg: 'var(--bad-bg)', label: 'Fail' },
-  warn: { color: 'var(--warn)', bg: 'var(--warn-bg)', label: 'Warn' },
+  pass: { color: 'var(--nx-success)', bg: 'var(--nx-raised)', label: 'Pass' },
+  fail: { color: 'var(--nx-danger)', bg: 'var(--nx-danger-tint)', label: 'Fail' },
+  warn: { color: 'var(--nx-warn)', bg: 'var(--nx-raised)', label: 'Warn' },
   // 'skip' (canvas redesign) — a check that never applied (e.g. a
   // same-connector mapping path), rendered neutral, never counted as a
   // pass or a failure.
-  skip: { color: 'var(--ink4)', bg: 'var(--surface2)', label: 'Skip' },
+  skip: { color: 'var(--nx-ink-disabled)', bg: 'var(--nx-raised)', label: 'Skip' },
 };
 
 type PillTone = 'ok' | 'bad' | 'warn' | 'neutral';
 
 const PILL_TONE_STYLES: Record<PillTone, { color: string; bg: string; border: string }> = {
-  ok: { color: 'var(--ok)', bg: 'var(--ok-bg)', border: 'var(--ok)' },
-  bad: { color: 'var(--bad)', bg: 'var(--bad-bg)', border: 'var(--bad)' },
-  warn: { color: 'var(--warn)', bg: 'var(--warn-bg)', border: 'var(--warn-bd)' },
-  neutral: { color: 'var(--ink4)', bg: 'var(--surface2)', border: 'var(--line2)' },
+  ok: { color: 'var(--nx-success)', bg: 'var(--nx-raised)', border: 'var(--nx-success)' },
+  bad: { color: 'var(--nx-danger)', bg: 'var(--nx-danger-tint)', border: 'var(--nx-danger)' },
+  warn: { color: 'var(--nx-warn)', bg: 'var(--nx-raised)', border: 'var(--nx-warn)' },
+  neutral: { color: 'var(--nx-ink-disabled)', bg: 'var(--nx-raised)', border: 'var(--nx-line)' },
 };
 
 // Failing rows sort first (then warn, then pass, then skip) so the most
@@ -139,8 +142,8 @@ function ResultRow({ result, onSelect }: { result: CheckResult; onSelect: (nodeI
         // Failing rows get a tinted background so they read as
         // actionable at a glance, even once sorted to the top of a
         // long, otherwise-passing list.
-        background: result.status === 'fail' ? 'var(--bad-bg)' : 'transparent',
-        borderBottom: '1px solid var(--line)',
+        background: result.status === 'fail' ? 'var(--nx-danger-tint)' : 'transparent',
+        borderBottom: '1px solid var(--nx-line)',
         cursor: clickable ? 'pointer' : 'default',
       }}
     >
@@ -159,8 +162,8 @@ function ResultRow({ result, onSelect }: { result: CheckResult; onSelect: (nodeI
         {s.label}
       </span>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 12.5, color: 'var(--ink)' }}>{result.message}</div>
-        <div style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 1 }}>
+        <div style={{ fontSize: 12.5, color: 'var(--nx-ink)' }}>{result.message}</div>
+        <div style={{ fontSize: 10.5, color: 'var(--nx-ink-disabled)', marginTop: 1 }}>
           {result.id}
           {result.nodeId ? ` · ${result.nodeId}` : ''}
           {clickable ? ' · click to locate' : ''}
@@ -206,10 +209,10 @@ export function ChecksDrawer({
       <div style={dragHandleStyle('horizontal', dragging)} onPointerDown={onDragPointerDown} data-testid="checks-dock-drag-handle" />
       {activeTab === 'checks' && (
         <div style={bodyStyleFor(bodyHeight)} data-testid="checks-dock-body">
-          {running && <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>Running checks…</div>}
-          {!running && error && <div style={{ fontSize: 12.5, color: 'var(--bad)' }}>{error}</div>}
+          {running && <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>Running checks…</div>}
+          {!running && error && <div style={{ fontSize: 12.5, color: 'var(--nx-danger)' }}>{error}</div>}
           {!running && !error && sorted && sorted.length === 0 && (
-            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No checks ran.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>No checks ran.</div>
           )}
           {!running && !error && sorted && sorted.length > 0 && (
             <div>
@@ -217,14 +220,14 @@ export function ChecksDrawer({
                 <ResultRow key={`${r.id}-${r.nodeId ?? ''}-${i}`} result={r} onSelect={onSelectNode} />
               ))}
               {ranAt && (
-                <div style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 8 }}>
+                <div style={{ fontSize: 10.5, color: 'var(--nx-ink-disabled)', marginTop: 8 }}>
                   Last run {new Date(ranAt).toLocaleString()}
                 </div>
               )}
             </div>
           )}
           {!running && !error && !sorted && (
-            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No checks have run yet.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>No checks have run yet.</div>
           )}
         </div>
       )}
@@ -232,12 +235,12 @@ export function ChecksDrawer({
       {activeTab === 'logs' && (
         <div style={bodyStyleFor(bodyHeight)} data-testid="checks-dock-logs">
           {logs.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: 'var(--ink4)' }}>No activity yet — checks, chat, and run events will appear here.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>No activity yet — checks, chat, and run events will appear here.</div>
           ) : (
             logs.map((l, i) => (
               <div key={`${l.kind}-${l.time}-${i}`} style={logRowStyle}>
-                <span style={{ flex: 'none', color: 'var(--ink4)' }}>{new Date(l.time).toLocaleString()}</span>
-                <span style={{ color: 'var(--ink2)' }}>{l.text}</span>
+                <span style={{ flex: 'none', color: 'var(--nx-ink-disabled)' }}>{new Date(l.time).toLocaleString()}</span>
+                <span style={{ color: 'var(--nx-ink-2)' }}>{l.text}</span>
               </div>
             ))
           )}
@@ -258,10 +261,10 @@ const countDotStyle = (color: string) =>
   }) as const;
 
 const metaLineStyle = {
-  fontFamily: 'var(--font-mono, var(--font-data))',
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 10.5,
   letterSpacing: '0.02em',
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   whiteSpace: 'nowrap',
 } as const;
 
@@ -350,11 +353,11 @@ export function ChecksBar({
 
       {results && (
         <span style={{ ...metaLineStyle, marginLeft: 12 }}>
-          <span style={countDotStyle('var(--ok)')} />
+          <span style={countDotStyle('var(--nx-success)')} />
           {passCount}
-          <span style={{ marginLeft: 8, ...countDotStyle('var(--bad)') }} />
+          <span style={{ marginLeft: 8, ...countDotStyle('var(--nx-danger)') }} />
           {failCount}
-          <span style={{ marginLeft: 8, ...countDotStyle('var(--ink4)') }} />
+          <span style={{ marginLeft: 8, ...countDotStyle('var(--nx-ink-disabled)') }} />
           {skipCount}
         </span>
       )}

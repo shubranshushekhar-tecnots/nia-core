@@ -153,7 +153,7 @@ const chipsRowStyle: CSSProperties = {
   alignItems: 'center',
   gap: 6,
   padding: '10px 16px',
-  borderBottom: '1px solid var(--panel-line)',
+  borderBottom: '1px solid var(--nx-line)',
 };
 
 function scopeChipStyle(): CSSProperties {
@@ -166,10 +166,10 @@ function scopeChipStyle(): CSSProperties {
     padding: '0 10px',
     borderRadius: 999,
     fontSize: 11.5,
-    fontFamily: 'var(--font-data)',
-    color: 'var(--acc)',
-    background: 'var(--surface)',
-    border: '1px solid var(--acc-bd)',
+    fontFamily: 'var(--nx-font-mono)',
+    color: 'var(--nx-blue-panel)',
+    background: 'var(--nx-surface)',
+    border: '1px solid var(--nx-blue-panel)',
     boxShadow: 'var(--amb)',
   };
 }
@@ -178,7 +178,7 @@ const scopeChipRemoveStyle: CSSProperties = {
   fontFamily: 'inherit',
   fontSize: 12,
   lineHeight: 1,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   background: 'none',
   border: 'none',
   padding: 0,
@@ -187,7 +187,7 @@ const scopeChipRemoveStyle: CSSProperties = {
 
 const scopeFallbackTextStyle: CSSProperties = {
   fontSize: 11.5,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   padding: '0 4px',
 };
 
@@ -202,8 +202,8 @@ const barShellStyle: CSSProperties = {
   boxSizing: 'border-box',
   padding: '0 10px',
   borderRadius: 14,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
   boxShadow: 'var(--drop)',
 };
 
@@ -218,7 +218,7 @@ const iconBtnStyle: CSSProperties = {
   fontSize: 16,
   background: 'transparent',
   border: 'none',
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   cursor: 'pointer',
 };
 
@@ -234,7 +234,7 @@ const barInputStyle: CSSProperties = {
   height: '100%',
   fontFamily: 'inherit',
   fontSize: 13.5,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   background: 'transparent',
   border: 'none',
   outline: 'none',
@@ -254,8 +254,8 @@ function barSendBtnStyle(disabled: boolean): CSSProperties {
     fontWeight: 600,
     borderRadius: 9,
     border: 'none',
-    background: disabled ? 'var(--surface2)' : 'var(--acc)',
-    color: disabled ? 'var(--ink4)' : 'var(--onacc)',
+    background: disabled ? 'var(--nx-raised)' : 'var(--nx-blue-cta)',
+    color: disabled ? 'var(--nx-ink-disabled)' : 'var(--nx-blue-cta-text)',
     cursor: disabled ? 'default' : 'pointer',
   };
 }
@@ -266,9 +266,9 @@ const commandHintStyle: CSSProperties = {
   left: 8,
   marginTop: 6,
   fontSize: 11.5,
-  color: 'var(--ink4)',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line2)',
+  color: 'var(--nx-ink-disabled)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 999,
   padding: '4px 10px',
 };
@@ -293,7 +293,7 @@ const threadHeaderStyle: CSSProperties = {
 const threadTitleStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   textTransform: 'uppercase',
   letterSpacing: '.04em',
 };
@@ -318,12 +318,12 @@ const emptyStateStyle: CSSProperties = {
 const emptyStateGreetingStyle: CSSProperties = {
   fontSize: 15,
   fontWeight: 600,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
 };
 
 const emptyStateSubtextStyle: CSSProperties = {
   fontSize: 12,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   maxWidth: 240,
   lineHeight: 1.5,
 };
@@ -332,7 +332,7 @@ const threadActionBtnStyle: CSSProperties = {
   fontFamily: 'inherit',
   fontSize: 12,
   fontWeight: 600,
-  color: 'var(--acc)',
+  color: 'var(--nx-blue-panel)',
   background: 'none',
   border: 'none',
   cursor: 'pointer',
@@ -933,7 +933,7 @@ export default function CommandBar({
 
 function MentionRow({ connection, onPick }: { connection: Connection; onPick: () => void }) {
   const [hovered, setHovered] = useState(false);
-  const dotColor = connection.lastTestStatus === 'ok' ? 'var(--ok)' : connection.lastTestStatus === 'error' ? 'var(--bad)' : 'var(--text-4)';
+  const dotColor = connection.lastTestStatus === 'ok' ? 'var(--nx-success)' : connection.lastTestStatus === 'error' ? 'var(--nx-danger)' : 'var(--nx-ink-disabled)';
   return (
     <button
       type="button"

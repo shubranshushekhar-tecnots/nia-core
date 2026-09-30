@@ -47,25 +47,25 @@ const rowStyle = { display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center
 const inputStyle = {
   height: 28,
   borderRadius: 6,
-  border: '1px solid var(--line2)',
+  border: '1px solid var(--nx-line)',
   padding: '0 8px',
   fontSize: 12.5,
   boxSizing: 'border-box',
-  color: 'var(--ink)',
-  background: 'var(--surface)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-surface)',
 } as const;
-const removeBtnStyle = { border: 'none', background: 'none', color: 'var(--bad)', cursor: 'pointer', fontSize: 12, padding: 0 } as const;
+const removeBtnStyle = { border: 'none', background: 'none', color: 'var(--nx-danger)', cursor: 'pointer', fontSize: 12, padding: 0 } as const;
 const sectionHeaderStyle = {
   fontSize: 11.5,
   fontWeight: 600,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   textTransform: 'uppercase',
   letterSpacing: '.04em',
   marginBottom: 8,
 } as const;
 const unmappedCardStyle = {
-  border: '1px solid var(--warn-bd)',
-  background: 'var(--warn-bg)',
+  border: '1px solid var(--nx-warn)',
+  background: 'var(--nx-raised)',
   borderRadius: 10,
   padding: 10,
   marginBottom: 12,
@@ -83,11 +83,11 @@ const unmappedTagListStyle = {
   overflowY: 'auto',
 } as const;
 const unmappedTagStyle = {
-  fontFamily: 'var(--font-data)',
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 11,
-  color: 'var(--warn)',
-  background: 'var(--surface)',
-  border: '1px solid var(--warn-bd)',
+  color: 'var(--nx-warn)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-warn)',
   borderRadius: 999,
   padding: '2px 8px',
 } as const;
@@ -115,7 +115,7 @@ function FieldSelect({
    */
   loading?: boolean;
 }) {
-  const style = invalid ? { ...inputStyle, flex: 1, borderColor: 'var(--bad)' } : { ...inputStyle, flex: 1 };
+  const style = invalid ? { ...inputStyle, flex: 1, borderColor: 'var(--nx-danger)' } : { ...inputStyle, flex: 1 };
   if (fields.length === 0) {
     return (
       <input
@@ -123,7 +123,7 @@ function FieldSelect({
         onChange={(e) => onChange(e.target.value)}
         placeholder={loading ? 'Loading fields\u2026' : (placeholder ?? 'field name')}
         disabled={loading}
-        style={{ ...style, fontFamily: 'var(--font-data)' }}
+        style={{ ...style, fontFamily: 'var(--nx-font-mono)' }}
       />
     );
   }
@@ -407,9 +407,9 @@ export default function MappingEditor({
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <div style={sectionHeaderStyle}>Field mapping</div>
         {isApproved ? (
-          <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--good, #16a34a)' }}>Approved</span>
+          <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--nx-success)' }}>Approved</span>
         ) : (
-          <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--warn)' }}>Not approved</span>
+          <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--nx-warn)' }}>Not approved</span>
         )}
       </div>
 
@@ -420,12 +420,12 @@ export default function MappingEditor({
         style={{
           fontSize: 12,
           fontWeight: 600,
-          border: '1px solid var(--line2)',
-          background: 'var(--surface2)',
+          border: '1px solid var(--nx-line)',
+          background: 'var(--nx-raised)',
           borderRadius: 6,
           padding: '5px 10px',
           cursor: proposing ? 'default' : 'pointer',
-          color: 'var(--ink)',
+          color: 'var(--nx-ink)',
           marginBottom: 10,
         }}
       >
@@ -433,12 +433,12 @@ export default function MappingEditor({
       </button>
 
       {proposeError && (
-        <div style={{ fontSize: 11.5, color: 'var(--bad)', marginBottom: 10 }}>
+        <div style={{ fontSize: 11.5, color: 'var(--nx-danger)', marginBottom: 10 }}>
           {proposeError}{' '}
           <button
             type="button"
             onClick={handlePropose}
-            style={{ border: 'none', background: 'none', color: 'var(--bad)', textDecoration: 'underline', cursor: 'pointer', fontSize: 11.5, padding: 0 }}
+            style={{ border: 'none', background: 'none', color: 'var(--nx-danger)', textDecoration: 'underline', cursor: 'pointer', fontSize: 11.5, padding: 0 }}
           >
             Retry
           </button>
@@ -459,7 +459,7 @@ export default function MappingEditor({
                 invalid={fromDrifted}
                 loading={sourceFieldsLoading}
               />
-              <span style={{ color: 'var(--ink4)', fontSize: 12 }}>{'\u2192'}</span>
+              <span style={{ color: 'var(--nx-ink-disabled)', fontSize: 12 }}>{'\u2192'}</span>
               <FieldSelect
                 value={entry.to}
                 onChange={(v) => updateEntry(i, { to: v })}
@@ -473,7 +473,7 @@ export default function MappingEditor({
               </button>
             </div>
             {(fromDrifted || toDrifted) && (
-              <div style={{ fontSize: 11, color: 'var(--bad)', marginTop: -4, marginBottom: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--nx-danger)', marginTop: -4, marginBottom: 8 }}>
                 {fromDrifted ? `"${entry.from}" ` : `"${entry.to}" `}
                 no longer exists in the {fromDrifted ? 'source' : 'destination'} schema — pick a new field.
               </div>
@@ -489,12 +489,12 @@ export default function MappingEditor({
         title={addEntryDisabled ? 'Waiting for the schema to load…' : undefined}
         style={{
           fontSize: 12,
-          border: '1px dashed var(--line2)',
+          border: '1px dashed var(--nx-line)',
           background: 'none',
           borderRadius: 6,
           padding: '4px 8px',
           cursor: addEntryDisabled ? 'not-allowed' : 'pointer',
-          color: 'var(--ink3)',
+          color: 'var(--nx-ink-3)',
           marginBottom: 12,
         }}
       >
@@ -503,7 +503,7 @@ export default function MappingEditor({
 
       {unmappedDestFields.length > 0 && (
         <div style={unmappedCardStyle}>
-          <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--warn)', marginBottom: 8 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--nx-warn)', marginBottom: 8 }}>
             Unmapped destination fields ({unmappedDestFields.length})
           </div>
           {unmappedDestFields.length > 8 && (
@@ -533,9 +533,9 @@ export default function MappingEditor({
         style={{
           fontSize: 12.5,
           fontWeight: 600,
-          color: approveDisabled ? 'var(--ink4)' : 'var(--good, #16a34a)',
-          background: 'var(--surface2)',
-          border: '1px solid var(--line2)',
+          color: approveDisabled ? 'var(--nx-ink-disabled)' : 'var(--nx-success)',
+          background: 'var(--nx-raised)',
+          border: '1px solid var(--nx-line)',
           borderRadius: 6,
           padding: '6px 12px',
           cursor: approveDisabled ? 'not-allowed' : 'pointer',
@@ -544,44 +544,44 @@ export default function MappingEditor({
         Approve
       </button>
 
-      <div style={{ borderTop: '1px solid var(--line2)', marginTop: 16, paddingTop: 16 }}>
+      <div style={{ borderTop: '1px solid var(--nx-line)', marginTop: 16, paddingTop: 16 }}>
         <div style={sectionHeaderStyle}>Upsert keys</div>
-        <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 8 }}>
+        <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', marginBottom: 8 }}>
           Destination fields a run matches existing rows on. Required to run this destination.
         </div>
         {mappedDestFieldsList.length === 0 ? (
-          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 12 }}>Map at least one field first.</div>
+          <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', marginBottom: 12 }}>Map at least one field first.</div>
         ) : (
           <div style={{ marginBottom: 12 }}>
             {mappedDestFieldsList.map((field) => (
               <label
                 key={field}
-                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--ink)', marginBottom: 4, cursor: 'pointer' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--nx-ink)', marginBottom: 4, cursor: 'pointer' }}
               >
                 <input type="checkbox" checked={upsertKeys.includes(field)} onChange={() => toggleUpsertKey(field)} />
-                <span style={{ fontFamily: 'var(--font-data)' }}>{field}</span>
+                <span style={{ fontFamily: 'var(--nx-font-mono)' }}>{field}</span>
               </label>
             ))}
           </div>
         )}
       </div>
 
-      <div style={{ borderTop: '1px solid var(--line2)', marginTop: 16, paddingTop: 16 }}>
+      <div style={{ borderTop: '1px solid var(--nx-line)', marginTop: 16, paddingTop: 16 }}>
         <div style={sectionHeaderStyle}>Destination contract</div>
         {sourceFieldsOverride ? (
-          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 4 }}>
+          <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', marginBottom: 4 }}>
             Preview unavailable with an Aggregate transform upstream.
           </div>
         ) : contract ? (
           <ContractPreview contract={contract} />
         ) : (
-          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 4 }}>
+          <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', marginBottom: 4 }}>
             Map at least one field, pick a destination table, and select an upsert key to preview the contract.
           </div>
         )}
       </div>
 
-      <div style={{ borderTop: '1px solid var(--line2)', marginTop: 16, paddingTop: 16 }}>
+      <div style={{ borderTop: '1px solid var(--nx-line)', marginTop: 16, paddingTop: 16 }}>
         <button
           type="button"
           onClick={handlePreview}
@@ -590,12 +590,12 @@ export default function MappingEditor({
           style={{
             fontSize: 12,
             fontWeight: 600,
-            border: '1px solid var(--line2)',
-            background: 'var(--surface2)',
+            border: '1px solid var(--nx-line)',
+            background: 'var(--nx-raised)',
             borderRadius: 6,
             padding: '5px 10px',
             cursor: previewDisabled ? 'not-allowed' : 'pointer',
-            color: previewDisabled ? 'var(--ink4)' : 'var(--ink)',
+            color: previewDisabled ? 'var(--nx-ink-disabled)' : 'var(--nx-ink)',
             marginBottom: 10,
           }}
         >
@@ -603,16 +603,16 @@ export default function MappingEditor({
         </button>
 
         {previewDisabledReason && !previewing && (
-          <div style={{ fontSize: 11.5, color: 'var(--ink4)', marginBottom: 10 }}>{previewDisabledReason}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', marginBottom: 10 }}>{previewDisabledReason}</div>
         )}
 
         {previewError && (
-          <div style={{ fontSize: 11.5, color: 'var(--bad)', marginBottom: 10 }}>
+          <div style={{ fontSize: 11.5, color: 'var(--nx-danger)', marginBottom: 10 }}>
             {previewError}{' '}
             <button
               type="button"
               onClick={handlePreview}
-              style={{ border: 'none', background: 'none', color: 'var(--bad)', textDecoration: 'underline', cursor: 'pointer', fontSize: 11.5, padding: 0 }}
+              style={{ border: 'none', background: 'none', color: 'var(--nx-danger)', textDecoration: 'underline', cursor: 'pointer', fontSize: 11.5, padding: 0 }}
             >
               Retry
             </button>
@@ -629,14 +629,14 @@ const contractTableStyle = { width: '100%', borderCollapse: 'collapse', fontSize
 const contractThStyle = {
   textAlign: 'left',
   fontWeight: 600,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   textTransform: 'uppercase',
   letterSpacing: '.03em',
   fontSize: 10,
   padding: '0 8px 6px 0',
-  borderBottom: '1px solid var(--line2)',
+  borderBottom: '1px solid var(--nx-line)',
 } as const;
-const contractTdStyle = { padding: '5px 8px 5px 0', borderBottom: '1px solid var(--line2)', verticalAlign: 'top' } as const;
+const contractTdStyle = { padding: '5px 8px 5px 0', borderBottom: '1px solid var(--nx-line)', verticalAlign: 'top' } as const;
 
 /**
  * Schema layer Part 4's UI bullet: "The preview shows source path ->
@@ -675,8 +675,8 @@ function ContractPreview({ contract }: { contract: DestinationContract }) {
           const isNested = col.niaType.kind === 'object' || col.niaType.kind === 'array';
           return (
             <tr key={col.destinationName}>
-              <td style={{ ...contractTdStyle, fontFamily: 'var(--font-data)', color: 'var(--ink3)' }}>{col.sourcePath}</td>
-              <td style={{ ...contractTdStyle, fontFamily: 'var(--font-data)' }}>
+              <td style={{ ...contractTdStyle, fontFamily: 'var(--nx-font-mono)', color: 'var(--nx-ink-3)' }}>{col.sourcePath}</td>
+              <td style={{ ...contractTdStyle, fontFamily: 'var(--nx-font-mono)' }}>
                 {col.destinationName}
                 {isNested && (
                   <span
@@ -684,8 +684,8 @@ function ContractPreview({ contract }: { contract: DestinationContract }) {
                       marginLeft: 6,
                       fontSize: 9.5,
                       fontWeight: 600,
-                      color: 'var(--ink4)',
-                      border: '1px solid var(--line2)',
+                      color: 'var(--nx-ink-disabled)',
+                      border: '1px solid var(--nx-line)',
                       borderRadius: 999,
                       padding: '1px 6px',
                     }}
@@ -697,9 +697,9 @@ function ContractPreview({ contract }: { contract: DestinationContract }) {
               <td style={contractTdStyle}>{col.niaType.kind}</td>
               <td style={contractTdStyle} title={col.fidelity.kind === 'lossy' ? col.fidelity.reason : undefined}>
                 {lossy ? (
-                  <span style={{ fontWeight: 600, color: 'var(--warn)' }}>lossy</span>
+                  <span style={{ fontWeight: 600, color: 'var(--nx-warn)' }}>lossy</span>
                 ) : (
-                  <span style={{ color: 'var(--ink4)' }}>lossless</span>
+                  <span style={{ color: 'var(--nx-ink-disabled)' }}>lossless</span>
                 )}
               </td>
               <td style={contractTdStyle}>{col.isKey ? '\u2713' : ''}</td>

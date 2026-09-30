@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import {
-  breadcrumbSepStyle,
-  dropdownItemStyle,
-  dropdownStyle,
+  nxBreadcrumbSepStyle,
+  nxDropdownItemStyle,
+  nxDropdownStyle,
+  nxPageCrumbCurrentStyle,
+  nxPageCrumbLinkStyle,
   orgSwitcherBtnStyle,
-  pageCrumbCurrentStyle,
-  pageCrumbLinkStyle,
   topBarStyle,
 } from '@/components/app/styles';
 import CommandPalette from '@/components/app/CommandPalette';
@@ -101,27 +101,27 @@ export default function CanvasHeader({
       <div style={{ position: 'relative' }}>
         <button type="button" style={orgSwitcherBtnStyle} onClick={() => setOrgMenuOpen((v) => !v)}>
           <span>{orgName ?? 'Personal workspace'}</span>
-          <span aria-hidden style={{ fontSize: 10, color: 'var(--ink4)', lineHeight: 1 }}>{'\u25BE'}</span>
+          <span aria-hidden style={{ fontSize: 10, color: 'var(--nx-ink-3)', lineHeight: 1 }}>{'\u25BE'}</span>
         </button>
         {orgMenuOpen && (
-          <div style={dropdownStyle} onMouseLeave={() => setOrgMenuOpen(false)}>
-            <div style={{ ...dropdownItemStyle, fontWeight: 600, cursor: 'default' }}>
+          <div style={nxDropdownStyle} onMouseLeave={() => setOrgMenuOpen(false)}>
+            <div style={{ ...nxDropdownItemStyle, fontWeight: 600, cursor: 'default' }}>
               {orgName ?? 'Personal workspace'}
             </div>
           </div>
         )}
       </div>
 
-      <span style={breadcrumbSepStyle}>/</span>
-      <a href="/app/projects" style={pageCrumbLinkStyle}>
+      <span style={nxBreadcrumbSepStyle}>/</span>
+      <a href="/app/projects" style={nxPageCrumbLinkStyle}>
         Projects
       </a>
-      <span style={breadcrumbSepStyle}>/</span>
-      <a href={projectHref} style={pageCrumbLinkStyle}>
+      <span style={nxBreadcrumbSepStyle}>/</span>
+      <a href={projectHref} style={nxPageCrumbLinkStyle}>
         {projectName}
       </a>
-      <span style={breadcrumbSepStyle}>/</span>
-      <span style={pageCrumbCurrentStyle}>{workflowName}</span>
+      <span style={nxBreadcrumbSepStyle}>/</span>
+      <span style={nxPageCrumbCurrentStyle}>{workflowName}</span>
       {/* Always disabled — no PATCH /workflows/:id (rename) endpoint exists
           yet. Signals where renaming will live without faking that it works. */}
       <button type="button" disabled style={headerRenameBtnStyle} title="Renaming isn't available yet" aria-label="Rename workflow">
@@ -129,14 +129,14 @@ export default function CanvasHeader({
       </button>
       {workflowStatus === 'draft' && <span style={headerDraftChipStyle}>Draft</span>}
       {readOnly && (
-        <span style={{ fontSize: 12, color: 'var(--ink4)', border: '1px dashed var(--panel-line)', borderRadius: 6, padding: '3px 8px' }}>
+        <span style={{ fontSize: 12, color: 'var(--nx-ink-3)', border: '1px dashed var(--nx-line)', borderRadius: 'var(--nx-radius)', padding: '3px 8px' }}>
           View only
         </span>
       )}
       {saveState !== 'conflict' && saveState !== 'idle' && (
         <>
-          <span style={breadcrumbSepStyle}>·</span>
-          <span style={{ fontSize: 12, color: 'var(--ink4)' }}>{saveState === 'saving' ? 'Saving…' : 'Saved'}</span>
+          <span style={nxBreadcrumbSepStyle}>·</span>
+          <span style={{ fontSize: 12, color: 'var(--nx-ink-3)' }}>{saveState === 'saving' ? 'Saving…' : 'Saved'}</span>
         </>
       )}
 
@@ -162,9 +162,9 @@ export default function CanvasHeader({
             style={{
               fontSize: 12.5,
               fontWeight: 600,
-              color: 'var(--bad)',
-              background: 'var(--warn-bg)',
-              border: '1px solid var(--warn-bd)',
+              color: 'var(--nx-danger-text)',
+              background: 'var(--nx-danger-tint)',
+              border: '1px solid var(--nx-danger)',
               borderRadius: 6,
               padding: '5px 10px',
               cursor: 'pointer',

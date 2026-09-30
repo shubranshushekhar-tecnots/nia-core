@@ -45,13 +45,13 @@ const toastStyle = (kind: Toast['kind']): CSSProperties => ({
   pointerEvents: 'auto',
   minWidth: 220,
   maxWidth: 360,
-  background: 'var(--surface)',
-  border: `1px solid ${kind === 'error' ? 'var(--bad)' : 'var(--panel-line)'}`,
-  borderRadius: 10,
+  background: 'var(--nx-surface)',
+  border: `1px solid ${kind === 'error' ? 'var(--nx-danger)' : 'var(--nx-line)'}`,
+  borderRadius: 'var(--nx-radius)',
   boxShadow: 'var(--floating-panel-shadow)',
   padding: '10px 12px',
   fontSize: 12.5,
-  color: kind === 'error' ? 'var(--bad)' : 'var(--ink)',
+  color: kind === 'error' ? 'var(--nx-danger-text)' : 'var(--nx-ink)',
 });
 
 export function ToastStack({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: string) => void }) {

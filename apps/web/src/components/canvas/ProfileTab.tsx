@@ -32,7 +32,7 @@ const headerStyle = {
 
 const metaStyle = {
   fontSize: 11.5,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   lineHeight: 1.5,
 } as const;
 
@@ -40,16 +40,16 @@ const refreshBtnStyle = {
   flex: 'none',
   fontSize: 12,
   fontWeight: 500,
-  color: 'var(--ink)',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line2)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 6,
   padding: '5px 10px',
   cursor: 'pointer',
 } as const;
 
 const columnCardStyle = {
-  border: '1px solid var(--line2)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 8,
   padding: '8px 10px',
   marginBottom: 8,
@@ -64,10 +64,10 @@ const columnHeaderStyle = {
 } as const;
 
 const columnNameStyle = {
-  fontFamily: 'var(--font-data)',
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 12.5,
   fontWeight: 600,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -75,7 +75,7 @@ const columnNameStyle = {
 
 const columnTypeStyle = {
   fontSize: 11,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   flex: 'none',
 } as const;
 
@@ -87,13 +87,13 @@ const statGridStyle = {
 
 const statStyle = {
   fontSize: 11,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 } as const;
 
 const parseRatesWrapStyle = {
   marginTop: 6,
   paddingTop: 6,
-  borderTop: '1px solid var(--line)',
+  borderTop: '1px solid var(--nx-line)',
   display: 'flex',
   flexDirection: 'column',
   gap: 2,
@@ -101,7 +101,7 @@ const parseRatesWrapStyle = {
 
 const parseRateRowStyle = {
   fontSize: 11,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
   display: 'flex',
   justifyContent: 'space-between',
   gap: 8,
@@ -179,12 +179,12 @@ export default function ProfileTab({ connectionId, entity }: { connectionId: str
   }
 
   if (isLoading) {
-    return <div style={{ fontSize: 12, color: 'var(--ink4)' }}>Profiling {entity.namespace ? `${entity.namespace}.${entity.name}` : entity.name}…</div>;
+    return <div style={{ fontSize: 12, color: 'var(--nx-ink-disabled)' }}>Profiling {entity.namespace ? `${entity.namespace}.${entity.name}` : entity.name}…</div>;
   }
 
   if (error || !profile) {
     return (
-      <div style={{ fontSize: 12, color: 'var(--warn)' }}>
+      <div style={{ fontSize: 12, color: 'var(--nx-warn)' }}>
         {error instanceof Error ? error.message : 'Failed to load profile.'}
       </div>
     );
@@ -202,7 +202,7 @@ export default function ProfileTab({ connectionId, entity }: { connectionId: str
           {refreshing ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
-      {refreshError && <div style={{ fontSize: 11.5, color: 'var(--warn)', marginBottom: 8 }}>{refreshError}</div>}
+      {refreshError && <div style={{ fontSize: 11.5, color: 'var(--nx-warn)', marginBottom: 8 }}>{refreshError}</div>}
       {profile.columns.map((col) => (
         <ColumnCard key={col.name} col={col} />
       ))}

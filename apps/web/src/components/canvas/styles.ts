@@ -23,9 +23,9 @@ export const canvasPageRootStyle: CSSProperties = {
   inset: 0,
   display: 'flex',
   flexDirection: 'column',
-  background: 'var(--canvas)',
-  color: 'var(--ink)',
-  fontFamily: 'var(--font-ui)',
+  background: 'var(--nx-bg)',
+  color: 'var(--nx-ink)',
+  fontFamily: 'var(--nx-font-ui)',
 };
 
 // Sidebar + canvasBodyStyle row, below CanvasHeader — the canvas-route
@@ -66,7 +66,7 @@ export const canvasFullscreenWrapStyle: CSSProperties = {
   minHeight: 0,
   display: 'flex',
   flexDirection: 'row',
-  background: 'var(--canvas)',
+  background: 'var(--nx-bg)',
 };
 
 // Row holding canvasSurfaceStyle + NodeConfigPanel as real flex siblings
@@ -206,8 +206,8 @@ export const railShellStyle = (wide: boolean): CSSProperties => ({
   height: '100%',
   display: 'flex',
   flexDirection: 'column',
-  background: 'var(--surface)',
-  borderRight: '1px solid var(--panel-line)',
+  background: 'var(--nx-surface)',
+  borderRight: '1px solid var(--nx-line)',
   overflow: 'hidden',
   transition: 'width 150ms ease',
 });
@@ -223,7 +223,7 @@ export const railHeaderStyle: CSSProperties = {
 export const railCollapseBtnStyle: CSSProperties = {
   border: 'none',
   background: 'none',
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   cursor: 'pointer',
   fontSize: 13,
   padding: 0,
@@ -235,12 +235,12 @@ export const railSearchInputStyle: CSSProperties = {
   width: '100%',
   height: 30,
   borderRadius: 6,
-  border: '1px solid var(--panel-line)',
+  border: '1px solid var(--nx-line)',
   padding: '0 8px',
   fontSize: 12.5,
   boxSizing: 'border-box',
-  color: 'var(--ink)',
-  background: 'var(--surface2)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-raised)',
 };
 
 export const railBodyStyle: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 8 };
@@ -248,7 +248,7 @@ export const railBodyStyle: CSSProperties = { flex: 1, minHeight: 0, overflowY: 
 export const railSectionHeaderStyle: CSSProperties = {
   fontSize: 11.5,
   fontWeight: 600,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   textTransform: 'uppercase',
   letterSpacing: '.04em',
   margin: '10px 14px 6px',
@@ -265,7 +265,7 @@ export const railEntryStyle = (draggable: boolean): CSSProperties => ({
   border: 'none',
   background: 'none',
   fontSize: 13,
-  color: draggable ? 'var(--ink)' : 'var(--ink4)',
+  color: draggable ? 'var(--nx-ink)' : 'var(--nx-ink-disabled)',
   cursor: draggable ? 'grab' : 'not-allowed',
   display: 'flex',
   alignItems: 'center',
@@ -301,14 +301,14 @@ export const railReopenBtnStyle: CSSProperties = {
   alignItems: 'center',
   gap: 6,
   whiteSpace: 'nowrap',
-  background: 'var(--surface)',
-  border: '1px solid var(--panel-line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 999,
   boxShadow: 'var(--floating-panel-shadow)',
   padding: '6px 12px 6px 8px',
   fontSize: 12.5,
   fontWeight: 600,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   cursor: 'pointer',
 };
 
@@ -320,8 +320,8 @@ export const railReopenBtnCountStyle: CSSProperties = {
   height: 16,
   padding: '0 4px',
   borderRadius: 999,
-  background: 'var(--surface-2)',
-  color: 'var(--ink3)',
+  background: 'var(--nx-raised)',
+  color: 'var(--nx-ink-3)',
   fontSize: 10.5,
   fontWeight: 700,
   lineHeight: 1,
@@ -334,9 +334,9 @@ export const railEntryConnectBadgeStyle: CSSProperties = {
   flex: 'none',
   fontSize: 10,
   fontWeight: 600,
-  color: 'var(--ink4)',
-  background: 'var(--surface-2)',
-  border: '1px solid var(--panel-line)',
+  color: 'var(--nx-ink-disabled)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 999,
   padding: '1px 6px',
 };
@@ -350,9 +350,9 @@ export const railContextMenuStyle = (x: number, y: number): CSSProperties => ({
   left: x,
   zIndex: 50,
   minWidth: 160,
-  background: 'var(--surface)',
-  border: '1px solid var(--panel-line)',
-  borderRadius: 8,
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  borderRadius: 'var(--nx-radius)',
   boxShadow: 'var(--floating-panel-shadow)',
   padding: 4,
 });
@@ -369,10 +369,10 @@ export const railAddEntryStyle: CSSProperties = {
   padding: '0 10px 0 8px',
   margin: '0 8px 2px',
   borderRadius: 8,
-  border: '1px dashed var(--panel-line)',
+  border: '1px dashed var(--nx-line)',
   background: 'none',
   fontSize: 12.5,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   cursor: 'pointer',
   display: 'flex',
   alignItems: 'center',
@@ -388,7 +388,7 @@ export const railContextMenuItemStyle: CSSProperties = {
   borderRadius: 6,
   padding: '7px 10px',
   fontSize: 12.5,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   cursor: 'pointer',
 };
 
@@ -397,7 +397,7 @@ export const railCollapsedToggleStyle: CSSProperties = {
   flex: 'none',
   border: 'none',
   background: 'none',
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   cursor: 'pointer',
   fontSize: 14,
 };
@@ -418,7 +418,7 @@ export const railCollapsedListStyle: CSSProperties = {
 export const railCollapsedDividerStyle: CSSProperties = {
   width: 20,
   height: 1,
-  background: 'var(--panel-line)',
+  background: 'var(--nx-line)',
   margin: '2px 0',
   flex: 'none',
 };
@@ -429,8 +429,8 @@ export const railCollapsedEntryStyle = (draggable: boolean): CSSProperties => ({
   flex: 'none',
   position: 'relative',
   borderRadius: 8,
-  border: '1px solid var(--panel-line)',
-  background: 'var(--surface)',
+  border: '1px solid var(--nx-line)',
+  background: 'var(--nx-surface)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -451,7 +451,7 @@ export const railCollapsedEntryDotStyle = (color: string): CSSProperties => ({
 export const railCollapsedEntryLabelStyle: CSSProperties = {
   fontSize: 10.5,
   fontWeight: 700,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
   textTransform: 'uppercase',
 };
 
@@ -472,8 +472,8 @@ export const configPanelShellStyle: CSSProperties = {
   minWidth: 0,
   display: 'flex',
   flexDirection: 'column',
-  background: 'var(--surface)',
-  borderLeft: '1px solid var(--panel-line)',
+  background: 'var(--nx-surface)',
+  borderLeft: '1px solid var(--nx-line)',
   boxSizing: 'border-box',
   overflow: 'auto',
 };
@@ -484,7 +484,7 @@ export const panelTabBarStyle: CSSProperties = {
   flex: 'none',
   display: 'flex',
   height: 36,
-  borderBottom: '1px solid var(--panel-line)',
+  borderBottom: '1px solid var(--nx-line)',
   padding: '0 4px',
 };
 
@@ -495,8 +495,8 @@ export const panelTabStyle = (active: boolean): CSSProperties => ({
   padding: '0 12px',
   fontSize: 13,
   fontWeight: 500,
-  color: active ? 'var(--ink)' : 'var(--ink3)',
-  borderBottom: active ? '2px solid var(--acc)' : '2px solid transparent',
+  color: active ? 'var(--nx-ink)' : 'var(--nx-ink-3)',
+  borderBottom: active ? '2px solid var(--nx-blue-panel)' : '2px solid transparent',
   cursor: 'pointer',
   flex: 'none',
   whiteSpace: 'nowrap',
@@ -514,9 +514,9 @@ export const configPanelMultiSelectStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   fontSize: 12.5,
-  color: 'var(--ink4)',
-  background: 'var(--surface)',
-  borderLeft: '1px solid var(--panel-line)',
+  color: 'var(--nx-ink-disabled)',
+  background: 'var(--nx-surface)',
+  borderLeft: '1px solid var(--nx-line)',
   boxSizing: 'border-box',
 };
 
@@ -544,7 +544,7 @@ export const configPanelRibbonStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'stretch',
   padding: '0 8px',
-  borderBottom: '1px solid var(--panel-line)',
+  borderBottom: '1px solid var(--nx-line)',
 };
 
 export const configPanelDetailStyle: CSSProperties = {
@@ -556,7 +556,7 @@ export const configPanelDetailStyle: CSSProperties = {
 
 export const configPanelDetailHintStyle: CSSProperties = {
   fontSize: 12,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
 };
 
 export const configPanelGroupStyle: CSSProperties = {
@@ -572,7 +572,7 @@ export const configPanelGroupStyle: CSSProperties = {
 export const configPanelGroupLabelStyle: CSSProperties = {
   fontSize: 10,
   fontWeight: 600,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   textTransform: 'uppercase',
   letterSpacing: '.05em',
   lineHeight: 1,
@@ -582,7 +582,7 @@ export const configPanelDividerStyle: CSSProperties = {
   width: 1,
   alignSelf: 'stretch',
   margin: '8px 0',
-  background: 'var(--panel-line)',
+  background: 'var(--nx-line)',
   flex: 'none',
 };
 
@@ -599,42 +599,42 @@ export const configPanelIdentityIconStyle = (color: string): CSSProperties => ({
 
 export const segmentedControlStyle: CSSProperties = {
   display: 'flex',
-  border: '1px solid var(--panel-line)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 8,
   overflow: 'hidden',
-  background: 'var(--surface2)',
+  background: 'var(--nx-raised)',
   flex: 'none',
 };
 
 export const segmentedOptionStyle = (active: boolean, disabled: boolean): CSSProperties => ({
   border: 'none',
-  background: active ? 'var(--surface)' : 'none',
-  color: disabled ? 'var(--ink4)' : active ? 'var(--ink)' : 'var(--ink3)',
+  background: active ? 'var(--nx-surface)' : 'none',
+  color: disabled ? 'var(--nx-ink-disabled)' : active ? 'var(--nx-ink)' : 'var(--nx-ink-3)',
   fontSize: 12,
   fontWeight: 600,
   padding: '0 10px',
   height: 26,
   cursor: disabled ? 'not-allowed' : 'pointer',
-  boxShadow: active ? 'inset 0 0 0 1px var(--panel-line)' : 'none',
+  boxShadow: active ? 'inset 0 0 0 1px var(--nx-line)' : 'none',
   whiteSpace: 'nowrap',
 });
 
 export const configPanelSelectStyle: CSSProperties = {
   height: 26,
   borderRadius: 6,
-  border: '1px solid var(--panel-line)',
+  border: '1px solid var(--nx-line)',
   padding: '0 8px',
   fontSize: 12.5,
   boxSizing: 'border-box',
-  color: 'var(--ink)',
-  background: 'var(--surface)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-surface)',
   maxWidth: 200,
 };
 
 export const configPanelIconBtnStyle: CSSProperties = {
-  border: '1px solid var(--panel-line)',
-  background: 'var(--surface)',
-  color: 'var(--ink3)',
+  border: '1px solid var(--nx-line)',
+  background: 'var(--nx-surface)',
+  color: 'var(--nx-ink-3)',
   width: 26,
   height: 26,
   borderRadius: 7,
@@ -648,7 +648,7 @@ export const configPanelIconBtnStyle: CSSProperties = {
 
 export const configPanelDeleteBtnStyle: CSSProperties = {
   ...configPanelIconBtnStyle,
-  color: 'var(--bad)',
+  color: 'var(--nx-danger)',
 };
 
 // ---------- NodeDrawer footer (live node status) + needsAction alert card ----------
@@ -664,9 +664,9 @@ export const configPanelFooterStyle: CSSProperties = {
   gap: 6,
   height: 32,
   padding: '0 14px',
-  borderTop: '1px solid var(--panel-line)',
+  borderTop: '1px solid var(--nx-line)',
   fontSize: 11.5,
-  color: 'var(--ink-200)',
+  color: 'var(--nx-ink-2)',
 };
 
 export const configPanelStatusDotStyle = (color: string): CSSProperties => ({
@@ -690,9 +690,9 @@ export const configPanelAlertCardStyle = (tone: 'warning' | 'danger'): CSSProper
   borderRadius: 8,
   fontSize: 12,
   lineHeight: 1.4,
-  color: tone === 'warning' ? 'var(--warning-deep, var(--warning))' : 'var(--danger)',
-  background: tone === 'warning' ? 'var(--warning-bg)' : 'var(--danger-bg)',
-  border: `1px solid ${tone === 'warning' ? 'var(--warning-border)' : 'var(--danger-border)'}`,
+  color: tone === 'warning' ? 'var(--nx-warn)' : 'var(--nx-danger-text)',
+  background: tone === 'warning' ? 'var(--nx-raised)' : 'var(--nx-danger-tint)',
+  border: `1px solid ${tone === 'warning' ? 'var(--nx-warn)' : 'var(--nx-danger)'}`,
 });
 
 // ---------- Copilot sidebar (docked right panel; wraps existing CommandBar) ----------
@@ -707,7 +707,8 @@ export const COPILOT_WIDTH_MAX = 920;
 // drag-resized value (CopilotSidebar.tsx local state, seeded from
 // COPILOT_WIDTH_DEFAULT); no transition while `open` so drag-resize tracks
 // the pointer 1:1, but the open/close toggle itself keeps its own
-// open-flag-driven collapse.
+// open-flag-driven collapse. Step 5 answer "panels go to 0": radius flattened
+// to var(--nx-radius) along with the rest of the canvas's floating chrome.
 export const copilotShellStyle = (open: boolean, width: number): CSSProperties => ({
   flex: 'none',
   width: open ? width : 0,
@@ -715,10 +716,10 @@ export const copilotShellStyle = (open: boolean, width: number): CSSProperties =
   display: 'flex',
   flexDirection: 'column',
   position: 'relative',
-  background: 'var(--surface)',
-  border: open ? '1px solid var(--panel-line)' : 'none',
-  borderTopLeftRadius: open ? 16 : 0,
-  borderBottomLeftRadius: open ? 16 : 0,
+  background: 'var(--nx-surface)',
+  border: open ? '1px solid var(--nx-line)' : 'none',
+  borderTopLeftRadius: open ? 'var(--nx-radius)' : 0,
+  borderBottomLeftRadius: open ? 'var(--nx-radius)' : 0,
   boxShadow: open ? 'var(--drop)' : 'none',
   overflow: 'hidden',
 });
@@ -730,16 +731,16 @@ export const copilotShellStyle = (open: boolean, width: number): CSSProperties =
 export const dragHandleStyle = (orientation: 'vertical' | 'horizontal', dragging: boolean): CSSProperties => ({
   position: 'absolute',
   zIndex: 5,
-  background: dragging ? 'var(--acc)' : 'transparent',
+  background: dragging ? 'var(--nx-blue-panel)' : 'transparent',
   ...(orientation === 'vertical'
     ? { top: 0, bottom: 0, left: -3, width: 6, cursor: 'col-resize' }
     : { left: 0, right: 0, top: -3, height: 6, cursor: 'row-resize' }),
 });
 
 export const copilotToggleBtnStyle: CSSProperties = {
-  border: '1px solid var(--panel-line)',
-  background: 'var(--surface)',
-  color: 'var(--ink3)',
+  border: '1px solid var(--nx-line)',
+  background: 'var(--nx-surface)',
+  color: 'var(--nx-ink-3)',
   cursor: 'pointer',
   borderRadius: 12,
   width: 40,
@@ -758,12 +759,12 @@ export const copilotHeaderStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   padding: '12px 16px',
-  borderBottom: '1px solid var(--panel-line)',
+  borderBottom: '1px solid var(--nx-line)',
 };
 
-export const copilotTitleStyle: CSSProperties = { fontSize: 14, fontWeight: 600, color: 'var(--ink)' };
+export const copilotTitleStyle: CSSProperties = { fontSize: 14, fontWeight: 600, color: 'var(--nx-ink)' };
 
-export const copilotSubtitleStyle: CSSProperties = { fontSize: 11.5, color: 'var(--ink3)' };
+export const copilotSubtitleStyle: CSSProperties = { fontSize: 11.5, color: 'var(--nx-ink-3)' };
 
 export const copilotChatAreaStyle: CSSProperties = {
   flex: 1,
@@ -798,26 +799,26 @@ export const headerBtnBaseStyle: CSSProperties = {
 
 export const headerRunChecksBtnStyle = (running: boolean): CSSProperties => ({
   ...headerBtnBaseStyle,
-  color: 'var(--ink)',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line2)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   cursor: running ? 'wait' : 'pointer',
   opacity: running ? 0.6 : 1,
 });
 
 export const headerRunBtnStyle = (enabled: boolean, inFlight: boolean): CSSProperties => ({
   ...headerBtnBaseStyle,
-  color: enabled || inFlight ? 'var(--onacc)' : 'var(--ink4)',
-  background: enabled || inFlight ? 'var(--acc)' : 'var(--surface2)',
-  border: `1px solid ${enabled || inFlight ? 'var(--acc)' : 'var(--line2)'}`,
+  color: enabled || inFlight ? 'var(--nx-blue-cta-text)' : 'var(--nx-ink-disabled)',
+  background: enabled || inFlight ? 'var(--nx-blue-cta)' : 'var(--nx-raised)',
+  border: `1px solid ${enabled || inFlight ? 'var(--nx-blue-cta)' : 'var(--nx-line)'}`,
   cursor: enabled ? 'pointer' : 'not-allowed',
 });
 
 export const headerCopilotToggleBtnStyle = (active: boolean): CSSProperties => ({
   ...headerBtnBaseStyle,
-  color: active ? 'var(--acc-soft-text)' : 'var(--ink3)',
-  background: active ? 'var(--acc-soft)' : 'none',
-  border: `1px solid ${active ? 'var(--acc-soft-bd)' : 'var(--panel-line)'}`,
+  color: active ? 'var(--nx-blue-soft-text)' : 'var(--nx-ink-3)',
+  background: active ? 'var(--nx-blue-tint)' : 'none',
+  border: `1px solid ${active ? 'var(--nx-blue-panel)' : 'var(--nx-line)'}`,
   cursor: 'pointer',
 });
 
@@ -835,9 +836,9 @@ export const headerSearchInputStyle: CSSProperties = {
   minWidth: 0,
   padding: '0 8px 0 10px',
   borderRadius: 8,
-  background: 'var(--surface2)',
-  border: '1px solid var(--panel-line)',
-  color: 'var(--ink3)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
+  color: 'var(--nx-ink-3)',
   fontSize: 12.5,
   fontFamily: 'inherit',
   cursor: 'pointer',
@@ -853,13 +854,13 @@ export const headerSearchLabelStyle: CSSProperties = {
 };
 
 export const headerSearchKbdStyle: CSSProperties = {
-  fontFamily: 'var(--font-data)',
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 11,
   padding: '2px 5px',
   borderRadius: 5,
-  background: 'var(--surface)',
-  border: '1px solid var(--panel-line)',
-  color: 'var(--ink4)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  color: 'var(--nx-ink-disabled)',
   lineHeight: 1,
   flex: 'none',
 };
@@ -869,9 +870,9 @@ export const headerSearchKbdStyle: CSSProperties = {
 export const headerDraftChipStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 600,
-  color: 'var(--ink3)',
-  background: 'var(--control-muted)',
-  border: '1px solid var(--line-200)',
+  color: 'var(--nx-ink-3)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 5,
   padding: '2px 7px',
   lineHeight: 1.4,
@@ -884,7 +885,7 @@ export const headerDraftChipStyle: CSSProperties = {
 export const headerRenameBtnStyle: CSSProperties = {
   border: 'none',
   background: 'none',
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   cursor: 'not-allowed',
   width: 20,
   height: 20,
@@ -903,8 +904,8 @@ export const headerTabsStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 2,
-  background: 'var(--control-muted)',
-  border: '1px solid var(--line-100)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 8,
   padding: 2,
   flex: 'none',
@@ -912,8 +913,8 @@ export const headerTabsStyle: CSSProperties = {
 
 export const headerTabBtnStyle = (active: boolean, disabled: boolean): CSSProperties => ({
   border: 'none',
-  background: active ? 'var(--surface)' : 'none',
-  color: disabled ? 'var(--ink4)' : active ? 'var(--ink)' : 'var(--ink3)',
+  background: active ? 'var(--nx-surface)' : 'none',
+  color: disabled ? 'var(--nx-ink-disabled)' : active ? 'var(--nx-ink)' : 'var(--nx-ink-3)',
   boxShadow: active ? '0 1px 2px rgba(15,23,42,.08)' : 'none',
   cursor: disabled ? 'not-allowed' : 'pointer',
   fontSize: 12,
@@ -938,13 +939,13 @@ export const fullViewBreadcrumbStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  background: 'var(--surface)',
-  border: '1px solid var(--panel-line)',
-  borderRadius: 10,
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  borderRadius: 'var(--nx-radius)',
   boxShadow: 'var(--floating-panel-shadow)',
   padding: '6px 12px',
   fontSize: 12.5,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
 };
 
 export const fullViewControlsStyle: CSSProperties = {
@@ -955,9 +956,9 @@ export const fullViewControlsStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  background: 'var(--surface)',
-  border: '1px solid var(--panel-line)',
-  borderRadius: 10,
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  borderRadius: 'var(--nx-radius)',
   boxShadow: 'var(--floating-panel-shadow)',
   padding: 6,
 };
@@ -974,16 +975,16 @@ export const planBannerStyle: CSSProperties = {
   alignItems: 'center',
   gap: 10,
   maxWidth: 560,
-  background: 'var(--surface)',
+  background: 'var(--nx-surface)',
   border: '1px solid var(--copilot-accent)',
-  borderRadius: 10,
+  borderRadius: 'var(--nx-radius)',
   boxShadow: '0 4px 16px rgba(15,23,42,.10)',
   padding: '10px 12px',
 };
 
 export const planBannerTextStyle: CSSProperties = {
   fontSize: 12.5,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   flex: 1,
   minWidth: 0,
 };
@@ -991,9 +992,9 @@ export const planBannerTextStyle: CSSProperties = {
 export const planBannerApplyBtnStyle: CSSProperties = {
   fontSize: 12.5,
   fontWeight: 600,
-  color: 'var(--onacc)',
-  background: 'var(--acc)',
-  border: '1px solid var(--acc)',
+  color: 'var(--nx-blue-cta-text)',
+  background: 'var(--nx-blue-cta)',
+  border: '1px solid var(--nx-blue-cta)',
   borderRadius: 6,
   padding: '6px 12px',
   cursor: 'pointer',
@@ -1003,9 +1004,9 @@ export const planBannerApplyBtnStyle: CSSProperties = {
 export const planBannerDiscardBtnStyle: CSSProperties = {
   fontSize: 12.5,
   fontWeight: 600,
-  color: 'var(--ink3)',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line2)',
+  color: 'var(--nx-ink-3)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 6,
   padding: '6px 12px',
   cursor: 'pointer',
@@ -1014,7 +1015,7 @@ export const planBannerDiscardBtnStyle: CSSProperties = {
 
 export const planBannerErrorStyle: CSSProperties = {
   fontSize: 11.5,
-  color: 'var(--bad)',
+  color: 'var(--nx-danger)',
   flex: 'none',
 };
 
@@ -1028,13 +1029,13 @@ export const appliedPlansSectionStyle: CSSProperties = {
   flexDirection: 'column',
   gap: 8,
   padding: '10px 16px',
-  borderBottom: '1px solid var(--panel-line)',
+  borderBottom: '1px solid var(--nx-line)',
 };
 
 export const appliedPlansTitleStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   textTransform: 'uppercase',
   letterSpacing: '.04em',
 };
@@ -1044,14 +1045,14 @@ export const appliedPlanRowStyle: CSSProperties = {
   alignItems: 'center',
   gap: 8,
   padding: '6px 0',
-  borderBottom: '1px solid var(--line2)',
+  borderBottom: '1px solid var(--nx-line)',
 };
 
 export const appliedPlanSummaryStyle: CSSProperties = {
   flex: 1,
   minWidth: 0,
   fontSize: 12,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -1061,9 +1062,9 @@ export const appliedPlanRevertBtnStyle: CSSProperties = {
   flex: 'none',
   fontSize: 11.5,
   fontWeight: 600,
-  color: 'var(--ink3)',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line2)',
+  color: 'var(--nx-ink-3)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 6,
   padding: '4px 10px',
   cursor: 'pointer',
@@ -1072,12 +1073,12 @@ export const appliedPlanRevertBtnStyle: CSSProperties = {
 export const appliedPlanRevertedTagStyle: CSSProperties = {
   flex: 'none',
   fontSize: 11,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
 };
 
 export const appliedPlanErrorStyle: CSSProperties = {
   fontSize: 11.5,
-  color: 'var(--bad)',
+  color: 'var(--nx-danger)',
 };
 
 // ---------- Copilot agent tool-call cards (docs/plans/copilot-agent.md, Part 3/4) ----------
@@ -1091,20 +1092,20 @@ export const agentCardStyle: CSSProperties = {
   gap: 8,
   marginTop: 8,
   padding: '10px 12px',
-  borderRadius: 10,
-  background: 'var(--surface2)',
+  borderRadius: 'var(--nx-radius)',
+  background: 'var(--nx-raised)',
   border: '1px solid var(--copilot-accent)',
 };
 
 export const agentCardTitleStyle: CSSProperties = {
   fontSize: 11.5,
   fontWeight: 700,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
 };
 
 export const agentCardEntryStyle: CSSProperties = {
   fontSize: 12,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
   display: 'flex',
   flexDirection: 'column',
   gap: 2,
@@ -1114,9 +1115,9 @@ export const agentCardConfirmBtnStyle = (disabled: boolean): CSSProperties => ({
   alignSelf: 'flex-start',
   fontSize: 12.5,
   fontWeight: 600,
-  color: disabled ? 'var(--ink4)' : 'var(--onacc)',
-  background: disabled ? 'var(--surface2)' : 'var(--acc)',
-  border: `1px solid ${disabled ? 'var(--line2)' : 'var(--acc)'}`,
+  color: disabled ? 'var(--nx-ink-disabled)' : 'var(--nx-blue-cta-text)',
+  background: disabled ? 'var(--nx-raised)' : 'var(--nx-blue-cta)',
+  border: `1px solid ${disabled ? 'var(--nx-line)' : 'var(--nx-blue-cta)'}`,
   borderRadius: 6,
   padding: '6px 12px',
   cursor: disabled ? 'default' : 'pointer',
@@ -1128,9 +1129,9 @@ export const agentCardBadgeStyle: CSSProperties = {
   alignSelf: 'flex-start',
   fontSize: 11,
   fontWeight: 600,
-  color: 'var(--ok)',
-  background: 'var(--surface)',
-  border: '1px solid var(--line2)',
+  color: 'var(--nx-success)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 999,
   padding: '3px 10px',
 };
@@ -1152,9 +1153,9 @@ export const viewportToolbarStyle = (dockHeight: number): CSSProperties => ({
   display: 'flex',
   alignItems: 'center',
   gap: 2,
-  background: 'var(--surface)',
-  border: '1px solid var(--panel-line)',
-  borderRadius: 10,
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  borderRadius: 'var(--nx-radius)',
   boxShadow: '0 4px 16px rgba(15,23,42,.10)',
   padding: 4,
   transition: 'bottom 150ms ease',
@@ -1163,7 +1164,7 @@ export const viewportToolbarStyle = (dockHeight: number): CSSProperties => ({
 export const viewportToolbarBtnStyle: CSSProperties = {
   border: 'none',
   background: 'none',
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
   cursor: 'pointer',
   width: 28,
   height: 28,
@@ -1177,7 +1178,7 @@ export const viewportToolbarBtnStyle: CSSProperties = {
 export const viewportToolbarDividerStyle: CSSProperties = {
   width: 1,
   height: 20,
-  background: 'var(--panel-line)',
+  background: 'var(--nx-line)',
   margin: '0 2px',
   flex: 'none',
 };
@@ -1186,8 +1187,8 @@ export const viewportToolbarDividerStyle: CSSProperties = {
 // action rather than blending into the zoom/fit icon cluster.
 export const viewportFullscreenBtnStyle = (active: boolean): CSSProperties => ({
   border: 'none',
-  background: active ? 'var(--surface2)' : 'none',
-  color: active ? 'var(--ink)' : 'var(--ink3)',
+  background: active ? 'var(--nx-raised)' : 'none',
+  color: active ? 'var(--nx-ink)' : 'var(--nx-ink-3)',
   cursor: 'pointer',
   height: 28,
   borderRadius: 6,
@@ -1206,8 +1207,8 @@ export const viewportFullscreenBtnStyle = (active: boolean): CSSProperties => ({
 // rather than a one-shot action.
 export const viewportToolbarToggleBtnStyle = (active: boolean): CSSProperties => ({
   border: 'none',
-  background: active ? 'var(--surface2)' : 'none',
-  color: active ? 'var(--ink)' : 'var(--ink3)',
+  background: active ? 'var(--nx-raised)' : 'none',
+  color: active ? 'var(--nx-ink)' : 'var(--nx-ink-3)',
   cursor: 'pointer',
   width: 28,
   height: 28,
@@ -1224,7 +1225,7 @@ export const viewportToolbarToggleBtnStyle = (active: boolean): CSSProperties =>
 export const viewportToolbarDisabledBtnStyle: CSSProperties = {
   border: 'none',
   background: 'none',
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   cursor: 'not-allowed',
   width: 28,
   height: 28,
@@ -1253,9 +1254,9 @@ export const commandMenuPanelStyle = (placement: 'above' | 'below'): CSSProperti
   display: 'flex',
   flexDirection: 'column',
   boxSizing: 'border-box',
-  borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  borderRadius: 'var(--nx-radius)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
   boxShadow: 'var(--amb)',
   overflow: 'hidden',
   zIndex: 5,
@@ -1273,10 +1274,10 @@ export const commandMenuListStyle: CSSProperties = {
 };
 
 export const commandMenuGroupHeaderStyle: CSSProperties = {
-  fontFamily: 'var(--font-ui)',
+  fontFamily: 'var(--nx-font-ui)',
   fontSize: 10.5,
   fontWeight: 500,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   textTransform: 'uppercase',
   letterSpacing: '.06em',
   padding: '10px 10px 4px',
@@ -1290,7 +1291,7 @@ export const commandMenuRowStyle = (active: boolean): CSSProperties => ({
   gap: 10,
   padding: '10px 12px',
   borderRadius: 8,
-  background: active ? 'var(--surface2)' : 'transparent',
+  background: active ? 'var(--nx-raised)' : 'transparent',
   border: 'none',
   cursor: 'pointer',
   textAlign: 'left',
@@ -1303,23 +1304,23 @@ export const commandMenuRowIconStyle: CSSProperties = {
   justifyContent: 'center',
   width: 16,
   height: 16,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const commandMenuRowNameStyle: CSSProperties = {
   flex: 'none',
-  fontFamily: 'var(--font-ui)',
+  fontFamily: 'var(--nx-font-ui)',
   fontSize: 14,
   fontWeight: 500,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
 };
 
 export const commandMenuRowDescStyle: CSSProperties = {
   flex: 1,
   minWidth: 0,
-  fontFamily: 'var(--font-ui)',
+  fontFamily: 'var(--nx-font-ui)',
   fontSize: 11.5,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -1330,22 +1331,22 @@ export const commandMenuRowDescStyle: CSSProperties = {
  * place of the old per-row title tooltip/inline description. */
 export const commandMenuHintStyle: CSSProperties = {
   flex: 'none',
-  fontFamily: 'var(--font-ui)',
+  fontFamily: 'var(--nx-font-ui)',
   fontSize: 11.5,
   fontWeight: 400,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   padding: '7px 12px',
-  borderTop: '1px solid var(--panel-line)',
+  borderTop: '1px solid var(--nx-line)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 };
 
 export const commandMenuEmptyStyle: CSSProperties = {
-  fontFamily: 'var(--font-ui)',
+  fontFamily: 'var(--nx-font-ui)',
   padding: '16px 10px',
   fontSize: 12.5,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-disabled)',
   textAlign: 'center',
 };
 
@@ -1355,15 +1356,15 @@ export const commandMenuTabStripStyle: CSSProperties = {
   alignItems: 'center',
   gap: 4,
   padding: '4px 6px',
-  borderTop: '1px solid var(--panel-line)',
-  background: 'var(--surface)',
+  borderTop: '1px solid var(--nx-line)',
+  background: 'var(--nx-surface)',
 };
 
 export const commandMenuTabBtnStyle = (active: boolean): CSSProperties => ({
-  fontFamily: 'var(--font-ui)',
+  fontFamily: 'var(--nx-font-ui)',
   border: 'none',
-  background: active ? 'var(--surface2)' : 'none',
-  color: active ? 'var(--ink)' : 'var(--ink3)',
+  background: active ? 'var(--nx-raised)' : 'none',
+  color: active ? 'var(--nx-ink)' : 'var(--nx-ink-3)',
   cursor: 'pointer',
   height: 26,
   borderRadius: 6,

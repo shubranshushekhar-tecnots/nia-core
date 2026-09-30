@@ -28,7 +28,7 @@ export function FilterStepEditor({
   if (conditions === null) {
     return (
       <div>
-        <div style={{ fontSize: 12, color: 'var(--ink4)', fontStyle: 'italic', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--nx-ink-disabled)', fontStyle: 'italic', marginBottom: 8 }}>
           This filter&apos;s expression is too complex for this editor (built by hand or by Copilot). It will keep
           running as-is; edit it via the expression source to change it.
         </div>
@@ -47,7 +47,7 @@ export function FilterStepEditor({
 
   return (
     <div>
-      <div style={{ fontSize: 11, color: 'var(--ink4)', marginBottom: 6 }}>All conditions must match (AND).</div>
+      <div style={{ fontSize: 11, color: 'var(--nx-ink-disabled)', marginBottom: 6 }}>All conditions must match (AND).</div>
       {conditions.map((cond, i) => (
         <div key={i} style={rowStyle}>
           <FieldSelect value={cond.field} onChange={(v) => updateCondition(i, { field: v })} fields={fields} />
@@ -67,7 +67,7 @@ export function FilterStepEditor({
               value={String(cond.value ?? '')}
               onChange={(e) => updateCondition(i, { value: coerceValue(e.target.value) })}
               placeholder="value"
-              style={{ ...inputStyle, width: 90, fontFamily: 'var(--font-data)' }}
+              style={{ ...inputStyle, width: 90, fontFamily: 'var(--nx-font-mono)' }}
             />
           )}
           <button
@@ -85,7 +85,7 @@ export function FilterStepEditor({
         onClick={() =>
           onChange({ ...step, expr: conditionsToExpr([...conditions, { field: fields[0] ?? '', operator: 'eq', value: '' }]) })
         }
-        style={{ fontSize: 12, border: '1px dashed var(--line2)', background: 'none', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: 'var(--ink3)', marginBottom: 8 }}
+        style={{ fontSize: 12, border: '1px dashed var(--nx-line)', background: 'none', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: 'var(--nx-ink-3)', marginBottom: 8 }}
       >
         + Condition
       </button>

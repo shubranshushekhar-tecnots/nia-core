@@ -28,9 +28,9 @@ import { PanelToggleIcon } from './navIcons';
 // it's a single 3-entry map and importing it would couple this file to the
 // node-rendering module for no other reason.
 const NODE_TYPE_COLOR: Record<GraphNodeType, string> = {
-  source: 'var(--c-data)',
-  transform: 'var(--c-condition)',
-  destination: 'var(--c-action)',
+  source: 'var(--nx-blue-panel)',
+  transform: 'var(--nx-ink)',
+  destination: 'var(--nx-blue-panel)',
 };
 
 /**
@@ -208,7 +208,7 @@ export default function NodesRail({
   return (
     <div style={railShellStyle(true)} data-testid="nodes-rail">
       <div style={railHeaderStyle}>
-        <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink)' }}>Nodes</span>
+        <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--nx-ink)' }}>Nodes</span>
         <button type="button" aria-label="Collapse nodes panel" onClick={() => setWide(false)} style={railCollapseBtnStyle}>
           {'\u2190'}
         </button>
@@ -232,7 +232,7 @@ export default function NodesRail({
             <div key={group}>
               <div style={railSectionHeaderStyle}>{group}</div>
               {group === 'Connections' && !q && (
-                <div style={{ fontSize: 11, color: 'var(--ink-300)', margin: '-2px 14px 6px' }}>
+                <div style={{ fontSize: 11, color: 'var(--nx-ink-3)', margin: '-2px 14px 6px' }}>
                   Drag a connection onto the canvas to use it as a source or destination.
                 </div>
               )}
@@ -240,7 +240,7 @@ export default function NodesRail({
                 const connected = Boolean(entry.connectionId);
                 const draggable = entry.roles.includes('transform') || connected;
                 const primaryRole = entry.roles[0];
-                const tileColor = entry.roles.length === 1 && primaryRole ? NODE_TYPE_COLOR[primaryRole] : 'var(--ink-300)';
+                const tileColor = entry.roles.length === 1 && primaryRole ? NODE_TYPE_COLOR[primaryRole] : 'var(--nx-ink-3)';
                 if (entry.isAddEntry) {
                   return (
                     <button
@@ -258,7 +258,7 @@ export default function NodesRail({
                         padding: '4px 8px',
                         fontSize: 12.5,
                         fontWeight: 500,
-                        color: 'var(--acc)',
+                        color: 'var(--nx-blue-panel)',
                         cursor: 'pointer',
                       }}
                       title={`Add another ${entry.connectorName} connection`}
@@ -305,9 +305,9 @@ export default function NodesRail({
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
-                            fontFamily: 'var(--font-mono)',
+                            fontFamily: 'var(--nx-font-mono)',
                             fontSize: 10.5,
-                            color: 'var(--ink-300)',
+                            color: 'var(--nx-ink-3)',
                           }}
                         >
                           {entry.secondaryLabel}
@@ -319,7 +319,7 @@ export default function NodesRail({
                 );
               })}
               {!q && groupEntries.length === 0 && (
-                <div style={{ fontSize: 11.5, color: 'var(--ink4)', margin: '0 12px 8px' }}>None available yet.</div>
+                <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', margin: '0 12px 8px' }}>None available yet.</div>
               )}
             </div>
           );
@@ -329,7 +329,7 @@ export default function NodesRail({
           <div>
             <div style={railSectionHeaderStyle}>Triggers</div>
             <div style={railEntryStyle(false)} title="Requires a trigger manifest — Phase 6">
-              <span style={railEntryIconTileStyle('var(--ink4)')}>
+              <span style={railEntryIconTileStyle('var(--nx-ink-disabled)')}>
                 <TriggerIcon size={13} />
               </span>
               <span style={{ flex: 1 }}>Schedule</span>
@@ -337,9 +337,9 @@ export default function NodesRail({
                 style={{
                   fontSize: 10,
                   fontWeight: 600,
-                  color: 'var(--warn)',
-                  background: 'var(--warn-bg)',
-                  border: '1px solid var(--warn-bd)',
+                  color: 'var(--nx-warn)',
+                  background: 'var(--nx-raised)',
+                  border: '1px solid var(--nx-warn)',
                   borderRadius: 999,
                   padding: '1px 6px',
                 }}

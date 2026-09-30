@@ -18,9 +18,9 @@ export type CanvasEdgeData = {
 };
 
 const VARIANT_STYLE: Record<NonNullable<CanvasEdgeData['variant']>, { stroke: string; dash?: string; animated?: boolean }> = {
-  default: { stroke: 'var(--line-200)' },
-  running: { stroke: 'var(--acc)', animated: true },
-  failed: { stroke: 'var(--danger)', dash: '2 3' },
+  default: { stroke: 'var(--nx-line)' },
+  running: { stroke: 'var(--nx-blue-panel)', animated: true },
+  failed: { stroke: 'var(--nx-danger)', dash: '2 3' },
 };
 
 export default function CanvasEdge({
@@ -46,7 +46,7 @@ export default function CanvasEdge({
         path={edgePath}
         markerEnd={markerEnd}
         style={{
-          stroke: selected ? 'var(--acc)' : stroke,
+          stroke: selected ? 'var(--nx-blue-panel)' : stroke,
           strokeWidth: selected ? 2 : 1.5,
           strokeDasharray: dash,
         }}
@@ -58,11 +58,11 @@ export default function CanvasEdge({
             style={{
               position: 'absolute',
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-              fontFamily: 'var(--font-mono)',
+              fontFamily: 'var(--nx-font-mono)',
               fontSize: 11,
-              color: 'var(--ink-200)',
-              background: 'var(--surface)',
-              border: '1px solid var(--line-200)',
+              color: 'var(--nx-ink-2)',
+              background: 'var(--nx-surface)',
+              border: '1px solid var(--nx-line)',
               borderRadius: 999,
               padding: '2px 8px',
               pointerEvents: 'none',

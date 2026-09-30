@@ -14,11 +14,11 @@ export function FlattenStepEditor({
   return (
     <div>
       <div style={rowStyle}>
-        <span style={{ fontSize: 12, color: 'var(--ink4)', width: 70 }}>Field</span>
+        <span style={{ fontSize: 12, color: 'var(--nx-ink-disabled)', width: 70 }}>Field</span>
         <FieldSelect value={step.field} onChange={(v) => onChange({ ...step, field: v })} fields={fields} placeholder="object-typed field" />
       </div>
       <div style={rowStyle}>
-        <span style={{ fontSize: 12, color: 'var(--ink4)', width: 70 }}>Max depth</span>
+        <span style={{ fontSize: 12, color: 'var(--nx-ink-disabled)', width: 70 }}>Max depth</span>
         <input
           type="number"
           min={1}
@@ -30,8 +30,8 @@ export function FlattenStepEditor({
           style={{ ...inputStyle, width: 80 }}
         />
       </div>
-      <div style={{ fontSize: 10.5, color: 'var(--ink4)', marginTop: 4 }}>
-        Expands the field&apos;s own fields into new <span style={{ fontFamily: 'var(--font-data)' }}>field_subfield</span> columns, replacing the original.
+      <div style={{ fontSize: 10.5, color: 'var(--nx-ink-disabled)', marginTop: 4 }}>
+        Expands the field&apos;s own fields into new <span style={{ fontFamily: 'var(--nx-font-mono)' }}>field_subfield</span> columns, replacing the original.
       </div>
     </div>
   );

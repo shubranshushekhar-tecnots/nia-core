@@ -60,7 +60,7 @@ import NodeContextMenu, { type MenuAction } from './NodeContextMenu';
 import { useToasts, ToastStack } from './Toast';
 import DeleteConnectionDialog from './DeleteConnectionDialog';
 import EditConnectionDialog from '@/components/app/EditConnectionDialog';
-import { breadcrumbSepStyle } from '@/components/app/styles';
+import { nxBreadcrumbSepStyle } from '@/components/app/styles';
 import {
   canvasBodyStyle,
   canvasColumnStyle,
@@ -1142,7 +1142,7 @@ function CanvasInner({
       />
 
       <div style={canvasShellRowStyle}>
-        <Sidebar orgId={orgId} role={role} projects={sidebarProjects} email={email} />
+        <Sidebar orgId={orgId} role={role} projects={sidebarProjects} email={email} headerHeight={52} showLogo />
 
         <div style={canvasBodyStyle}>
         {/* Viewer: no point showing the drag-to-add palette when dropping a
@@ -1184,17 +1184,17 @@ function CanvasInner({
               panOnDrag={interactionMode === 'pan'}
               selectionOnDrag={interactionMode === 'select'}
             >
-              <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} color="var(--canvas-dot)" bgColor="var(--canvas)" />
+              <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} color="var(--nx-line-inner)" bgColor="var(--nx-bg)" />
               <MiniMap
                 pannable
                 zoomable
-                nodeColor={(n) => (n.selected ? 'var(--acc-soft)' : 'var(--line-200)')}
+                nodeColor={(n) => (n.selected ? 'var(--nx-blue-tint)' : 'var(--nx-line)')}
                 nodeStrokeColor="transparent"
                 nodeBorderRadius={4}
                 maskColor="rgba(15,23,42,.06)"
-                maskStrokeColor="var(--acc)"
+                maskStrokeColor="var(--nx-blue-panel)"
                 maskStrokeWidth={2}
-                style={{ width: 152, height: 96, background: 'var(--surface)', border: '1px solid var(--panel-line)', borderRadius: 10 }}
+                style={{ width: 152, height: 96, background: 'var(--nx-surface)', border: '1px solid var(--nx-line)', borderRadius: 'var(--nx-radius)' }}
               />
             </ReactFlow>
 
@@ -1214,9 +1214,9 @@ function CanvasInner({
                   left: dropPicker.x,
                   zIndex: 50,
                   minWidth: 180,
-                  background: 'var(--surface)',
-                  border: '1px solid var(--panel-line)',
-                  borderRadius: 8,
+                  background: 'var(--nx-surface)',
+                  border: '1px solid var(--nx-line)',
+                  borderRadius: 'var(--nx-radius)',
                   boxShadow: 'var(--floating-panel-shadow)',
                   padding: 4,
                   display: 'flex',
@@ -1298,12 +1298,12 @@ function CanvasInner({
             {isFullscreen && (
               <div style={fullViewBreadcrumbStyle} data-testid="full-view-breadcrumb">
                 <span>{workflow.project.name}</span>
-                <span style={breadcrumbSepStyle}>/</span>
+                <span style={nxBreadcrumbSepStyle}>/</span>
                 <span style={{ fontWeight: 600 }}>{workflow.name}</span>
                 {saveState !== 'conflict' && saveState !== 'idle' && (
                   <>
-                    <span style={breadcrumbSepStyle}>·</span>
-                    <span style={{ color: 'var(--ink4)' }}>{saveState === 'saving' ? 'Saving…' : 'Saved'}</span>
+                    <span style={nxBreadcrumbSepStyle}>·</span>
+                    <span style={{ color: 'var(--nx-ink-3)' }}>{saveState === 'saving' ? 'Saving…' : 'Saved'}</span>
                   </>
                 )}
               </div>
@@ -1383,9 +1383,9 @@ function CanvasInner({
                     style={{
                       boxSizing: 'border-box',
                       padding: '14px 16px',
-                      borderRadius: 10,
-                      background: 'var(--surface)',
-                      border: `1px solid ${runState.status === 'error' ? 'var(--bad)' : 'var(--line2)'}`,
+                      borderRadius: 'var(--nx-radius)',
+                      background: 'var(--nx-surface)',
+                      border: `1px solid ${runState.status === 'error' ? 'var(--nx-danger)' : 'var(--nx-line)'}`,
                       boxShadow: 'var(--shadow)',
                       display: 'flex',
                       flexDirection: 'column',
@@ -1393,7 +1393,7 @@ function CanvasInner({
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }} data-testid="run-status-value">
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--nx-ink)' }} data-testid="run-status-value">
                         {destLabel(destNodeId)} —{' '}
                         {runState.status === 'starting' && 'Starting run…'}
                         {runState.status === 'running' && 'Running…'}
@@ -1408,13 +1408,13 @@ function CanvasInner({
                             type="button"
                             onClick={() => handleCancel(destNodeId)}
                             style={{
-                              border: '1px solid var(--line2)',
+                              border: '1px solid var(--nx-line)',
                               background: 'none',
-                              color: 'var(--ink3)',
+                              color: 'var(--nx-ink-3)',
                               cursor: 'pointer',
                               fontSize: 11.5,
                               fontWeight: 600,
-                              borderRadius: 5,
+                              borderRadius: 'var(--nx-radius)',
                               padding: '2px 8px',
                             }}
                           >
@@ -1425,7 +1425,7 @@ function CanvasInner({
                           type="button"
                           aria-label="Dismiss"
                           onClick={() => dismissRun(destNodeId)}
-                          style={{ border: 'none', background: 'none', color: 'var(--ink4)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                          style={{ border: 'none', background: 'none', color: 'var(--nx-ink-3)', cursor: 'pointer', fontSize: 12, padding: 0 }}
                         >
                           {'\u2715'}
                         </button>
@@ -1435,12 +1435,12 @@ function CanvasInner({
                       runState.status === 'cancelling' ||
                       runState.status === 'cancelled' ||
                       runState.status === 'done') && (
-                      <span style={{ fontSize: 12, color: 'var(--ink3)' }}>
+                      <span style={{ fontSize: 12, color: 'var(--nx-ink-3)' }}>
                         {runState.totalRowsProcessed.toLocaleString()} row{runState.totalRowsProcessed === 1 ? '' : 's'} written
                         {runState.status === 'done' ? ` in ${(runState.durationMs / 1000).toFixed(1)}s` : ''}
                       </span>
                     )}
-                    {runState.status === 'error' && <span style={{ fontSize: 12, color: 'var(--bad)' }}>{runState.message}</span>}
+                    {runState.status === 'error' && <span style={{ fontSize: 12, color: 'var(--nx-danger)' }}>{runState.message}</span>}
                   </div>
                 ))}
               </div>

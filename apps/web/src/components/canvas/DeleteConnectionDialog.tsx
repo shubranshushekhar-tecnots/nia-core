@@ -98,20 +98,20 @@ export default function DeleteConnectionDialog({
     <div style={modalOverlayStyle} onClick={onClose}>
       <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
         <span style={modalTitleStyle}>Delete connection?</span>
-        <p style={{ fontSize: 13.5, color: 'var(--text-3)', margin: 0 }}>
+        <p style={{ fontSize: 13.5, color: 'var(--nx-ink-3)', margin: 0 }}>
           This removes {connectionLabel} and its stored credential. This can{"'"}t be undone.
         </p>
 
         {usages === null && !loadError && (
-          <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>Checking where this connection is used…</span>
+          <span style={{ fontSize: 12.5, color: 'var(--nx-ink-3)' }}>Checking where this connection is used…</span>
         )}
         {loadError && <span style={modalErrorStyle}>{loadError}</span>}
         {inUse && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--warn)' }}>
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--nx-warn)' }}>
               Used by {usages!.length} workflow{usages!.length === 1 ? '' : 's'}:
             </span>
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--text-3)' }}>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--nx-ink-3)' }}>
               {usages!.map((u) => (
                 <li key={u.id}>
                   {u.name} — {u.nodeCount} node{u.nodeCount === 1 ? '' : 's'}
@@ -124,16 +124,16 @@ export default function DeleteConnectionDialog({
 
         {writeGrants.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--warn)' }}>
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--nx-warn)' }}>
               This connection has {writeGrants.length} confirmed write grant{writeGrants.length === 1 ? '' : 's'}. Deleting it
               does not remove the database role{writeGrants.length === 1 ? '' : 's'} you created — run this to clean up:
             </span>
             <pre
               style={{
-                fontFamily: 'var(--font-data)',
+                fontFamily: 'var(--nx-font-mono)',
                 fontSize: 11,
-                background: 'var(--surface)',
-                border: '1px solid var(--line2)',
+                background: 'var(--nx-surface)',
+                border: '1px solid var(--nx-line)',
                 borderRadius: 6,
                 padding: 8,
                 whiteSpace: 'pre-wrap',
