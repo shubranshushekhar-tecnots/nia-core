@@ -836,3 +836,150 @@ export const consoleRowConnectorCreatedCellStyle: CSSProperties = {
   fontSize: 11.5,
   color: 'var(--ink4)',
 };
+
+// Announcements screen (Subscription Phase 5, Slice 3,
+// docs/plans/subscription-model.md decision 1). Not in the original design
+// file (no announcements concept existed there) — reuses the same card/
+// field/button language as the plan-edit and suspend forms above rather
+// than inventing a new visual vocabulary.
+
+// Full-width, column-stacked card (unlike consolePlanFormStyle's row-wrap
+// layout, this form has too many fields — title, body, severity, audience,
+// conditional org/project id, roles, dates — to fit one row).
+export const consoleAnnouncementFormStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+  padding: '16px 18px',
+  borderRadius: 12,
+  background: 'var(--surface)',
+  border: '1px solid var(--line)',
+};
+
+export const consoleAnnouncementFieldsRowStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 12,
+};
+
+// consolePlanInputStyle's fixed 160px width doesn't fit a title field —
+// same visual treatment, full width instead.
+export const consoleAnnouncementInputStyle: CSSProperties = {
+  boxSizing: 'border-box',
+  width: '100%',
+  height: 32,
+  padding: '0 10px',
+  fontFamily: 'inherit',
+  fontSize: 12.5,
+  color: 'var(--ink)',
+  background: 'var(--surface2)',
+  border: '1px solid var(--line)',
+  borderRadius: 8,
+  outline: 'none',
+};
+
+export const consoleAnnouncementRolesRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 14,
+  flexWrap: 'wrap',
+};
+
+export const consoleAnnouncementRoleLabelStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  fontSize: 12.5,
+  color: 'var(--ink2)',
+  cursor: 'pointer',
+};
+
+// Live preview (spec: "create with a live preview before publishing") —
+// mimics the app banner's own visual shape (see AnnouncementBanner.tsx,
+// Slice 4) so what staff sees here is what customers will actually see.
+export const consoleAnnouncementPreviewWrapStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+};
+
+export function consoleAnnouncementPreviewStyle(severity: 'info' | 'warning' | 'critical'): CSSProperties {
+  const map: Record<'info' | 'warning' | 'critical', [string, string, string]> = {
+    info: ['var(--ink)', 'var(--subtle)', 'var(--line)'],
+    warning: ['var(--warning-deep)', 'rgba(245,158,11,.1)', 'rgba(245,158,11,.4)'],
+    critical: ['var(--error-deep)', 'rgba(239,68,68,.1)', 'rgba(239,68,68,.4)'],
+  };
+  const [color, background, border] = map[severity];
+  return {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    padding: '10px 14px',
+    borderRadius: 10,
+    color,
+    background,
+    border: `1px solid ${border}`,
+  };
+}
+
+export const consoleAnnouncementPreviewTitleStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+};
+
+export const consoleAnnouncementPreviewBodyStyle: CSSProperties = {
+  fontSize: 12.5,
+  whiteSpace: 'pre-wrap',
+};
+
+export const consoleAnnouncementListStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+};
+
+export const consoleAnnouncementRowStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: '14px 16px',
+  borderRadius: 12,
+  background: 'var(--surface)',
+  border: '1px solid var(--line)',
+};
+
+export const consoleAnnouncementRowHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  flexWrap: 'wrap',
+};
+
+export const consoleAnnouncementRowTitleGroupStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  minWidth: 0,
+};
+
+export const consoleAnnouncementRowTitleStyle: CSSProperties = {
+  fontSize: 13.5,
+  fontWeight: 700,
+  color: 'var(--ink)',
+};
+
+export const consoleAnnouncementRowMetaStyle: CSSProperties = {
+  fontSize: 11.5,
+  color: 'var(--ink3)',
+};
+
+export const consoleAnnouncementRowBodyStyle: CSSProperties = {
+  fontSize: 12.5,
+  color: 'var(--ink2)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
+};

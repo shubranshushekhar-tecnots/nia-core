@@ -1,7 +1,7 @@
 'use server';
 
 import { apiFetchServer, ApiError } from '@/lib/api/server';
-import type { ConsoleOrgsPage, ConsoleUsersPage } from '@/lib/api/consoleServer';
+import type { ConsoleAnnouncement, ConsoleAnnouncementsPage, ConsoleOrgsPage, ConsoleUsersPage } from '@/lib/api/consoleServer';
 
 /**
  * Console v1 Slice 1 review fix (docs/plans/console-plan.md decision 10).
@@ -155,5 +155,92 @@ export async function revokeUserSessionsAction(
   } catch (err) {
     if (err instanceof ApiError) return { ok: false, error: err.message };
     return { ok: false, error: "Couldn't sign this user out. Try again." };
+  }
+}
+
+/**
+ * Subscription Phase 5, Slice 3 (docs/plans/subscription-model.md, decision
+ * 1): ConsoleAnnouncementsClient's tab switch and "Load more" both call
+ * this — plain data-fetching Server Action, same non-mutation shape as
+ * loadMoreOrgsAction/searchUsersAction above, not the ok/error mutation
+ * shape below.
+ */
+export async function loadAnnouncementsAction(
+  status: 'active' | 'scheduled' | 'ended',
+  offset: number,
+): Promise<ConsoleAnnouncementsPage> {
+  const query = new URLSearchParams();
+  query.set('status', status);
+  if (offset) query.set('offset', String(offset));
+  return apiFetchServer<ConsoleAnnouncementsPage>(`/console/announcements?${query.toString()}`);
+}
+
+/**
+ * Subscription Phase 5, Slice 3: submits ConsoleAnnouncementsClient's
+ * create form to POST /console/announcements — same useTransition-driven,
+ * ok/error mutation shape as suspendOrgAction above.
+ */
+export async function createAnnouncementAction(input: {
+  title: string;
+  body: string;
+  severity: 'info' | 'warning' | 'critical';
+  audience: 'all' | 'org' | 'project';
+  audienceOrgId?: string;
+  audienceProjectId?: string;
+  audienceRoles?: string[];
+  startsAt?: string;
+  endsAt?: string;
+}): Promise<{ ok: true; announcement: ConsoleAnnouncement } | { ok: false; error: string }> {
+  try {
+    const announcement = await apiFetchServer<ConsoleAnnouncement>('/console/announcements', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    return { ok: true, announcement };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't create the announcement. Try again." };
+  }
+}
+
+/**
+ * Subscription Phase 5, Slice 3: submits an "End now" click to
+ * POST /console/announcements/:id/end — same ok/error mutation shape as
+ * suspendOrgAction above. No reason required (unlike suspend/revoke): this
+ * isn't a destructive customer-facing action, just an early-stop of the
+ * staff's own announcement.
+ */
+export async function endAnnouncementAction(
+  id: string,
+): Promise<{ ok: true; announcement: ConsoleAnnouncement } | { ok: false; error: string }> {
+  try {
+    const announcement = await apiFetchServer<ConsoleAnnouncement>(
+      `/console/announcements/${encodeURIComponent(id)}/end`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    return { ok: true, announcement };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't end the announcement. Try again." };
+  }
+}
+
+/**
+ * Subscription Phase 5, Slice 3: submits an "Archive" click to
+ * POST /console/announcements/:id/archive — same shape as
+ * endAnnouncementAction above.
+ */
+export async function archiveAnnouncementAction(
+  id: string,
+): Promise<{ ok: true; announcement: ConsoleAnnouncement } | { ok: false; error: string }> {
+  try {
+    const announcement = await apiFetchServer<ConsoleAnnouncement>(
+      `/console/announcements/${encodeURIComponent(id)}/archive`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    return { ok: true, announcement };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't archive the announcement. Try again." };
   }
 }

@@ -41,11 +41,16 @@ import {
 // its detail screen (`/console/users/:userId`) intentionally gets no nav
 // entry of its own, same as Org Detail — reached only by a row/member
 // click, never the sidebar.
+//
+// 'notify' (Subscription Phase 5, Slice 3, docs/plans/subscription-model.md
+// decision 1) was the one design-ported entry still inert through Slice 3e
+// — relabeled "Announcements" and given a real href now that the screen
+// exists, same label the design's own copy uses for this concept.
 const NAV: Array<{ id: string; label: string; icon: string; href?: string }> = [
   { id: 'dash', label: 'Platform', icon: '\u25D1' },
   { id: 'directory', label: 'Directory', icon: '\u25A4', href: '/console' },
   { id: 'users', label: 'Users', icon: '\u25CB', href: '/console/users' },
-  { id: 'notify', label: 'Notifications', icon: '\u25CD' },
+  { id: 'notify', label: 'Announcements', icon: '\u25CD', href: '/console/announcements' },
   { id: 'revenue', label: 'Revenue', icon: '\u25C8' },
   { id: 'invoices', label: 'Invoices', icon: '\u25A6' },
   { id: 'support', label: 'Support', icon: '\u25D4' },

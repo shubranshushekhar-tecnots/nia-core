@@ -228,3 +228,47 @@ export type ConsoleUserDetail = {
 export async function getConsoleUser(userId: string): Promise<ConsoleUserDetail> {
   return apiFetchServer<ConsoleUserDetail>(`/console/users/${encodeURIComponent(userId)}`);
 }
+
+/**
+ * Subscription Phase 5, Slice 3 (docs/plans/subscription-model.md, decision
+ * 1): GET /console/announcements's response shape. `status` is computed on
+ * read by the API (never stored) — 'ended' covers both a naturally-expired
+ * (ends_at passed) and a manually archived announcement, same three-tab
+ * split (active/scheduled/ended) the Console screen uses.
+ */
+export type ConsoleAnnouncement = {
+  id: string;
+  title: string;
+  body: string;
+  severity: 'info' | 'warning' | 'critical';
+  audience: 'all' | 'org' | 'project';
+  audienceOrgId: string | null;
+  audienceProjectId: string | null;
+  audienceRoles: string[] | null;
+  startsAt: string;
+  endsAt: string | null;
+  archivedAt: string | null;
+  createdBy: string;
+  createdByName: string | null;
+  createdAt: string;
+  status: 'active' | 'scheduled' | 'ended';
+};
+
+export type ConsoleAnnouncementsPage = {
+  announcements: ConsoleAnnouncement[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+export async function getConsoleAnnouncements(params?: {
+  status?: 'active' | 'scheduled' | 'ended';
+  offset?: number;
+}): Promise<ConsoleAnnouncementsPage> {
+  const query = new URLSearchParams();
+  if (params?.status) query.set('status', params.status);
+  if (params?.offset) query.set('offset', String(params.offset));
+  const qs = query.toString();
+  return apiFetchServer<ConsoleAnnouncementsPage>(`/console/announcements${qs ? `?${qs}` : ''}`);
+}
