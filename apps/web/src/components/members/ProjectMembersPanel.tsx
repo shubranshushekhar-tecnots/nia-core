@@ -3,19 +3,22 @@
 import { useState } from 'react';
 import { can, type ActorRole } from '@nia/schemas';
 import { addProjectMember, removeProjectMember, type ProjectMemberProfile } from '@/lib/projectMembers/actions';
-import DeleteConfirmDialog from '@/components/app/DeleteConfirmDialog';
-import { primaryBtnStyle } from '@/components/app/styles';
+import NxMembersDeleteDialog from './NxMembersDeleteDialog';
+import { nxModalErrorStyle } from '@/components/app/styles';
 import {
-  addMemberRowStyle,
-  addMemberSelectStyle,
-  memberActionsColStyle,
-  memberIdentityColStyle,
-  memberListStyle,
-  memberMetaStyle,
-  memberNameStyle,
-  memberRemoveBtnStyle,
-  memberRowStyle,
-  membersSectionTitleStyle,
+  nxProjectMembersPanelStyle,
+  nxProjectMembersHeaderStyle,
+  nxProjectMembersEmptyStyle,
+  nxProjectMemberRowStyle,
+  nxProjectMemberAvatarStyle,
+  nxProjectMemberIdentityColStyle,
+  nxProjectMemberNameStyle,
+  nxProjectMemberEmailStyle,
+  nxProjectMemberActionTextStyle,
+  nxProjectMemberNotPermittedStyle,
+  nxProjectMembersAddRowStyle,
+  nxProjectMembersAddSelectStyle,
+  nxProjectMembersAddBtnStyle,
 } from './styles';
 
 // Subscription Phase 2, Slice 7 ("Project members panel"). Org-scoped
@@ -57,66 +60,78 @@ export default function ProjectMembersPanel({
     }
   }
 
+  const noneAddable = addable.length === 0;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <span style={membersSectionTitleStyle}>Project members</span>
-      <div style={memberListStyle}>
-        {members.length === 0 && (
-          <span style={{ fontSize: 13.5, color: 'var(--text-3)' }}>No members added to this project yet.</span>
-        )}
-        {members.map((member) => {
-          const isSelf = member.userId === callerUserId;
-          const canRemove = isSelf || canManage;
-          return (
-            <div key={member.userId} style={memberRowStyle}>
-              <div style={memberIdentityColStyle}>
-                <span style={memberNameStyle}>{member.name ?? member.email ?? member.userId}</span>
-                <span style={memberMetaStyle}>{member.email ?? 'No email on file'}</span>
-              </div>
-              <div style={memberActionsColStyle}>
-                {canRemove ? (
-                  <button type="button" style={memberRemoveBtnStyle} onClick={() => setRemoveTarget(member)}>
-                    {isSelf ? 'Leave' : 'Remove'}
-                  </button>
-                ) : (
-                  <span style={{ fontSize: 12, color: 'var(--text-3)' }}>Not permitted</span>
-                )}
-              </div>
+    <div style={nxProjectMembersPanelStyle}>
+      <div style={nxProjectMembersHeaderStyle}>Project members</div>
+
+      {members.length === 0 && <p style={nxProjectMembersEmptyStyle}>No members added to this project yet.</p>}
+
+      {members.map((member) => {
+        const isSelf = member.userId === callerUserId;
+        const canRemove = isSelf || canManage;
+        const label = member.name ?? member.email ?? member.userId;
+        return (
+          <div key={member.userId} style={nxProjectMemberRowStyle}>
+            <span style={nxProjectMemberAvatarStyle()}>
+              {label.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase()}
+            </span>
+            <div style={nxProjectMemberIdentityColStyle}>
+              <span style={nxProjectMemberNameStyle}>{label}</span>
+              <span style={nxProjectMemberEmailStyle}>{member.email ?? 'No email on file'}</span>
             </div>
-          );
-        })}
-      </div>
+            {canRemove ? (
+              <button
+                type="button"
+                style={{ ...nxProjectMemberActionTextStyle, background: 'none', border: 'none', cursor: 'pointer' }}
+                onClick={() => setRemoveTarget(member)}
+              >
+                {isSelf ? 'Leave' : 'Remove'}
+              </button>
+            ) : (
+              <span style={nxProjectMemberNotPermittedStyle}>Not permitted</span>
+            )}
+          </div>
+        );
+      })}
 
       {canManage && (
-        <div style={addMemberRowStyle}>
+        <div style={nxProjectMembersAddRowStyle}>
           <select
             value={selectedUserId}
             onChange={(e) => setSelectedUserId(e.target.value)}
-            style={addMemberSelectStyle}
-            disabled={adding || addable.length === 0}
+            style={nxProjectMembersAddSelectStyle(noneAddable)}
+            disabled={adding || noneAddable}
           >
-            <option value="">{addable.length === 0 ? 'All org members already added' : 'Add an org member\u2026'}</option>
+            <option value="">{noneAddable ? 'All org members already added' : 'Add an org member\u2026'}</option>
             {addable.map((a) => (
               <option key={a.userId} value={a.userId}>
                 {a.name ?? a.email ?? a.userId}
               </option>
             ))}
           </select>
-          <button type="button" style={primaryBtnStyle} disabled={!selectedUserId || adding} onClick={onAdd}>
+          <button
+            type="button"
+            style={nxProjectMembersAddBtnStyle(!selectedUserId || adding)}
+            disabled={!selectedUserId || adding}
+            onClick={onAdd}
+          >
             {adding ? 'Adding\u2026' : 'Add'}
           </button>
         </div>
       )}
-      {addError && <span style={{ fontSize: 12, color: 'var(--bad)' }}>{addError}</span>}
+      {addError && <span style={{ ...nxModalErrorStyle, padding: '8px 16px' }}>{addError}</span>}
 
       {removeTarget && (
-        <DeleteConfirmDialog
+        <NxMembersDeleteDialog
           title={removeTarget.userId === callerUserId ? 'Leave this project?' : 'Remove this person?'}
           message={
             removeTarget.userId === callerUserId
               ? "You'll lose access to this project."
               : `${removeTarget.name ?? removeTarget.email ?? 'This person'} will lose access to this project.`
           }
+          confirmLabel={removeTarget.userId === callerUserId ? 'Leave' : 'Remove'}
           hiddenFields={{ projectId, targetUserId: removeTarget.userId }}
           action={removeProjectMember}
           onClose={() => setRemoveTarget(null)}

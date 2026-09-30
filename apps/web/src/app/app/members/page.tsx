@@ -6,7 +6,12 @@ import { getSidebarProjects } from '@/lib/api/dashboardServer';
 import AppShell from '@/components/app/AppShell';
 import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
-import { homeScrollStyle, mainColStyle, pageTitleStyle } from '@/components/app/styles';
+import { homeScrollStyle, mainColStyle } from '@/components/app/styles';
+import {
+  nxMembersNoPermissionStyle,
+  nxMembersNoPermissionEyebrowStyle,
+  nxMembersNoPermissionTextStyle,
+} from '@/components/members/styles';
 import MembersClient from '@/components/members/MembersClient';
 
 export const dynamic = 'force-dynamic';
@@ -45,17 +50,9 @@ export default async function MembersPage() {
       <Sidebar orgId={user.org?.id ?? null} role={user.role} projects={projects} email={user.email} />
       <div style={mainColStyle}>
         <div style={homeScrollStyle}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <span style={pageTitleStyle}>Members & roles</span>
-            {user.org && (
-              <span style={{ fontSize: 13.5, color: 'var(--text-3)' }}>
-                Everyone with access to {user.org.name}, and their role.
-              </span>
-            )}
-          </div>
-
           {allowed && user.org ? (
             <MembersClient
+              orgName={user.org.name}
               // `allowed` already excludes "individual"/"viewer" (can() requires member/admin/owner).
               callerRole={user.role as Exclude<typeof user.role, 'individual' | 'viewer'>}
               callerUserId={user.userId}
@@ -64,9 +61,10 @@ export default async function MembersPage() {
               invites={invites}
             />
           ) : (
-            <span style={{ fontSize: 13.5, color: 'var(--text-3)' }}>
-              You don&apos;t have permission to view this page.
-            </span>
+            <div style={nxMembersNoPermissionStyle}>
+              <span style={nxMembersNoPermissionEyebrowStyle}>Members &amp; roles</span>
+              <p style={nxMembersNoPermissionTextStyle}>You don&apos;t have permission to view this page.</p>
+            </div>
           )}
         </div>
       </div>

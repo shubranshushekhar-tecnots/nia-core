@@ -3,33 +3,61 @@
 import { useActionState, useState } from 'react';
 import type { OrgRole } from '@nia/schemas';
 import { createInvite, revokeInvite, type InviteActionState, type InviteLink } from '@/lib/invites/actions';
+import { nxModalLabelStyle, nxModalFieldStyle, nxModalErrorStyle } from '@/components/app/styles';
 import {
-  modalLabelStyle,
-  modalFieldStyle,
-  modalErrorStyle,
-  primaryBtnStyle,
-  pageEmptyCardStyle,
-} from '@/components/app/styles';
+  nxMembersInviteFormStyle,
+  nxMembersInviteFieldGridStyle,
+  nxMembersInviteFieldColStyle,
+  nxMembersMonoFieldOverride,
+  nxMembersInviteHintStyle,
+  nxMembersInviteSubmitStyle,
+  nxMembersCreatedCardStyle,
+  nxMembersCreatedHeadingStyle,
+  nxMembersLinkRowStyle,
+  nxMembersLinkChipStyle,
+  nxMembersCopyBtnStyle,
+  nxMembersCreatedBodyStyle,
+  nxMembersCreateAnotherStyle,
+  nxMembersInviteListStyle,
+  nxMembersInviteRowStyle,
+  nxMembersInviteInfoColStyle,
+  nxMembersInviteLineStyle,
+  nxMembersInviteMetaStyle,
+  nxMembersRevokeBtnStyle,
+  nxMembersInviteEmptyStyle,
+} from '@/components/members/styles';
 
 const initialState: InviteActionState = null;
 
-const ROLE_OPTIONS: OrgRole[] = ['viewer', 'member', 'admin', 'owner'];
+// Order matches Members.dc.html's invite-form <select> literally (differs
+// from the per-row role select's viewer-first order — that's the design).
+const ROLE_OPTIONS: OrgRole[] = ['member', 'viewer', 'admin', 'owner'];
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
-function inviteStatus(invite: InviteLink): string {
+function inviteStatus(invite: InviteLink): 'Active' | 'Used up' | 'Expired' | 'Revoked' {
   if (invite.revokedAt) return 'Revoked';
   if (new Date(invite.expiresAt).getTime() <= Date.now()) return 'Expired';
   if (invite.maxUses !== null && invite.uses >= invite.maxUses) return 'Used up';
   return 'Active';
 }
 
+// Status → line color, per MembersStates.dc.html's renderVals(): Active
+// renders in the blue-panel accent, the rest step down through ink-2/ink-3.
+const STATUS_INK: Record<string, string> = {
+  Active: 'var(--nx-blue-panel)',
+  'Used up': 'var(--nx-ink-2)',
+  Expired: 'var(--nx-ink-2)',
+  Revoked: 'var(--nx-ink-3)',
+};
+
 export default function InvitesClient({ invites, callerRole }: { invites: InviteLink[]; callerRole: OrgRole }) {
   const [state, formAction, pending] = useActionState(createInvite, initialState);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   async function handleRevoke(id: string) {
     setRevokeError(null);
@@ -39,84 +67,112 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
     if (result.error) setRevokeError(result.error);
   }
 
+  async function handleCopy(link: string) {
+    await navigator.clipboard.writeText(link);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 640 }}>
-      <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
-            <label htmlFor="role" style={modalLabelStyle}>Role</label>
-            <select id="role" name="role" defaultValue="member" style={modalFieldStyle(false)}>
+    <>
+      <form action={formAction} style={nxMembersInviteFormStyle}>
+        <div style={nxMembersInviteFieldGridStyle}>
+          <div style={nxMembersInviteFieldColStyle}>
+            <label htmlFor="role" style={nxModalLabelStyle}>Role</label>
+            <select
+              id="role"
+              name="role"
+              defaultValue="member"
+              style={{ ...nxModalFieldStyle(false), ...nxMembersMonoFieldOverride, textTransform: 'uppercase' }}
+            >
               {ROLE_OPTIONS.filter((r) => r !== 'owner' || callerRole === 'owner').map((r) => (
                 <option key={r} value={r}>{r}</option>
               ))}
             </select>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
-            <label htmlFor="expiresInDays" style={modalLabelStyle}>Expires in (days)</label>
-            <input id="expiresInDays" name="expiresInDays" type="number" min={1} max={365} defaultValue={7} style={modalFieldStyle(false)} />
+          <div style={nxMembersInviteFieldColStyle}>
+            <label htmlFor="expiresInDays" style={nxModalLabelStyle}>Expires in (days)</label>
+            <input
+              id="expiresInDays"
+              name="expiresInDays"
+              type="number"
+              min={1}
+              max={365}
+              defaultValue={7}
+              style={{ ...nxModalFieldStyle(false), ...nxMembersMonoFieldOverride }}
+            />
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 12 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
-            <label htmlFor="maxUses" style={modalLabelStyle}>Max uses (optional)</label>
-            <input id="maxUses" name="maxUses" type="number" min={1} placeholder="Unlimited" style={modalFieldStyle(false)} />
+        <div style={nxMembersInviteFieldGridStyle}>
+          <div style={nxMembersInviteFieldColStyle}>
+            <label htmlFor="maxUses" style={nxModalLabelStyle}>Max uses (optional)</label>
+            <input
+              id="maxUses"
+              name="maxUses"
+              type="number"
+              min={1}
+              placeholder="Unlimited"
+              style={{ ...nxModalFieldStyle(false), ...nxMembersMonoFieldOverride }}
+            />
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
-            <label htmlFor="emailDomain" style={modalLabelStyle}>Email domain (optional)</label>
-            <input id="emailDomain" name="emailDomain" type="text" placeholder="example.com" style={modalFieldStyle(Boolean(state?.fieldErrors?.emailDomain))} />
-            {state?.fieldErrors?.emailDomain && <span style={modalErrorStyle}>{state.fieldErrors.emailDomain[0]}</span>}
+          <div style={nxMembersInviteFieldColStyle}>
+            <label htmlFor="emailDomain" style={nxModalLabelStyle}>Email domain (optional)</label>
+            <input
+              id="emailDomain"
+              name="emailDomain"
+              type="text"
+              placeholder="example.com"
+              style={{ ...nxModalFieldStyle(Boolean(state?.fieldErrors?.emailDomain)), ...nxMembersMonoFieldOverride }}
+            />
+            {state?.fieldErrors?.emailDomain && <span style={nxModalErrorStyle}>{state.fieldErrors.emailDomain[0]}</span>}
           </div>
         </div>
 
-        <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
+        <p style={nxMembersInviteHintStyle}>
           Email addresses aren&apos;t verified yet, so the domain lock is advisory — someone could still sign up
           with a self-reported address on that domain.
-        </span>
+        </p>
 
-        {state?.error && <span style={modalErrorStyle}>{state.error}</span>}
+        {state?.error && <span style={nxModalErrorStyle}>{state.error}</span>}
 
-        <button type="submit" disabled={pending} style={{ ...primaryBtnStyle, alignSelf: 'flex-start' }}>
-          {pending ? 'Creating…' : 'Create invite'}
+        <button type="submit" disabled={pending} style={nxMembersInviteSubmitStyle(pending)}>
+          {pending ? 'Creating\u2026' : 'Create invite'}
+          {!pending && <span>{'\u2192'}</span>}
         </button>
 
         {state?.success && state.link && (
-          <div style={pageEmptyCardStyle}>
-            <span style={{ fontWeight: 600, color: 'var(--text)' }}>Invite link created</span>
-            <span style={{ fontSize: 13, wordBreak: 'break-all' }}>{state.link}</span>
-            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
+          <div style={nxMembersCreatedCardStyle}>
+            <span style={nxMembersCreatedHeadingStyle}>Invite link created</span>
+            <div style={nxMembersLinkRowStyle}>
+              <span style={nxMembersLinkChipStyle}>{state.link}</span>
+              <button type="button" style={nxMembersCopyBtnStyle} onClick={() => handleCopy(state.link!)}>
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <p style={nxMembersCreatedBodyStyle}>
               This is shown once — copy it now. It won&apos;t be shown again.
-            </span>
+            </p>
           </div>
         )}
       </form>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {revokeError && <span style={modalErrorStyle}>{revokeError}</span>}
+      <div style={nxMembersInviteListStyle}>
+        {revokeError && <span style={{ ...nxModalErrorStyle, padding: '10px 24px' }}>{revokeError}</span>}
         {invites.length === 0 ? (
-          <div style={pageEmptyCardStyle}>No invites yet.</div>
+          <p style={nxMembersInviteEmptyStyle}>No invites yet.</p>
         ) : (
           invites.map((invite) => {
             const status = inviteStatus(invite);
+            const ink = status === 'Revoked' ? 'var(--nx-ink-3)' : 'var(--nx-ink)';
             return (
-              <div
-                key={invite.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  padding: '12px 14px',
-                  borderRadius: 10,
-                  border: '1px solid var(--line)',
-                  background: 'var(--surface)',
-                }}
-              >
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--text)' }}>
-                    {invite.role} {'\u00b7'} {status}
+              <div key={invite.id} style={nxMembersInviteRowStyle}>
+                <div style={nxMembersInviteInfoColStyle}>
+                  <span style={nxMembersInviteLineStyle(ink)}>
+                    {invite.role} {'\u00b7'}{' '}
+                    <span style={{ color: STATUS_INK[status] }}>{status}</span>
                   </span>
-                  <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                  <span style={nxMembersInviteMetaStyle}>
                     Expires {formatDate(invite.expiresAt)} {'\u00b7'} used {invite.uses}
                     {invite.maxUses !== null ? `/${invite.maxUses}` : ''}
                     {invite.emailDomain ? ` \u00b7 ${invite.emailDomain} only` : ''}
@@ -127,19 +183,9 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
                     type="button"
                     onClick={() => handleRevoke(invite.id)}
                     disabled={revokingId === invite.id}
-                    style={{
-                      height: 30,
-                      padding: '0 12px',
-                      fontSize: 12.5,
-                      fontWeight: 500,
-                      borderRadius: 8,
-                      border: '1px solid var(--line)',
-                      background: 'transparent',
-                      color: 'var(--bad)',
-                      cursor: 'pointer',
-                    }}
+                    style={nxMembersRevokeBtnStyle}
                   >
-                    {revokingId === invite.id ? 'Revoking…' : 'Revoke'}
+                    {revokingId === invite.id ? 'Revoking\u2026' : 'Revoke'}
                   </button>
                 )}
               </div>
@@ -147,6 +193,6 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
           })
         )}
       </div>
-    </div>
+    </>
   );
 }
