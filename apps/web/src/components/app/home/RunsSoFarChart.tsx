@@ -135,7 +135,7 @@ export default function RunsSoFarChart({ runs }: { runs: RecentRun[] }) {
                     maxWidth: 28,
                     height: Math.max(2, h),
                     background: color,
-                    animation: run.status === 'running' ? 'livePulse 1.4s ease-in-out infinite' : undefined,
+                    animation: run.status === 'running' ? 'livePulse 1.6s ease-in-out infinite' : undefined,
                   }}
                 />
                 <span style={{ position: 'absolute', bottom: -22, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, fontFamily: 'var(--nx-font-mono)', fontSize: 11, color: 'var(--nx-ink-3)' }}>

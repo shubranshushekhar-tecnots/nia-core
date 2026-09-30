@@ -35,76 +35,12 @@ export const shellBodyStyle: CSSProperties = {
   display: 'flex',
 };
 
-// railW/suppressTransition drive the resizable rail exactly like the
-// design's `sidebarStyle` computed string (state.railW + state.railDrag) —
-// width is a live pixel value, not a two-state collapsed/expanded boolean.
-// `suppressTransition` is true only while actively dragging AND the width
-// is tracking the pointer 1:1 (so the rail never lags behind the cursor);
-// it's false for the normal double-click reset AND for the moment the
-// live drag crosses the collapse/expand threshold, so that specific snap
-// still eases in smoothly instead of teleporting mid-drag.
-export function sidebarStyle(railW: number, suppressTransition: boolean): CSSProperties {
-  return {
-    width: railW,
-    flex: 'none',
-    position: 'relative',
-    boxSizing: 'border-box',
-    display: 'flex',
-    flexDirection: 'column',
-    background: 'var(--surface)',
-    borderRight: '1px solid var(--line)',
-    transition: suppressTransition ? 'none' : 'width .2s cubic-bezier(.16,.84,.3,1)',
-    overflow: 'hidden',
-  };
-}
-
-// Drag handle on the rail's right edge — matches the design's
-// `railHandleStyle` (7px hit target, highlights with --live while dragging).
-export function railHandleStyle(dragging: boolean): CSSProperties {
-  return {
-    position: 'absolute',
-    top: 0,
-    right: -3,
-    bottom: 0,
-    width: 7,
-    zIndex: 12,
-    cursor: 'col-resize',
-    background: dragging ? 'var(--live)' : 'transparent',
-    opacity: dragging ? 0.5 : 1,
-    transition: 'background .12s ease',
-  };
-}
-
-// Ported from the design's `createBtnStyle` (height:32px, font-size:13px,
-// font-weight:500) — was 36/13.5/600 here, visibly too tall/bold.
-export const createWorkflowBtnStyle: CSSProperties = {
-  margin: '14px 14px 12px',
-  height: 32,
-  boxSizing: 'border-box',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 7,
-  fontFamily: 'inherit',
-  fontSize: 13,
-  fontWeight: 500,
-  color: 'var(--bg)',
-  background: 'var(--text)',
-  border: 'none',
-  borderRadius: 9,
-  cursor: 'pointer',
-};
-
-export const navScrollStyle: CSSProperties = {
-  flex: 1,
-  minHeight: 0,
-  overflowY: 'auto',
-  padding: '0 10px 14px',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 2,
-};
-
+// Nav rail group-section label ("PROJECTS", "PLATFORM") — Sidebar.tsx's
+// only remaining consumer of this un-prefixed style; its pre-nx siblings
+// (sidebarStyle, railHandleStyle, createWorkflowBtnStyle, navScrollStyle,
+// navItemStyle, projectsParentRowStyle, navChevronStyle — all superseded
+// by the navRail*/projectChevronStyle equivalents below) were removed in
+// UI-9 step 3 once confirmed to have zero remaining references.
 export const navGroupLabelStyle: CSSProperties = {
   padding: '22px 16px 8px',
   fontFamily: 'var(--nx-font-condensed)',
@@ -116,75 +52,6 @@ export const navGroupLabelStyle: CSSProperties = {
   color: 'var(--nx-ink-3)',
 };
 
-// `wide=false` renders the icon-only collapsed-rail row: centered icon,
-// no horizontal padding (the icon centers itself in the 64px rail rather
-// than sitting flush left where the label used to start).
-export function navItemStyle(active: boolean, wide: boolean = true): CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: wide ? 'flex-start' : 'center',
-    gap: 9,
-    height: 32,
-    boxSizing: 'border-box',
-    padding: wide ? '0 8px' : 0,
-    borderRadius: 7,
-    fontSize: 13.5,
-    fontWeight: active ? 600 : 400,
-    color: active ? 'var(--live)' : 'var(--text-2)',
-    background: active ? 'var(--live-dim)' : 'transparent',
-    cursor: 'pointer',
-    border: 'none',
-    width: '100%',
-    textAlign: 'left',
-    fontFamily: 'inherit',
-  };
-}
-
-// "Projects" parent disclosure row — icon + label + chevron pinned right,
-// sits directly under the PROJECTS section label, toggles the project tree
-// below it AND navigates to the /app/projects list page (design's `n.tree`
-// click handler does both: `navProjectsOpen:!st.navProjectsOpen,
-// page:'projects'`). Active whenever the list page, a project detail page,
-// or a workflow canvas is open (design's `n.id==='projects' &&
-// (s.page==='project'||s.page==='automation')` clause).
-export function projectsParentRowStyle(active: boolean, wide: boolean = true): CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: wide ? 'flex-start' : 'center',
-    gap: 9,
-    height: 32,
-    boxSizing: 'border-box',
-    padding: wide ? '0 8px' : 0,
-    borderRadius: 7,
-    fontSize: 13.5,
-    fontWeight: active ? 600 : 400,
-    color: active ? 'var(--live)' : 'var(--text-2)',
-    background: active ? 'var(--live-dim)' : 'transparent',
-    cursor: 'pointer',
-    border: 'none',
-    width: '100%',
-    textAlign: 'left',
-    fontFamily: 'inherit',
-  };
-}
-
-// Chevron glyph (›) shared by the "Projects" nav-row disclosure and each
-// project row — a single glyph rotated 0→90deg, never swapped for a
-// different up/down icon. Ported verbatim from the design's `chevStyle`
-// strings (Nia Core App.html).
-export function navChevronStyle(open: boolean): CSSProperties {
-  return {
-    flex: 'none',
-    fontSize: 12,
-    lineHeight: 1,
-    color: 'var(--text-4)',
-    transform: `rotate(${open ? 90 : 0}deg)`,
-    transition: 'transform .16s ease',
-  };
-}
-
 export function projectChevronStyle(open: boolean): CSSProperties {
   return {
     flex: 'none',
@@ -192,7 +59,9 @@ export function projectChevronStyle(open: boolean): CSSProperties {
     lineHeight: 1,
     color: 'var(--nx-ink-3)',
     transform: `rotate(${open ? 90 : 0}deg)`,
-    transition: 'transform .16s ease',
+    // UI-9 step 3 (motion): normalized to the 120ms press duration + the
+    // shared --nx-ease curve (was `.16s ease`).
+    transition: 'transform 120ms var(--nx-ease)',
   };
 }
 
@@ -740,6 +609,9 @@ export const nxDropdownStyleUp: CSSProperties = {
   borderRadius: 'var(--nx-radius)',
   background: 'var(--nx-surface)',
   border: '1px solid var(--nx-line)',
+  // UI-9 step 3 (motion): opens upward, so it slides down from its own
+  // top edge (nxMenuInUp) rather than the down-opening nxMenuIn.
+  animation: 'nxMenuInUp 160ms var(--nx-ease) both',
 };
 
 export const nxSettingsEmailRowStyle: CSSProperties = {
@@ -1085,8 +957,14 @@ export const nxDropdownStyle: CSSProperties = {
   borderRadius: 'var(--nx-radius)',
   background: 'var(--nx-surface)',
   border: '1px solid var(--nx-line)',
+  // UI-9 step 3 (motion): 160ms fade + 4px slide — had no open animation
+  // before this step.
+  animation: 'nxMenuIn 160ms var(--nx-ease) both',
 };
 
+// UI-9 step 3 (motion): pair with className="nx-wipe" for hover/focus —
+// had no hover treatment at all before this step (added to each JSX
+// caller: TopBar.tsx, CanvasHeader.tsx).
 export const nxDropdownItemStyle: CSSProperties = {
   ...dropdownItemStyle,
   borderRadius: 'var(--nx-radius)',
@@ -1140,6 +1018,8 @@ export const profileEmailTextStyle: CSSProperties = {
 // CreateProjectDialog/CreateWorkflowDialog and (since UI-9) every other
 // dialog in this scope — the pre-nx modal*Style family it replaced has
 // been removed (UI-9 step 2: last consumers migrated onto this one).
+// UI-9 step 3 (motion): scrim fade (180ms) + panel scale-up from .98
+// (220ms) — the dialog shell had no mount animation before this step.
 export const nxModalOverlayStyle: CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -1148,6 +1028,7 @@ export const nxModalOverlayStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   background: 'color-mix(in srgb, var(--nx-bg) 78%, transparent)',
+  animation: 'nxScrimIn 180ms var(--nx-ease) both',
 };
 
 export const nxModalCardStyle: CSSProperties = {
@@ -1159,6 +1040,7 @@ export const nxModalCardStyle: CSSProperties = {
   background: 'var(--nx-bg)',
   display: 'flex',
   flexDirection: 'column',
+  animation: 'nxPanelIn 220ms var(--nx-ease) both',
 };
 
 // Body is just a flex column now — each row (title, field) owns its own
@@ -1371,6 +1253,10 @@ export const nxCommandPaletteResultsTextStyle: CSSProperties = {
 // sibling like the canvas config panel, so it needs its own overlay rather
 // than reusing nxModalOverlayStyle's centered one).
 
+// UI-9 step 3 (motion): same dialog mount treatment as nxModalOverlayStyle/
+// nxModalCardStyle above — this is a modal dialog per the a11y comment
+// just above, so it gets the same scrim fade + panel scale, not a
+// bespoke slide-in.
 export const nxHelpPanelOverlayStyle: CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -1379,6 +1265,7 @@ export const nxHelpPanelOverlayStyle: CSSProperties = {
   alignItems: 'stretch',
   justifyContent: 'flex-end',
   background: 'color-mix(in srgb, var(--nx-bg) 78%, transparent)',
+  animation: 'nxScrimIn 180ms var(--nx-ease) both',
 };
 
 export const nxHelpPanelShellStyle: CSSProperties = {
@@ -1390,6 +1277,7 @@ export const nxHelpPanelShellStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   outline: 'none',
+  animation: 'nxPanelIn 220ms var(--nx-ease) both',
 };
 
 export const NX_HELP_PANEL_HEADER_HEIGHT = 56;
@@ -2104,6 +1992,8 @@ export const nxConnRowMenuBtnStyle: CSSProperties = {
   cursor: 'pointer',
 };
 
+// UI-9 step 3 (motion): 160ms fade + 4px slide — had no open animation
+// before this step.
 export const nxConnRowMenuPanelStyle: CSSProperties = {
   minWidth: 180,
   border: '1px solid var(--nx-line)',
@@ -2113,6 +2003,7 @@ export const nxConnRowMenuPanelStyle: CSSProperties = {
   zIndex: 1000,
   display: 'flex',
   flexDirection: 'column',
+  animation: 'nxMenuIn 160ms var(--nx-ease) both',
 };
 
 export const nxConnRowMenuItemStyle: CSSProperties = {

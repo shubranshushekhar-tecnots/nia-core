@@ -498,6 +498,7 @@ export default function ConnectionsClient({
                           rel="noopener noreferrer"
                           role="menuitem"
                           tabIndex={-1}
+                          className="nx-wipe"
                           style={nxConnRowMenuItemStyle}
                         >
                           View docs

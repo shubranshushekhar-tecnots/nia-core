@@ -106,7 +106,7 @@ export default function WorkflowsTable({ rows }: { rows: WorkflowRow[] }) {
                 </span>
               </div>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--nx-font-mono)', fontSize: 12.5, fontWeight: 500, color: status.color }}>
-                <span style={{ fontSize: 10, animation: status.pulsing ? 'livePulse 1.4s ease-in-out infinite' : undefined }}>
+                <span style={{ fontSize: 10, animation: status.pulsing ? 'livePulse 1.6s ease-in-out infinite' : undefined }}>
                   {status.glyph}
                 </span>
                 {row.statusLabel}

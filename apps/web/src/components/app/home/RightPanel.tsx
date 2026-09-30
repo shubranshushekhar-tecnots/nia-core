@@ -213,7 +213,7 @@ function Activity({ items }: { items: ActivityItem[] }) {
                   color: s.color,
                   flexShrink: 0,
                   marginTop: 3,
-                  animation: s.pulsing ? 'livePulse 1.4s ease-in-out infinite' : undefined,
+                  animation: s.pulsing ? 'livePulse 1.6s ease-in-out infinite' : undefined,
                 }}
               >
                 {s.glyph}

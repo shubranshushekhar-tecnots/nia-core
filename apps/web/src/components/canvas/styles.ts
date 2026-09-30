@@ -95,7 +95,9 @@ export const railShellStyle = (wide: boolean): CSSProperties => ({
   background: 'var(--nx-surface)',
   borderRight: '1px solid var(--nx-line)',
   overflow: 'hidden',
-  transition: 'width 150ms ease',
+  // UI-9 step 3 (motion): normalized to the 450ms panel/width duration +
+  // shared --nx-ease curve (was `150ms ease`).
+  transition: 'width 450ms var(--nx-ease)',
 });
 
 export const railHeaderStyle: CSSProperties = {
@@ -414,7 +416,9 @@ export const configPanelFadeStyle = (visible: boolean): CSSProperties => ({
   display: 'flex',
   flexDirection: 'column',
   opacity: visible ? 1 : 0,
-  transition: 'opacity 160ms ease-out',
+  // UI-9 step 3 (motion): normalized to the 220ms colour/opacity duration
+  // + shared --nx-ease curve (was `160ms ease-out`).
+  transition: 'opacity 220ms var(--nx-ease)',
 });
 
 // Fixed height (not content-derived) so the header row never reflows
@@ -1044,7 +1048,11 @@ export const viewportToolbarStyle = (dockHeight: number): CSSProperties => ({
   borderRadius: 'var(--nx-radius)',
   boxShadow: '0 4px 16px rgba(15,23,42,.10)',
   padding: 4,
-  transition: 'bottom 150ms ease',
+  // UI-9 step 3 (motion): normalized to the 450ms panel/width duration +
+  // shared --nx-ease curve (was `150ms ease`) — same bucket as
+  // railShellStyle above since this shift is driven by the same dock
+  // resize.
+  transition: 'bottom 450ms var(--nx-ease)',
 });
 
 export const viewportToolbarBtnStyle: CSSProperties = {

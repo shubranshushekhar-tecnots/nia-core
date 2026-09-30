@@ -129,6 +129,7 @@ export default function TopBar({
                   <form key={org.id} action={switchOrg.bind(null, org.id)}>
                     <button
                       type="submit"
+                      className="nx-wipe"
                       style={{
                         ...nxDropdownItemStyle,
                         fontWeight: org.id === activeOrgId ? 600 : 400,
@@ -148,11 +149,11 @@ export default function TopBar({
             )}
             <div style={{ height: 1, background: 'var(--nx-line)', margin: '4px 0' }} />
             {orgName === null ? (
-              <a href="/onboarding" style={{ ...nxDropdownItemStyle, textDecoration: 'none', display: 'block' }}>
+              <a className="nx-wipe" href="/onboarding" style={{ ...nxDropdownItemStyle, textDecoration: 'none', display: 'block' }}>
                 Create organization
               </a>
             ) : (
-              <button type="button" style={{ ...nxDropdownItemStyle, color: 'var(--nx-ink-3)' }} disabled>
+              <button type="button" className="nx-row-disabled" style={{ ...nxDropdownItemStyle, color: 'var(--nx-ink-3)' }} disabled>
                 Create organization {'\u2014'} soon
               </button>
             )}
@@ -242,6 +243,7 @@ export default function TopBar({
                   which the server action has no way to reach. */}
               <button
                 type="submit"
+                className="nx-wipe"
                 onClick={() => clearStoredBearerToken()}
                 style={{ ...nxDropdownItemStyle, color: 'var(--nx-danger-text)' }}
               >
