@@ -33,7 +33,7 @@ export default async function AcceptInvitePage({ params }: { params: Promise<{ t
 
   if ('alreadyMember' in result) {
     return (
-      <div style={nxAcceptInvitePageStyle}>
+      <div data-app-theme="" data-om-theme="light" style={nxAcceptInvitePageStyle}>
         <div style={nxAcceptInvitePanelStyle('success')}>
           <span style={nxAcceptInviteEyebrowStyle('success')}>Members &amp; roles</span>
           <h1 style={nxAcceptInviteHeadingStyle}>You&apos;re already a member</h1>
@@ -49,7 +49,7 @@ export default async function AcceptInvitePage({ params }: { params: Promise<{ t
   }
 
   return (
-    <div style={nxAcceptInvitePageStyle}>
+    <div data-app-theme="" data-om-theme="light" style={nxAcceptInvitePageStyle}>
       <div style={nxAcceptInvitePanelStyle('error')}>
         <span style={nxAcceptInviteEyebrowStyle('error')}>Invite link problem</span>
         <h1 style={nxAcceptInviteHeadingStyle}>Invite link problem</h1>
