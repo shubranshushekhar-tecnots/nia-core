@@ -28,6 +28,7 @@ import {
   navTreeStatusLabel,
   navWordmarkStyle,
   newProjectRowStyle,
+  nxDropdownItemStyle,
   nxDropdownStyleUp,
   nxSettingsEmailRowStyle,
   projectChevronStyle,
@@ -484,6 +485,9 @@ export default function Sidebar({
             <div style={{ ...nxDropdownStyleUp, left: wide ? 8 : 44, bottom: 0 }}>
               <div style={nxSettingsEmailRowStyle}>{email}</div>
               <ThemeSwitcher />
+              <Link href="/app/settings" className="nx-wipe" style={nxDropdownItemStyle}>
+                All settings
+              </Link>
             </div>
           )}
         </div>
