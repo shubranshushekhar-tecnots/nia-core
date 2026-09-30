@@ -512,6 +512,14 @@ html[data-nx-theme='light'] [data-app-theme] {
   background-size: 14px 14px;
 }
 
+/* Step 3 dialogs (CreateProjectDialog/CreateWorkflowDialog): 2px inset
+   purple focus ring on name/project fields — inline styles can't express
+   :focus, so this one rule lives here, same pattern as .hl-field:focus. */
+.nx-modal-field:focus {
+  outline: 2px solid var(--nx-blue-panel);
+  outline-offset: -2px;
+}
+
 /* ------------------------------------------------------------
    Nia Core App.html — auth screen theme (login/signup/forgot/reset/
    onboarding), extracted verbatim from the `const T = "..."` override

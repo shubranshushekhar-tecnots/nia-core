@@ -8,12 +8,13 @@ import {
   nxModalCancelCellStyle,
   nxModalCardStyle,
   nxModalErrorStyle,
+  nxModalFieldRowStyle,
   nxModalFieldStyle,
   nxModalFooterStyle,
   nxModalLabelStyle,
   nxModalOverlayStyle,
   nxModalPrimaryCellStyle,
-  nxModalTagStyle,
+  nxModalTitleRowStyle,
   nxModalTitleStyle,
 } from './styles';
 
@@ -31,9 +32,10 @@ export default function CreateProjectDialog({ orgId, onClose }: { orgId: string 
       <div style={nxModalCardStyle} onClick={(e) => e.stopPropagation()}>
         <form action={formAction} style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={nxModalBodyStyle}>
-            <span style={nxModalTagStyle}>New</span>
-            <span style={nxModalTitleStyle}>New project</span>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={nxModalTitleRowStyle}>
+              <span style={nxModalTitleStyle}>New project</span>
+            </div>
+            <div style={nxModalFieldRowStyle}>
               <label htmlFor="project-name" style={nxModalLabelStyle}>Name</label>
               <input
                 id="project-name"
@@ -41,22 +43,24 @@ export default function CreateProjectDialog({ orgId, onClose }: { orgId: string 
                 type="text"
                 autoFocus
                 placeholder="Sales Analytics"
+                className="nx-modal-field"
                 style={nxModalFieldStyle(Boolean(state?.fieldErrors?.name))}
               />
               {state?.fieldErrors?.name && <span style={nxModalErrorStyle}>{state.fieldErrors.name[0]}</span>}
+              {state?.error && <span style={nxModalErrorStyle}>{state.error}</span>}
             </div>
-            {state?.error && <span style={nxModalErrorStyle}>{state.error}</span>}
           </div>
           <div style={nxModalFooterStyle}>
             <button type="button" style={nxModalCancelCellStyle} onClick={onClose}>
               Cancel
             </button>
             <button type="submit" disabled={pending} style={nxModalPrimaryCellStyle(pending)}>
+              {pending && <span className="nx-spinner" aria-hidden style={{ color: 'var(--nx-blue-panel)' }} />}
               {pending ? 'Creating\u2026' : 'Create project'}
               {!pending && (
-                <span aria-hidden style={{ fontSize: 14 }}>
-                  {'\u2192'}
-                </span>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                  <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+                </svg>
               )}
             </button>
           </div>

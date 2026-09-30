@@ -1231,35 +1231,31 @@ export const nxModalCardStyle: CSSProperties = {
   width: 400,
   maxWidth: '90vw',
   boxSizing: 'border-box',
-  border: '1px solid var(--nx-line)',
+  border: '1px solid var(--nx-ink-disabled)',
   borderRadius: 'var(--nx-radius)',
   background: 'var(--nx-bg)',
   display: 'flex',
   flexDirection: 'column',
 };
 
+// Body is just a flex column now — each row (title, field) owns its own
+// 20px padding + border-bottom divider, per the Step 3 dialog spec
+// (DIALOGS section, HomeStates.dc.html), instead of one padded/gapped block.
 export const nxModalBodyStyle: CSSProperties = {
-  padding: '24px 24px 20px',
   display: 'flex',
   flexDirection: 'column',
-  gap: 14,
 };
 
-export const nxModalTagStyle: CSSProperties = {
-  fontFamily: 'var(--nx-font-condensed)',
-  fontStretch: '62.5%',
-  fontWeight: 700,
-  fontSize: 12,
-  letterSpacing: '0.06em',
-  textTransform: 'uppercase',
-  color: 'var(--nx-ink-2)',
+export const nxModalTitleRowStyle: CSSProperties = {
+  padding: 20,
+  borderBottom: '1px solid var(--nx-line)',
 };
 
 export const nxModalTitleStyle: CSSProperties = {
-  fontFamily: 'var(--nx-font-ui)',
-  fontSize: 26,
-  fontWeight: 700,
-  letterSpacing: '-0.035em',
+  fontFamily: 'var(--font-inter-tight), var(--nx-font-ui)',
+  fontSize: 28,
+  fontWeight: 500,
+  letterSpacing: '-0.03em',
   color: 'var(--nx-ink)',
 };
 
@@ -1267,23 +1263,50 @@ export const nxModalLabelStyle: CSSProperties = {
   fontFamily: 'var(--nx-font-condensed)',
   fontStretch: '62.5%',
   fontWeight: 700,
-  fontSize: 11.5,
-  letterSpacing: '0.05em',
+  fontSize: 14,
+  letterSpacing: '0.04em',
   textTransform: 'uppercase',
   color: 'var(--nx-ink-2)',
+};
+
+// Standalone single-field row (e.g. CreateProjectDialog's Name field).
+export const nxModalFieldRowStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: 20,
+  borderBottom: '1px solid var(--nx-line)',
+};
+
+// First of a stacked pair (e.g. CreateWorkflowDialog's Project field) — no
+// divider of its own, tighter bottom padding than the row below it.
+export const nxModalFieldRowTopStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: '20px 20px 12px',
+};
+
+// Second/last of a stacked pair (e.g. CreateWorkflowDialog's Name field).
+export const nxModalFieldRowStackedStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: '12px 20px 20px',
+  borderBottom: '1px solid var(--nx-line)',
 };
 
 export function nxModalFieldStyle(hasError: boolean): CSSProperties {
   return {
     width: '100%',
     boxSizing: 'border-box',
-    height: 40,
+    height: 44,
     padding: '0 12px',
     fontFamily: 'var(--nx-font-ui)',
-    fontSize: 14,
+    fontSize: 15,
     color: 'var(--nx-ink)',
     background: 'var(--nx-surface)',
-    border: `1px solid ${hasError ? 'var(--nx-danger)' : 'var(--nx-line)'}`,
+    border: `1px solid ${hasError ? 'var(--nx-danger)' : 'var(--nx-ink-disabled)'}`,
     borderRadius: 'var(--nx-radius)',
     outline: 'none',
   };
@@ -1291,7 +1314,7 @@ export function nxModalFieldStyle(hasError: boolean): CSSProperties {
 
 export const nxModalErrorStyle: CSSProperties = { fontSize: 12.5, color: 'var(--nx-danger-text)' };
 
-// Footer: 52px row, a 120px "CANCEL" cell with a right divider, primary
+// Footer: 52px row, a 110px "CANCEL" cell with a right divider, primary
 // action filling the rest — per the Step 3 dialog spec.
 export const nxModalFooterStyle: CSSProperties = {
   display: 'flex',
@@ -1300,11 +1323,11 @@ export const nxModalFooterStyle: CSSProperties = {
 };
 
 export const nxModalCancelCellStyle: CSSProperties = {
-  width: 120,
+  width: 110,
   flex: 'none',
   fontFamily: 'var(--nx-font-mono)',
-  fontSize: 11,
-  letterSpacing: '0.05em',
+  fontSize: 12,
+  letterSpacing: '0.06em',
   textTransform: 'uppercase',
   color: 'var(--nx-ink-2)',
   background: 'transparent',
@@ -1318,11 +1341,11 @@ export function nxModalPrimaryCellStyle(pending: boolean): CSSProperties {
     flex: 1,
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+    justifyContent: pending ? 'flex-start' : 'space-between',
+    gap: 12,
+    padding: '0 16px',
     fontFamily: 'var(--nx-font-ui)',
-    fontSize: 13.5,
-    fontWeight: 600,
+    fontSize: 15,
     color: pending ? 'var(--nx-blue-soft-text)' : 'var(--nx-blue-cta-text)',
     background: pending ? 'var(--nx-blue-tint)' : 'var(--nx-blue-cta)',
     border: 'none',

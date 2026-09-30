@@ -9,12 +9,14 @@ import {
   nxModalCancelCellStyle,
   nxModalCardStyle,
   nxModalErrorStyle,
+  nxModalFieldRowStackedStyle,
+  nxModalFieldRowTopStyle,
   nxModalFieldStyle,
   nxModalFooterStyle,
   nxModalLabelStyle,
   nxModalOverlayStyle,
   nxModalPrimaryCellStyle,
-  nxModalTagStyle,
+  nxModalTitleRowStyle,
   nxModalTitleStyle,
 } from './styles';
 
@@ -44,20 +46,36 @@ export default function CreateWorkflowDialog({
       <div style={nxModalCardStyle} onClick={(e) => e.stopPropagation()}>
         <form action={noProjects ? undefined : formAction} style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={nxModalBodyStyle}>
-            <span style={nxModalTagStyle}>New</span>
-            <span style={nxModalTitleStyle}>New workflow</span>
+            <div style={nxModalTitleRowStyle}>
+              <span style={nxModalTitleStyle}>New workflow</span>
+            </div>
             {noProjects ? (
-              <p style={{ fontSize: 13, color: 'var(--nx-ink-2)', margin: 0 }}>
-                Create a project first {'\u2014'} workflows live inside one.
-              </p>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 14,
+                  padding: '24px 20px',
+                  borderBottom: '1px solid var(--nx-line)',
+                  background: 'var(--nx-surface)',
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{ width: 32, height: 32, flexShrink: 0, border: '1px dashed var(--nx-ink-disabled)', boxSizing: 'border-box' }}
+                />
+                <p style={{ margin: 0, fontSize: 16, lineHeight: '24px', color: 'var(--nx-ink)' }}>
+                  Create a project first {'\u2014'} workflows live inside one.
+                </p>
+              </div>
             ) : (
               <>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={nxModalFieldRowTopStyle}>
                   <label htmlFor="workflow-project" style={nxModalLabelStyle}>Project</label>
                   <select
                     id="workflow-project"
                     name="projectId"
                     defaultValue={defaultProjectId ?? projects[0]?.id}
+                    className="nx-modal-field"
                     style={nxModalFieldStyle(Boolean(state?.fieldErrors?.projectId))}
                   >
                     {projects.map((project) => (
@@ -70,7 +88,7 @@ export default function CreateWorkflowDialog({
                     <span style={nxModalErrorStyle}>{state.fieldErrors.projectId[0]}</span>
                   )}
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={nxModalFieldRowStackedStyle}>
                   <label htmlFor="workflow-name" style={nxModalLabelStyle}>Name</label>
                   <input
                     id="workflow-name"
@@ -78,11 +96,12 @@ export default function CreateWorkflowDialog({
                     type="text"
                     autoFocus
                     placeholder="Daily revenue sync"
+                    className="nx-modal-field"
                     style={nxModalFieldStyle(Boolean(state?.fieldErrors?.name))}
                   />
                   {state?.fieldErrors?.name && <span style={nxModalErrorStyle}>{state.fieldErrors.name[0]}</span>}
+                  {state?.error && <span style={nxModalErrorStyle}>{state.error}</span>}
                 </div>
-                {state?.error && <span style={nxModalErrorStyle}>{state.error}</span>}
               </>
             )}
           </div>
@@ -92,11 +111,12 @@ export default function CreateWorkflowDialog({
             </button>
             {!noProjects && (
               <button type="submit" disabled={pending} style={nxModalPrimaryCellStyle(pending)}>
+                {pending && <span className="nx-spinner" aria-hidden style={{ color: 'var(--nx-blue-panel)' }} />}
                 {pending ? 'Creating\u2026' : 'Create workflow'}
                 {!pending && (
-                  <span aria-hidden style={{ fontSize: 14 }}>
-                    {'\u2192'}
-                  </span>
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                    <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+                  </svg>
                 )}
               </button>
             )}
