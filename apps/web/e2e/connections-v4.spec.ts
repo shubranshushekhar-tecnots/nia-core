@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { personas } from './fixtures/personas';
 
-// Verifies the "Connections page (cards v4)" redesign against
+// Verifies the "Connections page" redesign against
 // designs/Connections — with connections-html/Connections.dc.html.
 // Logged in as personas.canvasA (member of "Canvas E2E Org" — seeded with
 // all 4 real installed connectors: mysql, postgres, mongodb, supabase,
@@ -11,6 +11,27 @@ import { personas } from './fixtures/personas';
 // persona's storageState never gets produced. canvasA has no 2FA and
 // exercises every gated connector card, matching this task's Step 7
 // checklist.
+//
+// UI-9 step 6: selectors/assertions below were updated against the card
+// v6 "fidelity pass" (ConnectorCard.tsx/styles.ts's `nxConnectorCard*`
+// family) which replaced the earlier v4 hover-morph card referenced by
+// this file's original text:
+// - `--nx-radius` is now 0px globally (sharp corners everywhere) — was
+//   16/10/8px under v4.
+// - Hover/focus-within now only shifts the card's own background to
+//   `var(--nx-surface)` (`.nx-conn-card` in theme.css); there is no
+//   logo glide/shrink, no rest-text fade, no button color invert. The
+//   giant bottom-left logo/monogram mark never moves.
+// - The card is a plain non-focusable `<div>` (no tabIndex); keyboard
+//   focus/`:focus-within` is driven by its main action button, not the
+//   card itself — focus-ring and hover-state tests below target that
+//   button, not `connector-card`.
+// - Real vendor marks render as an inline `<svg>` inside a
+//   `data-testid="connector-logo"` wrapper, never an `<img>`; the 4
+//   catalog ids with no simple-icons mark render a bare text glyph in
+//   that same wrapper instead. Tests below use the testid, not `img`.
+// - The description has no line-clamp in v6 (card height is `minHeight`-
+//   based and grows with content), so that assertion was dropped.
 
 test.use({ storageState: personas.canvasA.storageStatePath });
 
@@ -68,9 +89,10 @@ for (const viewport of [
       const firstRowBoxes = boxes.filter((b) => Math.abs(b.y - firstRowY) < 4);
       expect(firstRowBoxes.length).toBe(viewport.cols);
 
+      // Card v6 uses `minHeight: 348` (art 148 + actions 52 + variable-
+      // height body) rather than a fixed height, so only assert the floor.
       for (const b of boxes) {
-        expect(b.height).toBeGreaterThanOrEqual(471);
-        expect(b.height).toBeLessThanOrEqual(473);
+        expect(b.height).toBeGreaterThanOrEqual(348);
       }
 
       // Equal card widths within the first row (+/-1px) — confirms the
@@ -89,11 +111,11 @@ for (const viewport of [
         expect(hasHScroll).toBe(false);
       }
 
-      // border-radius (round 5): card 16px, its buttons/docs-link 8-10px,
-      // search input 10px — see CONNECTIONS_RADIUS in styles.ts.
+      // border-radius: `--nx-radius` is 0px globally now (sharp corners) —
+      // card, its buttons/docs-link, and the search input all match.
       const radiusExpectations: [string, string][] = [
-        ['[data-testid="connector-card"]', '16px'],
-        ['input[placeholder="Search connectors"]', '10px'],
+        ['[data-testid="connector-card"]', '0px'],
+        ['input[placeholder="Search connectors"]', '0px'],
       ];
       for (const [sel, expected] of radiusExpectations) {
         const radii = await page.locator(sel).evaluateAll((els) =>
@@ -101,12 +123,10 @@ for (const viewport of [
         );
         for (const r of radii) expect(r).toBe(expected);
       }
-      // Card buttons are either the 10px main CTA or the 8px docs button —
-      // never square, never a stray capsule.
       const cardButtonRadii = await page
         .locator('[data-testid="connector-card"] button, [data-testid="connector-card"] a[aria-label$="documentation"]')
         .evaluateAll((els) => els.map((el) => getComputedStyle(el).borderRadius));
-      for (const r of cardButtonRadii) expect(['8px', '10px']).toContain(r);
+      for (const r of cardButtonRadii) expect(r).toBe('0px');
 
       // No-capsule rule: nothing on the page (other than the small status
       // dots) should be fully rounded (radius >= half its own height).
@@ -123,39 +143,49 @@ for (const viewport of [
       expect(capsules).toEqual([]);
     });
 
-    test('corner-safe insets: card text/icon/logo stay >=20px from every card edge', async ({ page }) => {
+    // Card v6's art-band corner labels use fixed inline-style insets
+    // (nxConnectorCardCategoryStyle: left 20/top 16; nxConnectorCardBadgeStyle:
+    // right 16/top 14 — see styles.ts) rather than a uniform ">=20px on every
+    // edge" rule. The giant bottom-left logo/monogram is a deliberate
+    // bleeding "watermark" (its fallback form is explicitly clipped past the
+    // art band's bottom edge, `bottom: -12`), so it's intentionally excluded
+    // from this inset check, and — per the v6 redesign — never moves on
+    // hover, so there's no separate hover-view assertion here either.
+    test('corner-safe insets: category label and status badge stay clear of the art-band edges', async ({ page }) => {
       await gotoConnections(page);
       const card = page.getByTestId('connector-card').first();
+      const cardBox = await card.boundingBox();
+      if (!cardBox) throw new Error('no card rendered');
 
-      // Re-fetch the card's own box each time (not once upfront) — hover
-      // can shift page scroll/layout, and a stale box compared against a
-      // freshly-measured child box would produce bogus huge offsets.
-      async function assertInset(locator: ReturnType<typeof card.locator>) {
-        const count = await locator.count();
-        if (!count) return;
-        const cardBox = await card.boundingBox();
-        const box = await locator.first().boundingBox();
-        if (!box || !cardBox) return;
-        expect(box.x - cardBox.x).toBeGreaterThanOrEqual(19);
-        expect(cardBox.x + cardBox.width - (box.x + box.width)).toBeGreaterThanOrEqual(19);
-        expect(box.y - cardBox.y).toBeGreaterThanOrEqual(19);
+      const category = card.getByText(/Database|Warehouse|BI|AI Vector|Files/).first();
+      const categoryBox = await category.boundingBox();
+      expect(categoryBox).not.toBeNull();
+      if (categoryBox) {
+        expect(categoryBox.x - cardBox.x).toBeGreaterThanOrEqual(14);
+        expect(categoryBox.y - cardBox.y).toBeGreaterThanOrEqual(10);
       }
 
-      // Rest view: category label (top-left) and status badge (top-right).
-      await assertInset(card.getByText(/Database|Warehouse|BI|AI Vector|Files/).first());
-
-      // Hover view: logo glides to (20, 20).
-      await card.hover();
-      await page.waitForTimeout(500);
-      await assertInset(card.getByTestId('connector-logo'));
+      const badge = card.locator('span').filter({ hasText: /connected|Installed|Coming soon/ }).first();
+      if (await badge.count()) {
+        const badgeBox = await badge.boundingBox();
+        if (badgeBox) {
+          expect(cardBox.x + cardBox.width - (badgeBox.x + badgeBox.width)).toBeGreaterThanOrEqual(10);
+          expect(badgeBox.y - cardBox.y).toBeGreaterThanOrEqual(8);
+        }
+      }
     });
 
-    test('keyboard focus ring is visible and not clipped by the card', async ({ page }) => {
+    // The card itself is a plain non-focusable <div> (no tabIndex) —
+    // keyboard focus/`:focus-within` is driven by its main action button
+    // (.nx-wipe, with its own :focus-visible rule in theme.css), not the
+    // card element.
+    test('keyboard focus ring is visible on the card\'s main action button', async ({ page }) => {
       await gotoConnections(page);
       const card = page.getByTestId('connector-card').first();
-      await card.focus();
+      const mainButton = card.locator('button, button[type="submit"]').first();
+      await mainButton.focus();
       await page.waitForTimeout(100);
-      const outline = await card.evaluate((el) => {
+      const outline = await mainButton.evaluate((el) => {
         const s = getComputedStyle(el);
         return { width: s.outlineWidth, style: s.outlineStyle };
       });
@@ -163,36 +193,24 @@ for (const viewport of [
       expect(parseFloat(outline.width)).toBeGreaterThan(0);
     });
 
-    test('rest view: logo size/position, description clamp, no button overflow', async ({ page }) => {
+    test('rest view: logo mark renders, no button overflow', async ({ page }) => {
       await gotoConnections(page);
       const card = page.getByTestId('connector-card').first();
 
-      const logoBox = card.locator('img, span').filter({ hasText: '' }).first();
-      // Media band + logo: verify via the card's own DOM structure instead of
-      // guessing a selector — read the logo <img> (simple-icons svg or
-      // fallback text) inside the card.
-      const img = card.locator('img').first();
-      if (await img.count()) {
-        const box = await img.boundingBox();
-        expect(box).not.toBeNull();
-        if (box) {
-          expect(Math.round(box.width)).toBeGreaterThanOrEqual(74);
-          expect(Math.round(box.width)).toBeLessThanOrEqual(78);
-        }
-      }
+      // Logo mark: a real vendor brand icon renders as an inline <svg>
+      // inside the data-testid wrapper; the 4 catalog ids with no
+      // simple-icons mark render a bare text glyph in the same wrapper
+      // instead — either way, just confirm something visible rendered
+      // (card v6 has no fixed logo size/position contract to assert here,
+      // unlike the old v4 hover-morph card).
+      const logo = card.getByTestId('connector-logo');
+      await expect(logo).toBeVisible();
+      const logoBox = await logo.boundingBox();
+      expect(logoBox).not.toBeNull();
+      if (logoBox) expect(logoBox.width).toBeGreaterThan(0);
 
-      const desc = card.locator('span').filter({ hasText: /.+/ }).nth(2);
-      const lineClampInfo = await card.evaluate((el) => {
-        const spans = Array.from(el.querySelectorAll('span'));
-        const descSpan = spans.find((s) => getComputedStyle(s).webkitLineClamp === '2');
-        if (!descSpan) return null;
-        return {
-          clamp: getComputedStyle(descSpan).webkitLineClamp,
-          scrollHeight: descSpan.scrollHeight,
-          clientHeight: descSpan.clientHeight,
-        };
-      });
-      expect(lineClampInfo?.clamp).toBe('2');
+      // No line-clamp in v6 — the description is unclamped and the card's
+      // body grows with content (minHeight, not a fixed height).
 
       const buttons = card.locator('button, a[aria-label$="documentation"], a[aria-label="Docs coming soon"]');
       const overflowChecks = await buttons.evaluateAll((els) =>
@@ -201,45 +219,41 @@ for (const viewport of [
       for (const c of overflowChecks) expect(c.scrollWidth).toBeLessThanOrEqual(c.clientWidth + 1);
     });
 
-    test('hover view: card recolors, logo moves and shrinks, rest text fades, button inverts', async ({ page }) => {
+    // Card v6: hover/focus-within only shifts the card's own background to
+    // `var(--nx-surface)` (theme.css's `.nx-conn-card`) — no logo move/
+    // shrink, no rest-text fade, no button color invert (the action
+    // buttons use the separate `.nx-wipe` hover utility for their own
+    // treatment, which isn't a `background-color` swap, so it isn't
+    // asserted here).
+    test('hover view: card background shifts to --nx-surface, no button overflow', async ({ page }) => {
       await gotoConnections(page);
       const card = page.getByTestId('connector-card').first();
       await card.hover();
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(300);
 
       const bg = await card.evaluate((el) => getComputedStyle(el).backgroundColor);
-      expect(bg).toBe('rgb(10, 10, 11)');
-
-      const img = card.locator('img').first();
-      if (await img.count()) {
-        const cardBox = await card.boundingBox();
-        const imgBox = await img.boundingBox();
-        expect(cardBox).not.toBeNull();
-        expect(imgBox).not.toBeNull();
-        if (cardBox && imgBox) {
-          expect(Math.round(imgBox.width)).toBeGreaterThanOrEqual(30);
-          expect(Math.round(imgBox.width)).toBeLessThanOrEqual(34);
-        }
-      }
+      expect(bg).toBe('rgb(17, 17, 19)'); // --nx-surface (dark theme)
 
       const mainButton = card.locator('button, button[type="submit"]').first();
-      const btnStyle = await mainButton.evaluate((el) => {
-        const s = getComputedStyle(el);
-        return { bg: s.backgroundColor, color: s.color, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
-      });
+      const btnStyle = await mainButton.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
       expect(btnStyle.scrollWidth).toBeLessThanOrEqual(btnStyle.clientWidth + 1);
     });
 
-    test('keyboard focus shows hover view; reduced motion skips logo glide', async ({ page }) => {
+    // `:focus-within` is triggered by focusing a control inside the card
+    // (the card div itself has no tabIndex) — same --nx-surface background
+    // as the mouse-hover case, reduced motion or not (it's a background
+    // transition, not a mount/morph animation).
+    test('focusing the main action button shows the same hover background on its card', async ({ page }) => {
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await gotoConnections(page);
 
       const card = page.getByTestId('connector-card').first();
-      await card.focus();
+      const mainButton = card.locator('button, button[type="submit"]').first();
+      await mainButton.focus();
       await page.waitForTimeout(200);
 
       const bg = await card.evaluate((el) => getComputedStyle(el).backgroundColor);
-      expect(bg).toBe('rgb(10, 10, 11)');
+      expect(bg).toBe('rgb(17, 17, 19)');
     });
 
     test('installed row: uninstall button is fully visible and clickable', async ({ page }) => {
