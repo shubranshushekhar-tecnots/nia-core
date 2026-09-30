@@ -159,6 +159,35 @@ export async function revokeUserSessionsAction(
 }
 
 /**
+ * Subscription Phase 5, Slice 6 (docs/plans/subscription-model.md, decision
+ * 2): submits ConsoleOrgDetailClient's per-member "Remove from org"
+ * reason + confirmation form to POST
+ * /console/orgs/:orgId/members/:userId/remove — same useTransition-driven,
+ * ok/error mutation shape as suspendOrgAction/revokeUserSessionsAction
+ * above. The route's own error message (e.g. the last-owner / billing-owner
+ * refusal, surfaced verbatim from the DB trigger — see routes/console.ts's
+ * doc comment on this route) flows straight through as `error` via
+ * ApiError, same "the trigger's own message IS the customer-facing copy"
+ * convention used elsewhere.
+ */
+export async function removeMemberAction(
+  orgId: string,
+  userId: string,
+  reason: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await apiFetchServer<{ status: string }>(
+      `/console/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}/remove`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't remove this member. Try again." };
+  }
+}
+
+/**
  * Subscription Phase 5, Slice 3 (docs/plans/subscription-model.md, decision
  * 1): ConsoleAnnouncementsClient's tab switch and "Load more" both call
  * this — plain data-fetching Server Action, same non-mutation shape as

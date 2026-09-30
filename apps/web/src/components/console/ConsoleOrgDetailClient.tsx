@@ -3,13 +3,14 @@
 import { useState, useTransition } from 'react';
 import Link from 'next/link';
 import type { ConsoleConnector, ConsoleOrgDetail, ConsolePlan, ConsoleRun } from '@/lib/api/consoleServer';
-import { suspendOrgAction, unsuspendOrgAction, updateOrgPlanAction } from '@/lib/console/actions';
+import { removeMemberAction, suspendOrgAction, unsuspendOrgAction, updateOrgPlanAction } from '@/lib/console/actions';
 import { formatLowerLimitWarning } from '@/lib/console/planLimitWarning';
 import {
   consoleBreadcrumbCurrentStyle,
   consoleBreadcrumbLinkStyle,
   consoleBreadcrumbRowStyle,
   consoleBreadcrumbSepStyle,
+  consoleColActionsStyle,
   consoleColConnectorCreatedStyle,
   consoleColConnectorHealthStyle,
   consoleColConnectorNameStyle,
@@ -48,13 +49,15 @@ import {
   consoleRowConnectorHealthCellStyle,
   consoleRowConnectorHealthLatencyStyle,
   consoleRowConnectorNameCellStyle,
+  consoleRowActionsCellStyle,
   consoleRowConnectorTypeCellStyle,
   consoleRowEmailCellStyle,
   consoleRowJoinedCellStyle,
-  consoleRowLinkStyle,
   consoleRowMemberCellStyle,
+  consoleRowMemberLinkStyle,
   consoleRowNameColStyle,
   consoleRowNameStyle,
+  consoleRowRemoveBtnStyle,
   consoleRowRoleCellStyle,
   consoleRowRunDurationCellStyle,
   consoleRowRunErrorCellStyle,
@@ -137,6 +140,16 @@ import {
  * moved and Copilot actions this month, appended to the existing
  * plan/limits/usage row — display-only (no edit form, unlike workflow/
  * project limit, since org_plan has no override columns for these).
+ *
+ * Subscription Phase 5, Slice 6 (decision 2): the Members row's "no per-row
+ * ··· menu" note above is now superseded for one specific action —
+ * "Remove from org". Same inline-form-not-modal, required-reason
+ * confirmation pattern as the header's suspend/unsuspend form (`removeMode`
+ * mirrors `suspendMode`, reusing its exact form styles), but scoped per
+ * row (keyed by userId) since removal targets one specific member rather
+ * than the whole org. The row itself can no longer be a single <Link> (a
+ * nested <button> would double-fire navigation) — see
+ * consoleRowMemberLinkStyle's own doc comment in styles.ts.
  */
 export default function ConsoleOrgDetailClient({
   org: initialOrg,
@@ -323,6 +336,39 @@ export default function ConsoleOrgDetailClient({
       }
       setOrg((prev) => ({ ...prev, status: result.status, suspendedAt: null, suspendedReason: null, suspendedBy: null }));
       setSuspendMode('none');
+    });
+  }
+
+  // Slice 6 (decision 2): removeTargetId is the userId whose row has its
+  // confirm form open (null = none open) — mirrors suspendMode's
+  // none/suspend/unsuspend shape, just keyed per row instead of once per
+  // screen.
+  const [removeTargetId, setRemoveTargetId] = useState<string | null>(null);
+  const [removeReason, setRemoveReason] = useState('');
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [isRemovePending, startRemoveTransition] = useTransition();
+
+  function startRemoving(userId: string) {
+    setRemoveReason('');
+    setRemoveError(null);
+    setRemoveTargetId(userId);
+  }
+
+  function handleRemove(userId: string) {
+    const reason = removeReason.trim();
+    if (!reason) {
+      setRemoveError('Reason is required.');
+      return;
+    }
+    setRemoveError(null);
+    startRemoveTransition(async () => {
+      const result = await removeMemberAction(org.id, userId, reason);
+      if (!result.ok) {
+        setRemoveError(result.error);
+        return;
+      }
+      setOrg((prev) => ({ ...prev, members: prev.members.filter((m) => m.userId !== userId) }));
+      setRemoveTargetId(null);
     });
   }
 
@@ -588,24 +634,70 @@ export default function ConsoleOrgDetailClient({
             <span style={consoleColEmailStyle}>Email</span>
             <span style={consoleColRoleStyle}>Role</span>
             <span style={consoleColJoinedStyle}>Joined</span>
+            <span style={consoleColActionsStyle} />
           </div>
 
           {org.members.length === 0 && <div style={consoleEmptyStyle}>No members.</div>}
 
           {org.members.map((m) => (
-            <Link key={m.userId} href={`/console/users/${m.userId}`} style={consoleRowLinkStyle}>
+            <div key={m.userId}>
               <div style={consoleRowStyle}>
-                <span style={consoleRowMemberCellStyle}>
-                  <span style={consoleMonoStyle}>{initialsOf(m.name)}</span>
-                  <span style={consoleRowNameColStyle}>
-                    <span style={consoleRowNameStyle}>{m.name}</span>
+                <Link href={`/console/users/${m.userId}`} style={consoleRowMemberLinkStyle}>
+                  <span style={consoleRowMemberCellStyle}>
+                    <span style={consoleMonoStyle}>{initialsOf(m.name)}</span>
+                    <span style={consoleRowNameColStyle}>
+                      <span style={consoleRowNameStyle}>{m.name}</span>
+                    </span>
                   </span>
+                  <span style={consoleRowEmailCellStyle}>{m.email}</span>
+                  <span style={consoleRowRoleCellStyle}>{m.role}</span>
+                  <span style={consoleRowJoinedCellStyle}>{formatDate(m.joinedAt)}</span>
+                </Link>
+                <span style={consoleRowActionsCellStyle}>
+                  {removeTargetId !== m.userId && (
+                    <button type="button" onClick={() => startRemoving(m.userId)} style={consoleRowRemoveBtnStyle}>
+                      Remove
+                    </button>
+                  )}
                 </span>
-                <span style={consoleRowEmailCellStyle}>{m.email}</span>
-                <span style={consoleRowRoleCellStyle}>{m.role}</span>
-                <span style={consoleRowJoinedCellStyle}>{formatDate(m.joinedAt)}</span>
               </div>
-            </Link>
+              {removeTargetId === m.userId && (
+                <div style={consoleSuspendFormStyle}>
+                  <div style={consolePlanFieldStyle}>
+                    <label htmlFor={`console-remove-reason-${m.userId}`} style={consolePlanFieldLabelStyle}>
+                      Reason
+                    </label>
+                    <textarea
+                      id={`console-remove-reason-${m.userId}`}
+                      value={removeReason}
+                      onChange={(e) => setRemoveReason(e.target.value)}
+                      disabled={isRemovePending}
+                      style={consoleSuspendTextareaStyle}
+                      placeholder={`Why is ${m.name} being removed from ${org.name}?`}
+                    />
+                  </div>
+                  <div style={consolePlanFormActionsStyle}>
+                    <button
+                      type="button"
+                      onClick={() => handleRemove(m.userId)}
+                      disabled={isRemovePending}
+                      style={consoleDangerBtnStyle}
+                    >
+                      {isRemovePending ? 'Removing…' : 'Confirm remove'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRemoveTargetId(null)}
+                      disabled={isRemovePending}
+                      style={consoleGhostBtnStyle}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {removeError && <span style={consolePlanFormErrorStyle}>{removeError}</span>}
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}

@@ -750,6 +750,43 @@ export const consoleRowLinkStyle: CSSProperties = {
   cursor: 'pointer',
 };
 
+// Subscription Phase 5, Slice 6 (decision 2): Org Detail's Members row now
+// has a per-row "Remove" action, so the row itself can no longer be a
+// single <Link> (a button nested inside an <a> would double-fire
+// navigation on click). This wraps just the member/email/role/joined
+// cells in the link instead — same visual layout as consoleRowLinkStyle's
+// old full-row link, just scoped to flex: 1 so the actions cell sits
+// outside it.
+export const consoleRowMemberLinkStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 14,
+  textDecoration: 'none',
+  color: 'inherit',
+  cursor: 'pointer',
+};
+
+export const consoleColActionsStyle: CSSProperties = { flex: '0 0 90px', textAlign: 'right' };
+export const consoleRowActionsCellStyle: CSSProperties = { flex: '0 0 90px', textAlign: 'right' };
+
+export const consoleRowRemoveBtnStyle: CSSProperties = {
+  flex: 'none',
+  height: 26,
+  boxSizing: 'border-box',
+  padding: '0 10px',
+  fontFamily: 'inherit',
+  fontSize: 11.5,
+  fontWeight: 600,
+  whiteSpace: 'nowrap',
+  borderRadius: 7,
+  background: 'transparent',
+  border: '1px solid var(--bad-bd)',
+  color: 'var(--bad)',
+  cursor: 'pointer',
+};
+
 // Runs table (Slice 3c, docs/plans/console-plan.md decision 9). Not in the
 // original design file (which has no Runs tab data) — column widths follow
 // the same flex-basis convention as the Members table above rather than
