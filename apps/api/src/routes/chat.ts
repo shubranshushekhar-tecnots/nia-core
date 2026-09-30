@@ -13,7 +13,14 @@ import { enqueueChatQuery, getChatJobData } from "../lib/chatQueue.js";
 import { channelFor, replayLogKeyFor } from "../lib/chatChannel.js";
 import { scopeFromActor, type WorkspaceScope } from "../lib/workspaceScope.js";
 import { env } from "../env.js";
-import { createConversation, getConversation, insertUserMessage, listConversations, listMessages } from "../services/chat.js";
+import {
+  assertCopilotActionAllowed,
+  createConversation,
+  getConversation,
+  insertUserMessage,
+  listConversations,
+  listMessages,
+} from "../services/chat.js";
 
 /**
  * Real home of the chat enqueue + SSE relay, replacing
@@ -76,6 +83,14 @@ chatRouter.post(
     const scope = scopeFromActor(req.actor!);
     const userId = req.actor!.userId;
 
+    // Own id, not BullMQ's default — this is what the client later passes
+    // back to GET /chat/stream?jobId= to find this exact job. Generated
+    // early so the Subscription Phase 3 Copilot-limit check below (decision
+    // 6: check before a Copilot request) runs before any write — a blocked
+    // request leaves no orphaned conversation/message row behind.
+    const jobId = randomUUID();
+    await assertCopilotActionAllowed(req.withUser!, scope, jobId);
+
     let resolvedConversationId = conversationId;
     if (resolvedConversationId) {
       // Must already exist in this workspace — insertUserMessage's own RLS-
@@ -95,9 +110,6 @@ chatRouter.post(
 
     await insertUserMessage(req.withUser!, scope, resolvedConversationId, message);
 
-    // Own id, not BullMQ's default — this is what the client later passes
-    // back to GET /chat/stream?jobId= to find this exact job.
-    const jobId = randomUUID();
     await enqueueChatQuery(jobId, {
       kind: "chat_query",
       scope,

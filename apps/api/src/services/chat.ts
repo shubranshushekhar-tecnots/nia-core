@@ -1,6 +1,7 @@
 import { workspaceWhere } from "@nia/db";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import type { WithUser } from "../lib/withUser.js";
+import { AppError } from "../lib/appError.js";
 
 /**
  * Chat now supports org-less "individual" actors (see
@@ -160,6 +161,78 @@ export async function listMessages(
     ),
   );
   return rows.map(toMessage);
+}
+
+/**
+ * Subscription Phase 3, Slice 3: a Copilot action is one user request (not
+ * each internal tool call — decision 3), checked before the request is
+ * enqueued and, if allowed, recorded in the same call so the check and the
+ * count can never race apart. `pg_advisory_xact_lock` serializes concurrent
+ * requests from the same workspace for the lifetime of this transaction
+ * (auto-released on commit/rollback, same guarantee `SET LOCAL ROLE` relies
+ * on — see packages/db/src/client.ts) so two requests arriving at the
+ * boundary can never both pass. Unlike rows (Free-only hard stop), Copilot
+ * hard-stops on every metered plan (decision 5) — a null
+ * copilot_actions_per_month means unmetered (legacy/enterprise).
+ *
+ * subjectId is the chat job's id (routes/chat.ts generates it before any
+ * write, one per request), so a blocked request never leaves an orphaned
+ * conversation/message row behind — usage_events' unique (kind, subject_id)
+ * index makes a duplicate insert for the same job a no-op.
+ */
+export async function assertCopilotActionAllowed(withUser: WithUser, scope: WorkspaceScope, subjectId: string): Promise<void> {
+  const isPersonal = !("orgId" in scope);
+  const table = isPersonal ? "owner_plan" : "org_plan";
+  const scopeColumn = isPersonal ? "user_id" : "org_id";
+  const scopeValue = isPersonal ? scope.ownerId : scope.orgId;
+  const lockKey = isPersonal ? `owner:${scope.ownerId}` : `org:${scope.orgId}`;
+
+  await withUser(async (db) => {
+    await db.query("select pg_advisory_xact_lock(hashtext($1))", [lockKey]);
+
+    const { rows: planRows } = await db.query<{ plan_name: string; action_limit: number | null }>(
+      `select pl.name as plan_name, pl.copilot_actions_per_month as action_limit
+       from public.${table} op
+       join public.plans pl on pl.id = op.plan_id
+       where op.${scopeColumn} = $1`,
+      [scopeValue],
+    );
+    const plan = planRows[0];
+    // Metered plans (limit not null) get a hard stop at 100% on every one
+    // of them (decision 5) — unlike rows, this isn't Free-only. Legacy/
+    // enterprise (null limit) and a missing plan row are both unmetered:
+    // skip the check, but still record below — usage is tracked per
+    // workspace regardless of plan (decision 1), so Console (Slice 5) can
+    // show it even for unmetered workspaces.
+    if (plan && plan.action_limit !== null) {
+      const where = workspaceWhere(scope, 1);
+      const { rows: usageRows } = await db.query<{ used: string | null }>(
+        `select sum(quantity)::bigint as used
+         from public.usage_events
+         where kind = 'copilot_action'
+           and ${where.sql}
+           and occurred_at >= date_trunc('month', now())`,
+        where.params,
+      );
+      const used = Number(usageRows[0]?.used ?? 0);
+      if (used >= plan.action_limit) {
+        throw new AppError(
+          403,
+          "COPILOT_LIMIT_EXCEEDED",
+          `Your ${plan.plan_name} plan includes ${plan.action_limit.toLocaleString()} Copilot actions a month, and this workspace has already used all of them. Upgrade to keep using Copilot this month.`,
+        );
+      }
+    }
+
+    const orgId = "orgId" in scope ? scope.orgId : null;
+    const ownerId = "orgId" in scope ? null : scope.ownerId;
+    await db.query(
+      `insert into public.usage_events (org_id, owner_id, kind, quantity, subject_id)
+       values ($1, $2, 'copilot_action', 1, $3)
+       on conflict (kind, subject_id) do nothing`,
+      [orgId, ownerId, subjectId],
+    );
+  });
 }
 
 export async function insertUserMessage(
