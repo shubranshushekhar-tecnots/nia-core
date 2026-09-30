@@ -122,7 +122,7 @@ export const railSearchWrapStyle: CSSProperties = { padding: '0 14px 10px', flex
 export const railSearchInputStyle: CSSProperties = {
   width: '100%',
   height: 30,
-  borderRadius: 6,
+  borderRadius: 'var(--nx-radius)',
   border: '1px solid var(--nx-line)',
   padding: '0 8px',
   fontSize: 12.5,
@@ -220,12 +220,15 @@ export const railReopenBtnCountStyle: CSSProperties = {
 // instead of floating.
 export const railEntryConnectBadgeStyle: CSSProperties = {
   flex: 'none',
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 10,
   fontWeight: 600,
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
   color: 'var(--nx-ink-disabled)',
   background: 'var(--nx-raised)',
   border: '1px solid var(--nx-line)',
-  borderRadius: 999,
+  borderRadius: 'var(--nx-radius)',
   padding: '1px 6px',
 };
 
@@ -632,7 +635,7 @@ export const copilotToggleBtnStyle: CSSProperties = {
   background: 'var(--nx-surface)',
   color: 'var(--nx-ink-3)',
   cursor: 'pointer',
-  borderRadius: 12,
+  borderRadius: 'var(--nx-radius)',
   width: 40,
   height: 40,
   display: 'flex',
