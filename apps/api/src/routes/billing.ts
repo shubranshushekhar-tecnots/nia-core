@@ -1,5 +1,6 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
+import { env } from "../env.js";
 import { requireAuth } from "../middleware/auth.js";
 import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
@@ -15,6 +16,18 @@ import { getUpgradePreview, createCheckout, getSubscriptionStatus } from "../ser
  * (mounted before express.json() in index.ts, since it needs the raw body).
  */
 export const billingRouter: ExpressRouter = Router();
+
+// Payments kill switch (env.PAYMENTS_ENABLED, see env.ts) — runs before
+// requireAuth so even an unauthenticated caller gets the clear "not
+// available yet" signal instead of a 401. 503, not 404: unlike the
+// webhook (a delivery target that simply doesn't exist while off), these
+// are real, documented app routes that are temporarily unavailable.
+billingRouter.use((_req, _res, next) => {
+  if (!env.PAYMENTS_ENABLED) {
+    throw new AppError(503, "PAYMENTS_DISABLED", "Payments aren't available yet.");
+  }
+  next();
+});
 
 billingRouter.use(requireAuth, attachDb, attachActor);
 

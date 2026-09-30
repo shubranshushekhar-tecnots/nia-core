@@ -90,12 +90,16 @@ services:
       - NIA_GATEWAY_BASE_URL=${NIA_GATEWAY_BASE_URL:?NIA_GATEWAY_BASE_URL is not set in .env}
       - NIA_GATEWAY_MODEL=${NIA_GATEWAY_MODEL:?NIA_GATEWAY_MODEL is not set in .env}
 
-      # Razorpay (Subscription Phase 4, Slice 2)
-      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:?RAZORPAY_KEY_ID is not set in .env}
-      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:?RAZORPAY_KEY_SECRET is not set in .env}
-      - RAZORPAY_WEBHOOK_SECRET=${RAZORPAY_WEBHOOK_SECRET:?RAZORPAY_WEBHOOK_SECRET is not set in .env}
-      - RAZORPAY_PRO_MONTHLY_PLAN_ID=${RAZORPAY_PRO_MONTHLY_PLAN_ID:?RAZORPAY_PRO_MONTHLY_PLAN_ID is not set in .env}
-      - RAZORPAY_PRO_YEARLY_PLAN_ID=${RAZORPAY_PRO_YEARLY_PLAN_ID:?RAZORPAY_PRO_YEARLY_PLAN_ID is not set in .env}
+      # Payments (Subscription Phase 4) — OFF by default. RAZORPAY_* are
+      # optional while PAYMENTS_ENABLED=false; apps/api's env.ts only
+      # requires them once that flag is flipped to true. See DEPLOYMENT.md's
+      # "Payments" section for how to turn this on later.
+      - PAYMENTS_ENABLED=${PAYMENTS_ENABLED:-false}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
+      - RAZORPAY_WEBHOOK_SECRET=${RAZORPAY_WEBHOOK_SECRET:-}
+      - RAZORPAY_PRO_MONTHLY_PLAN_ID=${RAZORPAY_PRO_MONTHLY_PLAN_ID:-}
+      - RAZORPAY_PRO_YEARLY_PLAN_ID=${RAZORPAY_PRO_YEARLY_PLAN_ID:-}
 
     networks:
       - niacore-network

@@ -914,3 +914,6 @@
   org (decided: new org starts fresh, personal workspace unchanged). A
   manual/guided "move this project into an org" flow is a separate later
   slice, not part of payments plumbing.
+- Payments disabled via PAYMENTS_ENABLED=false. To enable: add Razorpay
+  keys + plan IDs, register webhook, run one real test purchase, decide
+  GST-inclusive pricing with CA, then set true.

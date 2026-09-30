@@ -45,6 +45,8 @@ export type DashboardStats = {
   copilotLimit: number | null;
   copilotUsed: number;
   periodDaysLeft: number;
+  /** Payments kill switch (apps/api's env.PAYMENTS_ENABLED) — decided server-side, never a NEXT_PUBLIC_ flag. False in dev/prod until a payment provider is wired up; gates whether the billing page shows live checkout or a disabled "coming soon" button. */
+  paymentsEnabled: boolean;
 };
 
 export type ProjectDetail = {

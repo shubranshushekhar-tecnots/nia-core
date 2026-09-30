@@ -80,8 +80,13 @@ let addedSigint: Function[] = [];
 // eslint-disable-next-line @typescript-eslint/ban-types
 let addedSigterm: Function[] = [];
 
-async function bootApp(consoleEnabled: boolean): Promise<string> {
-  vi.stubEnv("CONSOLE_ENABLED", consoleEnabled ? "true" : "false");
+async function bootApp(overrides: { consoleEnabled?: boolean; paymentsEnabled?: boolean } = {}): Promise<string> {
+  if (overrides.consoleEnabled !== undefined) {
+    vi.stubEnv("CONSOLE_ENABLED", overrides.consoleEnabled ? "true" : "false");
+  }
+  if (overrides.paymentsEnabled !== undefined) {
+    vi.stubEnv("PAYMENTS_ENABLED", overrides.paymentsEnabled ? "true" : "false");
+  }
   vi.stubEnv("PORT", TEST_PORT);
   vi.resetModules();
 
@@ -141,7 +146,7 @@ describe("index.ts CONSOLE_ENABLED gate (the real app, not a substitute)", () =>
       response: { user: { id: "staff-1", email: "staff@nia.dev" } },
       headers: new Headers(),
     });
-    const baseUrl = await bootApp(false);
+    const baseUrl = await bootApp({ consoleEnabled: false });
     const res = await fetch(`${baseUrl}/console/ping`, { headers: { cookie: "better-auth.session_token=x" } });
 
     expect(res.status).toBe(404);
@@ -157,7 +162,7 @@ describe("index.ts CONSOLE_ENABLED gate (the real app, not a substitute)", () =>
     // no cookie present, so an un-configured vi.fn() (resolves to undefined)
     // would throw before ever reaching the 401 this test asserts.
     getSession.mockResolvedValue({ response: null, headers: new Headers() });
-    const baseUrl = await bootApp(false);
+    const baseUrl = await bootApp({ consoleEnabled: false });
     const res = await fetch(`${baseUrl}/console/ping`);
 
     expect(res.status).toBe(401);
@@ -165,11 +170,40 @@ describe("index.ts CONSOLE_ENABLED gate (the real app, not a substitute)", () =>
   });
 
   it("CONSOLE_ENABLED=true: GET /console/ping reaches requireAuth — 401 without an auth header", async () => {
-    const baseUrl = await bootApp(true);
+    const baseUrl = await bootApp({ consoleEnabled: true });
     const res = await fetch(`${baseUrl}/console/ping`);
 
     expect(res.status).toBe(401);
     expect(getSession).not.toHaveBeenCalled();
     expect(withServiceRole).not.toHaveBeenCalled();
+  });
+});
+
+describe("index.ts PAYMENTS_ENABLED gate (the real app, not a substitute)", () => {
+  it("PAYMENTS_ENABLED=false: POST /billing/webhook 404s — billingWebhookRouter is never mounted", async () => {
+    const baseUrl = await bootApp({ paymentsEnabled: false });
+    const res = await fetch(`${baseUrl}/billing/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("PAYMENTS_ENABLED=true: POST /billing/webhook reaches billingWebhookRouter — 400 bad signature, not 404", async () => {
+    // apps/api/.env always carries a placeholder RAZORPAY_WEBHOOK_SECRET
+    // (env.ts's header comment), so this boots fine without also stubbing
+    // the RAZORPAY_* vars — this test only needs to prove the route is
+    // mounted, not exercise signature verification itself (that's
+    // billingWebhook.integration.test.ts's job).
+    const baseUrl = await bootApp({ paymentsEnabled: true });
+    const res = await fetch(`${baseUrl}/billing/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+
+    expect(res.status).toBe(400);
   });
 });

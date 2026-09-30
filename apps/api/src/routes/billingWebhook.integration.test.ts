@@ -225,7 +225,11 @@ describe("POST /billing/webhook — bad signature — real HTTP server", () => {
 
   it("sanity: the real secret DOES verify (proves the test above failed for signature reasons, not payload/env issues)", () => {
     const payload = JSON.stringify({ event: "ping" });
-    const signature = createHmac("sha256", env.RAZORPAY_WEBHOOK_SECRET).update(payload).digest("hex");
+    // Non-null: this integration test only ever runs against apps/api/.env,
+    // which always carries a placeholder RAZORPAY_WEBHOOK_SECRET — env.ts
+    // only makes this optional at the schema level for a
+    // PAYMENTS_ENABLED=false deploy (see env.ts's header comment).
+    const signature = createHmac("sha256", env.RAZORPAY_WEBHOOK_SECRET!).update(payload).digest("hex");
     expect(signature).toHaveLength(64);
   });
 });

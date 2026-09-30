@@ -41,7 +41,22 @@ app.use(
 // skip parsing here and leave req.body undefined instead of a Buffer. This
 // route has no auth middleware of its own (see billingWebhook.ts's header
 // comment) — signature verification IS its authentication.
-app.use("/billing/webhook", express.raw({ type: "*/*" }), billingWebhookRouter);
+//
+// Payments kill switch (env.PAYMENTS_ENABLED, see env.ts): while off, this
+// router isn't mounted at all, same "flag off means not mounted" rule
+// CONSOLE_ENABLED already follows below. The explicit notFoundHandler in
+// the else branch is required, not just "do nothing": without it, a
+// delivery to /billing/webhook falls through to billingRouter's own
+// kill-switch middleware (mounted below at "/billing", which matches this
+// path's prefix too) and gets ITS 503 instead of the 404 a delivery target
+// that doesn't exist should return — registering the 404 here, before that
+// mount, wins the match first. Either way no RPC call is ever made and
+// nothing is written.
+if (env.PAYMENTS_ENABLED) {
+  app.use("/billing/webhook", express.raw({ type: "*/*" }), billingWebhookRouter);
+} else {
+  app.all("/billing/webhook", notFoundHandler);
+}
 
 app.use(express.json());
 app.use(requestLogger);

@@ -22,6 +22,7 @@ describe("getPlanUsage", () => {
       copilotLimit: 500,
       copilotUsed: 480,
       periodDaysLeft: 9,
+      paymentsEnabled: false,
     };
 
     expect(getPlanUsage(stats)).toEqual({

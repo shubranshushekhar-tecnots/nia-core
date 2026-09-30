@@ -95,7 +95,12 @@ export async function createCheckout(
   userId: string,
   interval: "monthly" | "yearly",
 ): Promise<{ checkoutUrl: string; subscriptionId: string }> {
-  const razorpayPlanId = interval === "monthly" ? env.RAZORPAY_PRO_MONTHLY_PLAN_ID : env.RAZORPAY_PRO_YEARLY_PLAN_ID;
+  // Non-null: this function is only reached when env.PAYMENTS_ENABLED is
+  // true (routes/billing.ts's 503 gate runs first), and env.ts's
+  // superRefine() guarantees both plan ids are set whenever that flag is
+  // true.
+  const razorpayPlanId =
+    interval === "monthly" ? env.RAZORPAY_PRO_MONTHLY_PLAN_ID! : env.RAZORPAY_PRO_YEARLY_PLAN_ID!;
 
   const razorpaySubscription = await createRazorpaySubscription({
     razorpayPlanId,

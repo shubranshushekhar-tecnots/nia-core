@@ -41,7 +41,11 @@ const RAZORPAY_API_BASE = "https://api.razorpay.com/v1";
 const SUBSCRIPTION_TOTAL_COUNT = 100;
 
 function authHeader(): string {
-  const token = Buffer.from(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`).toString("base64");
+  // Non-null: every call path into this module is gated behind
+  // env.PAYMENTS_ENABLED (routes/billing.ts's 503 middleware), and
+  // env.ts's superRefine() guarantees these are set whenever that flag
+  // is true — this function is never reached while they're undefined.
+  const token = Buffer.from(`${env.RAZORPAY_KEY_ID!}:${env.RAZORPAY_KEY_SECRET!}`).toString("base64");
   return `Basic ${token}`;
 }
 
@@ -127,7 +131,10 @@ export async function createRazorpaySubscription(params: {
 export function verifyRazorpayWebhookSignature(rawBody: Buffer, signatureHeader: string | undefined): boolean {
   if (!signatureHeader) return false;
 
-  const expected = createHmac("sha256", env.RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
+  // Non-null: this route is only mounted at all when env.PAYMENTS_ENABLED
+  // is true (index.ts), and env.ts's superRefine() guarantees this is set
+  // whenever that flag is true.
+  const expected = createHmac("sha256", env.RAZORPAY_WEBHOOK_SECRET!).update(rawBody).digest("hex");
   const expectedBuf = Buffer.from(expected, "hex");
   const actualBuf = Buffer.from(signatureHeader, "hex");
 

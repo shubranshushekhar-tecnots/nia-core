@@ -208,6 +208,23 @@ const EnvSchema = z.object({
    */
   STAFF_SESSION_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(28_800),
   /**
+   * Payments kill switch. Defaults to false: Razorpay stays fully in the
+   * codebase, but no Razorpay client is ever created and no Razorpay call
+   * is ever made (including at boot) while this is off — the checkout/
+   * subscription-management routes (routes/billing.ts) 503, and the
+   * webhook route (routes/billingWebhook.ts) isn't even mounted (index.ts),
+   * so it 404s and writes nothing. Same `z.enum(["true","false"])` +
+   * explicit transform pattern as CONSOLE_ENABLED above, for the same
+   * "false" !== `Boolean("false")` reason. Flip to true only once real
+   * Razorpay keys exist — see the `.superRefine()` below and
+   * DEPLOYMENT.md's "Payments" section.
+   */
+  PAYMENTS_ENABLED: z
+    .enum(["true", "false"])
+    .optional()
+    .default("false")
+    .transform((v) => v === "true"),
+  /**
    * Subscription Phase 4, Slice 2 (docs/plans/subscription-model.md) —
    * Razorpay TEST mode credentials for individual Free/Legacy -> Pro
    * checkout. RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET authenticate every
@@ -217,10 +234,15 @@ const EnvSchema = z.object({
    * derived from the key secret) used only to verify the
    * X-Razorpay-Signature HMAC on inbound webhook deliveries
    * (routes/billingWebhook.ts) — never sent to Razorpay's API.
+   *
+   * All five RAZORPAY_* vars below are optional at the schema level — a
+   * deploy with PAYMENTS_ENABLED unset/false must boot with none of them
+   * set. They're only required (validated below, with a message naming
+   * exactly which one is missing) when PAYMENTS_ENABLED=true.
    */
-  RAZORPAY_KEY_ID: z.string().min(1),
-  RAZORPAY_KEY_SECRET: z.string().min(1),
-  RAZORPAY_WEBHOOK_SECRET: z.string().min(1),
+  RAZORPAY_KEY_ID: z.string().optional(),
+  RAZORPAY_KEY_SECRET: z.string().optional(),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
   /**
    * Razorpay Plan ids (rzp_test_.../plan_... ids, created once via the
    * Razorpay Dashboard or API against the Pro tier's price) for the two
@@ -230,12 +252,30 @@ const EnvSchema = z.object({
    * lib/razorpay.ts's header comment, citing razorpay.com/docs/api/
    * payments/subscriptions/create-plan/).
    */
-  RAZORPAY_PRO_MONTHLY_PLAN_ID: z.string().min(1),
-  RAZORPAY_PRO_YEARLY_PLAN_ID: z.string().min(1),
+  RAZORPAY_PRO_MONTHLY_PLAN_ID: z.string().optional(),
+  RAZORPAY_PRO_YEARLY_PLAN_ID: z.string().optional(),
 }).refine((e) => !(e.NODE_ENV === "production" && e.CONNECTOR_DEV_HOST), {
   message:
     "CONNECTOR_DEV_HOST must not be set when NODE_ENV=production — it overrides the connector service host to a dev-only address.",
   path: ["CONNECTOR_DEV_HOST"],
+}).superRefine((e, ctx) => {
+  if (!e.PAYMENTS_ENABLED) return;
+  const required = [
+    ["RAZORPAY_KEY_ID", e.RAZORPAY_KEY_ID],
+    ["RAZORPAY_KEY_SECRET", e.RAZORPAY_KEY_SECRET],
+    ["RAZORPAY_WEBHOOK_SECRET", e.RAZORPAY_WEBHOOK_SECRET],
+    ["RAZORPAY_PRO_MONTHLY_PLAN_ID", e.RAZORPAY_PRO_MONTHLY_PLAN_ID],
+    ["RAZORPAY_PRO_YEARLY_PLAN_ID", e.RAZORPAY_PRO_YEARLY_PLAN_ID],
+  ] as const;
+  for (const [key, value] of required) {
+    if (!value) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${key} is required when PAYMENTS_ENABLED=true.`,
+        path: [key],
+      });
+    }
+  }
 });
 
 export const env = EnvSchema.parse(process.env);

@@ -191,8 +191,17 @@ app's own default.
 .env}`, so `docker compose up` itself refuses to start any container if
 one is missing from `.env` — you get a clear error naming the exact
 variable instead of a container that starts and crash-loops on an empty
-value. `PROXY_PORT` is the only var with a real default (`:-80`) and is
-the sole exception.
+value. `PROXY_PORT` and the payments vars below (`PAYMENTS_ENABLED`,
+`RAZORPAY_*`) are the only vars with a real default/optional value and are
+the exceptions.
+
+## Payments
+
+Payments are off by default (`PAYMENTS_ENABLED=false`) — `RAZORPAY_*` can
+stay empty and the stack boots with zero errors. To turn payments on:
+set real Razorpay keys + plan IDs and `PAYMENTS_ENABLED=true` in `.env`,
+then redeploy — `apps/api` validates all five `RAZORPAY_*` vars are
+present at boot whenever the flag is true.
 
 ## Secret storage master key (`NIA_SECRET_MASTER_KEY`)
 

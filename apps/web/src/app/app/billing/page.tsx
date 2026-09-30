@@ -125,8 +125,12 @@ export default async function BillingPage() {
                 Upgrade plan {'\u2014'} coming soon
               </button>
             </div>
-          ) : (
+          ) : stats.paymentsEnabled ? (
             <UpgradeSection />
+          ) : (
+            <button type="button" style={soonBtnStyle} disabled title="Coming soon">
+              Upgrades coming soon
+            </button>
           )}
         </div>
       </div>
