@@ -39,6 +39,7 @@ export default defineConfig({
       "src/lib/workflowLimit.integration.test.ts",
       "src/lib/projectLimit.integration.test.ts",
       "src/services/dashboard.integration.test.ts",
+      "src/services/announcements.integration.test.ts",
       "src/lib/invites.integration.test.ts",
       "src/routes/billingWebhook.integration.test.ts",
     ],

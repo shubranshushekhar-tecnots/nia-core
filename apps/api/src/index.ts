@@ -6,6 +6,7 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { projectsRouter } from "./routes/projects.js";
+import { announcementsRouter } from "./routes/announcements.js";
 import { workflowsRouter } from "./routes/workflows.js";
 import { connectorsRouter } from "./routes/connectors.js";
 import { connectionsRouter } from "./routes/connections.js";
@@ -53,6 +54,7 @@ app.get("/health", (_req, res) => {
 // apps/web/src/lib/dashboard/queries.ts. Write routes (Step 3) not added yet.
 app.use("/dashboard", dashboardRouter);
 app.use("/projects", projectsRouter);
+app.use("/announcements", announcementsRouter);
 
 // runsRouter (POST /workflows/:id/run(/cancel), GET /workflows/:id/run/
 // stream — cookie-authenticated, not Bearer, since GET .../run/stream is
