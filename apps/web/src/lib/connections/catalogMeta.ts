@@ -34,6 +34,34 @@ export type ConnectorCatalogMeta = {
   tags: string[];
   iconSlug?: string;
   comingSoon: boolean;
+  // Card redesign (Step 3/4): "Works as" filter + the card's facts row.
+  // For the 4 real connectors these match packages/schemas/src/connectors/
+  // {mysql,mongodb,supabase,postgres}.ts's manifest `operations` 1:1 (all
+  // four ship `["read","insert"]`, i.e. usable as both a workflow source
+  // and destination) — ConnectorCard prefers the live `/connectors` API
+  // entry's `operations` when one is passed in and only falls back to
+  // these static values when it isn't. For the 8 comingSoon entries (no
+  // manifest exists yet) these are read directly off each entry's own
+  // description above, not invented: e.g. metabase/lookerstudio/qdrant/
+  // snowflake/bigquery/redshift/s3's copy only ever says "pull"/"query"/
+  // "search"/"reach" (source-only); pinecone's says "read and write"
+  // (both).
+  isSource: boolean;
+  isDestination: boolean;
+  // Canonical vendor docs homepage for the card's round "Docs" button —
+  // only set for the 4 real connectors (well-known, stable URLs); left
+  // undefined for comingSoon entries, whose Docs button stays disabled.
+  docsUrl?: string;
+  // Real auth method shown in the card's facts row and (for the 4 real
+  // connectors) the Installed section. For the 4 real connectors this is
+  // read directly off each one's actual config field list in
+  // packages/schemas/src/connectors/{mysql,mongodb,supabase,postgres}.ts
+  // (mysql/mongodb: password only; supabase/postgres: password + an `ssl`
+  // field). The 8 comingSoon entries reuse the general auth family already
+  // encoded in `tags` ('oauth' | 'credentials') above — never invented,
+  // just promoted to an explicit field instead of re-derived from tags at
+  // render time.
+  authMethod: string;
 };
 
 // Order fixes each card's design "index" number (01–12) and the grid's
@@ -63,6 +91,10 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     tags: ['credentials', 'queryable', 'etl'],
     iconSlug: 'mysql',
     comingSoon: false,
+    isSource: true,
+    isDestination: true,
+    docsUrl: 'https://dev.mysql.com/doc/',
+    authMethod: 'Password',
   },
   mongodb: {
     id: 'mongodb',
@@ -72,6 +104,10 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     tags: ['credentials', 'queryable', 'etl'],
     iconSlug: 'mongodb',
     comingSoon: false,
+    isSource: true,
+    isDestination: true,
+    docsUrl: 'https://www.mongodb.com/docs/',
+    authMethod: 'Password',
   },
   supabase: {
     id: 'supabase',
@@ -81,6 +117,10 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     tags: ['credentials', 'queryable', 'etl'],
     iconSlug: 'supabase',
     comingSoon: false,
+    isSource: true,
+    isDestination: true,
+    docsUrl: 'https://supabase.com/docs',
+    authMethod: 'Password + TLS',
   },
   postgres: {
     id: 'postgres',
@@ -90,6 +130,10 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     tags: ['credentials', 'queryable', 'etl'],
     iconSlug: 'postgresql',
     comingSoon: false,
+    isSource: true,
+    isDestination: true,
+    docsUrl: 'https://www.postgresql.org/docs/',
+    authMethod: 'Password + TLS',
   },
   snowflake: {
     id: 'snowflake',
@@ -99,6 +143,9 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     tags: ['credentials', 'warehouse', 'queryable'],
     iconSlug: 'snowflake',
     comingSoon: true,
+    isSource: true,
+    isDestination: false,
+    authMethod: 'Credentials',
   },
   bigquery: {
     id: 'bigquery',
@@ -108,6 +155,9 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     tags: ['oauth', 'warehouse', 'queryable'],
     iconSlug: 'googlebigquery',
     comingSoon: true,
+    isSource: true,
+    isDestination: false,
+    authMethod: 'OAuth',
   },
   redshift: {
     id: 'redshift',
@@ -116,6 +166,9 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     description: 'Reach a Redshift cluster through an IAM role.',
     tags: ['oauth', 'warehouse', 'queryable'],
     comingSoon: true,
+    isSource: true,
+    isDestination: false,
+    authMethod: 'OAuth',
   },
   metabase: {
     id: 'metabase',
@@ -125,6 +178,9 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     tags: ['credentials', 'queryable'],
     iconSlug: 'metabase',
     comingSoon: true,
+    isSource: true,
+    isDestination: false,
+    authMethod: 'Credentials',
   },
   lookerstudio: {
     id: 'lookerstudio',
@@ -133,6 +189,9 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     description: 'Pull explores and reports into a workflow as a source.',
     tags: ['oauth', 'queryable'],
     comingSoon: true,
+    isSource: true,
+    isDestination: false,
+    authMethod: 'OAuth',
   },
   qdrant: {
     id: 'qdrant',
@@ -142,6 +201,9 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     tags: ['credentials', 'ai vector', 'queryable'],
     iconSlug: 'qdrant',
     comingSoon: true,
+    isSource: true,
+    isDestination: false,
+    authMethod: 'Credentials',
   },
   pinecone: {
     id: 'pinecone',
@@ -150,6 +212,9 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     description: 'Read and write vectors from a managed index.',
     tags: ['credentials', 'ai vector', 'actions'],
     comingSoon: true,
+    isSource: true,
+    isDestination: true,
+    authMethod: 'Credentials',
   },
   s3: {
     id: 's3',
@@ -158,10 +223,31 @@ export const CONNECTOR_CATALOG_META: Record<string, ConnectorCatalogMeta> = {
     description: 'Treat objects in a bucket as files your workflows can query.',
     tags: ['oauth', 'files'],
     comingSoon: true,
+    isSource: true,
+    isDestination: false,
+    authMethod: 'OAuth',
   },
 };
 
 export function catalogIndexLabel(id: string): string {
   const i = CATALOG_ORDER.indexOf(id);
   return i === -1 ? '' : String(i + 1).padStart(2, '0');
+}
+
+// "Works as" filter + card facts row: prefers the live `/connectors` API
+// entry's real `capabilities` (etl_source/etl_sink) when one is passed in
+// (the 4 real connectors — see registry.ts) and only falls back to this
+// meta's static isSource/isDestination for the 8 comingSoon ids, which
+// have no manifest/API entry to read from.
+export function resolveWorksAs(
+  meta: ConnectorCatalogMeta,
+  catalogEntry?: { capabilities: readonly string[] },
+): { isSource: boolean; isDestination: boolean } {
+  if (catalogEntry) {
+    return {
+      isSource: catalogEntry.capabilities.includes('etl_source'),
+      isDestination: catalogEntry.capabilities.includes('etl_sink'),
+    };
+  }
+  return { isSource: meta.isSource, isDestination: meta.isDestination };
 }

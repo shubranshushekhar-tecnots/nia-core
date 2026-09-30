@@ -1040,7 +1040,7 @@ export function healthDotColor(health: ConnectionHealth): string {
 
 export const connectionsSubtitleStyle: CSSProperties = {
   fontSize: 13.5,
-  color: 'var(--text-3)',
+  color: '#6B6E76',
 };
 
 export const connectionsHealthStripStyle: CSSProperties = {
@@ -1067,21 +1067,42 @@ export function connectionsHealthDotStyle(health: ConnectionHealth): CSSProperti
   };
 }
 
+// Round 5 — the app has no CSS --radius token scale (every radius in the
+// app is a hardcoded px number inline; nearest existing values are 14 for
+// cards/dialogs, 9 for primary buttons, 8 for dialog secondary buttons,
+// 10 for dropdowns). These are page-scoped values reused/added for the
+// Connections page only: `container` (12) has no existing app-wide
+// equivalent (between the 10 dropdown token and the 14 card token); the
+// rest reuse or exactly match existing app values.
+export const CONNECTIONS_RADIUS = {
+  card: 16, // connector card shell
+  container: 12, // installed list, connections table, empty-state panel
+  control: 10, // search input, segmented-control container, dropdown/menu shells, ~40px buttons
+  chip: 8, // segments, docs icon button, small 28-32px buttons, icon tiles
+  tag: 6, // status badges, menu items
+} as const;
+
+// Single consolidated row — search + category segmented control + Works-as
+// segmented control all share this row now (previously Works-as was a
+// separate full-width row below); wraps under ~1100px.
 export const connectionsToolbarRowStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 10,
+  flexWrap: 'wrap',
 };
 
 export const connectionsSearchBoxStyle: CSSProperties = {
   flex: 1,
-  height: 38,
+  minWidth: 200,
+  maxWidth: 320,
+  height: 36,
   boxSizing: 'border-box',
   padding: '0 14px',
-  borderRadius: 10,
-  border: '1px solid var(--line)',
-  background: 'var(--surface)',
-  color: 'var(--text)',
+  borderRadius: CONNECTIONS_RADIUS.control,
+  border: '1px solid #DEDEE3',
+  background: '#FFFFFF',
+  color: '#0E0E12',
   fontFamily: 'inherit',
   fontSize: 13,
   outline: 'none',
@@ -1093,9 +1114,9 @@ export const connectionsFilterListStyle: CSSProperties = {
   gap: 4,
   flex: 'none',
   padding: 4,
-  borderRadius: 999,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  borderRadius: CONNECTIONS_RADIUS.control,
+  background: '#FFFFFF',
+  border: '1px solid #DEDEE3',
 };
 
 export function connectionsFilterPillStyle(active: boolean): CSSProperties {
@@ -1106,14 +1127,14 @@ export function connectionsFilterPillStyle(active: boolean): CSSProperties {
     height: 30,
     boxSizing: 'border-box',
     padding: '0 13px',
-    borderRadius: 999,
+    borderRadius: CONNECTIONS_RADIUS.chip,
     fontFamily: 'inherit',
     fontSize: 13,
     fontWeight: 600,
     cursor: 'pointer',
     border: 'none',
-    background: active ? 'var(--text)' : 'transparent',
-    color: active ? 'var(--onacc)' : 'var(--text-2)',
+    background: active ? '#0E0E12' : 'transparent',
+    color: active ? '#FFFFFF' : '#52555C',
   };
 }
 
@@ -1126,76 +1147,58 @@ export const connectionsSectionHeaderStyle: CSSProperties = {
 export const connectionsSectionTitleStyle: CSSProperties = {
   fontSize: 13.5,
   fontWeight: 600,
-  color: 'var(--text)',
+  color: '#0E0E12',
 };
 
 export const connectionsSectionMetaStyle: CSSProperties = {
   fontSize: 12.5,
-  color: 'var(--text-3)',
+  color: '#6B6E76',
 };
 
 export const connectionsProviderListStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  borderRadius: 14,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  borderRadius: CONNECTIONS_RADIUS.container,
+  background: '#FFFFFF',
+  border: '1px solid #E4E4E8',
   overflow: 'hidden',
 };
 
+// 56px total row height: 12px top+bottom padding around a 32px icon tile.
 export function connectionsProviderRowStyle(bordered: boolean, dashed = false): CSSProperties {
   return {
     display: 'flex',
     alignItems: 'center',
-    gap: 16,
-    padding: '18px 20px',
-    borderBottom: bordered ? `1px ${dashed ? 'dashed' : 'solid'} var(--line)` : 'none',
+    gap: 14,
+    padding: '12px 16px',
+    borderBottom: bordered ? `1px ${dashed ? 'dashed' : 'solid'} #ECECEF` : 'none',
   };
 }
 
-// Holds either a real connector brand logo (own fixed colors) or, for ids
-// without one yet, initials text — background is a plain neutral tile
-// either way so a colored logo reads true (no tint) and initials still
-// have contrast (var(--ign-text) still applies to the text fallback).
-export const connectionsProviderIconStyle: CSSProperties = {
-  width: 36,
-  height: 36,
-  flex: 'none',
-  borderRadius: 10,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: '#fff',
-  border: '1px solid rgba(203,213,225,.6)',
-  color: 'var(--ign-text)',
-  fontSize: 13,
-  fontWeight: 700,
-};
-
-// The Upload CSV/Excel row is visually distinct in the design: a dashed
-// top border and a faint violet tint (var(--c-condition), the same token
-// used for "condition"-kind canvas nodes / the files category).
+// The Upload CSV/Excel row is visually distinct: a dashed top divider,
+// square corners throughout.
 export const connectionsUploadRowStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 16,
+  gap: 14,
   flexWrap: 'wrap',
-  padding: '18px 20px',
-  borderTop: '1px dashed var(--line-strong)',
-  background: 'color-mix(in srgb, var(--c-condition) 3%, transparent)',
+  padding: '12px 16px',
+  borderTop: '1px dashed #ECECEF',
+  background: '#FAFAFB',
 };
 
 export const connectionsUploadIconStyle: CSSProperties = {
-  width: 40,
-  height: 40,
+  width: 32,
+  height: 32,
   flex: 'none',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  borderRadius: 11,
-  fontSize: 15,
-  background: 'color-mix(in srgb, var(--c-condition) 10%, var(--surface))',
-  color: 'var(--c-condition)',
+  borderRadius: CONNECTIONS_RADIUS.chip,
+  fontSize: 14,
+  background: '#FFFFFF',
+  border: '1px solid #E4E4E8',
+  color: '#6B6E76',
 };
 
 export const connectionsUploadBtnStyle: CSSProperties = {
@@ -1206,10 +1209,10 @@ export const connectionsUploadBtnStyle: CSSProperties = {
   fontFamily: 'inherit',
   fontSize: 12.5,
   fontWeight: 600,
-  color: 'var(--c-condition)',
-  background: 'var(--surface)',
-  border: '1.5px solid var(--c-condition)',
-  borderRadius: 9,
+  color: '#6B6E76',
+  background: '#FFFFFF',
+  border: '1px solid #DEDEE3',
+  borderRadius: CONNECTIONS_RADIUS.chip,
   cursor: 'not-allowed',
   whiteSpace: 'nowrap',
 };
@@ -1223,14 +1226,14 @@ export const connectionsProviderNameColStyle: CSSProperties = {
 };
 
 export const connectionsProviderNameStyle: CSSProperties = {
-  fontSize: 13.5,
-  fontWeight: 600,
-  color: 'var(--text)',
+  fontSize: 14,
+  fontWeight: 500,
+  color: '#0E0E12',
 };
 
 export const connectionsProviderMetaStyle: CSSProperties = {
-  fontSize: 12,
-  color: 'var(--text-3)',
+  fontSize: 12.5,
+  color: '#6B6E76',
 };
 
 export const connectionsBadgesRowStyle: CSSProperties = {
@@ -1249,7 +1252,7 @@ export function connectionsBadgeStyle(health: ConnectionHealth): CSSProperties {
     height: 26,
     boxSizing: 'border-box',
     padding: '0 10px',
-    borderRadius: 999,
+    borderRadius: CONNECTIONS_RADIUS.tag,
     fontSize: 12,
     background: health === 'error' ? 'var(--bad-bg)' : 'var(--surface2)',
     border: health === 'error' ? '1px solid var(--bad-bd)' : '1px solid transparent',
@@ -1273,7 +1276,7 @@ export const connectionsBadgeHandleStyle: CSSProperties = {
 };
 
 export const connectionsBadgeMetaStyle: CSSProperties = {
-  color: 'var(--text-3)',
+  color: '#6B6E76',
 };
 
 export const connectionsBadgeLinkStyle: CSSProperties = {
@@ -1291,10 +1294,39 @@ export const connectionsProviderActionsStyle: CSSProperties = {
   marginLeft: 'auto',
 };
 
+// Installed row's standalone "Uninstall" button — destructive (white bg,
+// red border/text), 32px tall, next to the ⋯ menu.
+export const connectionsDangerBtnStyle: CSSProperties = {
+  flex: 'none',
+  height: 32,
+  boxSizing: 'border-box',
+  padding: '0 12px',
+  borderRadius: CONNECTIONS_RADIUS.chip,
+  fontFamily: 'inherit',
+  fontSize: 12.5,
+  fontWeight: 500,
+  color: 'var(--bad)',
+  background: '#FFFFFF',
+  border: '1px solid var(--bad)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+};
+
+// v4 card grid (CARD.height=472). Column count follows the spec's fixed
+// breakpoint table against the catalog section's own *content* width (not
+// the viewport — the sidebar rail is user-resizable, so a viewport media
+// query would drift): 3 columns by default (>= 860px), 2 from 540-859px,
+// 1 below 540px. Implemented as CSS container-query rules (see the
+// `.nia-connector-grid` / `.nia-connector-catalog` selectors rendered
+// alongside the grid in ConnectionsClient.tsx). gridTemplateColumns is
+// deliberately NOT set here — an inline style always wins over any
+// stylesheet rule (including one inside an `@container` block), so the
+// 1-column default and every breakpoint override both live in the CSS
+// class rules instead, not in this inline style object.
 export const connectionsAvailableGridStyle: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-  gap: 20,
+  gap: 24,
+  alignItems: 'start',
 };
 
 // Step 2 (page layout redesign) — header, "Your connections" table and
@@ -1323,13 +1355,13 @@ export const connectionsRequestBtnStyle: CSSProperties = {
   height: 36,
   boxSizing: 'border-box',
   padding: '0 16px',
-  borderRadius: 8,
+  borderRadius: CONNECTIONS_RADIUS.chip,
   fontFamily: 'inherit',
   fontSize: 13.5,
   fontWeight: 600,
-  color: 'var(--text-3)',
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  color: '#6B6E76',
+  background: '#FFFFFF',
+  border: '1px solid #DEDEE3',
   cursor: 'not-allowed',
   whiteSpace: 'nowrap',
 };
@@ -1350,22 +1382,24 @@ export function connectionsHealthFilterBtnStyle(active: boolean): CSSProperties 
     height: 28,
     boxSizing: 'border-box',
     padding: '0 11px',
-    borderRadius: 999,
+    borderRadius: CONNECTIONS_RADIUS.chip,
     fontFamily: 'inherit',
     fontSize: 12.5,
     fontWeight: 600,
     cursor: 'pointer',
-    border: active ? '1px solid var(--text)' : '1px solid var(--line)',
-    background: active ? 'var(--text)' : 'var(--surface)',
-    color: active ? 'var(--onacc)' : 'var(--text-2)',
+    border: active ? '1px solid #0E0E12' : '1px solid #DEDEE3',
+    background: active ? '#0E0E12' : '#FFFFFF',
+    color: active ? '#FFFFFF' : '#52555C',
   };
 }
 
+// overflow:hidden removed — it was clipping the row "⋯" menu; the menu
+// itself is portaled to document.body, which independently escapes any
+// ancestor's overflow/stacking context.
 export const connectionsTableCardStyle: CSSProperties = {
-  borderRadius: 12,
-  border: '1px solid var(--line)',
-  background: 'var(--surface)',
-  overflow: 'hidden',
+  borderRadius: CONNECTIONS_RADIUS.container,
+  border: '1px solid #E4E4E8',
+  background: '#FFFFFF',
   overflowX: 'auto',
 };
 
@@ -1375,30 +1409,31 @@ export const connectionsTableStyle: CSSProperties = {
 };
 
 export const connectionsTableHeadRowStyle: CSSProperties = {
-  borderBottom: '1px solid var(--line)',
+  borderBottom: '1px solid #E4E4E8',
 };
 
+// Header uses the app's default UI font (var(--font-ui), inherited — no
+// override), same small-uppercase-label treatment as navGroupLabelStyle.
 export const connectionsTableThStyle: CSSProperties = {
   textAlign: 'left',
   padding: '10px 16px',
-  fontFamily: 'var(--font-mono)',
-  fontSize: 10.5,
+  fontSize: 11,
   fontWeight: 600,
-  letterSpacing: '.06em',
+  letterSpacing: '.04em',
   textTransform: 'uppercase',
-  color: 'var(--text-4)',
+  color: '#8A8D94',
   whiteSpace: 'nowrap',
 };
 
 export const connectionsTableRowStyle: CSSProperties = {
-  borderBottom: '1px solid var(--line)',
+  borderBottom: '1px solid #ECECEF',
 };
 
 export const connectionsTableTdStyle: CSSProperties = {
   padding: '14px 16px',
   verticalAlign: 'middle',
   fontSize: 13,
-  color: 'var(--text-2)',
+  color: '#52555C',
 };
 
 export const connectionsTableConnCellStyle: CSSProperties = {
@@ -1411,18 +1446,18 @@ export const connectionsTableTileStyle: CSSProperties = {
   width: 36,
   height: 36,
   flex: 'none',
-  borderRadius: 10,
+  borderRadius: CONNECTIONS_RADIUS.chip,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   background: '#fff',
-  border: '1px solid rgba(203,213,225,.6)',
+  border: '1px solid #E4E4E8',
 };
 
 export const connectionsTableHostStyle: CSSProperties = {
   fontFamily: 'var(--font-mono)',
   fontSize: 12,
-  color: 'var(--text-2)',
+  color: '#52555C',
   maxWidth: 220,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -1445,27 +1480,27 @@ export const connectionsTableMenuBtnStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  borderRadius: 7,
-  border: '1px solid var(--line)',
-  background: 'var(--surface)',
-  color: 'var(--text-3)',
+  borderRadius: CONNECTIONS_RADIUS.chip,
+  border: '1px solid #DEDEE3',
+  background: '#FFFFFF',
+  color: '#6B6E76',
   cursor: 'pointer',
   fontSize: 15,
   lineHeight: 1,
 };
 
+// Portaled to document.body (ConnectionsClient's RowMenu) — top/left are
+// computed per-open from the trigger button's getBoundingClientRect(), so
+// this base style only sets shape/chrome, not position.
 export const connectionsTableMenuStyle: CSSProperties = {
-  position: 'absolute',
-  top: '100%',
-  right: 0,
-  marginTop: 4,
+  position: 'fixed',
   minWidth: 160,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
-  borderRadius: 10,
-  boxShadow: '0 8px 24px rgba(15,23,42,.14)',
+  background: '#FFFFFF',
+  border: '1px solid #DEDEE3',
+  borderRadius: CONNECTIONS_RADIUS.control,
+  boxShadow: '0 8px 24px rgba(14,14,18,.14)',
   padding: 4,
-  zIndex: 20,
+  zIndex: 1000,
   display: 'flex',
   flexDirection: 'column',
 };
@@ -1475,19 +1510,19 @@ export const connectionsTableMenuItemStyle: CSSProperties = {
   width: '100%',
   textAlign: 'left',
   padding: '8px 10px',
-  borderRadius: 7,
+  borderRadius: CONNECTIONS_RADIUS.tag,
   border: 'none',
   background: 'transparent',
   fontFamily: 'inherit',
   fontSize: 13,
-  color: 'var(--text)',
+  color: '#0E0E12',
   cursor: 'pointer',
 };
 
 export const connectionsCatalogHintStyle: CSSProperties = {
   textAlign: 'center',
   fontSize: 12.5,
-  color: 'var(--text-3)',
+  color: '#6B6E76',
 };
 
 export const connectionsEmptyPanelStyle: CSSProperties = {
@@ -1495,9 +1530,9 @@ export const connectionsEmptyPanelStyle: CSSProperties = {
   gridTemplateColumns: 'minmax(0, 1.1fr) minmax(0, .9fr)',
   gap: 32,
   padding: 28,
-  borderRadius: 14,
-  border: '1px solid var(--line)',
-  background: 'var(--surface)',
+  borderRadius: CONNECTIONS_RADIUS.container,
+  border: '1px solid #E4E4E8',
+  background: '#FFFFFF',
 };
 
 export const connectionsEmptyStepsColStyle: CSSProperties = {
@@ -1520,7 +1555,7 @@ export const connectionsEmptyStepNumStyle: CSSProperties = {
   background: 'var(--surface2)',
   color: 'var(--text-2)',
   fontSize: 12,
-  fontWeight: 700,
+  fontWeight: 600,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -1532,222 +1567,354 @@ export const connectionsEmptySuggestColStyle: CSSProperties = {
   gap: 10,
 };
 
-// Glassmorphic card shell, ported 1:1 from the design's connector-card
-// markup (frosted background + soft indigo-tinted shadow).
-export const connectionsConnectorCardStyle: CSSProperties = {
-  position: 'relative',
+// Connector card v4 — 472px card with a rest view (name/kind/description/
+// facts below a 220px media band) and a hover/focus view (card turns
+// #0A0A0B, logo glides to a small top-left mark, a single bottom-anchored
+// dark text block replaces the rest text). Both views stay mounted at all
+// times — only opacity/position/pointer-events toggle — and the footer
+// never fades, it just recolors, so it can't ever flash. Ported 1:1 from
+// designs/Connections — with connections-html/Connections.dc.html's
+// `cardBuilder` (same pixel values, same cubic-bezier(.2,.8,.2,1) easing).
+const CARD_EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
+
+export const CARD = {
+  height: 472,
+  media: 220,
+  logoRest: 108,
+  logoHover: 56,
+  imgRest: 76,
+  imgHover: 32,
+  textTop: 242, // media (220) + 22
+  darkBottom: 92,
+  footerBottom: 24,
+  footerHeight: 44,
+  docsBtnSize: 44,
+} as const;
+
+function cardT(prop: string, duration: number, delayMs = 0): string {
+  return `${prop} ${duration}ms ${CARD_EASE}${delayMs ? ` ${delayMs}ms` : ''}`;
+}
+
+// Outer 472px shell — background/border/shadow invert and the card lifts
+// 4px on hover/focus. `comingSoon` dims the rest view to 75% opacity
+// (matches the reference's `c.soon && !on` rule) so a disabled card still
+// reads as part of the grid, not broken.
+export function connectorCardShellStyle(active: boolean, comingSoon: boolean, reducedMotion: boolean): CSSProperties {
+  return {
+    position: 'relative',
+    boxSizing: 'border-box',
+    width: '100%',
+    height: CARD.height,
+    overflow: 'hidden',
+    cursor: 'pointer',
+    borderRadius: CONNECTIONS_RADIUS.card,
+    background: active ? '#0A0A0B' : '#FFFFFF',
+    border: `1px solid ${active ? '#0A0A0B' : '#E4E4E8'}`,
+    boxShadow: active ? '0 20px 40px rgba(14,14,18,.22)' : '0 1px 0 rgba(14,14,18,.03)',
+    transform: !reducedMotion && active ? 'translateY(-4px)' : 'translateY(0)',
+    opacity: comingSoon && !active ? 0.75 : 1,
+    transition: reducedMotion
+      ? [cardT('background-color', 120), cardT('border-color', 120), cardT('box-shadow', 120)].join(', ')
+      : [cardT('background-color', 360), cardT('border-color', 360), cardT('box-shadow', 360), cardT('transform', 360)].join(', '),
+  };
+}
+
+// Top media band — plain #FAFAFB fill with a hairline bottom border at
+// rest; both disappear (transparent) on hover so the card reads as one
+// solid dark surface.
+export function connectorMediaStyle(active: boolean, reducedMotion: boolean): CSSProperties {
+  return {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: CARD.media,
+    // Nested-radius rule: the card's top corners are CONNECTIONS_RADIUS.card
+    // (16); this band sits flush against them, so its own top corners are
+    // 16 - 1 (the card's border width) = 15. Its bottom corners are square
+    // since it ends mid-card. The card's own overflow:hidden already clips
+    // this to the rounded shape, but the radius is set explicitly too so it
+    // matches on inspection.
+    borderRadius: `${CONNECTIONS_RADIUS.card - 1}px ${CONNECTIONS_RADIUS.card - 1}px 0 0`,
+    background: active ? 'transparent' : '#FAFAFB',
+    borderBottom: `1px solid ${active ? 'transparent' : '#EFEFF2'}`,
+    transition: reducedMotion ? cardT('background-color', 120) : [cardT('background-color', 360), cardT('border-color', 360)].join(', '),
+  };
+}
+
+export function connectorCategoryLabelStyle(active: boolean, reducedMotion: boolean): CSSProperties {
+  return {
+    position: 'absolute',
+    left: 20,
+    top: 20,
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: '.08em',
+    textTransform: 'uppercase',
+    color: '#8A8D94',
+    opacity: active ? 0 : 1,
+    transition: reducedMotion ? cardT('opacity', 120) : cardT('opacity', 160),
+  };
+}
+
+export type ConnectorBadgeKind = 'connected' | 'soon';
+
+export function connectorTopBadgeStyle(active: boolean, kind: ConnectorBadgeKind, reducedMotion: boolean): CSSProperties {
+  const inkColor = kind === 'connected' ? '#17803D' : '#6B6E76';
+  return {
+    position: 'absolute',
+    right: 20,
+    top: 20,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    height: 24,
+    boxSizing: 'border-box',
+    padding: '0 8px',
+    borderRadius: CONNECTIONS_RADIUS.tag,
+    border: `1px solid ${active ? 'rgba(255,255,255,.25)' : '#E4E4E8'}`,
+    background: active ? 'transparent' : '#FFFFFF',
+    fontSize: 12,
+    fontWeight: 500,
+    whiteSpace: 'nowrap',
+    color: active ? '#FFFFFF' : inkColor,
+    transition: reducedMotion
+      ? cardT('color', 120)
+      : [cardT('border-color', 360), cardT('background-color', 360), cardT('color', 360)].join(', '),
+  };
+}
+
+export function connectorBadgeDotStyle(kind: ConnectorBadgeKind): CSSProperties {
+  return {
+    width: 6,
+    height: 6,
+    borderRadius: '50%',
+    background: kind === 'connected' ? '#1F9D4C' : '#A9ABB2',
+  };
+}
+
+// Logo box — glides from a centered 160px box (128px mark) to a top-left
+// 76px box (48px mark) on hover. No background/border in either state —
+// the brand mark (or initials fallback) sits directly on the card.
+export function connectorLogoBoxStyle(active: boolean, reducedMotion: boolean): CSSProperties {
+  const size = active ? CARD.logoHover : CARD.logoRest;
+  return {
+    position: 'absolute',
+    zIndex: 2,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxSizing: 'border-box',
+    borderRadius: 0,
+    background: 'transparent',
+    left: active ? 20 : 'calc(50% - 54px)',
+    top: active ? 20 : (CARD.media - CARD.logoRest) / 2,
+    width: size,
+    height: size,
+    border: 0,
+    transition: reducedMotion
+      ? cardT('opacity', 120)
+      : [cardT('left', 440), cardT('top', 440), cardT('width', 440), cardT('height', 440)].join(', '),
+  };
+}
+
+export function connectorLogoImgStyle(active: boolean, reducedMotion: boolean): CSSProperties {
+  const size = active ? CARD.imgHover : CARD.imgRest;
+  return {
+    width: size,
+    height: size,
+    objectFit: 'contain',
+    transition: reducedMotion ? cardT('opacity', 120) : [cardT('width', 440), cardT('height', 440)].join(', '),
+  };
+}
+
+export function connectorLogoMonoStyle(active: boolean, reducedMotion: boolean): CSSProperties {
+  return {
+    fontSize: active ? 16 : 31,
+    fontWeight: 600,
+    letterSpacing: '-.02em',
+    color: active ? '#FFFFFF' : '#0E0E12',
+    transition: reducedMotion ? cardT('opacity', 120) : [cardT('font-size', 440), cardT('color', 440)].join(', '),
+  };
+}
+
+// Rest-view text block (name/kind/description/facts) — fades out and
+// drops 8px on hover so the dark block underneath reads as the active
+// state.
+export function connectorRestTextStyle(active: boolean, reducedMotion: boolean): CSSProperties {
+  return {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    top: CARD.textTop,
+    display: 'flex',
+    flexDirection: 'column',
+    opacity: active ? 0 : 1,
+    transform: !reducedMotion && active ? 'translateY(8px)' : 'translateY(0)',
+    pointerEvents: active ? 'none' : 'auto',
+    transition: reducedMotion ? cardT('opacity', 120) : [cardT('opacity', 160), cardT('transform', 260)].join(', '),
+  };
+}
+
+export const connectorNameStyle: CSSProperties = {
+  fontFamily: 'var(--font-display)',
+  fontSize: 22,
+  lineHeight: '28px',
+  fontWeight: 500,
+  letterSpacing: '-.015em',
+  color: '#0E0E12',
+  whiteSpace: 'nowrap',
   overflow: 'hidden',
-  boxSizing: 'border-box',
+  textOverflow: 'ellipsis',
+};
+
+export const connectorSubtitleStyle: CSSProperties = {
+  fontSize: 13.5,
+  lineHeight: '20px',
+  color: '#6B6E76',
+  marginTop: 2,
+};
+
+export const connectorDescStyle: CSSProperties = {
+  margin: '10px 0 0',
+  fontSize: 14,
+  lineHeight: '21px',
+  color: '#52555C',
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
+  overflow: 'hidden',
+};
+
+// Footer (main button + Docs button) — always visible, never fades; only
+// its colors change between rest and hover/focus.
+export const connectorFooterStyle: CSSProperties = {
+  position: 'absolute',
+  left: 24,
+  right: 24,
+  bottom: CARD.footerBottom,
   display: 'flex',
-  flexDirection: 'column',
-  gap: 9,
-  padding: '24px 22px 22px',
-  minHeight: 344,
-  borderRadius: 18,
-  background: 'linear-gradient(165deg, rgba(255,255,255,.72), rgba(255,255,255,.5))',
-  backdropFilter: 'blur(16px) saturate(1.6)',
-  border: '1px solid rgba(255,255,255,.8)',
-  outline: '1px solid rgba(203,213,225,.45)',
-  boxShadow:
-    'rgba(15,23,42,.05) 0 2px 6px, rgba(79,70,229,.16) 0 14px 34px -16px, rgba(255,255,255,.9) 0 1px 0 inset',
-  transition: 'transform .3s cubic-bezier(.2,.7,.2,1), box-shadow .3s cubic-bezier(.2,.7,.2,1)',
+  gap: 8,
 };
 
-// Applied on top of connectionsConnectorCardStyle while hovered (inline
-// styles can't express :hover directly, and this codebase avoids
-// className/global CSS for app-shell components — see AVAILABLE grid's
-// onMouseEnter/onMouseLeave). Lift + deepen the shadow.
-export const connectionsConnectorCardHoverStyle: CSSProperties = {
-  transform: 'translateY(-4px)',
-  boxShadow:
-    'rgba(15,23,42,.08) 0 8px 16px, rgba(79,70,229,.26) 0 22px 44px -16px, rgba(255,255,255,.9) 0 1px 0 inset',
-};
+export type ConnectorMainButtonKind = 'install' | 'uninstall' | 'notify';
 
-export const connectionsConnectorIndexStyle: CSSProperties = {
-  position: 'relative',
-  fontFamily: 'var(--font-display)',
-  fontSize: 12,
-  fontWeight: 700,
-  color: 'var(--text-4)',
-};
+export function connectorMainButtonStyle(kind: ConnectorMainButtonKind, active: boolean, reducedMotion: boolean): CSSProperties {
+  const base: CSSProperties = {
+    flex: '1 1 auto',
+    minWidth: 0,
+    height: CARD.footerHeight,
+    boxSizing: 'border-box',
+    padding: '0 16px',
+    borderRadius: CONNECTIONS_RADIUS.control,
+    fontFamily: 'inherit',
+    fontSize: 14,
+    fontWeight: 500,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    transition: reducedMotion
+      ? cardT('color', 120)
+      : [cardT('background-color', 360), cardT('color', 360), cardT('border-color', 360)].join(', '),
+  };
+  if (kind === 'notify') {
+    return {
+      ...base,
+      border: `1px solid ${active ? 'rgba(255,255,255,.25)' : '#DEDEE3'}`,
+      background: 'transparent',
+      color: active ? 'rgba(255,255,255,.7)' : '#6B6E76',
+      cursor: 'default',
+    };
+  }
+  if (active) {
+    return { ...base, border: '1px solid #FFFFFF', background: '#FFFFFF', color: '#0A0A0B', cursor: 'pointer' };
+  }
+  if (kind === 'uninstall') {
+    return { ...base, border: '1px solid var(--bad)', background: '#FFFFFF', color: 'var(--bad)', cursor: 'pointer' };
+  }
+  return { ...base, border: '1px solid #0E0E12', background: '#0E0E12', color: '#FFFFFF', cursor: 'pointer' };
+}
 
-// Real-brand logo chip, top of the connector card (above the index/name),
-// on a plain white tile so the vendor's own logo colors read true instead
-// of tinting against the card's frosted-indigo background.
-export const connectionsConnectorLogoStyle: CSSProperties = {
-  position: 'relative',
-  width: 40,
-  height: 40,
-  flex: 'none',
-  borderRadius: 10,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: '#fff',
-  border: '1px solid rgba(203,213,225,.6)',
-  boxShadow: 'rgba(15,23,42,.05) 0 1px 3px',
-};
+export function connectorDocsIconBtnStyle(active: boolean, reducedMotion: boolean): CSSProperties {
+  return {
+    width: CARD.docsBtnSize,
+    height: CARD.docsBtnSize,
+    flex: `0 0 ${CARD.docsBtnSize}px`,
+    boxSizing: 'border-box',
+    borderRadius: CONNECTIONS_RADIUS.chip,
+    border: `1px solid ${active ? 'rgba(255,255,255,.3)' : '#DEDEE3'}`,
+    color: active ? '#FFFFFF' : '#52555C',
+    background: 'transparent',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    transition: reducedMotion ? cardT('color', 120) : [cardT('border-color', 360), cardT('color', 360)].join(', '),
+  };
+}
 
-export const connectionsConnectorNameStyle: CSSProperties = {
-  position: 'relative',
-  maxWidth: '11ch',
-  fontFamily: 'var(--font-display)',
-  fontSize: 20,
-  fontWeight: 700,
-  lineHeight: 1.15,
-  color: 'var(--text)',
-};
+// Dark (hover-view) text block — a single bottom-anchored block, its
+// bottom edge 92px above the card bottom (clear of the 24px-inset, 44px-
+// tall footer). Fades in + rises with a short delay so it visibly trails
+// the card's own background/lift.
+export function connectorDarkWrapStyle(active: boolean, reducedMotion: boolean): CSSProperties {
+  return {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    bottom: CARD.darkBottom,
+    display: 'flex',
+    flexDirection: 'column',
+    opacity: active ? 1 : 0,
+    transform: !reducedMotion && !active ? 'translateY(12px)' : 'translateY(0)',
+    pointerEvents: active ? 'auto' : 'none',
+    transition: reducedMotion
+      ? cardT('opacity', 120)
+      : `opacity 280ms ${CARD_EASE} ${active ? '120ms' : '0ms'}, transform 380ms ${CARD_EASE} ${active ? '80ms' : '0ms'}`,
+  };
+}
 
-export const connectionsConnectorDescStyle: CSSProperties = {
-  position: 'relative',
-  maxWidth: '24ch',
-  fontSize: 13,
-  lineHeight: 1.5,
-  color: 'var(--text-3)',
-};
-
-export const connectionsConnectorTagsStyle: CSSProperties = {
-  position: 'relative',
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 6,
-};
-
-export const connectionsConnectorTagStyle: CSSProperties = {
-  height: 20,
-  boxSizing: 'border-box',
-  display: 'inline-flex',
-  alignItems: 'center',
-  padding: '0 8px',
-  borderRadius: 6,
+export const connectorDarkCategoryLabelStyle: CSSProperties = {
   fontSize: 11,
+  lineHeight: '16px',
   fontWeight: 600,
-  color: 'var(--text-2)',
-  background: 'var(--surface2)',
+  letterSpacing: '.08em',
+  textTransform: 'uppercase',
+  color: 'rgba(255,255,255,.5)',
 };
 
-export const connectionsInstallRowStyle: CSSProperties = {
-  position: 'relative',
-  marginTop: 'auto',
-  display: 'flex',
-  alignItems: 'center',
-  gap: 11,
-};
-
-// Default cursor is 'pointer' — this is shared by the real, clickable
-// install button (see ConnectorCard) as well as the always-disabled
-// decorative "Coming soon" button and the non-interactive "Installed"
-// state's checkmark. Callers that render it disabled must override cursor
-// to 'not-allowed'/'default' themselves (inline styles win over the
-// browser's native disabled-cursor default, so it can't be left implicit).
-export const connectionsInstallBtnStyle: CSSProperties = {
-  width: 38,
-  height: 38,
-  flex: 'none',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontSize: 15,
-  lineHeight: 1,
-  borderRadius: '50%',
-  cursor: 'pointer',
-  background: 'var(--text)',
-  border: 'none',
+export const connectorDarkNameStyle: CSSProperties = {
+  fontFamily: 'var(--font-display)',
+  margin: '6px 0 0',
+  fontSize: 26,
+  lineHeight: '32px',
+  fontWeight: 500,
+  letterSpacing: '-.02em',
   color: '#FFFFFF',
 };
 
-export const connectionsInstallLabelStyle: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 600,
-  color: 'var(--text)',
+export const connectorDarkSubtitleStyle: CSSProperties = {
+  fontSize: 13.5,
+  lineHeight: '20px',
+  color: 'rgba(255,255,255,.6)',
+  marginTop: 2,
 };
 
-// Decorative per-card graphic, anchored bottom-right, ported from the
-// design: database/BI/warehouse/files connectors get 5 skewed, hue-shifted
-// "stacked cards"; AI-vector connectors (pgvector, Pinecone) get a sphere
-// with a highlight and 3 floating dots.
-export const connectionsGraphicWrapStyle: CSSProperties = {
-  position: 'absolute',
-  right: -12,
-  bottom: -12,
-  width: 196,
-  height: 196,
-  pointerEvents: 'none',
+export const connectorDarkDescStyle: CSSProperties = {
+  margin: '12px 0 0',
+  fontSize: 14,
+  lineHeight: '21px',
+  color: 'rgba(255,255,255,.82)',
+  display: '-webkit-box',
+  WebkitLineClamp: 3,
+  WebkitBoxOrient: 'vertical',
+  overflow: 'hidden',
 };
-
-const STACK_LAYERS = [
-  { left: 0, top: 6, hue: -70 },
-  { left: 20, top: 10, hue: -35 },
-  { left: 40, top: 14, hue: 0 },
-  { left: 60, top: 18, hue: 35 },
-  { left: 80, top: 22, hue: 70 },
-];
-
-export function connectionsStackLayerStyle(i: number): CSSProperties {
-  const layer = STACK_LAYERS[i]!;
-  return {
-    position: 'absolute',
-    left: layer.left,
-    top: layer.top,
-    width: 70,
-    height: 112,
-    borderRadius: 14,
-    transform: 'skewY(-10deg)',
-    background: 'linear-gradient(160deg, rgba(165,243,252,.85), rgba(199,210,254,.82), rgba(251,207,232,.85))',
-    filter: `hue-rotate(${layer.hue}deg)`,
-    boxShadow: 'rgba(255,255,255,.9) 0 1px 0 inset, rgba(79,70,229,.5) 0 8px 18px -10px',
-  };
-}
-
-export const STACK_LAYER_COUNT = STACK_LAYERS.length;
-
-export const connectionsSphereMainStyle: CSSProperties = {
-  position: 'absolute',
-  left: 34,
-  top: 26,
-  width: 116,
-  height: 116,
-  borderRadius: '50%',
-  background: 'radial-gradient(circle at 32% 28%, #FFFFFF, #FBCFE8 34%, #C7D2FE 62%, #A7F3D0 100%)',
-  boxShadow: 'rgba(79,70,229,.28) -8px -10px 22px inset, rgba(124,58,237,.5) 0 16px 30px -14px',
-};
-
-export const connectionsSphereHighlightStyle: CSSProperties = {
-  position: 'absolute',
-  left: 58,
-  top: 44,
-  width: 44,
-  height: 22,
-  borderRadius: '50%',
-  background: 'rgba(255,255,255,.75)',
-  filter: 'blur(6px)',
-};
-
-const SPHERE_DOTS = [
-  { left: 14, top: 120, size: 16, gradient: 'linear-gradient(160deg, #C7D2FE, #A7F3D0)' },
-  { left: 150, top: 96, size: 12, gradient: 'linear-gradient(160deg, #FBCFE8, #C7D2FE)' },
-  { left: 126, top: 150, size: 9, gradient: 'linear-gradient(160deg, #A7F3D0, #C7D2FE)' },
-];
-
-export function connectionsSphereDotStyle(i: number): CSSProperties {
-  const dot = SPHERE_DOTS[i]!;
-  return {
-    position: 'absolute',
-    left: dot.left,
-    top: dot.top,
-    width: dot.size,
-    height: dot.size,
-    borderRadius: '50%',
-    background: dot.gradient,
-  };
-}
-
-export const SPHERE_DOT_COUNT = SPHERE_DOTS.length;
 
 export const connectionsEmptyResultsStyle: CSSProperties = {
   padding: '32px 0',
   fontSize: 13,
-  color: 'var(--text-3)',
+  color: '#6B6E76',
   textAlign: 'center',
 };
 
@@ -1766,81 +1933,6 @@ export const connectionsUninstallBtnStyle: CSSProperties = {
   background: 'var(--surface)',
   color: 'var(--text-3)',
   cursor: 'pointer',
-};
-
-// "Unavailable" cards (no manifest and nothing planned near-term, e.g.
-// AWS/Notion) — ported from the design's "SOON" badge + "On the roadmap"
-// row, which replaces the Install control entirely rather than just
-// disabling it.
-export const connectionsSoonBadgeStyle: CSSProperties = {
-  position: 'absolute',
-  top: 20,
-  right: 20,
-  height: 20,
-  boxSizing: 'border-box',
-  display: 'inline-flex',
-  alignItems: 'center',
-  padding: '0 8px',
-  borderRadius: 6,
-  fontSize: 10.5,
-  fontWeight: 700,
-  letterSpacing: '.04em',
-  color: 'var(--text-4)',
-  background: 'var(--surface2)',
-};
-
-export const connectionsUnavailableNameStyle: CSSProperties = {
-  ...connectionsConnectorNameStyle,
-  color: 'var(--text-4)',
-};
-
-export const connectionsUnavailableDescStyle: CSSProperties = {
-  ...connectionsConnectorDescStyle,
-  color: 'var(--text-4)',
-};
-
-export const connectionsRoadmapRowStyle: CSSProperties = {
-  position: 'relative',
-  marginTop: 'auto',
-  display: 'flex',
-  alignItems: 'center',
-  gap: 11,
-};
-
-export const connectionsRoadmapIconStyle: CSSProperties = {
-  width: 38,
-  height: 38,
-  flex: 'none',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: '50%',
-  background: 'transparent',
-  border: '1px solid var(--line-strong)',
-  color: 'var(--text-4)',
-};
-
-export const connectionsRoadmapLabelStyle: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 600,
-  color: 'var(--text-4)',
-};
-
-// Faint diagonal hatch swapped in for the vivid stacked-cards/sphere
-// graphic on unavailable cards — same wrap box, far lower contrast, masked
-// to fade out toward the top-left like the design's version does.
-export const connectionsUnavailableGraphicStyle: CSSProperties = {
-  position: 'absolute',
-  right: -12,
-  bottom: -12,
-  width: 196,
-  height: 196,
-  pointerEvents: 'none',
-  opacity: 0.6,
-  background:
-    'repeating-linear-gradient(135deg, var(--line) 0, var(--line) 1px, transparent 1px, transparent 14px)',
-  maskImage: 'radial-gradient(circle at 70% 70%, black 0%, transparent 70%)',
-  WebkitMaskImage: 'radial-gradient(circle at 70% 70%, black 0%, transparent 70%)',
 };
 
 // Chat surface (/app/chat). Style values are ported from the exact CSS
