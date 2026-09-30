@@ -67,18 +67,26 @@ create table if not exists auth.users (
   updated_at timestamptz not null default now()
 );
 
+-- nullif is applied to the raw text setting BEFORE the ::jsonb cast (not
+-- after) — matching real Supabase's own auth.uid()/auth.role(). This
+-- matters: once a transaction that ran `SET LOCAL`/`set_config(..., true)`
+-- on this GUC commits, Postgres resets a custom placeholder GUC to '' (empty
+-- string), not NULL — confirmed by hand. ''::jsonb throws
+-- "invalid input syntax for type json", so nullif-after-cast crashes on the
+-- very next call on a reused (pooled) connection once no acting user is set;
+-- nullif-before-cast short-circuits to NULL first and never attempts the cast.
 create or replace function auth.uid()
 returns uuid
 language sql stable
 as $$
-  select nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid
+  select (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid
 $$;
 
 create or replace function auth.role()
 returns text
 language sql stable
 as $$
-  select nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'role', '')
+  select nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role'
 $$;
 
 -- User-created schemas grant no privileges to PUBLIC by default (unlike the

@@ -4,11 +4,19 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withActingUser, withServiceRole } from "./client.js";
 
 /**
- * Real local Postgres only (`supabase start` — DATABASE_URL defaults to the
- * local instance's direct connection, same role migrations use). Proves the
+ * Real local Postgres only (plain Postgres dev sandbox — `docker-compose.yml`'s
+ * `postgres` service, DATABASE_URL defaults to its host port). Proves the
  * properties a mock can't: RLS actually isolating two real users, auth.uid()/
  * role resolution, and connection state genuinely clearing on release.
  * Run explicitly with `pnpm test:integration`.
+ *
+ * Identity fixtures go in `public.user` (Better Auth's own table), not
+ * `auth.users` — since 0035_better_auth.sql, every FK this test touches
+ * (connections.owner_id/owner_user_id, audit_log.actor/owner_id) points at
+ * public.user, and auth.users is a stub kept only for pre-0035 migrations to
+ * apply (docker/local-postgres-bootstrap.sql). auth.uid()/auth.role() are
+ * unaffected either way — both resolve from the request.jwt.claims GUC
+ * withActingUser sets, never from a table lookup.
  *
  * Fixture setup/teardown/cross-user verification below intentionally runs
  * through a raw `pool.query()` (the base DATABASE_URL role — postgres,
@@ -17,7 +25,7 @@ import { withActingUser, withServiceRole } from "./client.js";
  * plumbing.
  */
 
-const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
+const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:5434/postgres";
 
 const userA = randomUUID();
 const userB = randomUUID();
@@ -30,11 +38,10 @@ beforeAll(async () => {
   pool = new pg.Pool({ connectionString: DATABASE_URL, max: 5 });
 
   await pool.query(
-    `insert into auth.users
-       (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
+    `insert into public.user (id, name, email, "emailVerified")
      values
-       ('00000000-0000-0000-0000-000000000000', $1, 'authenticated', 'authenticated', $3, crypt('password', gen_salt('bf')), now(), now(), now(), '{"provider":"email","providers":["email"]}', '{}'),
-       ('00000000-0000-0000-0000-000000000000', $2, 'authenticated', 'authenticated', $4, crypt('password', gen_salt('bf')), now(), now(), now(), '{"provider":"email","providers":["email"]}', '{}')`,
+       ($1, 'db pkg test a', $3, true),
+       ($2, 'db pkg test b', $4, true)`,
     [userA, userB, `db-pkg-test-a-${userA}@rls-probe.test`, `db-pkg-test-b-${userB}@rls-probe.test`],
   );
 
@@ -51,7 +58,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await pool.query("delete from public.audit_log where owner_id in ($1, $2)", [userA, userB]);
   await pool.query("delete from public.connections where id in ($1, $2)", [connA, connB]);
-  await pool.query("delete from auth.users where id in ($1, $2)", [userA, userB]);
+  await pool.query('delete from public.user where id in ($1, $2)', [userA, userB]);
   await pool.end();
 });
 
