@@ -1580,3 +1580,287 @@ describe("POST /console/users/:userId/revoke-sessions", () => {
     ]);
   });
 });
+
+/**
+ * Subscription Phase 5, Slice 2 (decision 1): in-app announcements.
+ * requireStaff's own gate (403/401) is already fully covered by the /ping
+ * tests above, so these focus on what's new to this route: the tri-state
+ * audience validation (mirrors 0067_announcements.sql's CHECK constraint),
+ * the create/list/end/archive response shapes, and that create/end/archive
+ * each write staff_audit_log plus (when the announcement targets a single
+ * org) a matching audit_log row.
+ */
+const ANNOUNCEMENT_ROW = {
+  id: "ann-1",
+  title: "Scheduled maintenance",
+  body: "We will be performing maintenance.",
+  severity: "info",
+  audience: "org",
+  audience_org_id: "org-1",
+  audience_project_id: null,
+  audience_roles: null,
+  starts_at: "2026-02-01T00:00:00.000Z",
+  ends_at: null,
+  archived_at: null,
+  created_by: "staff-1",
+  created_at: "2026-02-01T00:00:00.000Z",
+};
+
+const ANNOUNCEMENT_RESPONSE = {
+  id: "ann-1",
+  title: "Scheduled maintenance",
+  body: "We will be performing maintenance.",
+  severity: "info",
+  audience: "org",
+  audienceOrgId: "org-1",
+  audienceProjectId: null,
+  audienceRoles: null,
+  startsAt: "2026-02-01T00:00:00.000Z",
+  endsAt: null,
+  archivedAt: null,
+  createdBy: "staff-1",
+  createdByName: null,
+  createdAt: "2026-02-01T00:00:00.000Z",
+  status: null,
+};
+
+function mockCreateAnnouncementQuery(options: { orgExists: boolean }) {
+  const { orgExists } = options;
+  const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+    if (sql.includes("platform_staff")) return { rowCount: 1 };
+    if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+    if (sql.includes("private.log_org_audit")) return { rows: [], rowCount: 0 };
+    if (sql.includes("select id from public.organizations where id")) {
+      return { rows: orgExists ? [{ id: "org-1" }] : [], rowCount: orgExists ? 1 : 0 };
+    }
+    if (sql.includes("insert into public.announcements")) {
+      return { rows: [ANNOUNCEMENT_ROW], rowCount: 1 };
+    }
+    throw new Error(`mockCreateAnnouncementQuery: unexpected SQL: ${sql}`);
+  });
+  withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+    fn({ query }),
+  );
+  return query;
+}
+
+describe("POST /console/announcements", () => {
+  it("creates an org-audience announcement and writes both audit rows for a staff session", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockCreateAnnouncementQuery({ orgExists: true });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/announcements`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "Scheduled maintenance",
+        body: "We will be performing maintenance.",
+        severity: "info",
+        audience: "org",
+        audienceOrgId: "22222222-2222-2222-2222-222222222222",
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual(ANNOUNCEMENT_RESPONSE);
+
+    const detail = JSON.stringify({ id: "ann-1", title: "Scheduled maintenance", severity: "info", audience: "org" });
+    const staffAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(staffAuditCall?.[1]).toEqual(["staff-1", "announcement.create", null, "org-1", detail]);
+    const orgAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_org_audit"));
+    expect(orgAuditCall?.[1]).toEqual(["org-1", "staff-1", "announcement.created", detail]);
+  });
+
+  it("rejects audience 'org' with no audienceOrgId with a validation error, without creating anything", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    withServiceRole.mockResolvedValue({ rowCount: 1 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/announcements`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ title: "Notice", body: "Body text.", audience: "org" }),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+    expect(withServiceRole).toHaveBeenCalledOnce();
+  });
+});
+
+function mockListAnnouncementsQuery() {
+  const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+    if (sql.includes("platform_staff")) return { rowCount: 1 };
+    if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+    if (sql.includes("select count(*) as count")) return { rows: [{ count: "1" }], rowCount: 1 };
+    if (sql.includes("from public.announcements a")) {
+      return { rows: [{ ...ANNOUNCEMENT_ROW, created_by_name: "Staff One", status: "active" }], rowCount: 1 };
+    }
+    throw new Error(`mockListAnnouncementsQuery: unexpected SQL: ${sql}`);
+  });
+  withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+    fn({ query }),
+  );
+  return query;
+}
+
+describe("GET /console/announcements", () => {
+  it("returns the mapped announcement list with total/hasMore and writes one staff_audit_log row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    mockListAnnouncementsQuery();
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/announcements`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      announcements: [{ ...ANNOUNCEMENT_RESPONSE, createdByName: "Staff One", status: "active" }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+      hasMore: false,
+    });
+  });
+
+  it("returns 403 for a non-staff session without ever querying announcements", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/announcements`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(403);
+    expect(withServiceRole).toHaveBeenCalledOnce();
+  });
+});
+
+function mockEndAnnouncementQuery(options: { archivedAt: string | null; endsAt: string | null }) {
+  const { archivedAt, endsAt } = options;
+  const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+    if (sql.includes("platform_staff")) return { rowCount: 1 };
+    if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+    if (sql.includes("private.log_org_audit")) return { rows: [], rowCount: 0 };
+    if (sql.includes("select id, audience, audience_org_id, audience_project_id, archived_at, ends_at")) {
+      return { rows: [{ id: "ann-1", audience: "org", audience_org_id: "org-1", audience_project_id: null, archived_at: archivedAt, ends_at: endsAt }], rowCount: 1 };
+    }
+    if (sql.includes("update public.announcements set ends_at = now()")) {
+      return { rows: [{ ...ANNOUNCEMENT_ROW, ends_at: "2026-02-02T00:00:00.000Z" }], rowCount: 1 };
+    }
+    throw new Error(`mockEndAnnouncementQuery: unexpected SQL: ${sql}`);
+  });
+  withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+    fn({ query }),
+  );
+  return query;
+}
+
+describe("POST /console/announcements/:id/end", () => {
+  const id = "33333333-3333-3333-3333-333333333333";
+
+  it("sets ends_at to now and writes both audit rows for a staff session", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockEndAnnouncementQuery({ archivedAt: null, endsAt: null });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/announcements/${id}/end`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).endsAt).toBe("2026-02-02T00:00:00.000Z");
+
+    const detail = JSON.stringify({ id: "ann-1", title: "Scheduled maintenance" });
+    const staffAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(staffAuditCall?.[1]).toEqual(["staff-1", "announcement.end", null, "org-1", detail]);
+    const orgAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_org_audit"));
+    expect(orgAuditCall?.[1]).toEqual(["org-1", "staff-1", "announcement.ended", detail]);
+  });
+
+  it("returns 400 ALREADY_ENDED for an announcement whose ends_at is already in the past, without updating it", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockEndAnnouncementQuery({ archivedAt: null, endsAt: "2020-01-01T00:00:00.000Z" });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/announcements/${id}/end`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("ALREADY_ENDED");
+    expect(query.mock.calls.some((call) => call[0].includes("update public.announcements set ends_at"))).toBe(false);
+  });
+});
+
+function mockArchiveAnnouncementQuery(options: { archivedAt: string | null }) {
+  const { archivedAt } = options;
+  const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+    if (sql.includes("platform_staff")) return { rowCount: 1 };
+    if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+    if (sql.includes("private.log_org_audit")) return { rows: [], rowCount: 0 };
+    if (sql.includes("select id, archived_at from public.announcements")) {
+      return { rows: [{ id: "ann-1", archived_at: archivedAt }], rowCount: 1 };
+    }
+    if (sql.includes("update public.announcements set archived_at = now()")) {
+      return { rows: [{ ...ANNOUNCEMENT_ROW, archived_at: "2026-02-02T00:00:00.000Z" }], rowCount: 1 };
+    }
+    throw new Error(`mockArchiveAnnouncementQuery: unexpected SQL: ${sql}`);
+  });
+  withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+    fn({ query }),
+  );
+  return query;
+}
+
+describe("POST /console/announcements/:id/archive", () => {
+  const id = "33333333-3333-3333-3333-333333333333";
+
+  it("sets archived_at to now and writes both audit rows for a staff session", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockArchiveAnnouncementQuery({ archivedAt: null });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/announcements/${id}/archive`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).archivedAt).toBe("2026-02-02T00:00:00.000Z");
+
+    const detail = JSON.stringify({ id: "ann-1", title: "Scheduled maintenance" });
+    const staffAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(staffAuditCall?.[1]).toEqual(["staff-1", "announcement.archive", null, "org-1", detail]);
+    const orgAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_org_audit"));
+    expect(orgAuditCall?.[1]).toEqual(["org-1", "staff-1", "announcement.archived", detail]);
+  });
+
+  it("returns 400 ALREADY_ARCHIVED for an already-archived announcement, without updating it", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockArchiveAnnouncementQuery({ archivedAt: "2026-02-01T00:00:00.000Z" });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/announcements/${id}/archive`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("ALREADY_ARCHIVED");
+    expect(query.mock.calls.some((call) => call[0].includes("update public.announcements set archived_at"))).toBe(false);
+  });
+});

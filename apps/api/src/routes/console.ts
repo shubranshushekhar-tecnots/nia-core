@@ -1075,3 +1075,400 @@ consoleRouter.post(
     res.json({ revokedSessionCount: result.revokedCount });
   }),
 );
+
+/**
+ * Subscription Phase 5, Slice 2 (decision 1) — in-app announcements.
+ * Staff-authored, staff-write-only (0067_announcements.sql grants SELECT
+ * only to `authenticated`), so every mutation here goes through
+ * withServiceRole same as the rest of this router. `serializeAnnouncement`
+ * maps a DB row (snake_case, optionally carrying a computed `status` and
+ * `created_by_name`) to the camelCase shape every route below returns.
+ */
+function serializeAnnouncement(row: {
+  id: string;
+  title: string;
+  body: string;
+  severity: string;
+  audience: string;
+  audience_org_id: string | null;
+  audience_project_id: string | null;
+  audience_roles: string[] | null;
+  starts_at: string;
+  ends_at: string | null;
+  archived_at: string | null;
+  created_by: string;
+  created_by_name?: string | null;
+  created_at: string;
+  status?: string;
+}) {
+  return {
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    severity: row.severity,
+    audience: row.audience,
+    audienceOrgId: row.audience_org_id,
+    audienceProjectId: row.audience_project_id,
+    audienceRoles: row.audience_roles,
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    archivedAt: row.archived_at,
+    createdBy: row.created_by,
+    createdByName: row.created_by_name ?? null,
+    createdAt: row.created_at,
+    status: row.status ?? null,
+  };
+}
+
+/**
+ * Resolves which org (if any) an announcement's audit trail should also be
+ * written against, per the Console principle "customer-affecting actions
+ * are also audited in the org's audit_log": an 'org'-audience announcement
+ * targets that org directly; a 'project'-audience one targets whichever
+ * org owns that project; 'all' targets no single org, so only
+ * staff_audit_log gets a row.
+ */
+async function resolveAnnouncementAuditOrgId(
+  db: Parameters<Parameters<typeof withServiceRole>[1]>[0],
+  row: { audience: string; audience_org_id: string | null; audience_project_id: string | null },
+): Promise<string | null> {
+  if (row.audience === "org") return row.audience_org_id;
+  if (row.audience === "project" && row.audience_project_id) {
+    const result = await db.query<{ org_id: string | null }>(
+      `select org_id from public.projects where id = $1`,
+      [row.audience_project_id],
+    );
+    return result.rows[0]?.org_id ?? null;
+  }
+  return null;
+}
+
+const announcementSeveritySchema = z.enum(["info", "warning", "critical"]);
+const announcementAudienceSchema = z.enum(["all", "org", "project"]);
+const orgRoleSchema = z.enum(["member", "admin", "owner", "viewer"]);
+
+/**
+ * Mirrors 0067_announcements.sql's tri-state audience CHECK constraint
+ * exactly, so a malformed request gets a friendly 400 here rather than a
+ * raw Postgres constraint-violation error.
+ */
+const createAnnouncementBodySchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    body: z.string().trim().min(1).max(5000),
+    severity: announcementSeveritySchema.default("info"),
+    audience: announcementAudienceSchema,
+    audienceOrgId: z.string().uuid().optional(),
+    audienceProjectId: z.string().uuid().optional(),
+    audienceRoles: z.array(orgRoleSchema).min(1).optional(),
+    startsAt: z.string().datetime().optional(),
+    endsAt: z.string().datetime().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.audience === "all") {
+      if (val.audienceOrgId) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["audienceOrgId"], message: "audienceOrgId must not be set for audience 'all'" });
+      if (val.audienceProjectId) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["audienceProjectId"], message: "audienceProjectId must not be set for audience 'all'" });
+      if (val.audienceRoles) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["audienceRoles"], message: "audienceRoles must not be set for audience 'all'" });
+    } else if (val.audience === "org") {
+      if (!val.audienceOrgId) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["audienceOrgId"], message: "audienceOrgId is required for audience 'org'" });
+      if (val.audienceProjectId) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["audienceProjectId"], message: "audienceProjectId must not be set for audience 'org'" });
+    } else if (val.audience === "project") {
+      if (!val.audienceProjectId) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["audienceProjectId"], message: "audienceProjectId is required for audience 'project'" });
+      if (val.audienceOrgId) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["audienceOrgId"], message: "audienceOrgId must not be set for audience 'project'" });
+      if (val.audienceRoles) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["audienceRoles"], message: "audienceRoles is not supported for audience 'project'" });
+    }
+    if (val.startsAt && val.endsAt && new Date(val.endsAt) <= new Date(val.startsAt)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endsAt"], message: "endsAt must be after startsAt" });
+    }
+  });
+
+consoleRouter.post(
+  "/announcements",
+  validate({ body: createAnnouncementBodySchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const body = req.body as unknown as {
+      title: string;
+      body: string;
+      severity: "info" | "warning" | "critical";
+      audience: "all" | "org" | "project";
+      audienceOrgId?: string;
+      audienceProjectId?: string;
+      audienceRoles?: string[];
+      startsAt?: string;
+      endsAt?: string;
+    };
+
+    const created = await withServiceRole(dbPool, async (db) => {
+      if (body.audience === "org") {
+        const orgResult = await db.query<{ id: string }>(`select id from public.organizations where id = $1`, [body.audienceOrgId]);
+        if (!orgResult.rows[0]) throw new AppError(404, "NOT_FOUND", "Organization not found.");
+      }
+      if (body.audience === "project") {
+        const projectResult = await db.query<{ id: string }>(`select id from public.projects where id = $1`, [body.audienceProjectId]);
+        if (!projectResult.rows[0]) throw new AppError(404, "NOT_FOUND", "Project not found.");
+      }
+
+      const result = await db.query<{
+        id: string;
+        title: string;
+        body: string;
+        severity: string;
+        audience: string;
+        audience_org_id: string | null;
+        audience_project_id: string | null;
+        audience_roles: string[] | null;
+        starts_at: string;
+        ends_at: string | null;
+        archived_at: string | null;
+        created_by: string;
+        created_at: string;
+      }>(
+        `insert into public.announcements
+           (title, body, severity, audience, audience_org_id, audience_project_id, audience_roles, starts_at, ends_at, created_by)
+         values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, now()), $9, $10)
+         returning id, title, body, severity, audience, audience_org_id, audience_project_id, audience_roles, starts_at, ends_at, archived_at, created_by, created_at`,
+        [
+          body.title,
+          body.body,
+          body.severity,
+          body.audience,
+          body.audienceOrgId ?? null,
+          body.audienceProjectId ?? null,
+          body.audienceRoles ?? null,
+          body.startsAt ?? null,
+          body.endsAt ?? null,
+          authUser.id,
+        ],
+      );
+      const row = result.rows[0];
+      if (!row) throw new AppError(500, "INTERNAL", "Failed to create announcement.");
+
+      const auditOrgId = await resolveAnnouncementAuditOrgId(db, row);
+      const detail = JSON.stringify({ id: row.id, title: row.title, severity: row.severity, audience: row.audience });
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [authUser.id, "announcement.create", null, auditOrgId, detail]);
+      if (auditOrgId) {
+        await db.query("select private.log_org_audit($1, $2, $3, $4)", [auditOrgId, authUser.id, "announcement.created", detail]);
+      }
+
+      return row;
+    });
+
+    res.status(201).json(serializeAnnouncement(created));
+  }),
+);
+
+const listAnnouncementsQuerySchema = z.object({
+  status: z.enum(["active", "scheduled", "ended"]).optional(),
+  limit: z.coerce.number().int().positive().max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
+/**
+ * Status is computed on read (never stored): 'ended' covers both an
+ * explicitly ended (ends_at in the past) and an archived announcement, so
+ * the three-tab UI (active/scheduled/ended) the spec asks for doesn't need
+ * a fourth "archived" tab — archived rows simply surface there too, same
+ * as any other ended one.
+ */
+consoleRouter.get(
+  "/announcements",
+  validate({ query: listAnnouncementsQuerySchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { status, limit = 50, offset = 0 } = req.query as unknown as { status?: string; limit?: number; offset?: number };
+
+    const { rows, total } = await withServiceRole(dbPool, async (db) => {
+      const statusExpr = `
+        case
+          when a.archived_at is not null then 'ended'
+          when a.ends_at is not null and a.ends_at <= now() then 'ended'
+          when a.starts_at > now() then 'scheduled'
+          else 'active'
+        end`;
+
+      const countResult = await db.query<{ count: string }>(
+        `select count(*) as count
+         from public.announcements a
+         where ($1::text is null or (${statusExpr}) = $1)`,
+        [status ?? null],
+      );
+
+      const result = await db.query<{
+        id: string;
+        title: string;
+        body: string;
+        severity: string;
+        audience: string;
+        audience_org_id: string | null;
+        audience_project_id: string | null;
+        audience_roles: string[] | null;
+        starts_at: string;
+        ends_at: string | null;
+        archived_at: string | null;
+        created_by: string;
+        created_by_name: string | null;
+        created_at: string;
+        status: string;
+      }>(
+        `select a.id, a.title, a.body, a.severity, a.audience, a.audience_org_id, a.audience_project_id,
+                a.audience_roles, a.starts_at, a.ends_at, a.archived_at, a.created_by, u.name as created_by_name,
+                a.created_at, (${statusExpr}) as status
+         from public.announcements a
+         left join public."user" u on u.id = a.created_by
+         where ($1::text is null or (${statusExpr}) = $1)
+         order by a.created_at desc
+         limit $2
+         offset $3`,
+        [status ?? null, limit, offset],
+      );
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+        authUser.id,
+        "announcement.list",
+        null,
+        null,
+        JSON.stringify({ status: status ?? null, limit, offset, count: result.rowCount }),
+      ]);
+
+      return { rows: result.rows, total: Number(countResult.rows[0]?.count ?? 0) };
+    });
+
+    res.json({
+      announcements: rows.map((row) => serializeAnnouncement(row)),
+      total,
+      limit,
+      offset,
+      hasMore: offset + rows.length < total,
+    });
+  }),
+);
+
+const announcementIdParamsSchema = z.object({ id: z.string().uuid() });
+
+consoleRouter.post(
+  "/announcements/:id/end",
+  validate({ params: announcementIdParamsSchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { id } = req.params as unknown as { id: string };
+
+    const updated = await withServiceRole(dbPool, async (db) => {
+      const existingResult = await db.query<{
+        id: string;
+        audience: string;
+        audience_org_id: string | null;
+        audience_project_id: string | null;
+        archived_at: string | null;
+        ends_at: string | null;
+      }>(`select id, audience, audience_org_id, audience_project_id, archived_at, ends_at from public.announcements where id = $1`, [id]);
+      const existing = existingResult.rows[0];
+      if (!existing) return { kind: "not_found" as const };
+      if (existing.archived_at !== null) return { kind: "already_archived" as const };
+      if (existing.ends_at !== null && new Date(existing.ends_at).getTime() <= Date.now()) return { kind: "already_ended" as const };
+
+      const result = await db.query<{
+        id: string;
+        title: string;
+        body: string;
+        severity: string;
+        audience: string;
+        audience_org_id: string | null;
+        audience_project_id: string | null;
+        audience_roles: string[] | null;
+        starts_at: string;
+        ends_at: string | null;
+        archived_at: string | null;
+        created_by: string;
+        created_at: string;
+      }>(
+        `update public.announcements set ends_at = now() where id = $1
+         returning id, title, body, severity, audience, audience_org_id, audience_project_id, audience_roles, starts_at, ends_at, archived_at, created_by, created_at`,
+        [id],
+      );
+      const row = result.rows[0];
+      if (!row) return { kind: "not_found" as const };
+
+      const auditOrgId = await resolveAnnouncementAuditOrgId(db, row);
+      const detail = JSON.stringify({ id: row.id, title: row.title });
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [authUser.id, "announcement.end", null, auditOrgId, detail]);
+      if (auditOrgId) {
+        await db.query("select private.log_org_audit($1, $2, $3, $4)", [auditOrgId, authUser.id, "announcement.ended", detail]);
+      }
+
+      return { kind: "ok" as const, row };
+    });
+
+    if (updated.kind === "not_found") throw new AppError(404, "NOT_FOUND", "Announcement not found.");
+    if (updated.kind === "already_archived") throw new AppError(400, "ALREADY_ARCHIVED", "This announcement is already archived.");
+    if (updated.kind === "already_ended") throw new AppError(400, "ALREADY_ENDED", "This announcement has already ended.");
+
+    res.json(serializeAnnouncement(updated.row));
+  }),
+);
+
+consoleRouter.post(
+  "/announcements/:id/archive",
+  validate({ params: announcementIdParamsSchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { id } = req.params as unknown as { id: string };
+
+    const updated = await withServiceRole(dbPool, async (db) => {
+      const existingResult = await db.query<{ id: string; archived_at: string | null }>(
+        `select id, archived_at from public.announcements where id = $1`,
+        [id],
+      );
+      const existing = existingResult.rows[0];
+      if (!existing) return { kind: "not_found" as const };
+      if (existing.archived_at !== null) return { kind: "already_archived" as const };
+
+      const result = await db.query<{
+        id: string;
+        title: string;
+        body: string;
+        severity: string;
+        audience: string;
+        audience_org_id: string | null;
+        audience_project_id: string | null;
+        audience_roles: string[] | null;
+        starts_at: string;
+        ends_at: string | null;
+        archived_at: string | null;
+        created_by: string;
+        created_at: string;
+      }>(
+        `update public.announcements set archived_at = now() where id = $1
+         returning id, title, body, severity, audience, audience_org_id, audience_project_id, audience_roles, starts_at, ends_at, archived_at, created_by, created_at`,
+        [id],
+      );
+      const row = result.rows[0];
+      if (!row) return { kind: "not_found" as const };
+
+      const auditOrgId = await resolveAnnouncementAuditOrgId(db, row);
+      const detail = JSON.stringify({ id: row.id, title: row.title });
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [authUser.id, "announcement.archive", null, auditOrgId, detail]);
+      if (auditOrgId) {
+        await db.query("select private.log_org_audit($1, $2, $3, $4)", [auditOrgId, authUser.id, "announcement.archived", detail]);
+      }
+
+      return { kind: "ok" as const, row };
+    });
+
+    if (updated.kind === "not_found") throw new AppError(404, "NOT_FOUND", "Announcement not found.");
+    if (updated.kind === "already_archived") throw new AppError(400, "ALREADY_ARCHIVED", "This announcement is already archived.");
+
+    res.json(serializeAnnouncement(updated.row));
+  }),
+);
