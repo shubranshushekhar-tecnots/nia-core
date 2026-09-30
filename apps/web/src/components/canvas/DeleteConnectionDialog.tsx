@@ -11,13 +11,16 @@ import {
 } from '@/lib/api/connectionsClient';
 import { buildDropRoleStatementText } from '@nia/schemas';
 import {
-  modalActionsStyle,
-  modalBtnDangerStyle,
-  modalBtnGhostStyle,
-  modalCardStyle,
-  modalErrorStyle,
-  modalOverlayStyle,
-  modalTitleStyle,
+  nxModalBodyStyle,
+  nxModalBodyTextStyle,
+  nxModalCancelCellStyle,
+  nxModalCardStyle,
+  nxModalDangerCellStyle,
+  nxModalDestructiveTagStyle,
+  nxModalErrorStyle,
+  nxModalFooterStyle,
+  nxModalOverlayStyle,
+  nxModalTitleStyle,
 } from '@/components/app/styles';
 
 /**
@@ -95,70 +98,80 @@ export default function DeleteConnectionDialog({
   const inUse = (usages?.length ?? 0) > 0;
 
   return (
-    <div style={modalOverlayStyle} onClick={onClose}>
-      <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
-        <span style={modalTitleStyle}>Delete connection?</span>
-        <p style={{ fontSize: 13.5, color: 'var(--nx-ink-3)', margin: 0 }}>
-          This removes {connectionLabel} and its stored credential. This can{"'"}t be undone.
-        </p>
+    <div style={nxModalOverlayStyle} onClick={onClose}>
+      <div style={nxModalCardStyle} onClick={(e) => e.stopPropagation()}>
+        <div style={nxModalBodyStyle}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 20 }}>
+            <span style={nxModalDestructiveTagStyle}>Delete</span>
+            <span style={nxModalTitleStyle}>Delete connection?</span>
+            <p style={{ ...nxModalBodyTextStyle, margin: 0 }}>
+              This removes {connectionLabel} and its stored credential. This can{"'"}t be undone.
+            </p>
 
-        {usages === null && !loadError && (
-          <span style={{ fontSize: 12.5, color: 'var(--nx-ink-3)' }}>Checking where this connection is used…</span>
-        )}
-        {loadError && <span style={modalErrorStyle}>{loadError}</span>}
-        {inUse && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--nx-warn)' }}>
-              Used by {usages!.length} workflow{usages!.length === 1 ? '' : 's'}:
-            </span>
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--nx-ink-3)' }}>
-              {usages!.map((u) => (
-                <li key={u.id}>
-                  {u.name} — {u.nodeCount} node{u.nodeCount === 1 ? '' : 's'}
-                  {u.cleanPlanCount > 0 ? `, ${u.cleanPlanCount} clean plan${u.cleanPlanCount === 1 ? '' : 's'}` : ''}
-                </li>
-              ))}
-            </ul>
+            {usages === null && !loadError && (
+              <span style={{ fontSize: 12.5, color: 'var(--nx-ink-3)' }}>Checking where this connection is used…</span>
+            )}
+            {loadError && <span style={nxModalErrorStyle}>{loadError}</span>}
+            {inUse && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--nx-warn)' }}>
+                  Used by {usages!.length} workflow{usages!.length === 1 ? '' : 's'}:
+                </span>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--nx-ink-3)' }}>
+                  {usages!.map((u) => (
+                    <li key={u.id}>
+                      {u.name} — {u.nodeCount} node{u.nodeCount === 1 ? '' : 's'}
+                      {u.cleanPlanCount > 0 ? `, ${u.cleanPlanCount} clean plan${u.cleanPlanCount === 1 ? '' : 's'}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {writeGrants.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--nx-warn)' }}>
+                  This connection has {writeGrants.length} confirmed write grant{writeGrants.length === 1 ? '' : 's'}. Deleting
+                  it does not remove the database role{writeGrants.length === 1 ? '' : 's'} you created — run this to clean up:
+                </span>
+                <pre
+                  style={{
+                    fontFamily: 'var(--nx-font-mono)',
+                    fontSize: 11,
+                    background: 'var(--nx-surface)',
+                    border: '1px solid var(--nx-line)',
+                    borderRadius: 6,
+                    padding: 8,
+                    whiteSpace: 'pre-wrap',
+                    overflowX: 'auto',
+                    margin: 0,
+                  }}
+                >
+                  {writeGrants
+                    .map((g) =>
+                      g.writeRoleName
+                        ? (connectorId && buildDropRoleStatementText(connectorId, g.writeRoleName)) ?? `-- role: ${g.writeRoleName}`
+                        : '-- role name unavailable for this grant',
+                    )
+                    .join('\n')}
+                </pre>
+              </div>
+            )}
+
+            {deleteError && <span style={nxModalErrorStyle}>{deleteError}</span>}
           </div>
-        )}
+        </div>
 
-        {writeGrants.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--nx-warn)' }}>
-              This connection has {writeGrants.length} confirmed write grant{writeGrants.length === 1 ? '' : 's'}. Deleting it
-              does not remove the database role{writeGrants.length === 1 ? '' : 's'} you created — run this to clean up:
-            </span>
-            <pre
-              style={{
-                fontFamily: 'var(--nx-font-mono)',
-                fontSize: 11,
-                background: 'var(--nx-surface)',
-                border: '1px solid var(--nx-line)',
-                borderRadius: 6,
-                padding: 8,
-                whiteSpace: 'pre-wrap',
-                overflowX: 'auto',
-                margin: 0,
-              }}
-            >
-              {writeGrants
-                .map((g) =>
-                  g.writeRoleName
-                    ? (connectorId && buildDropRoleStatementText(connectorId, g.writeRoleName)) ?? `-- role: ${g.writeRoleName}`
-                    : '-- role name unavailable for this grant',
-                )
-                .join('\n')}
-            </pre>
-          </div>
-        )}
-
-        {deleteError && <span style={modalErrorStyle}>{deleteError}</span>}
-
-        <div style={modalActionsStyle}>
-          <button type="button" style={modalBtnGhostStyle} onClick={onClose} disabled={deleting}>
+        <div style={nxModalFooterStyle}>
+          <button type="button" style={nxModalCancelCellStyle} onClick={onClose} disabled={deleting}>
             Cancel
           </button>
-          <button type="button" style={modalBtnDangerStyle} onClick={handleDelete} disabled={deleting || usages === null}>
+          <button
+            type="button"
+            style={nxModalDangerCellStyle(deleting)}
+            onClick={handleDelete}
+            disabled={deleting || usages === null}
+          >
             {deleting ? 'Deleting…' : inUse ? 'Delete anyway' : 'Delete'}
           </button>
         </div>

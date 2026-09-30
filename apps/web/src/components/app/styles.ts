@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import type { WorkflowStatus } from '@/lib/dashboard/types';
 
 // App shell (post-login): sidebar, top bar, home dashboard. Scoped under
 // [data-app-theme] (Midnight Navy dark / Warm White light) — see
@@ -1135,95 +1136,10 @@ export const profileEmailTextStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-// Modal / dialog shared with create-project and create-workflow
-export const modalOverlayStyle: CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  zIndex: 60,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: 'rgba(5, 9, 16, .5)',
-};
-
-export const modalCardStyle: CSSProperties = {
-  width: 380,
-  maxWidth: '90vw',
-  boxSizing: 'border-box',
-  padding: '22px 22px 20px',
-  borderRadius: 14,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
-  boxShadow: 'var(--shadow)',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 14,
-};
-
-export const modalTitleStyle: CSSProperties = {
-  fontFamily: 'var(--font-display)',
-  fontSize: 17,
-  fontWeight: 700,
-  color: 'var(--text)',
-};
-
-export const modalLabelStyle: CSSProperties = { fontSize: 13, fontWeight: 600, color: 'var(--text)' };
-
-export function modalFieldStyle(hasError: boolean): CSSProperties {
-  return {
-    width: '100%',
-    boxSizing: 'border-box',
-    height: 40,
-    padding: '0 12px',
-    fontFamily: 'inherit',
-    fontSize: 14,
-    color: 'var(--text)',
-    background: 'var(--surface2)',
-    border: `1px solid ${hasError ? 'var(--bad)' : 'var(--line)'}`,
-    borderRadius: 9,
-    outline: 'none',
-  };
-}
-
-export const modalErrorStyle: CSSProperties = { fontSize: 12.5, color: 'var(--bad)' };
-
-export const modalActionsStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'flex-end',
-  gap: 8,
-  marginTop: 4,
-};
-
-export const modalBtnGhostStyle: CSSProperties = {
-  height: 36,
-  padding: '0 14px',
-  borderRadius: 8,
-  fontFamily: 'inherit',
-  fontSize: 13.5,
-  fontWeight: 600,
-  color: 'var(--text-2)',
-  background: 'transparent',
-  border: '1px solid var(--line)',
-  cursor: 'pointer',
-};
-
-export const modalBtnPrimaryStyle: CSSProperties = {
-  height: 36,
-  padding: '0 14px',
-  borderRadius: 8,
-  fontFamily: 'inherit',
-  fontSize: 13.5,
-  fontWeight: 600,
-  color: 'var(--onacc)',
-  background: 'var(--live-fill)',
-  border: 'none',
-  cursor: 'pointer',
-};
-
-// Precision Dark redesign (Step 3, Home): nx-token restyle of the dialog
-// shell used by CreateProjectDialog/CreateWorkflowDialog. A parallel set
-// rather than edits to modal*Style above, since those are still used
-// as-is by AddConnectionDialog/ConnectionForm.
+// Precision Dark redesign (Step 3, Home): nx-token dialog shell used by
+// CreateProjectDialog/CreateWorkflowDialog and (since UI-9) every other
+// dialog in this scope — the pre-nx modal*Style family it replaced has
+// been removed (UI-9 step 2: last consumers migrated onto this one).
 export const nxModalOverlayStyle: CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -1627,19 +1543,6 @@ export const nxHelpPanelFooterCloseStyle: CSSProperties = {
   cursor: 'pointer',
 };
 
-export const modalBtnDangerStyle: CSSProperties = {
-  height: 36,
-  padding: '0 14px',
-  borderRadius: 8,
-  fontFamily: 'inherit',
-  fontSize: 13.5,
-  fontWeight: 600,
-  color: '#fff',
-  background: 'var(--bad)',
-  border: 'none',
-  cursor: 'pointer',
-};
-
 // Content region for pages nested one level under a nav item (project
 // detail today) — ported verbatim from the design's `isProject` content
 // div: padding:44px 56px 56px;gap:30px. Deliberately distinct from
@@ -1863,312 +1766,12 @@ export const projectListEmptyTextStyle: CSSProperties = {
   textAlign: 'center',
 };
 
-// Connections page (/app/connections) — ported from the design's
-// `isConnections` section. No connections/connectors table exists yet
-// (packages/schemas/src/{contract,jobs,manifest,tabular}.ts only define the
-// connector *protocol*), so this page renders hardcoded sample data with
-// "coming soon" disabled actions until real connector wiring lands.
-
+// Connections page (/app/connections) types — still read by ConnectorCard.tsx,
+// ConnectionsClient.tsx and lib/connections/catalogMeta.ts. The original
+// pre-nx prototype styles these were declared alongside were removed in
+// UI-9 step 2 (superseded by the nxConn* family below).
 export type ConnectionHealth = 'ok' | 'idle' | 'error';
 export type ConnectorCategory = 'databases' | 'warehouses' | 'bi' | 'ai-vector' | 'files';
-
-// Category colors extracted directly from the design's rendered DOM
-// (--c-data/--c-action/--c-condition already exist as canvas node-kind
-// tokens in theme.css and happen to be reused here verbatim by the design;
-// AI vector's dot is exactly --text-4; BI's sky-500 has no existing token
-// so a new --info was added to theme.css alongside --ok/--bad/--warn).
-export function categoryDotColor(category: ConnectorCategory): string {
-  switch (category) {
-    case 'databases':
-      return 'var(--c-data)';
-    case 'warehouses':
-      return 'var(--c-action)';
-    case 'bi':
-      return 'var(--info)';
-    case 'ai-vector':
-      return 'var(--text-4)';
-    case 'files':
-      return 'var(--c-condition)';
-  }
-}
-
-export function healthDotColor(health: ConnectionHealth): string {
-  return health === 'ok' ? 'var(--ok)' : health === 'error' ? 'var(--bad)' : 'var(--warn)';
-}
-
-export const connectionsSubtitleStyle: CSSProperties = {
-  fontSize: 13.5,
-  color: '#6B6E76',
-};
-
-export const connectionsHealthStripStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  fontSize: 12.5,
-  color: 'var(--text-3)',
-};
-
-export const connectionsHealthDotsStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 4,
-};
-
-export function connectionsHealthDotStyle(health: ConnectionHealth): CSSProperties {
-  return {
-    width: 6,
-    height: 6,
-    flex: 'none',
-    borderRadius: '50%',
-    background: healthDotColor(health),
-  };
-}
-
-// Round 5 — the app has no CSS --radius token scale (every radius in the
-// app is a hardcoded px number inline; nearest existing values are 14 for
-// cards/dialogs, 9 for primary buttons, 8 for dialog secondary buttons,
-// 10 for dropdowns). These are page-scoped values reused/added for the
-// Connections page only: `container` (12) has no existing app-wide
-// equivalent (between the 10 dropdown token and the 14 card token); the
-// rest reuse or exactly match existing app values.
-export const CONNECTIONS_RADIUS = {
-  card: 16, // connector card shell
-  container: 12, // installed list, connections table, empty-state panel
-  control: 10, // search input, segmented-control container, dropdown/menu shells, ~40px buttons
-  chip: 8, // segments, docs icon button, small 28-32px buttons, icon tiles
-  tag: 6, // status badges, menu items
-} as const;
-
-// Single consolidated row — search + category segmented control + Works-as
-// segmented control all share this row now (previously Works-as was a
-// separate full-width row below); wraps under ~1100px.
-export const connectionsToolbarRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  flexWrap: 'wrap',
-};
-
-export const connectionsSearchBoxStyle: CSSProperties = {
-  flex: 1,
-  minWidth: 200,
-  maxWidth: 320,
-  height: 36,
-  boxSizing: 'border-box',
-  padding: '0 14px',
-  borderRadius: CONNECTIONS_RADIUS.control,
-  border: '1px solid #DEDEE3',
-  background: '#FFFFFF',
-  color: '#0E0E12',
-  fontFamily: 'inherit',
-  fontSize: 13,
-  outline: 'none',
-};
-
-export const connectionsFilterListStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 4,
-  flex: 'none',
-  padding: 4,
-  borderRadius: CONNECTIONS_RADIUS.control,
-  background: '#FFFFFF',
-  border: '1px solid #DEDEE3',
-};
-
-export function connectionsFilterPillStyle(active: boolean): CSSProperties {
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 7,
-    height: 30,
-    boxSizing: 'border-box',
-    padding: '0 13px',
-    borderRadius: CONNECTIONS_RADIUS.chip,
-    fontFamily: 'inherit',
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: 'pointer',
-    border: 'none',
-    background: active ? '#0E0E12' : 'transparent',
-    color: active ? '#FFFFFF' : '#52555C',
-  };
-}
-
-export const connectionsSectionHeaderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  gap: 8,
-};
-
-export const connectionsSectionTitleStyle: CSSProperties = {
-  fontSize: 13.5,
-  fontWeight: 600,
-  color: '#0E0E12',
-};
-
-export const connectionsSectionMetaStyle: CSSProperties = {
-  fontSize: 12.5,
-  color: '#6B6E76',
-};
-
-export const connectionsProviderListStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  borderRadius: CONNECTIONS_RADIUS.container,
-  background: '#FFFFFF',
-  border: '1px solid #E4E4E8',
-  overflow: 'hidden',
-};
-
-// 56px total row height: 12px top+bottom padding around a 32px icon tile.
-export function connectionsProviderRowStyle(bordered: boolean, dashed = false): CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 14,
-    padding: '12px 16px',
-    borderBottom: bordered ? `1px ${dashed ? 'dashed' : 'solid'} #ECECEF` : 'none',
-  };
-}
-
-// The Upload CSV/Excel row is visually distinct: a dashed top divider,
-// square corners throughout.
-export const connectionsUploadRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 14,
-  flexWrap: 'wrap',
-  padding: '12px 16px',
-  borderTop: '1px dashed #ECECEF',
-  background: '#FAFAFB',
-};
-
-export const connectionsUploadIconStyle: CSSProperties = {
-  width: 32,
-  height: 32,
-  flex: 'none',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: CONNECTIONS_RADIUS.chip,
-  fontSize: 14,
-  background: '#FFFFFF',
-  border: '1px solid #E4E4E8',
-  color: '#6B6E76',
-};
-
-export const connectionsUploadBtnStyle: CSSProperties = {
-  flex: 'none',
-  height: 32,
-  boxSizing: 'border-box',
-  padding: '0 14px',
-  fontFamily: 'inherit',
-  fontSize: 12.5,
-  fontWeight: 600,
-  color: '#6B6E76',
-  background: '#FFFFFF',
-  border: '1px solid #DEDEE3',
-  borderRadius: CONNECTIONS_RADIUS.chip,
-  cursor: 'not-allowed',
-  whiteSpace: 'nowrap',
-};
-
-export const connectionsProviderNameColStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 2,
-  minWidth: 150,
-  flex: 'none',
-};
-
-export const connectionsProviderNameStyle: CSSProperties = {
-  fontSize: 14,
-  fontWeight: 500,
-  color: '#0E0E12',
-};
-
-export const connectionsProviderMetaStyle: CSSProperties = {
-  fontSize: 12.5,
-  color: '#6B6E76',
-};
-
-export const connectionsBadgesRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  flexWrap: 'wrap',
-  flex: 1,
-};
-
-export function connectionsBadgeStyle(health: ConnectionHealth): CSSProperties {
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    height: 26,
-    boxSizing: 'border-box',
-    padding: '0 10px',
-    borderRadius: CONNECTIONS_RADIUS.tag,
-    fontSize: 12,
-    background: health === 'error' ? 'var(--bad-bg)' : 'var(--surface2)',
-    border: health === 'error' ? '1px solid var(--bad-bd)' : '1px solid transparent',
-    color: 'var(--text-2)',
-  };
-}
-
-export function connectionsBadgeDotStyle(health: ConnectionHealth): CSSProperties {
-  return {
-    width: 6,
-    height: 6,
-    flex: 'none',
-    borderRadius: '50%',
-    background: healthDotColor(health),
-  };
-}
-
-export const connectionsBadgeHandleStyle: CSSProperties = {
-  fontWeight: 600,
-  color: 'var(--text)',
-};
-
-export const connectionsBadgeMetaStyle: CSSProperties = {
-  color: '#6B6E76',
-};
-
-export const connectionsBadgeLinkStyle: CSSProperties = {
-  color: 'var(--live)',
-  fontWeight: 600,
-  textDecoration: 'underline',
-  cursor: 'default',
-};
-
-export const connectionsProviderActionsStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  flex: 'none',
-  marginLeft: 'auto',
-};
-
-// Installed row's standalone "Uninstall" button — destructive (white bg,
-// red border/text), 32px tall, next to the ⋯ menu.
-export const connectionsDangerBtnStyle: CSSProperties = {
-  flex: 'none',
-  height: 32,
-  boxSizing: 'border-box',
-  padding: '0 12px',
-  borderRadius: CONNECTIONS_RADIUS.chip,
-  fontFamily: 'inherit',
-  fontSize: 12.5,
-  fontWeight: 500,
-  color: 'var(--bad)',
-  background: '#FFFFFF',
-  border: '1px solid var(--bad)',
-  cursor: 'pointer',
-  whiteSpace: 'nowrap',
-};
 
 // v4 card grid (CARD.height=472). Column count follows the spec's fixed
 // breakpoint table against the catalog section's own *content* width (not
@@ -2188,620 +1791,14 @@ export const connectionsAvailableGridStyle: CSSProperties = {
   background: 'var(--nx-line)',
 };
 
-// Step 2 (page layout redesign) — header, "Your connections" table and
-// catalog toolbar additions. Connector-card internals (Step 3) keep using
-// the styles below this block unchanged.
-
-export const connectionsPageHeaderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: 24,
-  flexWrap: 'wrap',
-};
-
-export const connectionsHeaderButtonsStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  flex: 'none',
-};
-
-// "Request a connector" has no backend action yet (no request-a-connector
-// endpoint/table exists) — rendered inert like the Upload CSV button above,
-// not wired to an invented action.
-export const connectionsRequestBtnStyle: CSSProperties = {
-  height: 36,
-  boxSizing: 'border-box',
-  padding: '0 16px',
-  borderRadius: CONNECTIONS_RADIUS.chip,
-  fontFamily: 'inherit',
-  fontSize: 13.5,
-  fontWeight: 600,
-  color: '#6B6E76',
-  background: '#FFFFFF',
-  border: '1px solid #DEDEE3',
-  cursor: 'not-allowed',
-  whiteSpace: 'nowrap',
-};
-
-export const connectionsHealthFilterRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  flex: 'none',
-  flexWrap: 'wrap',
-};
-
-export function connectionsHealthFilterBtnStyle(active: boolean): CSSProperties {
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    height: 28,
-    boxSizing: 'border-box',
-    padding: '0 11px',
-    borderRadius: CONNECTIONS_RADIUS.chip,
-    fontFamily: 'inherit',
-    fontSize: 12.5,
-    fontWeight: 600,
-    cursor: 'pointer',
-    border: active ? '1px solid #0E0E12' : '1px solid #DEDEE3',
-    background: active ? '#0E0E12' : '#FFFFFF',
-    color: active ? '#FFFFFF' : '#52555C',
-  };
-}
-
-// overflow:hidden removed — it was clipping the row "⋯" menu; the menu
-// itself is portaled to document.body, which independently escapes any
-// ancestor's overflow/stacking context.
-export const connectionsTableCardStyle: CSSProperties = {
-  borderRadius: CONNECTIONS_RADIUS.container,
-  border: '1px solid #E4E4E8',
-  background: '#FFFFFF',
-  overflowX: 'auto',
-};
-
-export const connectionsTableStyle: CSSProperties = {
-  width: '100%',
-  borderCollapse: 'collapse',
-};
-
-export const connectionsTableHeadRowStyle: CSSProperties = {
-  borderBottom: '1px solid #E4E4E8',
-};
-
-// Header uses the app's default UI font (var(--font-ui), inherited — no
-// override), same small-uppercase-label treatment as navGroupLabelStyle.
-export const connectionsTableThStyle: CSSProperties = {
-  textAlign: 'left',
-  padding: '10px 16px',
-  fontSize: 11,
-  fontWeight: 600,
-  letterSpacing: '.04em',
-  textTransform: 'uppercase',
-  color: '#8A8D94',
-  whiteSpace: 'nowrap',
-};
-
-export const connectionsTableRowStyle: CSSProperties = {
-  borderBottom: '1px solid #ECECEF',
-};
-
-export const connectionsTableTdStyle: CSSProperties = {
-  padding: '14px 16px',
-  verticalAlign: 'middle',
-  fontSize: 13,
-  color: '#52555C',
-};
-
-export const connectionsTableConnCellStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-};
-
-export const connectionsTableTileStyle: CSSProperties = {
-  width: 36,
-  height: 36,
-  flex: 'none',
-  borderRadius: CONNECTIONS_RADIUS.chip,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: '#fff',
-  border: '1px solid #E4E4E8',
-};
-
-export const connectionsTableHostStyle: CSSProperties = {
-  fontFamily: 'var(--font-mono)',
-  fontSize: 12,
-  color: '#52555C',
-  maxWidth: 220,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  display: 'block',
-};
-
-export const connectionsTableActionsCellStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'flex-end',
-  gap: 8,
-  position: 'relative',
-};
-
-export const connectionsTableMenuBtnStyle: CSSProperties = {
-  width: 28,
-  height: 28,
-  flex: 'none',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: CONNECTIONS_RADIUS.chip,
-  border: '1px solid #DEDEE3',
-  background: '#FFFFFF',
-  color: '#6B6E76',
-  cursor: 'pointer',
-  fontSize: 15,
-  lineHeight: 1,
-};
-
-// Portaled to document.body (ConnectionsClient's RowMenu) — top/left are
-// computed per-open from the trigger button's getBoundingClientRect(), so
-// this base style only sets shape/chrome, not position.
-export const connectionsTableMenuStyle: CSSProperties = {
-  position: 'fixed',
-  minWidth: 160,
-  background: '#FFFFFF',
-  border: '1px solid #DEDEE3',
-  borderRadius: CONNECTIONS_RADIUS.control,
-  boxShadow: '0 8px 24px rgba(14,14,18,.14)',
-  padding: 4,
-  zIndex: 1000,
-  display: 'flex',
-  flexDirection: 'column',
-};
-
-export const connectionsTableMenuItemStyle: CSSProperties = {
-  display: 'block',
-  width: '100%',
-  textAlign: 'left',
-  padding: '8px 10px',
-  borderRadius: CONNECTIONS_RADIUS.tag,
-  border: 'none',
-  background: 'transparent',
-  fontFamily: 'inherit',
-  fontSize: 13,
-  color: '#0E0E12',
-  cursor: 'pointer',
-};
-
-export const connectionsCatalogHintStyle: CSSProperties = {
-  textAlign: 'center',
-  fontSize: 12.5,
-  color: '#6B6E76',
-};
-
-export const connectionsEmptyPanelStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1.1fr) minmax(0, .9fr)',
-  gap: 32,
-  padding: 28,
-  borderRadius: CONNECTIONS_RADIUS.container,
-  border: '1px solid #E4E4E8',
-  background: '#FFFFFF',
-};
-
-export const connectionsEmptyStepsColStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 18,
-};
-
-export const connectionsEmptyStepStyle: CSSProperties = {
-  display: 'flex',
-  gap: 12,
-  alignItems: 'flex-start',
-};
-
-export const connectionsEmptyStepNumStyle: CSSProperties = {
-  width: 24,
-  height: 24,
-  flex: 'none',
-  borderRadius: '50%',
-  background: 'var(--surface2)',
-  color: 'var(--text-2)',
-  fontSize: 12,
-  fontWeight: 600,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-export const connectionsEmptySuggestColStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 10,
-};
-
-// Connector card v4 — 472px card with a rest view (name/kind/description/
-// facts below a 220px media band) and a hover/focus view (card turns
-// #0A0A0B, logo glides to a small top-left mark, a single bottom-anchored
-// dark text block replaces the rest text). Both views stay mounted at all
-// times — only opacity/position/pointer-events toggle — and the footer
-// never fades, it just recolors, so it can't ever flash. Ported 1:1 from
-// designs/Connections — with connections-html/Connections.dc.html's
-// `cardBuilder` (same pixel values, same cubic-bezier(.2,.8,.2,1) easing).
-const CARD_EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
-
-export const CARD = {
-  height: 472,
-  media: 220,
-  logoRest: 108,
-  logoHover: 56,
-  imgRest: 76,
-  imgHover: 32,
-  textTop: 242, // media (220) + 22
-  darkBottom: 92,
-  footerBottom: 24,
-  footerHeight: 44,
-  docsBtnSize: 44,
-} as const;
-
-function cardT(prop: string, duration: number, delayMs = 0): string {
-  return `${prop} ${duration}ms ${CARD_EASE}${delayMs ? ` ${delayMs}ms` : ''}`;
-}
-
-// Outer 472px shell — background/border/shadow invert and the card lifts
-// 4px on hover/focus. `comingSoon` dims the rest view to 75% opacity
-// (matches the reference's `c.soon && !on` rule) so a disabled card still
-// reads as part of the grid, not broken.
-export function connectorCardShellStyle(active: boolean, comingSoon: boolean, reducedMotion: boolean): CSSProperties {
-  return {
-    position: 'relative',
-    boxSizing: 'border-box',
-    width: '100%',
-    height: CARD.height,
-    overflow: 'hidden',
-    cursor: 'pointer',
-    borderRadius: CONNECTIONS_RADIUS.card,
-    background: active ? '#0A0A0B' : '#FFFFFF',
-    border: `1px solid ${active ? '#0A0A0B' : '#E4E4E8'}`,
-    boxShadow: active ? '0 20px 40px rgba(14,14,18,.22)' : '0 1px 0 rgba(14,14,18,.03)',
-    transform: !reducedMotion && active ? 'translateY(-4px)' : 'translateY(0)',
-    opacity: comingSoon && !active ? 0.75 : 1,
-    transition: reducedMotion
-      ? [cardT('background-color', 120), cardT('border-color', 120), cardT('box-shadow', 120)].join(', ')
-      : [cardT('background-color', 360), cardT('border-color', 360), cardT('box-shadow', 360), cardT('transform', 360)].join(', '),
-  };
-}
-
-// Top media band — plain #FAFAFB fill with a hairline bottom border at
-// rest; both disappear (transparent) on hover so the card reads as one
-// solid dark surface.
-export function connectorMediaStyle(active: boolean, reducedMotion: boolean): CSSProperties {
-  return {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    height: CARD.media,
-    // Nested-radius rule: the card's top corners are CONNECTIONS_RADIUS.card
-    // (16); this band sits flush against them, so its own top corners are
-    // 16 - 1 (the card's border width) = 15. Its bottom corners are square
-    // since it ends mid-card. The card's own overflow:hidden already clips
-    // this to the rounded shape, but the radius is set explicitly too so it
-    // matches on inspection.
-    borderRadius: `${CONNECTIONS_RADIUS.card - 1}px ${CONNECTIONS_RADIUS.card - 1}px 0 0`,
-    background: active ? 'transparent' : '#FAFAFB',
-    borderBottom: `1px solid ${active ? 'transparent' : '#EFEFF2'}`,
-    transition: reducedMotion ? cardT('background-color', 120) : [cardT('background-color', 360), cardT('border-color', 360)].join(', '),
-  };
-}
-
-export function connectorCategoryLabelStyle(active: boolean, reducedMotion: boolean): CSSProperties {
-  return {
-    position: 'absolute',
-    left: 20,
-    top: 20,
-    fontSize: 11,
-    fontWeight: 600,
-    letterSpacing: '.08em',
-    textTransform: 'uppercase',
-    color: '#8A8D94',
-    opacity: active ? 0 : 1,
-    transition: reducedMotion ? cardT('opacity', 120) : cardT('opacity', 160),
-  };
-}
-
-export type ConnectorBadgeKind = 'connected' | 'soon';
-
-export function connectorTopBadgeStyle(active: boolean, kind: ConnectorBadgeKind, reducedMotion: boolean): CSSProperties {
-  const inkColor = kind === 'connected' ? '#17803D' : '#6B6E76';
-  return {
-    position: 'absolute',
-    right: 20,
-    top: 20,
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    height: 24,
-    boxSizing: 'border-box',
-    padding: '0 8px',
-    borderRadius: CONNECTIONS_RADIUS.tag,
-    border: `1px solid ${active ? 'rgba(255,255,255,.25)' : '#E4E4E8'}`,
-    background: active ? 'transparent' : '#FFFFFF',
-    fontSize: 12,
-    fontWeight: 500,
-    whiteSpace: 'nowrap',
-    color: active ? '#FFFFFF' : inkColor,
-    transition: reducedMotion
-      ? cardT('color', 120)
-      : [cardT('border-color', 360), cardT('background-color', 360), cardT('color', 360)].join(', '),
-  };
-}
-
-export function connectorBadgeDotStyle(kind: ConnectorBadgeKind): CSSProperties {
-  return {
-    width: 6,
-    height: 6,
-    borderRadius: '50%',
-    background: kind === 'connected' ? '#1F9D4C' : '#A9ABB2',
-  };
-}
-
-// Logo box — glides from a centered 160px box (128px mark) to a top-left
-// 76px box (48px mark) on hover. No background/border in either state —
-// the brand mark (or initials fallback) sits directly on the card.
-export function connectorLogoBoxStyle(active: boolean, reducedMotion: boolean): CSSProperties {
-  const size = active ? CARD.logoHover : CARD.logoRest;
-  return {
-    position: 'absolute',
-    zIndex: 2,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxSizing: 'border-box',
-    borderRadius: 0,
-    background: 'transparent',
-    left: active ? 20 : 'calc(50% - 54px)',
-    top: active ? 20 : (CARD.media - CARD.logoRest) / 2,
-    width: size,
-    height: size,
-    border: 0,
-    transition: reducedMotion
-      ? cardT('opacity', 120)
-      : [cardT('left', 440), cardT('top', 440), cardT('width', 440), cardT('height', 440)].join(', '),
-  };
-}
-
-export function connectorLogoImgStyle(active: boolean, reducedMotion: boolean): CSSProperties {
-  const size = active ? CARD.imgHover : CARD.imgRest;
-  return {
-    width: size,
-    height: size,
-    objectFit: 'contain',
-    transition: reducedMotion ? cardT('opacity', 120) : [cardT('width', 440), cardT('height', 440)].join(', '),
-  };
-}
-
-export function connectorLogoMonoStyle(active: boolean, reducedMotion: boolean): CSSProperties {
-  return {
-    fontSize: active ? 16 : 31,
-    fontWeight: 600,
-    letterSpacing: '-.02em',
-    color: active ? '#FFFFFF' : '#0E0E12',
-    transition: reducedMotion ? cardT('opacity', 120) : [cardT('font-size', 440), cardT('color', 440)].join(', '),
-  };
-}
-
-// Rest-view text block (name/kind/description/facts) — fades out and
-// drops 8px on hover so the dark block underneath reads as the active
-// state.
-export function connectorRestTextStyle(active: boolean, reducedMotion: boolean): CSSProperties {
-  return {
-    position: 'absolute',
-    left: 24,
-    right: 24,
-    top: CARD.textTop,
-    display: 'flex',
-    flexDirection: 'column',
-    opacity: active ? 0 : 1,
-    transform: !reducedMotion && active ? 'translateY(8px)' : 'translateY(0)',
-    pointerEvents: active ? 'none' : 'auto',
-    transition: reducedMotion ? cardT('opacity', 120) : [cardT('opacity', 160), cardT('transform', 260)].join(', '),
-  };
-}
-
-export const connectorNameStyle: CSSProperties = {
-  fontFamily: 'var(--font-display)',
-  fontSize: 22,
-  lineHeight: '28px',
-  fontWeight: 500,
-  letterSpacing: '-.015em',
-  color: '#0E0E12',
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-};
-
-export const connectorSubtitleStyle: CSSProperties = {
-  fontSize: 13.5,
-  lineHeight: '20px',
-  color: '#6B6E76',
-  marginTop: 2,
-};
-
-export const connectorDescStyle: CSSProperties = {
-  margin: '10px 0 0',
-  fontSize: 14,
-  lineHeight: '21px',
-  color: '#52555C',
-  display: '-webkit-box',
-  WebkitLineClamp: 2,
-  WebkitBoxOrient: 'vertical',
-  overflow: 'hidden',
-};
-
-// Footer (main button + Docs button) — always visible, never fades; only
-// its colors change between rest and hover/focus.
-export const connectorFooterStyle: CSSProperties = {
-  position: 'absolute',
-  left: 24,
-  right: 24,
-  bottom: CARD.footerBottom,
-  display: 'flex',
-  gap: 8,
-};
-
-export type ConnectorMainButtonKind = 'install' | 'uninstall' | 'notify';
-
-export function connectorMainButtonStyle(kind: ConnectorMainButtonKind, active: boolean, reducedMotion: boolean): CSSProperties {
-  const base: CSSProperties = {
-    flex: '1 1 auto',
-    minWidth: 0,
-    height: CARD.footerHeight,
-    boxSizing: 'border-box',
-    padding: '0 16px',
-    borderRadius: CONNECTIONS_RADIUS.control,
-    fontFamily: 'inherit',
-    fontSize: 14,
-    fontWeight: 500,
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    transition: reducedMotion
-      ? cardT('color', 120)
-      : [cardT('background-color', 360), cardT('color', 360), cardT('border-color', 360)].join(', '),
-  };
-  if (kind === 'notify') {
-    return {
-      ...base,
-      border: `1px solid ${active ? 'rgba(255,255,255,.25)' : '#DEDEE3'}`,
-      background: 'transparent',
-      color: active ? 'rgba(255,255,255,.7)' : '#6B6E76',
-      cursor: 'default',
-    };
-  }
-  if (active) {
-    return { ...base, border: '1px solid #FFFFFF', background: '#FFFFFF', color: '#0A0A0B', cursor: 'pointer' };
-  }
-  if (kind === 'uninstall') {
-    return { ...base, border: '1px solid var(--bad)', background: '#FFFFFF', color: 'var(--bad)', cursor: 'pointer' };
-  }
-  return { ...base, border: '1px solid #0E0E12', background: '#0E0E12', color: '#FFFFFF', cursor: 'pointer' };
-}
-
-export function connectorDocsIconBtnStyle(active: boolean, reducedMotion: boolean): CSSProperties {
-  return {
-    width: CARD.docsBtnSize,
-    height: CARD.docsBtnSize,
-    flex: `0 0 ${CARD.docsBtnSize}px`,
-    boxSizing: 'border-box',
-    borderRadius: CONNECTIONS_RADIUS.chip,
-    border: `1px solid ${active ? 'rgba(255,255,255,.3)' : '#DEDEE3'}`,
-    color: active ? '#FFFFFF' : '#52555C',
-    background: 'transparent',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-    transition: reducedMotion ? cardT('color', 120) : [cardT('border-color', 360), cardT('color', 360)].join(', '),
-  };
-}
-
-// Dark (hover-view) text block — a single bottom-anchored block, its
-// bottom edge 92px above the card bottom (clear of the 24px-inset, 44px-
-// tall footer). Fades in + rises with a short delay so it visibly trails
-// the card's own background/lift.
-export function connectorDarkWrapStyle(active: boolean, reducedMotion: boolean): CSSProperties {
-  return {
-    position: 'absolute',
-    left: 24,
-    right: 24,
-    bottom: CARD.darkBottom,
-    display: 'flex',
-    flexDirection: 'column',
-    opacity: active ? 1 : 0,
-    transform: !reducedMotion && !active ? 'translateY(12px)' : 'translateY(0)',
-    pointerEvents: active ? 'auto' : 'none',
-    transition: reducedMotion
-      ? cardT('opacity', 120)
-      : `opacity 280ms ${CARD_EASE} ${active ? '120ms' : '0ms'}, transform 380ms ${CARD_EASE} ${active ? '80ms' : '0ms'}`,
-  };
-}
-
-export const connectorDarkCategoryLabelStyle: CSSProperties = {
-  fontSize: 11,
-  lineHeight: '16px',
-  fontWeight: 600,
-  letterSpacing: '.08em',
-  textTransform: 'uppercase',
-  color: 'rgba(255,255,255,.5)',
-};
-
-export const connectorDarkNameStyle: CSSProperties = {
-  fontFamily: 'var(--font-display)',
-  margin: '6px 0 0',
-  fontSize: 26,
-  lineHeight: '32px',
-  fontWeight: 500,
-  letterSpacing: '-.02em',
-  color: '#FFFFFF',
-};
-
-export const connectorDarkSubtitleStyle: CSSProperties = {
-  fontSize: 13.5,
-  lineHeight: '20px',
-  color: 'rgba(255,255,255,.6)',
-  marginTop: 2,
-};
-
-export const connectorDarkDescStyle: CSSProperties = {
-  margin: '12px 0 0',
-  fontSize: 14,
-  lineHeight: '21px',
-  color: 'rgba(255,255,255,.82)',
-  display: '-webkit-box',
-  WebkitLineClamp: 3,
-  WebkitBoxOrient: 'vertical',
-  overflow: 'hidden',
-};
-
-export const connectionsEmptyResultsStyle: CSSProperties = {
-  padding: '32px 0',
-  fontSize: 13,
-  color: '#6B6E76',
-  textAlign: 'center',
-};
-
-// Real, active button for uninstalling an already-installed connector —
-// same footprint as primaryBtnStyle's row but neutral coloring, so it
-// reads as a secondary action next to "Add connection".
-export const connectionsUninstallBtnStyle: CSSProperties = {
-  height: 32,
-  boxSizing: 'border-box',
-  padding: '0 14px',
-  fontFamily: 'inherit',
-  fontSize: 12.5,
-  fontWeight: 500,
-  borderRadius: 9,
-  border: '1px solid var(--line)',
-  background: 'var(--surface)',
-  color: 'var(--text-3)',
-  cursor: 'pointer',
-};
-
 // ---------------------------------------------------------------------------
 // Precision Dark redesign (Step 4, Connections). Additive nx-* styles for
-// /app/connections — the legacy `connections*` styles above stay untouched
-// (still imported elsewhere); everything below is new. See docs/plans'
-// step notes for the governing spec. Only --nx-* tokens are used except the
-// literal brand hexes drawn inside ConnectorLogo.tsx (never recolored, by
-// design) and CONNECTIONS_RADIUS-style hardcoded 0s where the design calls
-// for a hard Swiss-grid corner.
+// /app/connections — connectionsAvailableGridStyle above is the one surviving
+// legacy style (still imported elsewhere); everything below is new. See
+// docs/plans' step notes for the governing spec. Only --nx-* tokens are used
+// except the literal brand hexes drawn inside ConnectorLogo.tsx (never
+// recolored, by design) and hardcoded 0s where the design calls for a hard
+// Swiss-grid corner.
 //
 // Fidelity pass (Step 4b): rewritten value-for-value against
 // designs/nia-design-source/Connections.dc.html — full-bleed sections
@@ -4037,3 +3034,576 @@ export const chatNewBtnStyle: CSSProperties = {
   cursor: 'pointer',
   textDecoration: 'none',
 };
+
+// ---------- Projects list (Precision Dark redesign, Step 8B) ----------
+// Matches Projects.dc.html / ProjectsStates.dc.html — 240px header (hero
+// title in a 1fr left column + a 360px --nx-blue-panel counter column with
+// a "New project" CTA strip underneath), then a bordered "ALL PROJECTS"
+// table (index/name/workflows/last-activity/delete/arrow columns).
+
+export const nxProjPageHeaderRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) 360px',
+  minHeight: 240,
+  borderBottom: '1px solid var(--nx-line)',
+};
+
+export const nxProjHeaderLeftColStyle: CSSProperties = {
+  padding: '28px 40px',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'space-between',
+  gap: 14,
+};
+
+export const nxProjPageTagStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 16,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxProjPageTitleStyle: CSSProperties = {
+  margin: 0,
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 112,
+  lineHeight: '100px',
+  fontWeight: 500,
+  letterSpacing: '-0.055em',
+  color: 'var(--nx-ink)',
+};
+
+export const nxProjCounterColStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateRows: 'minmax(0, 1fr) 56px',
+  background: 'var(--nx-blue-panel)',
+  color: 'var(--nx-blue-panel-text)',
+};
+
+export const nxProjCounterRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+};
+
+export const nxProjCounterCellStyle = (last: boolean): CSSProperties => ({
+  padding: 20,
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'space-between',
+  borderRight: last ? 'none' : '1px solid var(--nx-bg)',
+});
+
+export const nxProjCounterLabelStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 14,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+};
+
+export const nxProjCounterValueStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 72,
+  lineHeight: '64px',
+  fontWeight: 500,
+  letterSpacing: '-0.05em',
+};
+
+// "New project" CTA strip — invert-on-hover button (bg --nx-bg / ink idle),
+// height 56, sits under the counter row, full width of the 360px column.
+export const nxProjCounterCtaStyle: CSSProperties = {
+  width: '100%',
+  height: 56,
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '0 20px',
+  border: 'none',
+  borderTop: '1px solid var(--nx-bg)',
+  background: 'var(--nx-bg)',
+  color: 'var(--nx-ink)',
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 16,
+  cursor: 'pointer',
+};
+
+// Viewer replacement for the CTA strip — halftone-dot background (pair with
+// className="nx-halftone") with a centered "VIEW ONLY" chip, no button.
+export const nxProjViewOnlyStripStyle: CSSProperties = {
+  height: 56,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderTop: '1px solid var(--nx-bg)',
+};
+
+export const nxProjViewOnlyChipStyle: CSSProperties = {
+  height: 28,
+  boxSizing: 'border-box',
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '0 10px',
+  border: '1px solid var(--nx-line)',
+  background: 'var(--nx-bg)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxProjSectionHeaderStyle: CSSProperties = {
+  height: 56,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '0 28px',
+  borderBottom: '1px solid var(--nx-line)',
+};
+
+export const nxProjSectionTitleStyle: CSSProperties = {
+  margin: 0,
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 24,
+  fontWeight: 800,
+  letterSpacing: '0.02em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink)',
+};
+
+export const nxProjSectionMetaStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  color: 'var(--nx-ink-3)',
+};
+
+const nxProjGridColumns = '72px minmax(0, 1fr) 180px 200px 120px 64px';
+
+export const nxProjColHeaderRowStyle: CSSProperties = {
+  height: 40,
+  display: 'grid',
+  gridTemplateColumns: nxProjGridColumns,
+  alignItems: 'center',
+  borderBottom: '1px solid var(--nx-line-inner)',
+};
+
+export const nxProjColHeaderCellStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 13,
+  fontWeight: 700,
+  letterSpacing: '0.02em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxProjRowStyle: CSSProperties = {
+  position: 'relative',
+  height: 76,
+  display: 'grid',
+  gridTemplateColumns: nxProjGridColumns,
+  alignItems: 'stretch',
+  borderBottom: '1px solid var(--nx-line-inner)',
+};
+
+export const nxProjRowIndexCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  paddingLeft: 20,
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  color: 'var(--nx-ink-3)',
+};
+
+// Name link — pair with className="nx-wipe" for the hover background.
+export const nxProjRowNameCellStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'center',
+  minWidth: 0,
+  padding: '0 4px',
+  textDecoration: 'none',
+};
+
+export const nxProjRowNameStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 22,
+  fontWeight: 500,
+  letterSpacing: '-0.02em',
+  color: 'inherit',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+export const nxProjRowWorkflowsCellStyle = (has: boolean): CSSProperties => ({
+  display: 'flex',
+  alignItems: 'center',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  textTransform: 'uppercase',
+  color: has ? 'var(--nx-ink)' : 'var(--nx-ink-3)',
+});
+
+export const nxProjRowActivityCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxProjRowActivityDotStyle = (ran: boolean): CSSProperties => ({
+  width: 6,
+  height: 6,
+  borderRadius: '50%',
+  background: ran ? 'var(--nx-success)' : 'var(--nx-line)',
+  flex: 'none',
+});
+
+// Delete cell — full-height grid cell, borderless button (className="nx-wipe").
+export const nxProjRowDeleteCellStyle: CSSProperties = {
+  border: 0,
+  borderLeft: '1px solid var(--nx-line-inner)',
+  borderRadius: 0,
+  background: 'transparent',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-danger-text)',
+  cursor: 'pointer',
+};
+
+export const nxProjRowArrowCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderLeft: '1px solid var(--nx-line-inner)',
+  color: 'inherit',
+  textDecoration: 'none',
+};
+
+// Empty-state box (writer: heading + subline + CTA; viewer: heading only) —
+// pair with className="nx-halftone" for the dotted background.
+export const nxProjEmptyBoxStyle: CSSProperties = {
+  minHeight: 240,
+  boxSizing: 'border-box',
+  padding: '32px 24px',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'flex-end',
+  gap: 14,
+};
+
+export const nxProjEmptyHeadingStyle: CSSProperties = {
+  margin: 0,
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 36,
+  lineHeight: '38px',
+  fontWeight: 500,
+  letterSpacing: '-0.04em',
+  color: 'var(--nx-ink)',
+};
+
+export const nxProjEmptySublineStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 14,
+  lineHeight: '21px',
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxProjEmptyCtaStyle: CSSProperties = {
+  height: 48,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  alignSelf: 'flex-start',
+  padding: '0 18px',
+  background: 'var(--nx-blue-cta)',
+  color: 'var(--nx-blue-cta-text)',
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 15,
+  border: 'none',
+  cursor: 'pointer',
+};
+
+// ---------- Project detail (Precision Dark redesign, Step 8B) ----------
+// Matches ProjectDetail.dc.html / ProjectsStates.dc.html — 240px header
+// (breadcrumb + hero name in a 1fr left column, a 280px --nx-blue-cta
+// "New workflow" panel, a 64px kebab column), then a 1fr/420px body:
+// a bordered "WORKFLOWS" table on the left, ProjectMembersPanel on the right.
+
+export const nxProjDetailHeaderRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) 280px 64px',
+  minHeight: 240,
+  borderBottom: '1px solid var(--nx-line)',
+};
+
+export const nxProjDetailLeftColStyle: CSSProperties = {
+  padding: '28px 40px',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'flex-end',
+  gap: 12,
+};
+
+export const nxProjDetailBreadcrumbStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 16,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxProjDetailTitleStyle: CSSProperties = {
+  margin: 0,
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 96,
+  lineHeight: '88px',
+  fontWeight: 500,
+  letterSpacing: '-0.055em',
+  color: 'var(--nx-ink)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+export const nxProjDetailMetaStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 13,
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxProjDetailNewWorkflowBtnStyle: CSSProperties = {
+  width: '100%',
+  height: '100%',
+  boxSizing: 'border-box',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start',
+  padding: 20,
+  border: 'none',
+  borderRight: '1px solid var(--nx-line)',
+  background: 'var(--nx-blue-cta)',
+  color: 'var(--nx-blue-cta-text)',
+  cursor: 'pointer',
+};
+
+export const nxProjDetailNewWorkflowLabelStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 14,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  opacity: 0.85,
+};
+
+export const nxProjDetailNewWorkflowTextRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  width: '100%',
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 18,
+};
+
+// Viewer replacement for the New-workflow panel — same footprint, halftone
+// background (className="nx-halftone").
+export const nxProjDetailViewOnlyPanelStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRight: '1px solid var(--nx-line)',
+};
+
+export const nxProjDetailKebabColStyle: CSSProperties = {
+  position: 'relative',
+};
+
+export const nxProjDetailKebabBtnStyle = (open: boolean): CSSProperties => ({
+  width: '100%',
+  height: 64,
+  border: 'none',
+  borderBottom: '1px solid var(--nx-line)',
+  background: open ? 'var(--nx-raised)' : 'transparent',
+  color: 'var(--nx-ink)',
+  fontSize: 18,
+  cursor: 'pointer',
+});
+
+export const nxProjDetailDropdownStyle: CSSProperties = {
+  position: 'absolute',
+  top: 64,
+  right: 0,
+  width: 220,
+  border: '1px solid var(--nx-line)',
+  background: 'var(--nx-bg)',
+  boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+  zIndex: 1000,
+  display: 'flex',
+  flexDirection: 'column',
+};
+
+export const nxProjDetailDropdownItemStyle = (destructive?: boolean): CSSProperties => ({
+  height: 44,
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  width: '100%',
+  padding: '0 14px',
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 14,
+  color: destructive ? 'var(--nx-danger-text)' : 'var(--nx-ink)',
+  background: 'transparent',
+  border: 'none',
+  borderBottom: destructive ? 'none' : '1px solid var(--nx-line-inner)',
+  cursor: 'pointer',
+  textAlign: 'left',
+});
+
+export const nxProjDetailBodyStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) 420px',
+  minHeight: 0,
+};
+
+export const nxProjDetailWorkflowsColStyle: CSSProperties = {
+  borderRight: '1px solid var(--nx-line)',
+  minWidth: 0,
+};
+
+const nxProjDetailGridColumns = '56px minmax(0, 1fr) 140px 150px 64px';
+
+export const nxProjDetailColHeaderRowStyle: CSSProperties = {
+  height: 40,
+  display: 'grid',
+  gridTemplateColumns: nxProjDetailGridColumns,
+  alignItems: 'center',
+  borderBottom: '1px solid var(--nx-line-inner)',
+};
+
+export const nxProjDetailColHeaderCellStyle = (padLeft: number): CSSProperties => ({
+  paddingLeft: padLeft,
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 13,
+  fontWeight: 700,
+  letterSpacing: '0.02em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
+});
+
+export const nxProjDetailRowStyle: CSSProperties = {
+  height: 68,
+  display: 'grid',
+  gridTemplateColumns: nxProjDetailGridColumns,
+  alignItems: 'stretch',
+  borderBottom: '1px solid var(--nx-line-inner)',
+  textDecoration: 'none',
+  color: 'inherit',
+};
+
+export const nxProjDetailRowDotCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+export const nxProjDetailRowNameCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  minWidth: 0,
+  paddingLeft: 4,
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 19,
+  fontWeight: 500,
+  letterSpacing: '-0.02em',
+  color: 'inherit',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+export const nxProjDetailRowStatusCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  paddingLeft: 20,
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11.5,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+};
+
+export const nxProjDetailRowUpdatedCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  paddingLeft: 20,
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11.5,
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxProjDetailRowArrowCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderLeft: '1px solid var(--nx-line-inner)',
+};
+
+export const nxProjDetailEmptyBoxStyle: CSSProperties = {
+  minHeight: 240,
+  boxSizing: 'border-box',
+  padding: '32px 24px',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'flex-end',
+};
+
+export const nxProjDetailEmptyTextStyle: CSSProperties = {
+  margin: 0,
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 36,
+  lineHeight: '38px',
+  fontWeight: 500,
+  letterSpacing: '-0.04em',
+  color: 'var(--nx-ink)',
+};
+
+export const nxProjDetailMembersColStyle: CSSProperties = {
+  minWidth: 0,
+};
+
+// Workflow status dot + ink vocabulary (active/paused/draft) — nx copy of
+// the old statusDotStyle() above, which stays untouched (shared-style rule:
+// this page gets its own copy rather than mutating the old one in place).
+export function nxWorkflowStatusDotStyle(status: WorkflowStatus): CSSProperties {
+  const color = status === 'active' ? 'var(--nx-blue-panel)' : status === 'paused' ? 'var(--nx-warn)' : 'var(--nx-ink-3)';
+  const filled = status === 'active' || status === 'paused';
+  return {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    border: `1px solid ${color}`,
+    background: filled ? color : 'transparent',
+  };
+}
+
+export function nxWorkflowStatusInkColor(status: WorkflowStatus): string {
+  return status === 'active' ? 'var(--nx-ink)' : status === 'paused' ? 'var(--nx-warn)' : 'var(--nx-ink-2)';
+}
