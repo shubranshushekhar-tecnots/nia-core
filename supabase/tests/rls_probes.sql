@@ -3916,6 +3916,122 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Fixture for probes 112-114 — 0066_usage_events.sql: one rows_moved row
+-- for the main org, one copilot_action row for the 'individual' user's
+-- personal workspace. Inserted as postgres (bypasses RLS — usage_events has
+-- no insert grant to authenticated at all, same as workflow_runs).
+-- =========================================================================
+do $$
+declare
+  v_org        uuid := (select id from test_ids where key = 'org');
+  v_individual uuid := (select id from test_ids where key = 'individual');
+begin
+  insert into public.usage_events (org_id, kind, quantity, subject_id)
+  values (v_org, 'rows_moved', 500, gen_random_uuid());
+
+  insert into public.usage_events (owner_id, kind, quantity, subject_id)
+  values (v_individual, 'copilot_action', 1, gen_random_uuid());
+end $$;
+
+-- =========================================================================
+-- Probe 112 — 0066_usage_events.sql: an org member CAN read their own
+-- org's usage_events row.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org    uuid := (select id from test_ids where key = 'org');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_visible from public.usage_events where org_id = v_org and kind = 'rows_moved';
+  reset role;
+
+  if n_visible = 1 then
+    insert into probe_results values (112, 'usage_events: an org member can read their own org''s usage row', true);
+  else
+    insert into probe_results values (112, 'usage_events: an org member can read their own org''s usage row', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (112, 'usage_events member-can-read-own-org probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 113 — 0066_usage_events.sql: an outsider (not a member of 'org')
+-- CANNOT read org's usage_events row, and the 'individual' user's personal
+-- usage row is invisible to any org member — private.is_member(org_id)
+-- actually scopes by org, and the owner_id branch only ever matches the
+-- row's own owner.
+-- =========================================================================
+do $$
+declare
+  v_outsider   uuid := (select id from test_ids where key = 'outsider');
+  v_org        uuid := (select id from test_ids where key = 'org');
+  v_individual uuid := (select id from test_ids where key = 'individual');
+  n_org_visible int;
+  n_personal_visible int;
+begin
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_org_visible from public.usage_events where org_id = v_org;
+  select count(*) into n_personal_visible from public.usage_events where owner_id = v_individual;
+  reset role;
+
+  if n_org_visible = 0 and n_personal_visible = 0 then
+    insert into probe_results values (113, 'usage_events: a non-member cannot read another org''s or another user''s personal usage row', true);
+  else
+    insert into probe_results values (113, 'usage_events: a non-member cannot read another org''s or another user''s personal usage row', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (113, 'usage_events cannot-read-others probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 114 — 0066_usage_events.sql grants select-only — confirm an org
+-- member (not just an outsider) still cannot INSERT/UPDATE/DELETE
+-- usage_events at all; it remains write-only via service_role.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org    uuid := (select id from test_ids where key = 'org');
+  v_existing_id uuid;
+  insert_denied boolean := false;
+  update_denied boolean := false;
+  delete_denied boolean := false;
+begin
+  select id into v_existing_id from public.usage_events where org_id = v_org and kind = 'rows_moved';
+
+  perform pg_temp.act_as(v_member);
+  begin
+    insert into public.usage_events (org_id, kind, quantity, subject_id) values (v_org, 'rows_moved', 1, gen_random_uuid());
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  begin
+    update public.usage_events set quantity = 999 where id = v_existing_id;
+  exception when insufficient_privilege then
+    update_denied := true;
+  end;
+  begin
+    delete from public.usage_events where id = v_existing_id;
+  exception when insufficient_privilege then
+    delete_denied := true;
+  end;
+  reset role;
+
+  if insert_denied and update_denied and delete_denied then
+    insert into probe_results values (114, 'usage_events: an org member still cannot INSERT/UPDATE/DELETE (SELECT-only grant)', true);
+  else
+    insert into probe_results values (114, 'usage_events: an org member still cannot INSERT/UPDATE/DELETE (SELECT-only grant)', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (114, 'usage_events member-cannot-write probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$
