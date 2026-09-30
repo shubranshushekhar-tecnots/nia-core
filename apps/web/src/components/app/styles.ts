@@ -590,7 +590,28 @@ export const sidebarUserRoleStyle: CSSProperties = {
 
 // Top bar: search trigger ("Search or run" + ⌘K), notifications bell, and
 // the avatar / sign-out button (26px circle, tooltip via title attr).
-export const topBarSpacerStyle: CSSProperties = { flex: 1 };
+export const topBarSpacerStyle: CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  minWidth: 0,
+  paddingRight: 20,
+};
+
+export const topBarClockStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 13,
+  color: 'var(--nx-ink-3)',
+  fontVariantNumeric: 'tabular-nums',
+  letterSpacing: '0.02em',
+  lineHeight: 1,
+};
+
+export const topBarClockColonStyle: CSSProperties = {
+  display: 'inline-block',
+  animation: 'nxColonBlink 1s step-end infinite',
+};
 
 export const topBarKbdStyle: CSSProperties = {
   marginLeft: 'auto',
@@ -1825,8 +1846,9 @@ export const connectionsDangerBtnStyle: CSSProperties = {
 // class rules instead, not in this inline style object.
 export const connectionsAvailableGridStyle: CSSProperties = {
   display: 'grid',
-  gap: 24,
-  alignItems: 'start',
+  gap: 1,
+  alignItems: 'stretch',
+  background: 'var(--nx-line)',
 };
 
 // Step 2 (page layout redesign) — header, "Your connections" table and
@@ -2434,6 +2456,771 @@ export const connectionsUninstallBtnStyle: CSSProperties = {
   color: 'var(--text-3)',
   cursor: 'pointer',
 };
+
+// ---------------------------------------------------------------------------
+// Precision Dark redesign (Step 4, Connections). Additive nx-* styles for
+// /app/connections — the legacy `connections*` styles above stay untouched
+// (still imported elsewhere); everything below is new. See docs/plans'
+// step notes for the governing spec. Only --nx-* tokens are used except the
+// literal brand hexes drawn inside ConnectorLogo.tsx (never recolored, by
+// design) and CONNECTIONS_RADIUS-style hardcoded 0s where the design calls
+// for a hard Swiss-grid corner.
+//
+// Fidelity pass (Step 4b): rewritten value-for-value against
+// designs/nia-design-source/Connections.dc.html — full-bleed sections
+// divided by 1px --nx-line, cell padding only, no boxed buttons.
+// ---------------------------------------------------------------------------
+
+// Full-bleed page scroll container for /app/connections only — unlike
+// homeScrollStyle (shared by Home/Members/Billing), this page has no outer
+// padding/max-width; every section runs edge to edge and supplies its own
+// cell padding.
+export const nxConnScrollStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  background: 'var(--nx-bg)',
+  color: 'var(--nx-ink)',
+};
+
+// Header: 280px-tall grid, title column (2fr) + counter column (1fr),
+// divided by the section's 1px --nx-line border.
+export const nxConnPageHeaderRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)',
+  minHeight: 280,
+  borderBottom: '1px solid var(--nx-line)',
+};
+
+export const nxConnHeaderLeftColStyle: CSSProperties = {
+  padding: '28px 40px 32px',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'space-between',
+  borderRight: '1px solid var(--nx-line)',
+};
+
+export const nxConnHeaderTopRowStyle: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'baseline',
+};
+
+export const nxConnPageTagStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 16,
+  fontWeight: 600,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+};
+
+// Inert "Request a connector" strip — plain mono text, not a boxed button.
+export const nxConnRequestBtnStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: 0,
+  border: 0,
+  background: 'transparent',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  letterSpacing: '0.06em',
+  color: 'var(--nx-ink-disabled)',
+  cursor: 'not-allowed',
+};
+
+export const nxConnSoonChipStyle: CSSProperties = {
+  padding: '2px 6px',
+  background: 'var(--nx-raised)',
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxConnTitleColStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+};
+
+export const nxConnPageTitleStyle: CSSProperties = {
+  margin: 0,
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 112,
+  lineHeight: '100px',
+  fontWeight: 500,
+  letterSpacing: '-0.055em',
+  color: 'var(--nx-ink)',
+};
+
+export const nxConnPageSubtitleStyle: CSSProperties = {
+  margin: 0,
+  maxWidth: 620,
+  fontSize: 16,
+  lineHeight: '24px',
+  color: 'var(--nx-ink-2)',
+};
+
+// Counter column: solid --nx-blue-panel block, full header height, split
+// into the 2-cell counter row (top) + the canvas-hint strip (56px, bottom)
+// by a 1px --nx-bg line (dark #0A0A0B / light #FAFAF8 — matches --nx-bg
+// exactly in both themes).
+export const nxConnCounterColStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateRows: 'minmax(0, 1fr) 56px',
+  background: 'var(--nx-blue-panel)',
+  color: 'var(--nx-blue-panel-text)',
+};
+
+export const nxConnCounterRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+};
+
+export const nxConnCounterCellStyle = (last: boolean): CSSProperties => ({
+  padding: '24px 28px',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'space-between',
+  borderRight: last ? 'none' : '1px solid var(--nx-bg)',
+});
+
+export const nxConnCounterLabelStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 16,
+  fontWeight: 800,
+  letterSpacing: '0.04em',
+};
+
+export const nxConnCounterValueStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 88,
+  lineHeight: '80px',
+  fontWeight: 500,
+  letterSpacing: '-0.05em',
+};
+
+// Bottom strip of the counter column — plain text, not a link/button.
+export const nxConnCanvasHintStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '0 28px',
+  borderTop: '1px solid var(--nx-bg)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  fontWeight: 500,
+  letterSpacing: '0.06em',
+};
+
+// Section header: 56px bar, title + count adjacent (not pushed far right).
+export const nxConnSectionHeaderStyle: CSSProperties = {
+  height: 56,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '0 28px',
+  borderBottom: '1px solid var(--nx-line)',
+};
+
+export const nxConnSectionTitleStyle: CSSProperties = {
+  margin: 0,
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 24,
+  fontWeight: 800,
+  letterSpacing: '0.02em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink)',
+};
+
+export const nxConnSectionMetaStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  color: 'var(--nx-ink-3)',
+};
+
+// Installed row: real CSS grid, matches the source's literal column
+// template exactly. Dividers follow the source (logo cell + the two
+// trailing action cells are bordered; the middle data cells share only
+// their cell padding, no inner divider — mirrored, not the denser
+// every-column-divided reading).
+export const nxConnRowStyle: CSSProperties = {
+  position: 'relative',
+  height: 72,
+  display: 'grid',
+  gridTemplateColumns: '72px minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.3fr) 150px 64px',
+  alignItems: 'stretch',
+  borderBottom: '1px solid var(--nx-line-inner)',
+};
+
+export const nxConnRowLogoCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRight: '1px solid var(--nx-line-inner)',
+};
+
+export const nxConnRowNameColStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'center',
+  gap: 2,
+  minWidth: 0,
+  padding: '0 20px',
+};
+
+export const nxConnRowNameStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 20,
+  fontWeight: 500,
+  letterSpacing: '-0.02em',
+  color: 'var(--nx-ink)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+export const nxConnRowMetaStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  color: 'var(--nx-ink-3)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+export const nxConnRowCountCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  padding: '0 20px',
+};
+
+// Count chip: filled --nx-blue-panel when the connector has connections,
+// outlined --nx-line when it has none ("No connections yet").
+export const nxConnBadgeStyle = (filled: boolean): CSSProperties => ({
+  height: 24,
+  boxSizing: 'border-box',
+  padding: '0 8px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  background: filled ? 'var(--nx-blue-panel)' : 'transparent',
+  color: filled ? 'var(--nx-blue-panel-text)' : 'var(--nx-ink-2)',
+  border: filled ? 'none' : '1px solid var(--nx-line)',
+});
+
+export const nxConnRowHealthCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '0 20px',
+};
+
+// Health glyph (answer #7): glyph + short mono label only, no inline error
+// text (error text stays in title/tooltip).
+export type NxHealthStatus = 'ok' | 'error' | 'untested';
+
+export const nxHealthGlyphStyle = (status: NxHealthStatus): CSSProperties => ({
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.03em',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  color:
+    status === 'ok'
+      ? 'var(--nx-success)'
+      : status === 'error'
+        ? 'var(--nx-danger-text)'
+        : 'var(--nx-ink-3)',
+});
+
+// UNINSTALL: a full-height, borderless (except its left divider) grid
+// cell — no boxed button anywhere on this page.
+export const nxConnDangerBtnStyle: CSSProperties = {
+  border: 0,
+  borderLeft: '1px solid var(--nx-line-inner)',
+  borderRadius: 0,
+  background: 'transparent',
+  color: 'var(--nx-danger-text)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  fontWeight: 500,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  cursor: 'pointer',
+};
+
+// RowMenu restyle: bespoke portal/flip logic in ConnectionsClient.tsx is
+// preserved verbatim — only the visual styles below change. Trigger is now
+// the row's own 64px full-height grid cell.
+export const nxConnRowMenuBtnStyle: CSSProperties = {
+  border: 0,
+  borderLeft: '1px solid var(--nx-line-inner)',
+  borderRadius: 0,
+  background: 'transparent',
+  color: 'var(--nx-ink)',
+  fontSize: 18,
+  cursor: 'pointer',
+};
+
+export const nxConnRowMenuPanelStyle: CSSProperties = {
+  minWidth: 180,
+  border: '1px solid var(--nx-line)',
+  background: 'var(--nx-bg)',
+  boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+  overflow: 'hidden',
+  zIndex: 1000,
+  display: 'flex',
+  flexDirection: 'column',
+};
+
+export const nxConnRowMenuItemStyle: CSSProperties = {
+  height: 40,
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  width: '100%',
+  padding: '0 14px',
+  fontSize: 12.5,
+  color: 'var(--nx-ink)',
+  background: 'transparent',
+  border: 'none',
+  borderBottom: '1px solid var(--nx-line-inner)',
+  cursor: 'pointer',
+  textAlign: 'left',
+};
+
+// CSV upload row — same row height as installed rows, its own 3-column
+// grid: icon cell, name+meta cell, "Choose file" action cell.
+export const nxConnUploadRowStyle: CSSProperties = {
+  height: 72,
+  display: 'grid',
+  gridTemplateColumns: '72px minmax(0, 1fr) 190px',
+  alignItems: 'stretch',
+  color: 'var(--nx-ink-disabled)',
+};
+
+export const nxConnUploadIconCellStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRight: '1px solid var(--nx-line-inner)',
+};
+
+export const nxConnUploadIconStyle: CSSProperties = {
+  width: 40,
+  height: 40,
+  boxSizing: 'border-box',
+  border: '1px dashed var(--nx-line)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 18,
+};
+
+export const nxConnUploadNameColStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'center',
+  gap: 2,
+  padding: '0 20px',
+};
+
+export const nxConnUploadNameStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 20,
+  fontWeight: 500,
+  letterSpacing: '-0.02em',
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxConnUploadMetaStyle: CSSProperties = {
+  fontSize: 13,
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxConnUploadBtnStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '0 20px',
+  border: 0,
+  borderLeft: '1px solid var(--nx-line-inner)',
+  borderRadius: 0,
+  background: 'var(--nx-surface)',
+  color: 'var(--nx-ink-disabled)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  letterSpacing: '0.06em',
+  cursor: 'not-allowed',
+};
+
+// Empty/get-started panel.
+export const nxConnEmptyPanelStyle: CSSProperties = {
+  display: 'flex',
+  gap: 32,
+  flexWrap: 'wrap',
+  padding: 28,
+  border: '1px solid var(--nx-line)',
+};
+
+export const nxConnEmptyStepsColStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+  flex: '1 1 260px',
+};
+
+export const nxConnEmptyStepStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 12,
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxConnEmptyStepNumStyle: CSSProperties = {
+  width: 22,
+  height: 22,
+  flex: 'none',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  border: '1px solid var(--nx-line)',
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxConnEmptySuggestColStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  flex: '1 1 240px',
+};
+
+// Catalog toolbar: ONE 56px bar — search cell, category tabs, works-as
+// tabs, all contiguous, sharing borders, no gaps, no individual pills.
+export const nxConnToolbarRowStyle: CSSProperties = {
+  height: 56,
+  display: 'flex',
+  alignItems: 'stretch',
+  borderBottom: '1px solid var(--nx-line)',
+};
+
+export const nxConnSearchCellStyle: CSSProperties = {
+  width: 240,
+  flex: 'none',
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '0 20px',
+  borderRight: '1px solid var(--nx-line)',
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxConnSearchInputStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  border: 'none',
+  outline: 'none',
+  background: 'transparent',
+  color: 'var(--nx-ink)',
+  fontFamily: 'inherit',
+  fontSize: 13,
+};
+
+export const nxConnSearchHintStyle: CSSProperties = {
+  flex: 'none',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  border: '1px solid var(--nx-line)',
+  padding: '0 6px',
+};
+
+export const nxConnFilterListStyle: CSSProperties = {
+  display: 'flex',
+};
+
+// Category tabs: condensed caps 17px/700, count inline at mono 12px.
+export const nxConnFilterPillStyle = (active: boolean): CSSProperties => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '0 16px',
+  border: 0,
+  borderRight: '1px solid var(--nx-line)',
+  background: active ? 'var(--nx-ink)' : 'transparent',
+  color: active ? 'var(--nx-bg)' : 'var(--nx-ink)',
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 17,
+  fontWeight: 700,
+  letterSpacing: '0.03em',
+  textTransform: 'uppercase',
+  cursor: 'pointer',
+});
+
+export const nxConnFilterCountStyle = (active: boolean): CSSProperties => ({
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  fontWeight: 400,
+  opacity: 0.7,
+  color: active ? 'var(--nx-bg)' : 'var(--nx-ink-2)',
+});
+
+// Works-as tabs: mono 12px, pushed to the far right via margin-left: auto.
+export const nxConnWorksAsListStyle: CSSProperties = {
+  marginLeft: 'auto',
+  display: 'flex',
+  borderLeft: '1px solid var(--nx-line)',
+};
+
+export const nxConnWorksAsPillStyle = (active: boolean): CSSProperties => ({
+  padding: '0 16px',
+  border: 0,
+  borderRight: '1px solid var(--nx-line)',
+  background: active ? 'var(--nx-raised)' : 'transparent',
+  color: active ? 'var(--nx-ink)' : 'var(--nx-ink-2)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  letterSpacing: '0.06em',
+  cursor: 'pointer',
+});
+
+export const nxConnCatalogHintStyle: CSSProperties = {
+  padding: '20px 28px',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxConnEmptyResultsStyle: CSSProperties = {
+  padding: '40px 28px',
+  textAlign: 'center',
+  fontSize: 13,
+  color: 'var(--nx-ink-3)',
+};
+
+// Card v6 (fidelity pass): rewritten against the source's literal catalog
+// card — 148px art band with a radial-dot pattern + 128px giant monogram,
+// 52px action row, no card border (the grid's own 1px --nx-line gap
+// reads as the hairline divider between cards).
+export const NX_CARD = {
+  art: 148,
+  actionsHeight: 52,
+} as const;
+
+export const nxConnectorCardShellStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: 348,
+  background: 'var(--nx-bg)',
+};
+
+export const nxConnectorCardArtStyle: CSSProperties = {
+  position: 'relative',
+  height: NX_CARD.art,
+  overflow: 'hidden',
+  borderBottom: '1px solid var(--nx-line-inner)',
+};
+
+export const nxConnectorCardDotsStyle: CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  backgroundImage: 'radial-gradient(circle, var(--nx-line-inner) 1px, transparent 1.4px)',
+  backgroundSize: '6px 6px',
+  WebkitMaskImage: 'linear-gradient(200deg, #000 0%, transparent 80%)',
+  maskImage: 'linear-gradient(200deg, #000 0%, transparent 80%)',
+};
+
+export const nxConnectorCardCategoryStyle: CSSProperties = {
+  position: 'absolute',
+  left: 20,
+  top: 16,
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 14,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  color: 'var(--nx-ink-2)',
+};
+
+// Badges: "N connected" filled --nx-blue-panel, "Installed" (0
+// connections) --nx-ink filled, "Coming soon" --nx-raised.
+export const nxConnectorCardBadgeStyle = (kind: 'connected' | 'installed' | 'soon'): CSSProperties => {
+  const tone =
+    kind === 'connected'
+      ? { background: 'var(--nx-blue-panel)', color: 'var(--nx-blue-panel-text)' }
+      : kind === 'installed'
+        ? { background: 'var(--nx-ink)', color: 'var(--nx-bg)' }
+        : { background: 'var(--nx-raised)', color: 'var(--nx-ink-2)' };
+  return {
+    position: 'absolute',
+    right: 16,
+    top: 14,
+    height: 24,
+    boxSizing: 'border-box',
+    padding: '0 8px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    fontFamily: 'var(--nx-font-mono)',
+    fontSize: 11,
+    fontWeight: 500,
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+    ...tone,
+  };
+};
+
+// Giant monogram fallback (no brand mark): a display rule per item 7 —
+// --nx-blue-panel when installed/connected, --nx-raised otherwise
+// (collapses the source's literal 3-way soon/installed/none split into
+// this 2-way one, as explicitly requested).
+export const nxConnectorCardGlyphStyle = (color: string): CSSProperties => ({
+  position: 'absolute',
+  left: 16,
+  bottom: -12,
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontSize: 128,
+  lineHeight: '112px',
+  fontWeight: 800,
+  color,
+});
+
+export const nxConnectorCardBodyStyle: CSSProperties = {
+  flexGrow: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '18px 20px',
+};
+
+export const nxConnectorCardNameStyle: CSSProperties = {
+  margin: 0,
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 26,
+  lineHeight: '30px',
+  fontWeight: 500,
+  letterSpacing: '-0.03em',
+  color: 'var(--nx-ink)',
+};
+
+export const nxConnectorCardSubtitleStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxConnectorCardDescStyle: CSSProperties = {
+  margin: '4px 0 0',
+  fontSize: 14,
+  lineHeight: '21px',
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxConnectorCardFactsRowStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+  marginTop: 4,
+};
+
+export const nxConnectorCardFactStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 10,
+  letterSpacing: '0.03em',
+  color: 'var(--nx-ink-3)',
+  border: '1px solid var(--nx-line)',
+  padding: '2px 6px',
+};
+
+export const nxConnectorCardActionsStyle: CSSProperties = {
+  height: NX_CARD.actionsHeight,
+  display: 'flex',
+  borderTop: '1px solid var(--nx-line-inner)',
+};
+
+// No boxed buttons: INSTALL is an --nx-ink-filled cell, UNINSTALL/NOTIFY
+// ME are transparent full-height cells, all UPPERCASE mono labels.
+export const nxConnectorCardMainBtnStyle = (kind: 'install' | 'uninstall' | 'notify'): CSSProperties => ({
+  flexGrow: 1,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '0 20px',
+  border: 0,
+  borderRadius: 0,
+  background: kind === 'install' ? 'var(--nx-ink)' : 'transparent',
+  color: kind === 'install' ? 'var(--nx-bg)' : kind === 'uninstall' ? 'var(--nx-danger-text)' : 'var(--nx-ink-disabled)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  fontWeight: kind === 'notify' ? 400 : 500,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  cursor: kind === 'notify' ? 'not-allowed' : 'pointer',
+});
+
+export const nxConnectorCardDocsBtnStyle: CSSProperties = {
+  width: 76,
+  flex: 'none',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: 0,
+  borderLeft: '1px solid var(--nx-line-inner)',
+  background: 'transparent',
+  color: 'var(--nx-ink-2)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  cursor: 'pointer',
+};
+
+// Destructive dialog extensions (answer #5) — layered on the existing
+// nxModal* family from CreateProjectDialog's pattern.
+export const nxModalDestructiveTagStyle: CSSProperties = {
+  display: 'inline-block',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.08em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-danger-text)',
+};
+
+export const nxModalBodyTextStyle: CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.6,
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxModalDangerCellStyle = (pending: boolean): CSSProperties => ({
+  flex: '1 1 auto',
+  height: '100%',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  fontSize: 13,
+  fontWeight: 600,
+  border: 'none',
+  background: 'var(--nx-danger-text)',
+  color: 'var(--nx-bg)',
+  cursor: pending ? 'default' : 'pointer',
+  opacity: pending ? 0.7 : 1,
+});
 
 // Chat surface (/app/chat). Style values are ported from the exact CSS
 // strings in designs/Nia Core App.html's `// ---------- chat ----------`

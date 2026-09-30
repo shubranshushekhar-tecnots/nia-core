@@ -5,7 +5,7 @@ import AppShell from '@/components/app/AppShell';
 import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
 import ConnectionsClient from '@/components/app/ConnectionsClient';
-import { homeScrollStyle, mainColStyle } from '@/components/app/styles';
+import { nxConnScrollStyle, mainColStyle } from '@/components/app/styles';
 
 export default async function ConnectionsPage() {
   const user = await requireUser();
@@ -25,7 +25,7 @@ export default async function ConnectionsPage() {
     >
       <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
       <div style={mainColStyle}>
-        <div style={homeScrollStyle}>
+        <div style={nxConnScrollStyle}>
           <ConnectionsClient
             currentUserId={user.userId}
             catalog={catalog}

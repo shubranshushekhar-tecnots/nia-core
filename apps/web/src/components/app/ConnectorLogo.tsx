@@ -14,7 +14,7 @@ import { CONNECTOR_CATALOG_META } from '@/lib/connections/catalogMeta';
 // a mark for (confirmed via `node -e` against the installed package —
 // see catalogMeta.ts's header comment) are statically imported here; the
 // other 4 ids (redshift, lookerstudio, pinecone, s3) have no `iconSlug` in
-// CONNECTOR_CATALOG_META and always render the initials fallback below.
+// CONNECTOR_CATALOG_META and always render the monogram-tile fallback below.
 const ICONS: Record<string, { path: string; hex: string; title: string }> = {
   mysql: siMysql,
   mongodb: siMongodb,
@@ -27,46 +27,99 @@ const ICONS: Record<string, { path: string; hex: string; title: string }> = {
 };
 
 /**
- * Real vendor brand mark (fixed brand hex, never `currentColor` — a
- * recolored trademarked logo isn't recognizable, same rationale as
- * components/canvas/icons.tsx's CONNECTOR_ICONS) on a plain white tile so
- * the color reads true. Falls back to a 2-letter initials tile for
- * catalog ids with no simple-icons mark yet.
+ * Precision Dark redesign (Step 4, Connections). Real vendor brand marks
+ * (fixed brand hex, never recolored — a recolored trademarked logo isn't
+ * recognizable, same rationale as components/canvas/icons.tsx's
+ * CONNECTOR_ICONS) render on a `--nx-logo-tile` (white, both themes) tile
+ * with a 1px `--nx-line` border so the true brand color always reads,
+ * regardless of theme. The 4 catalog ids with no simple-icons mark
+ * (redshift, lookerstudio, pinecone, s3) render the PDF's solid monogram
+ * tile instead: `--nx-ink` background, `--nx-bg` condensed-weight initials.
  *
- * `variant="onDark"` is for placement on the connector card's hover-view
- * near-black background (styles.ts's connectorCardShellStyle) — real
- * vendor marks keep their fixed brand hex either way (never recolor a
- * trademarked logo), only the initials-fallback tint switches to a
- * light-on-dark color.
- *
- * `fill` makes the mark size itself to 100% of its parent box instead of
- * `size` pixels, so it can be CSS-transitioned by an ancestor whose own
- * width/height animate (the card's connectorLogoBoxStyle) — table-row
- * callers that just want a fixed pixel icon leave this off.
+ * `giant` is the catalog card's bottom-left mark: a bigger 64px tile +
+ * 40px logo for real brand marks, or — for the 4 fallback ids — a bare
+ * 128px condensed monogram (no tile) in `--nx-raised`, matching the PDF's
+ * quiet oversized watermark treatment.
  */
 export default function ConnectorLogo({
   id,
-  size = 22,
-  variant = 'default',
-  fill = false,
+  tile = 22,
+  giant = false,
+  giantColor = 'var(--nx-raised)',
 }: {
   id: string;
-  size?: number;
-  variant?: 'default' | 'onDark';
-  fill?: boolean;
+  /** Tile size in px for the normal (non-giant) render. Logo draws at ~60% of this. */
+  tile?: number;
+  /** Catalog card's giant bottom-left mark. */
+  giant?: boolean;
+  /** Monogram-fallback color override for `giant` mode — install/connection-state-aware per the design source's glyph display rule (item 7). Ignored when a real brand mark renders. */
+  giantColor?: string;
 }) {
   const meta = CONNECTOR_CATALOG_META[id];
   const icon = meta?.iconSlug ? ICONS[meta.iconSlug] : undefined;
+  const initials = (meta?.name ?? id).slice(0, 2).toUpperCase();
+
+  if (giant) {
+    if (!icon) {
+      return (
+        <span
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: 16,
+            bottom: -12,
+            fontFamily: 'var(--nx-font-condensed)',
+            fontStretch: '62.5%',
+            fontWeight: 800,
+            fontSize: 128,
+            lineHeight: '112px',
+            color: giantColor,
+          }}
+        >
+          {initials}
+        </span>
+      );
+    }
+    return (
+      <span
+        style={{
+          position: 'absolute',
+          left: 20,
+          bottom: 16,
+          width: 64,
+          height: 64,
+          flex: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--nx-logo-tile)',
+          border: '1px solid var(--nx-line)',
+        }}
+      >
+        <svg width={40} height={40} viewBox="0 0 24 24" fill={`#${icon.hex}`} role="img" aria-label={icon.title}>
+          <path d={icon.path} />
+        </svg>
+      </span>
+    );
+  }
 
   if (!icon) {
-    const initials = (meta?.name ?? id).slice(0, 2).toUpperCase();
     return (
       <span
         aria-hidden="true"
         style={{
-          fontSize: fill ? '55%' : Math.round(size * 0.55),
-          fontWeight: 700,
-          color: variant === 'onDark' ? '#FFFFFF' : 'var(--text-3)',
+          width: tile,
+          height: tile,
+          flex: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--nx-ink)',
+          color: 'var(--nx-bg)',
+          fontFamily: 'var(--nx-font-condensed)',
+          fontStretch: '62.5%',
+          fontWeight: 800,
+          fontSize: Math.round(tile * 0.4),
         }}
       >
         {initials}
@@ -75,15 +128,21 @@ export default function ConnectorLogo({
   }
 
   return (
-    <svg
-      width={fill ? '100%' : size}
-      height={fill ? '100%' : size}
-      viewBox="0 0 24 24"
-      fill={`#${icon.hex}`}
-      role="img"
-      aria-label={icon.title}
+    <span
+      style={{
+        width: tile,
+        height: tile,
+        flex: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--nx-logo-tile)',
+        border: '1px solid var(--nx-line)',
+      }}
     >
-      <path d={icon.path} />
-    </svg>
+      <svg width={Math.round(tile * 0.6)} height={Math.round(tile * 0.6)} viewBox="0 0 24 24" fill={`#${icon.hex}`} role="img" aria-label={icon.title}>
+        <path d={icon.path} />
+      </svg>
+    </span>
   );
 }

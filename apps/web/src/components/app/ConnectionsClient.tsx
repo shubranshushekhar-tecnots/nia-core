@@ -6,47 +6,65 @@ import { CONNECTOR_MANIFESTS } from '@nia/schemas';
 import type { Connection, ConnectorCatalogEntry, ConnectorInstall } from '@/lib/connections/types';
 import { uninstallConnectorAction, installConnectorAction } from '@/lib/connections/actions';
 import { CATALOG_ORDER, CONNECTOR_CATALOG_META, resolveWorksAs } from '@/lib/connections/catalogMeta';
-import type { ConnectorCategory } from './styles';
+import type { ConnectorCategory, NxHealthStatus } from './styles';
 import {
   connectionsAvailableGridStyle,
-  connectionsBadgeLinkStyle,
-  connectionsBadgeMetaStyle,
-  connectionsBadgesRowStyle,
-  connectionsCatalogHintStyle,
-  connectionsDangerBtnStyle,
-  connectionsEmptyPanelStyle,
-  connectionsEmptyResultsStyle,
-  connectionsEmptyStepStyle,
-  connectionsEmptyStepNumStyle,
-  connectionsEmptyStepsColStyle,
-  connectionsEmptySuggestColStyle,
-  connectionsFilterListStyle,
-  connectionsFilterPillStyle,
-  connectionsHeaderButtonsStyle,
-  connectionsPageHeaderStyle,
-  connectionsProviderActionsStyle,
-  connectionsProviderListStyle,
-  connectionsProviderMetaStyle,
-  connectionsProviderNameColStyle,
-  connectionsProviderNameStyle,
-  connectionsProviderRowStyle,
-  connectionsRequestBtnStyle,
-  connectionsSearchBoxStyle,
-  connectionsSectionHeaderStyle,
-  connectionsSectionMetaStyle,
-  connectionsSectionTitleStyle,
-  connectionsSubtitleStyle,
-  connectionsTableMenuBtnStyle,
-  connectionsTableMenuItemStyle,
-  connectionsTableMenuStyle,
-  connectionsTableTileStyle,
-  connectionsToolbarRowStyle,
-  connectionsUploadBtnStyle,
-  connectionsUploadIconStyle,
-  connectionsUploadRowStyle,
-  pageTitleStyle,
+  nxConnBadgeStyle,
+  nxConnCanvasHintStyle,
+  nxConnCatalogHintStyle,
+  nxConnCounterCellStyle,
+  nxConnCounterColStyle,
+  nxConnCounterLabelStyle,
+  nxConnCounterRowStyle,
+  nxConnCounterValueStyle,
+  nxConnDangerBtnStyle,
+  nxConnEmptyPanelStyle,
+  nxConnEmptyResultsStyle,
+  nxConnEmptyStepNumStyle,
+  nxConnEmptyStepStyle,
+  nxConnEmptyStepsColStyle,
+  nxConnEmptySuggestColStyle,
+  nxConnFilterCountStyle,
+  nxConnFilterListStyle,
+  nxConnFilterPillStyle,
+  nxConnHeaderLeftColStyle,
+  nxConnHeaderTopRowStyle,
+  nxConnPageHeaderRowStyle,
+  nxConnPageSubtitleStyle,
+  nxConnPageTagStyle,
+  nxConnPageTitleStyle,
+  nxConnRequestBtnStyle,
+  nxConnRowCountCellStyle,
+  nxConnRowHealthCellStyle,
+  nxConnRowLogoCellStyle,
+  nxConnRowMenuBtnStyle,
+  nxConnRowMenuItemStyle,
+  nxConnRowMenuPanelStyle,
+  nxConnRowMetaStyle,
+  nxConnRowNameColStyle,
+  nxConnRowNameStyle,
+  nxConnRowStyle,
+  nxConnSearchCellStyle,
+  nxConnSearchHintStyle,
+  nxConnSearchInputStyle,
+  nxConnSectionHeaderStyle,
+  nxConnSectionMetaStyle,
+  nxConnSectionTitleStyle,
+  nxConnSoonChipStyle,
+  nxConnTitleColStyle,
+  nxConnToolbarRowStyle,
+  nxConnUploadBtnStyle,
+  nxConnUploadIconCellStyle,
+  nxConnUploadIconStyle,
+  nxConnUploadMetaStyle,
+  nxConnUploadNameColStyle,
+  nxConnUploadNameStyle,
+  nxConnUploadRowStyle,
+  nxConnWorksAsListStyle,
+  nxConnWorksAsPillStyle,
+  nxHealthGlyphStyle,
 } from './styles';
-import DeleteConfirmDialog from './DeleteConfirmDialog';
+import NxConnectionsDeleteDialog from './NxConnectionsDeleteDialog';
 import ConnectorCard from './ConnectorCard';
 import ConnectorLogo from './ConnectorLogo';
 
@@ -60,6 +78,29 @@ const CATEGORY_LABEL: Record<ConnectorCategory, string> = {
 
 const CATEGORIES: ConnectorCategory[] = ['databases', 'warehouses', 'bi', 'ai-vector', 'files'];
 
+// Health column (answer #4/#7): `Connection.lastTestStatus` is already a
+// full page prop (no new fetch/API field) — this just aggregates it up
+// to the connector-install row this page actually renders (one row per
+// installed connector, not per individual connection). Worst-status-wins:
+// any failing connection surfaces as 'error' even if others passed.
+function aggregateHealth(connectorConnections: Connection[]): NxHealthStatus {
+  if (connectorConnections.some((c) => c.lastTestStatus === 'error')) return 'error';
+  if (connectorConnections.some((c) => c.lastTestStatus === 'ok')) return 'ok';
+  return 'untested';
+}
+
+function HealthGlyph({ status, errorCount }: { status: NxHealthStatus; errorCount: number }) {
+  const glyph = status === 'ok' ? '\u25a0' : status === 'error' ? '\u2715' : '\u2014';
+  const label = status === 'ok' ? 'OK' : status === 'error' ? 'FAILED' : 'NOT TESTED';
+  const title = status === 'error' ? `${errorCount} connection${errorCount === 1 ? '' : 's'} failed its last test` : undefined;
+  return (
+    <span style={nxHealthGlyphStyle(status)} title={title}>
+      <span aria-hidden="true">{glyph}</span>
+      {label}
+    </span>
+  );
+}
+
 /**
  * Item 5 (fix-chain plan): renders the friendly `error` summary inline, plus
  * the raw `details` (original driver/connector text) behind a "Show
@@ -70,7 +111,7 @@ const CATEGORIES: ConnectorCategory[] = ['databases', 'warehouses', 'bi', 'ai-ve
  */
 function ActionErrorDetail({ error, fix, details }: { error: string; fix?: string; details?: string }) {
   return (
-    <span style={connectionsBadgeMetaStyle}>
+    <span style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 11, color: 'var(--nx-danger-text)' }}>
       {'\u2014'} {error}
       {fix && <span style={{ display: 'block' }}>{fix}</span>}
       {details && details !== error && (
@@ -93,12 +134,10 @@ function SuggestedConnectorRow({ id, name, onInstalled }: { id: string; name: st
   }, [state, id, onInstalled]);
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={connectionsTableTileStyle}>
-        <ConnectorLogo id={id} size={16} />
-      </span>
-      <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)', flex: 1 }}>{name}</span>
+      <ConnectorLogo id={id} tile={44} />
+      <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--nx-ink)', flex: 1 }}>{name}</span>
       <form action={formAction}>
-        <button type="submit" disabled={pending} style={connectionsRequestBtnStyle}>
+        <button type="submit" disabled={pending} style={nxConnRequestBtnStyle}>
           {pending ? 'Installing\u2026' : 'Install'}
         </button>
       </form>
@@ -197,14 +236,14 @@ function RowMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={triggerLabel}
-        style={connectionsTableMenuBtnStyle}
+        style={nxConnRowMenuBtnStyle}
         onClick={() => onOpenChange(!open)}
       >
         {'\u22ef'}
       </button>
       {open && coords && typeof document !== 'undefined'
         ? createPortal(
-            <div ref={menuRef} role="menu" style={{ ...connectionsTableMenuStyle, top: coords.top, left: coords.left }}>
+            <div ref={menuRef} role="menu" style={{ ...nxConnRowMenuPanelStyle, position: 'fixed', top: coords.top, left: coords.left }}>
               {children}
             </div>,
             document.body,
@@ -269,6 +308,15 @@ export default function ConnectionsClient({
   // Destination facts and "Works as" filtering read genuine API data
   // instead of catalogMeta's static fallback (see resolveWorksAs).
   const catalogByIdMap = useMemo(() => new Map(catalog.map((c) => [c.id, c])), [catalog]);
+  const connectionsByConnector = useMemo(() => {
+    const map = new Map<string, Connection[]>();
+    for (const c of connections) {
+      const list = map.get(c.connectorId);
+      if (list) list.push(c);
+      else map.set(c.connectorId, [c]);
+    }
+    return map;
+  }, [connections]);
   const connectionCountByConnector = useMemo(() => {
     const map = new Map<string, number>();
     for (const c of connections) map.set(c.connectorId, (map.get(c.connectorId) ?? 0) + 1);
@@ -320,39 +368,56 @@ export default function ConnectionsClient({
 
   return (
     <>
-      <div style={connectionsPageHeaderStyle}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={pageTitleStyle}>Connections</span>
-          <span style={connectionsSubtitleStyle}>The databases, warehouses and tools your workflows read from and write to.</span>
+      <div style={nxConnPageHeaderRowStyle}>
+        <div style={nxConnHeaderLeftColStyle}>
+          <div style={nxConnHeaderTopRowStyle}>
+            <span style={nxConnPageTagStyle}>Platform / Connections</span>
+            {/* No request-a-connector endpoint exists yet — inert like the
+                Upload CSV button below, not wired to an invented action. */}
+            <button type="button" style={nxConnRequestBtnStyle} disabled title="Coming soon">
+              Request a connector
+              <span style={nxConnSoonChipStyle}>Soon</span>
+            </button>
+          </div>
+          <div style={nxConnTitleColStyle}>
+            <h1 style={nxConnPageTitleStyle}>Connections</h1>
+            <span style={nxConnPageSubtitleStyle}>The databases, warehouses and tools your workflows read from and write to.</span>
+          </div>
         </div>
-        <div style={connectionsHeaderButtonsStyle}>
-          {/* No request-a-connector endpoint exists yet — inert like the
-              Upload CSV button below, not wired to an invented action. */}
-          <button type="button" style={connectionsRequestBtnStyle} disabled title="Coming soon">
-            Request a connector
-          </button>
+        <div style={nxConnCounterColStyle}>
+          <div style={nxConnCounterRowStyle}>
+            <div style={nxConnCounterCellStyle(false)}>
+              <span style={nxConnCounterLabelStyle}>Installed</span>
+              <span style={nxConnCounterValueStyle}>{String(installs.length).padStart(2, '0')}</span>
+            </div>
+            <div style={nxConnCounterCellStyle(true)}>
+              <span style={nxConnCounterLabelStyle}>Connections</span>
+              <span style={nxConnCounterValueStyle}>{String(connections.length).padStart(2, '0')}</span>
+            </div>
+          </div>
+          <span style={nxConnCanvasHintStyle}>ADD CONNECTIONS FROM A WORKFLOW CANVAS {'\u2192'}</span>
         </div>
       </div>
 
       {showEmptyState ? (
-        <div style={connectionsEmptyPanelStyle}>
-          <div style={connectionsEmptyStepsColStyle}>
-            <span style={connectionsSectionTitleStyle}>Get started</span>
-            <div style={connectionsEmptyStepStyle}>
-              <span style={connectionsEmptyStepNumStyle}>1</span>
-              <span style={connectionsSectionMetaStyle}>Install a connector below.</span>
+        <div style={nxConnEmptyPanelStyle}>
+          <div style={nxConnEmptyStepsColStyle}>
+            <span style={nxConnSectionTitleStyle}>Get started</span>
+            <div style={nxConnEmptyStepStyle}>
+              <span style={nxConnEmptyStepNumStyle}>1</span>
+              <span style={nxConnSectionMetaStyle}>Install a connector below.</span>
             </div>
-            <div style={connectionsEmptyStepStyle}>
-              <span style={connectionsEmptyStepNumStyle}>2</span>
-              <span style={connectionsSectionMetaStyle}>Open a workflow canvas.</span>
+            <div style={nxConnEmptyStepStyle}>
+              <span style={nxConnEmptyStepNumStyle}>2</span>
+              <span style={nxConnSectionMetaStyle}>Open a workflow canvas.</span>
             </div>
-            <div style={connectionsEmptyStepStyle}>
-              <span style={connectionsEmptyStepNumStyle}>3</span>
-              <span style={connectionsSectionMetaStyle}>Add a connection from a connector node — adding a connection always happens on the canvas.</span>
+            <div style={nxConnEmptyStepStyle}>
+              <span style={nxConnEmptyStepNumStyle}>3</span>
+              <span style={nxConnSectionMetaStyle}>Add a connection from a connector node — adding a connection always happens on the canvas.</span>
             </div>
           </div>
-          <div style={connectionsEmptySuggestColStyle}>
-            <span style={connectionsSectionTitleStyle}>Suggested connectors</span>
+          <div style={nxConnEmptySuggestColStyle}>
+            <span style={nxConnSectionTitleStyle}>Suggested connectors</span>
             {realCatalogEntries.map((meta) => (
               <SuggestedConnectorRow key={meta.id} id={meta.id} name={meta.name} onInstalled={setPendingScrollId} />
             ))}
@@ -361,18 +426,21 @@ export default function ConnectionsClient({
       ) : (
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={connectionsSectionHeaderStyle}>
-              <span style={connectionsSectionTitleStyle}>Installed</span>
-              <span style={connectionsSectionMetaStyle}>
+            <div style={nxConnSectionHeaderStyle}>
+              <span style={nxConnSectionTitleStyle}>Installed</span>
+              <span style={nxConnSectionMetaStyle}>
                 {installs.length} connector{installs.length === 1 ? '' : 's'}
               </span>
             </div>
-            <div style={connectionsProviderListStyle}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
               {installs.map((install) => {
                 const meta = CONNECTOR_CATALOG_META[install.connectorId];
                 const manifest = CONNECTOR_MANIFESTS[install.connectorId];
                 const count = connectionCountByConnector.get(install.connectorId) ?? 0;
                 const highlighted = highlightedProviderId === install.connectorId;
+                const connectorConnections = connectionsByConnector.get(install.connectorId) ?? [];
+                const health = aggregateHealth(connectorConnections);
+                const errorCount = connectorConnections.filter((c) => c.lastTestStatus === 'error').length;
                 return (
                   <div
                     key={install.id}
@@ -381,68 +449,79 @@ export default function ConnectionsClient({
                       installedRowRefs.current[install.connectorId] = el;
                     }}
                     style={{
-                      ...connectionsProviderRowStyle(true),
+                      ...nxConnRowStyle,
                       transition: 'background 1.2s ease',
-                      background: highlighted ? 'color-mix(in srgb, var(--live-fill) 10%, transparent)' : undefined,
+                      background: highlighted ? 'color-mix(in srgb, var(--nx-blue-panel) 12%, var(--nx-bg))' : undefined,
                     }}
                   >
-                    <span style={{ width: 20, height: 20, flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <ConnectorLogo id={install.connectorId} size={20} />
-                    </span>
-                    <span style={connectionsProviderNameColStyle}>
-                      <span style={connectionsProviderNameStyle}>{meta?.name ?? install.connectorId}</span>
-                      <span style={connectionsProviderMetaStyle}>
+                    <div style={nxConnRowLogoCellStyle}>
+                      <ConnectorLogo id={install.connectorId} tile={40} />
+                    </div>
+                    <span style={nxConnRowNameColStyle}>
+                      <span style={nxConnRowNameStyle}>{meta?.name ?? install.connectorId}</span>
+                      <span style={nxConnRowMetaStyle}>
                         {meta ? CATEGORY_LABEL[meta.category] : ''}
                         {manifest?.version && (
                           <>
                             {' \u00b7 '}
-                            <span style={{ fontFamily: 'var(--font-mono)' }}>v{manifest.version}</span>
+                            <span>v{manifest.version}</span>
+                          </>
+                        )}
+                        {meta?.authMethod && (
+                          <>
+                            {' \u00b7 '}
+                            <span>{meta.authMethod}</span>
                           </>
                         )}
                       </span>
                     </span>
-                    <div style={connectionsBadgesRowStyle}>
-                      <span style={connectionsProviderMetaStyle}>
+                    <div style={nxConnRowCountCellStyle}>
+                      <span style={nxConnBadgeStyle(count > 0)}>
                         {count > 0 ? `${count} connection${count === 1 ? '' : 's'}` : 'No connections yet'}
                       </span>
-                      {meta?.authMethod && <span style={connectionsProviderMetaStyle}>{meta.authMethod}</span>}
                     </div>
-                    <div style={connectionsProviderActionsStyle}>
-                      <button
-                        type="button"
-                        style={connectionsDangerBtnStyle}
-                        onClick={() => setDialog({ type: 'uninstall', installId: install.id, name: meta?.name ?? install.connectorId })}
-                      >
-                        Uninstall
-                      </button>
-                      {meta?.docsUrl && (
-                        <RowMenu open={openMenuRowId === install.id} onOpenChange={(o) => setOpenMenuRowId(o ? install.id : null)}>
-                          <a
-                            href={meta.docsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            role="menuitem"
-                            tabIndex={-1}
-                            style={connectionsTableMenuItemStyle}
-                          >
-                            View docs
-                          </a>
-                        </RowMenu>
-                      )}
+                    <div style={nxConnRowHealthCellStyle}>
+                      <HealthGlyph status={health} errorCount={errorCount} />
                     </div>
+                    <button
+                      type="button"
+                      style={nxConnDangerBtnStyle}
+                      onClick={() => setDialog({ type: 'uninstall', installId: install.id, name: meta?.name ?? install.connectorId })}
+                    >
+                      Uninstall
+                    </button>
+                    {meta?.docsUrl ? (
+                      <RowMenu open={openMenuRowId === install.id} onOpenChange={(o) => setOpenMenuRowId(o ? install.id : null)}>
+                        <a
+                          href={meta.docsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          role="menuitem"
+                          tabIndex={-1}
+                          style={nxConnRowMenuItemStyle}
+                        >
+                          View docs
+                        </a>
+                      </RowMenu>
+                    ) : (
+                      <div style={{ borderLeft: '1px solid var(--nx-line-inner)' }} />
+                    )}
                   </div>
                 );
               })}
-              <div style={connectionsUploadRowStyle}>
-                <span style={connectionsUploadIconStyle} aria-hidden="true">
-                  {'\u2913'}
+              <div style={nxConnUploadRowStyle}>
+                <div style={nxConnUploadIconCellStyle}>
+                  <span style={nxConnUploadIconStyle} aria-hidden="true">
+                    {'\u2913'}
+                  </span>
+                </div>
+                <span style={nxConnUploadNameColStyle}>
+                  <span style={nxConnUploadNameStyle}>Upload a CSV or Excel file</span>
+                  <span style={nxConnUploadMetaStyle}>Treat a spreadsheet as a workflow source — no connector required.</span>
                 </span>
-                <span style={connectionsProviderNameColStyle}>
-                  <span style={connectionsProviderNameStyle}>Upload a CSV or Excel file</span>
-                  <span style={connectionsProviderMetaStyle}>Treat a spreadsheet as a workflow source — no connector required.</span>
-                </span>
-                <button type="button" disabled title="Coming soon" style={connectionsUploadBtnStyle}>
+                <button type="button" disabled title="Coming soon" style={nxConnUploadBtnStyle}>
                   Choose file
+                  <span style={nxConnSoonChipStyle}>Soon</span>
                 </button>
               </div>
             </div>
@@ -451,43 +530,31 @@ export default function ConnectionsClient({
       )}
 
       <div className="nia-connector-catalog" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={connectionsSectionHeaderStyle}>
-          <span style={connectionsSectionTitleStyle}>Add a connection</span>
-          <span style={connectionsSectionMetaStyle}>{filteredCatalog.length} connectors</span>
+        <div style={nxConnSectionHeaderStyle}>
+          <span style={nxConnSectionTitleStyle}>Add a connection</span>
+          <span style={nxConnSectionMetaStyle}>{filteredCatalog.length} connectors</span>
         </div>
 
-        <div style={connectionsToolbarRowStyle}>
-          <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+        <div style={nxConnToolbarRowStyle}>
+          <label style={nxConnSearchCellStyle}>
+            <span aria-hidden="true">{'\u2315'}</span>
             <input
               ref={searchRef}
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search connectors"
-              style={{ ...connectionsSearchBoxStyle, width: '100%' }}
+              style={nxConnSearchInputStyle}
             />
             {!search && (
-              <span
-                aria-hidden="true"
-                style={{
-                  position: 'absolute',
-                  right: 10,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color: 'var(--text-4)',
-                  border: '1px solid var(--line2)',
-                  borderRadius: 4,
-                  padding: '1px 5px',
-                  pointerEvents: 'none',
-                }}
-              >
+              <span aria-hidden="true" style={nxConnSearchHintStyle}>
                 /
               </span>
             )}
-          </div>
-          <div style={connectionsFilterListStyle} role="tablist">
-            <button type="button" role="tab" aria-selected={category === 'all'} style={connectionsFilterPillStyle(category === 'all')} onClick={() => setCategory('all')}>
-              All {catalogEntries.length}
+          </label>
+          <div style={nxConnFilterListStyle} role="tablist">
+            <button type="button" role="tab" aria-selected={category === 'all'} style={nxConnFilterPillStyle(category === 'all')} onClick={() => setCategory('all')}>
+              All <span style={nxConnFilterCountStyle(category === 'all')}>{catalogEntries.length}</span>
             </button>
             {CATEGORIES.map((c) => (
               <button
@@ -495,25 +562,25 @@ export default function ConnectionsClient({
                 type="button"
                 role="tab"
                 aria-selected={category === c}
-                style={connectionsFilterPillStyle(category === c)}
+                style={nxConnFilterPillStyle(category === c)}
                 onClick={() => setCategory(c)}
               >
-                {CATEGORY_LABEL[c]} {categoryCounts.get(c) ?? 0}
+                {CATEGORY_LABEL[c]} <span style={nxConnFilterCountStyle(category === c)}>{categoryCounts.get(c) ?? 0}</span>
               </button>
             ))}
           </div>
-          <div style={{ ...connectionsFilterListStyle, marginLeft: 'auto' }} role="tablist" aria-label="Works as">
-            <button type="button" role="tab" aria-selected={worksAs === 'any'} style={connectionsFilterPillStyle(worksAs === 'any')} onClick={() => setWorksAs('any')}>
+          <div style={nxConnWorksAsListStyle} role="tablist" aria-label="Works as">
+            <button type="button" role="tab" aria-selected={worksAs === 'any'} style={nxConnWorksAsPillStyle(worksAs === 'any')} onClick={() => setWorksAs('any')}>
               Any
             </button>
-            <button type="button" role="tab" aria-selected={worksAs === 'source'} style={connectionsFilterPillStyle(worksAs === 'source')} onClick={() => setWorksAs('source')}>
+            <button type="button" role="tab" aria-selected={worksAs === 'source'} style={nxConnWorksAsPillStyle(worksAs === 'source')} onClick={() => setWorksAs('source')}>
               Source
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={worksAs === 'destination'}
-              style={connectionsFilterPillStyle(worksAs === 'destination')}
+              style={nxConnWorksAsPillStyle(worksAs === 'destination')}
               onClick={() => setWorksAs('destination')}
             >
               Destination
@@ -522,7 +589,7 @@ export default function ConnectionsClient({
         </div>
 
         {filteredCatalog.length === 0 ? (
-          <div style={connectionsEmptyResultsStyle}>No connectors match this filter.</div>
+          <div style={nxConnEmptyResultsStyle}>No connectors match this filter.</div>
         ) : (
           <div style={connectionsAvailableGridStyle} className="nia-connector-grid" data-testid="connector-grid">
             {filteredCatalog.map((meta) => (
@@ -538,13 +605,17 @@ export default function ConnectionsClient({
           </div>
         )}
 
-        {/* Column count follows the spec's fixed breakpoint table against
-            this section's own content width (container query, not viewport):
-            3 columns >= 860px, 2 from 540-859px, 1 below 540px — see
+        {/* Column count follows the source's 4-up layout at full width
+            (1440px), against this section's own content width (container
+            query, not viewport), stepping down at narrower widths: 4 >=
+            1200px, 3 from 860-1199px, 2 from 540-859px, 1 below 540px — see
             connectionsAvailableGridStyle. */}
         <style>{`
           .nia-connector-catalog { container-type: inline-size; }
-          .nia-connector-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          .nia-connector-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+          @container (max-width: 1199px) {
+            .nia-connector-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          }
           @container (max-width: 859px) {
             .nia-connector-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           }
@@ -553,16 +624,21 @@ export default function ConnectionsClient({
           }
         `}</style>
 
-        <span style={connectionsCatalogHintStyle}>
+        <span style={nxConnCatalogHintStyle}>
           Missing something?{' '}
-          <button type="button" disabled title="Coming soon" style={{ ...connectionsBadgeLinkStyle, cursor: 'not-allowed' }}>
+          <button
+            type="button"
+            disabled
+            title="Coming soon"
+            style={{ fontFamily: 'inherit', fontSize: 'inherit', color: 'var(--nx-ink)', textDecoration: 'underline', background: 'none', border: 'none', padding: 0, cursor: 'not-allowed' }}
+          >
             Request a connector
           </button>
         </span>
       </div>
 
       {dialog?.type === 'uninstall' && (
-        <DeleteConfirmDialog
+        <NxConnectionsDeleteDialog
           title="Uninstall connector?"
           message={`This removes ${dialog.name} from your workspace. You'll need to delete its connections first if it has any.`}
           hiddenFields={{ id: dialog.installId }}
