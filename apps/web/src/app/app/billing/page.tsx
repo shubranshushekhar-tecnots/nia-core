@@ -87,6 +87,7 @@ export default async function BillingPage() {
           orgName={user.org?.name ?? null}
           email={user.email}
           userId={user.userId}
+          fullName={user.fullName}
           orgs={user.orgs}
           activeOrgId={user.org?.id ?? null}
         />

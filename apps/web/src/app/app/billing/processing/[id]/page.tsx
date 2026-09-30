@@ -26,6 +26,7 @@ export default async function BillingProcessingPage({
           orgName={user.org?.name ?? null}
           email={user.email}
           userId={user.userId}
+          fullName={user.fullName}
           orgs={user.orgs}
           activeOrgId={user.org?.id ?? null}
           crumbs={[{ label: 'Billing', href: '/app/billing' }, { label: 'Processing' }]}

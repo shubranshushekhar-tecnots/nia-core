@@ -26,17 +26,29 @@ const sectionHeadingStyle = {
 // square-ended bar above that; a full repeating stripe when unlimited.
 // Warn state (--nx-warn fill + "N LEFT BEFORE THE LIMIT") triggers at the
 // same PLAN_ALERT_THRESHOLD the page banners use.
+const meterLabelStyle = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 700,
+  fontSize: 15,
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+} as const;
+
+// Item 15: bar height 10px (was 6), fill is --nx-ink (not blue — blue is
+// reserved for the CTA and the profile square), --nx-warn in the warn
+// state, empty cells always --nx-raised.
 function UsageMeter({ label, used, limit }: { label: string; used: number; limit: number | null }) {
   const pct = limit === null ? 0 : Math.min(100, (100 * used) / limit);
   const warn = limit !== null && limit > 0 && used / limit >= PLAN_ALERT_THRESHOLD;
   const left = limit === null ? null : Math.max(0, limit - used);
-  const fillColor = warn ? 'var(--nx-warn)' : 'var(--nx-blue-panel)';
+  const fillColor = warn ? 'var(--nx-warn)' : 'var(--nx-ink)';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-        <span style={{ color: 'var(--nx-ink-2)' }}>{label}</span>
-        <span style={{ fontFamily: 'var(--nx-font-mono)', fontVariantNumeric: 'tabular-nums' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+        <span style={meterLabelStyle}>{label}</span>
+        <span style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>
           <span style={{ fontWeight: 700, color: 'var(--nx-ink)' }}>{used.toLocaleString()}</span>{' '}
           <span style={{ color: 'var(--nx-ink-3)' }}>/ {limit === null ? 'Unlimited' : limit.toLocaleString()}</span>
         </span>
@@ -48,14 +60,14 @@ function UsageMeter({ label, used, limit }: { label: string; used: number; limit
           aria-valuenow={used}
           aria-label={label}
           style={{
-            height: 6,
-            background: 'repeating-linear-gradient(45deg, var(--nx-blue-panel) 0, var(--nx-blue-panel) 4px, var(--nx-raised) 4px, var(--nx-raised) 8px)',
+            height: 10,
+            background: 'repeating-linear-gradient(45deg, var(--nx-line-inner) 0, var(--nx-line-inner) 4px, var(--nx-raised) 4px, var(--nx-raised) 8px)',
           }}
         />
       ) : limit <= 50 ? (
         <div role="meter" aria-valuenow={used} aria-valuemin={0} aria-valuemax={limit} aria-label={label} style={{ display: 'flex', gap: 2 }}>
           {Array.from({ length: limit }).map((_, i) => (
-            <span key={i} style={{ flex: 1, height: 6, background: i < used ? fillColor : 'var(--nx-raised)' }} />
+            <span key={i} style={{ flex: 1, height: 10, background: i < used ? fillColor : 'var(--nx-raised)' }} />
           ))}
         </div>
       ) : (
@@ -65,9 +77,9 @@ function UsageMeter({ label, used, limit }: { label: string; used: number; limit
           aria-valuemin={0}
           aria-valuemax={limit}
           aria-label={label}
-          style={{ height: 6, background: 'var(--nx-raised)' }}
+          style={{ height: 10, background: 'var(--nx-raised)' }}
         >
-          <div style={{ width: `${pct}%`, height: 6, background: fillColor }} />
+          <div style={{ width: `${pct}%`, height: 10, background: fillColor }} />
         </div>
       )}
 
@@ -80,7 +92,7 @@ function UsageMeter({ label, used, limit }: { label: string; used: number; limit
   );
 }
 
-function initials(fullName: string | null): string {
+export function initials(fullName: string | null): string {
   if (!fullName) return '?';
   const parts = fullName.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
@@ -92,42 +104,46 @@ function initials(fullName: string | null): string {
 
 function ProfileCard({ fullName, workspaceLabel, plan }: { fullName: string | null; workspaceLabel: string; plan: PlanUsage }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: 12,
-        padding: '24px 16px 20px',
-        background: 'var(--nx-raised)',
-      }}
-    >
-      <div
-        aria-hidden
-        style={{
-          width: 48,
-          height: 48,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'var(--nx-ink)',
-          color: 'var(--nx-bg)',
-          fontFamily: 'var(--nx-font-ui)',
-          fontSize: 15,
-          fontWeight: 700,
-        }}
-      >
-        {initials(fullName)}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '24px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div
+          aria-hidden
+          style={{
+            width: 72,
+            height: 72,
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'var(--nx-blue-panel)',
+            color: 'var(--nx-blue-panel-text)',
+            fontFamily: 'var(--nx-font-condensed)',
+            fontStretch: '62.5%',
+            fontWeight: 800,
+            fontSize: 40,
+          }}
+        >
+          {initials(fullName)}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+          <span
+            style={{
+              fontFamily: 'var(--font-inter-tight), var(--nx-font-ui)',
+              fontSize: 20,
+              fontWeight: 500,
+              color: 'var(--nx-ink)',
+            }}
+          >
+            {fullName ?? 'You'}
+          </span>
+          <span style={{ fontSize: 13, color: 'var(--nx-ink-2)' }}>{workspaceLabel}</span>
+        </div>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--nx-ink)' }}>{fullName ?? 'You'}</span>
-        <span style={{ fontSize: 12.5, color: 'var(--nx-ink-2)' }}>{workspaceLabel}</span>
-      </div>
-      <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <UsageMeter label="Workflows used" used={plan.workflowUsed} limit={plan.workflowLimit} />
         <UsageMeter label="Rows moved" used={plan.rowsUsed} limit={plan.rowsLimit} />
         <UsageMeter label="Copilot actions" used={plan.copilotUsed} limit={plan.copilotLimit} />
-        <span style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 11.5, color: 'var(--nx-ink-3)' }}>
+        <span style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 12, color: 'var(--nx-ink-3)' }}>
           {plan.periodDaysLeft} {plan.periodDaysLeft === 1 ? 'day' : 'days'} left this month
         </span>
       </div>
@@ -238,18 +254,22 @@ export default function RightPanel({
       style={{
         width: 340,
         flexShrink: 0,
-        background: 'var(--nx-surface)',
+        background: 'var(--nx-bg)',
         borderLeft: '1px solid var(--nx-line)',
-        padding: '0 20px 24px',
         boxSizing: 'border-box',
         display: 'flex',
         flexDirection: 'column',
-        gap: 24,
       }}
     >
-      <ProfileCard fullName={fullName} workspaceLabel={workspaceLabel} plan={plan} />
-      <NeedsAttention items={needsAttention} />
-      <Activity items={activity} />
+      <div style={{ padding: '0 24px', borderBottom: '1px solid var(--nx-line)' }}>
+        <ProfileCard fullName={fullName} workspaceLabel={workspaceLabel} plan={plan} />
+      </div>
+      <div style={{ padding: 24, borderBottom: '1px solid var(--nx-line)' }}>
+        <NeedsAttention items={needsAttention} />
+      </div>
+      <div style={{ padding: 24 }}>
+        <Activity items={activity} />
+      </div>
     </aside>
   );
 }

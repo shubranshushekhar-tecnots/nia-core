@@ -56,23 +56,23 @@ export default function HomeContent({
     <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
       <div style={homeScrollStyle}>
         <div className="nx-fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <span className="nx-clip-line" style={nxGreetingTagStyle}>
-            Your workspace
-          </span>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+            <span className="nx-clip-line" style={nxGreetingTagStyle}>
+              Your workspace
+            </span>
+            <span style={greetingLineStyle}>
+              {stats.projectCount} PROJECTS {'\u00b7'} {stats.workflowCount} WORKFLOWS
+            </span>
+          </div>
           <span className="nx-clip-line" style={{ ...greetingStyle, animationDelay: '80ms' }}>
             {greeting}
-            {firstName ? (
-              <>
-                {', '}
-                <span style={{ color: 'var(--nx-blue-panel)' }}>{firstName}</span>
-              </>
-            ) : (
-              ''
-            )}
+            {firstName ? ',' : ''}
           </span>
-          <span style={greetingLineStyle}>
-            {stats.projectCount} PROJECTS {'\u00b7'} {stats.workflowCount} WORKFLOWS
-          </span>
+          {firstName && (
+            <span className="nx-clip-line" style={{ ...greetingStyle, animationDelay: '120ms' }}>
+              {firstName}
+            </span>
+          )}
         </div>
 
         {plan.workflowLimit !== null && plan.workflowUsed / plan.workflowLimit >= PLAN_ALERT_THRESHOLD && (
@@ -127,15 +127,16 @@ export default function HomeContent({
               display: 'flex',
               flexDirection: 'column',
               gap: 8,
-              padding: '48px 32px',
-              borderRadius: 'var(--nx-radius)',
-              border: '1px solid var(--nx-line)',
-              background: 'var(--nx-surface)',
+              width: '100%',
+              boxSizing: 'border-box',
+              padding: 40,
+              borderBottom: '1px solid var(--nx-line)',
+              backgroundSize: '6px 6px',
             }}
           >
             <span
               style={{
-                fontFamily: 'var(--nx-font-ui)',
+                fontFamily: 'var(--font-inter-tight), var(--nx-font-ui)',
                 fontSize: 44,
                 fontWeight: 700,
                 letterSpacing: '-0.035em',

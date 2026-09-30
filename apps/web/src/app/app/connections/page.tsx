@@ -18,7 +18,11 @@ export default async function ConnectionsPage() {
   ]);
 
   return (
-    <AppShell topBar={<TopBar orgName={user.org?.name ?? null} email={user.email} userId={user.userId} />}>
+    <AppShell
+      topBar={
+        <TopBar orgName={user.org?.name ?? null} email={user.email} userId={user.userId} fullName={user.fullName} />
+      }
+    >
       <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
       <div style={mainColStyle}>
         <div style={homeScrollStyle}>

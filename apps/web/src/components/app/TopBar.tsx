@@ -5,23 +5,37 @@ import Link from 'next/link';
 import { logout, switchOrg } from '@/lib/auth/actions';
 import { clearStoredBearerToken } from '@/lib/auth/browserSession';
 import Avatar from '@/components/Avatar';
+import Logo from '@/components/Logo';
+import { useAppShellStore } from './store';
+import { initials } from './home/RightPanel';
 import {
-  breadcrumbSepStyle,
-  dropdownItemStyle,
-  dropdownStyle,
-  orgSwitcherBtnStyle,
-  pageCrumbCurrentStyle,
-  pageCrumbLinkStyle,
+  navWordmarkStyle,
+  nxBreadcrumbSepStyle,
+  nxDropdownItemStyle,
+  nxDropdownStyle,
+  nxOrgSwitcherBtnStyle,
+  nxPageCrumbCurrentStyle,
+  nxPageCrumbLinkStyle,
+  nxTopBarCellStyle,
+  nxTopBarLogoCellStyle,
+  nxTopBarSearchCellStyle,
+  nxTopBarStyle,
   profileEmailRowStyle,
   profileEmailTextStyle,
-  topBarAvatarBtnStyle,
-  topBarIconBtnStyle,
+  topBarInitialsStyle,
   topBarKbdStyle,
-  topBarSearchBtnStyle,
+  topBarSearchBtnFillStyle,
+  topBarSearchLabelStyle,
   topBarSpacerStyle,
-  topBarStyle,
+  topBarSquareCellStyle,
 } from './styles';
+import { NxBellIcon, NxSearchIcon } from '@/components/canvas/navIcons';
 import CommandPalette from './CommandPalette';
+
+// Wordmark hides below this cell width so "NIA CORE" never clips against
+// the logo cell's right border while the sidebar (which this cell's width
+// mirrors) is being dragged narrower.
+const LOGO_CELL_WORDMARK_MIN_WIDTH = 120;
 
 // Optional page-path crumbs (e.g. "Projects / <project name>") rendered
 // right after the org switcher, in the same header row — pages must not
@@ -32,6 +46,7 @@ export default function TopBar({
   orgName,
   email,
   userId,
+  fullName,
   crumbs,
   orgs,
   activeOrgId,
@@ -40,6 +55,8 @@ export default function TopBar({
   email: string;
   /** Seed for the generated avatar — the current user's id. */
   userId: string;
+  /** Used for the avatar cell's initials — same logic as the right panel. */
+  fullName: string | null;
   crumbs?: TopBarCrumb[];
   /**
    * Org switcher (Subscription Phase 2): every org this user belongs to.
@@ -54,16 +71,30 @@ export default function TopBar({
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Read-only: the sidebar (Sidebar.tsx) is this cell's only writer, via
+  // its drag handle / collapse toggle. TopBar and Sidebar are siblings
+  // (see e.g. app/app/page.tsx), not parent/child, so the store is the
+  // only way this cell's width can track the live rail width.
+  const railW = useAppShellStore((s) => s.railW);
+  const showWordmark = railW >= LOGO_CELL_WORDMARK_MIN_WIDTH;
 
   return (
-    <header style={topBarStyle}>
-      <div style={{ position: 'relative' }}>
-        <button type="button" style={orgSwitcherBtnStyle} onClick={() => setOrgMenuOpen((v) => !v)}>
+    <header style={nxTopBarStyle}>
+      {/* Logo cell — same unlinked/unlabeled <Logo> the sidebar used to
+          render at this spot (no href or aria-label existed on it before
+          this move either, so none is added here). */}
+      <div className="nx-wipe" style={nxTopBarLogoCellStyle(railW)}>
+        <Logo size={40} showWordmark={false} />
+        {showWordmark && <span style={navWordmarkStyle}>Nia Core</span>}
+      </div>
+
+      <div className="nx-wipe" style={{ ...nxTopBarCellStyle(), position: 'relative' }}>
+        <button type="button" style={nxOrgSwitcherBtnStyle} onClick={() => setOrgMenuOpen((v) => !v)}>
           <span>{orgName ?? 'Personal workspace'}</span>
-          <span aria-hidden style={{ fontSize: 10, color: 'var(--text-4)', lineHeight: 1 }}>{'\u25BE'}</span>
+          <span aria-hidden style={{ fontSize: 10, color: 'var(--nx-ink-2)', lineHeight: 1 }}>{'\u25BE'}</span>
         </button>
         {orgMenuOpen && (
-          <div style={dropdownStyle} onMouseLeave={() => setOrgMenuOpen(false)}>
+          <div style={nxDropdownStyle} onMouseLeave={() => setOrgMenuOpen(false)}>
             {orgs && orgs.length > 1 ? (
               <>
                 {orgs.map((org) => (
@@ -71,9 +102,9 @@ export default function TopBar({
                     <button
                       type="submit"
                       style={{
-                        ...dropdownItemStyle,
+                        ...nxDropdownItemStyle,
                         fontWeight: org.id === activeOrgId ? 600 : 400,
-                        color: org.id === activeOrgId ? 'var(--text-1)' : undefined,
+                        color: org.id === activeOrgId ? 'var(--nx-ink)' : undefined,
                       }}
                       disabled={org.id === activeOrgId}
                     >
@@ -83,17 +114,17 @@ export default function TopBar({
                 ))}
               </>
             ) : (
-              <div style={{ ...dropdownItemStyle, fontWeight: 600, cursor: 'default' }}>
+              <div style={{ ...nxDropdownItemStyle, fontWeight: 600, cursor: 'default' }}>
                 {orgName ?? 'Personal workspace'}
               </div>
             )}
-            <div style={{ height: 1, background: 'var(--line)', margin: '4px 0' }} />
+            <div style={{ height: 1, background: 'var(--nx-line)', margin: '4px 0' }} />
             {orgName === null ? (
-              <a href="/onboarding" style={{ ...dropdownItemStyle, textDecoration: 'none', display: 'block' }}>
+              <a href="/onboarding" style={{ ...nxDropdownItemStyle, textDecoration: 'none', display: 'block' }}>
                 Create organization
               </a>
             ) : (
-              <button type="button" style={{ ...dropdownItemStyle, color: 'var(--text-3)' }} disabled>
+              <button type="button" style={{ ...nxDropdownItemStyle, color: 'var(--nx-ink-3)' }} disabled>
                 Create organization {'\u2014'} soon
               </button>
             )}
@@ -101,52 +132,79 @@ export default function TopBar({
         )}
       </div>
 
-      {crumbs?.map((crumb, i) => (
-        <span key={crumb.label} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={breadcrumbSepStyle}>/</span>
-          {crumb.href && i < crumbs.length - 1 ? (
-            <Link href={crumb.href} style={pageCrumbLinkStyle}>
-              {crumb.label}
-            </Link>
-          ) : (
-            <span style={pageCrumbCurrentStyle}>{crumb.label}</span>
-          )}
-        </span>
-      ))}
+      {crumbs && crumbs.length > 0 && (
+        <div className="nx-wipe" style={nxTopBarCellStyle()}>
+          {crumbs.map((crumb, i) => (
+            <span key={crumb.label} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span style={nxBreadcrumbSepStyle}>/</span>
+              {crumb.href && i < crumbs.length - 1 ? (
+                <Link href={crumb.href} style={nxPageCrumbLinkStyle}>
+                  {crumb.label}
+                </Link>
+              ) : (
+                <span style={nxPageCrumbCurrentStyle}>{crumb.label}</span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
 
       <span style={topBarSpacerStyle} />
 
-      <button type="button" style={topBarSearchBtnStyle} onClick={() => setPaletteOpen(true)}>
-        <span aria-hidden>{'\u26B2'}</span>
-        <span>Search or run</span>
-        <span style={topBarKbdStyle}>{'\u2318K'}</span>
-      </button>
+      <div className="nx-wipe" style={nxTopBarSearchCellStyle}>
+        <button type="button" style={topBarSearchBtnFillStyle} onClick={() => setPaletteOpen(true)}>
+          <NxSearchIcon size={15} />
+          <span style={topBarSearchLabelStyle}>Search or run</span>
+          <span style={topBarKbdStyle}>{'\u2318K'}</span>
+        </button>
+      </div>
 
-      <button
-        type="button"
-        style={{ ...topBarIconBtnStyle, cursor: 'default', color: 'var(--text-4)' }}
-        disabled
-        title="Notifications — soon"
-      >
-        <span aria-hidden>{'\u25D4'}</span>
-      </button>
-
-      <div style={{ position: 'relative' }}>
+      <div className="nx-wipe nx-row-disabled" style={topBarSquareCellStyle(true)}>
         <button
           type="button"
-          style={{ ...topBarAvatarBtnStyle, padding: 0, background: 'transparent', border: 'none' }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'transparent',
+            border: 'none',
+            padding: 0,
+            cursor: 'default',
+            color: 'var(--nx-ink-disabled)',
+          }}
+          disabled
+          title="Notifications — soon"
+        >
+          <NxBellIcon size={16} />
+        </button>
+      </div>
+
+      <div className="nx-wipe" style={{ ...topBarSquareCellStyle(false), position: 'relative' }}>
+        <button
+          type="button"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '100%',
+            height: '100%',
+            padding: 0,
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+          }}
           onClick={() => setProfileMenuOpen((v) => !v)}
           title={email}
         >
-          <Avatar seed={userId} size={26} title={email} />
+          <span style={topBarInitialsStyle}>{initials(fullName)}</span>
         </button>
         {profileMenuOpen && (
-          <div style={{ ...dropdownStyle, right: 0, left: 'auto' }} onMouseLeave={() => setProfileMenuOpen(false)}>
+          <div style={{ ...nxDropdownStyle, right: 0, left: 'auto' }} onMouseLeave={() => setProfileMenuOpen(false)}>
             <div style={profileEmailRowStyle}>
               <Avatar seed={userId} size={24} title={email} />
               <span style={profileEmailTextStyle}>{email}</span>
             </div>
-            <div style={{ height: 1, background: 'var(--line)', margin: '4px 0' }} />
+            <div style={{ height: 1, background: 'var(--nx-line)', margin: '4px 0' }} />
             <form action={logout}>
               {/* The server action clears the httpOnly session cookie;
                   this clears the localStorage bearer token (lib/auth/
@@ -155,7 +213,7 @@ export default function TopBar({
               <button
                 type="submit"
                 onClick={() => clearStoredBearerToken()}
-                style={{ ...dropdownItemStyle, color: 'var(--bad)' }}
+                style={{ ...nxDropdownItemStyle, color: 'var(--nx-danger-text)' }}
               >
                 Sign out
               </button>

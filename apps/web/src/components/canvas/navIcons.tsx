@@ -194,3 +194,121 @@ export const EditIcon: IconComponent = ({ size = 16 }) => (
     />
   </svg>
 );
+
+/**
+ * Precision Dark redesign (Step 2): Sidebar/TopBar nav icon set — 20px
+ * viewBox, stroke-only geometric glyphs (square caps, miter joins — NOT
+ * round like the icon set above), per the redesign's icon reference sheet
+ * (designs/Nia Core — Precision Dark redesign.pdf, "Sidebar" pages). Kept
+ * separate from the icons above rather than restyling them in place: the
+ * old `ConnectionsIcon`/`RunsIcon`/`ChevronRightIcon` are also used by
+ * CommandMenu.tsx/CopilotSidebar.tsx and must keep their current (round,
+ * 24px) appearance there.
+ */
+const nxStroke = {
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.5,
+  strokeLinecap: 'square',
+  strokeLinejoin: 'miter',
+} as const;
+
+export const NxDashboardIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M3 3h6v8H3zM11 3h6v5h-6zM11 10h6v7h-6zM3 13h6v4H3z" />
+  </svg>
+);
+
+export const NxHomeIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M3 9.5 10 3.5l7 6V17H3zM8 17v-4.5h4V17" />
+  </svg>
+);
+
+export const NxProjectsIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M2.5 4.5h5.5l1.5 2h8v10h-15z" />
+  </svg>
+);
+
+/** Defined for a later page (Q6 — not placed anywhere in Step 2). */
+export const NxWorkflowIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M2.5 3.5h4.5v4.5H2.5zM13 12h4.5v4.5H13zM7 5.75h3.25v8.5H13" />
+  </svg>
+);
+
+export const NxConnectionsIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M2.5 7h5v6h-5zM12.5 7h5v6h-5zM7.5 10h5" />
+  </svg>
+);
+
+export const NxRunsIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M4.5 3.5l9 6.5-9 6.5zM15.5 3.5v13" />
+  </svg>
+);
+
+export const NxMembersIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M5 3h4v4H5zM2.5 16.5v-3l2-2.5h5l2 2.5v3M12.5 3h2.5v4h-2.5M14 11l3.5 2.5v3" />
+  </svg>
+);
+
+export const NxAuditIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M4 2.5h8.5l3.5 3.5v11.5H4zM7 9h6M7 12h6M7 15h3.5" />
+  </svg>
+);
+
+export const NxBillingIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M2.5 4.5h15v11h-15zM2.5 8h15M5.5 12h3" />
+  </svg>
+);
+
+export const NxSettingsIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M3 6h7M15 6h2M3 14h2M9 14h8M10 4h4v4h-4zM5 12h4v4H5z" />
+  </svg>
+);
+
+/** Collapse/expand toggle — points left by default (collapse direction);
+ * Sidebar.tsx flips it with `transform: scaleX(-1)` for the expand state. */
+export const NxCollapseIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M2.5 3.5h15v13h-15zM7.5 3.5v13M13.5 8l-2 2 2 2" />
+  </svg>
+);
+
+export const NxPlusIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M10 4v12M4 10h12" />
+  </svg>
+);
+
+/** Small disclosure chevron for the sidebar's "Projects" tree row — a new
+ * icon rather than reusing ChevronRightIcon above, since that one is also
+ * used by CopilotSidebar.tsx and must keep its current round/24px look. */
+export const NxChevronRightIcon: IconComponent = ({ size = 12 }) => (
+  <svg width={size} height={size} viewBox="0 0 12 12" aria-hidden {...nxStroke}>
+    <path d="M4 2.5 8 6l-4 3.5" />
+  </svg>
+);
+
+/** Replaces the TopBar's unicode "◔" notifications glyph. 16px viewBox per
+ * spec (the rest of this set is 20px). */
+export const NxBellIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden {...nxStroke}>
+    <path d="M4 11V7a4 4 0 0 1 8 0v4l1 1.5H3zM6.5 14h3" />
+  </svg>
+);
+
+/** Replaces the TopBar's unicode "⚲" search glyph. 16px viewBox, same
+ * geometric nx-stroke treatment as NxBellIcon. */
+export const NxSearchIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden {...nxStroke}>
+    <path d="M2.5 7A4.5 4.5 0 1 1 11.5 7 4.5 4.5 0 0 1 2.5 7ZM10.5 10.5 14 14" />
+  </svg>
+);

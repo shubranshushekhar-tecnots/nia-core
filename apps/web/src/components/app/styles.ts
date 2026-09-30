@@ -106,9 +106,11 @@ export const navScrollStyle: CSSProperties = {
 
 export const navGroupLabelStyle: CSSProperties = {
   padding: '14px 8px 6px',
-  fontSize: 11,
-  fontWeight: 600,
-  letterSpacing: '.04em',
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 700,
+  fontSize: 14,
+  letterSpacing: '0.04em',
   textTransform: 'uppercase',
   color: 'var(--nx-ink-3)',
 };
@@ -366,20 +368,27 @@ export const nxGreetingTagStyle: CSSProperties = {
   color: 'var(--nx-ink-3)',
 };
 
+// Item 10: both headline lines (greeting + name) are Inter Tight
+// 80px/76px, 500, -0.05em, --nx-ink — rendered as two separate `display:
+// block` lines by HomeContent.tsx rather than one wrapping string.
 export const greetingStyle: CSSProperties = {
-  fontFamily: 'var(--nx-font-ui)',
-  fontSize: 44,
-  fontWeight: 700,
-  letterSpacing: '-.035em',
-  lineHeight: 1.05,
+  display: 'block',
+  fontFamily: 'var(--font-inter-tight), var(--nx-font-ui)',
+  fontSize: 80,
+  fontWeight: 500,
+  letterSpacing: '-0.05em',
+  lineHeight: '76px',
   color: 'var(--nx-ink)',
 };
 
+// Item 11: the "N PROJECTS · N WORKFLOWS" counts, now pushed to the right
+// end of the "Your workspace" eyebrow row instead of sitting under the
+// headline.
 export const greetingLineStyle: CSSProperties = {
   fontFamily: 'var(--nx-font-mono)',
-  fontSize: 12.5,
+  fontSize: 13,
   letterSpacing: '0.02em',
-  color: 'var(--nx-ink-2)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const continueCardStyle: CSSProperties = {
@@ -583,28 +592,10 @@ export const sidebarUserRoleStyle: CSSProperties = {
 // the avatar / sign-out button (26px circle, tooltip via title attr).
 export const topBarSpacerStyle: CSSProperties = { flex: 1 };
 
-export const topBarSearchBtnStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  height: 30,
-  padding: '0 8px 0 10px',
-  borderRadius: 'var(--nx-radius)',
-  background: 'var(--nx-raised)',
-  border: '1px solid var(--nx-line)',
-  color: 'var(--nx-ink-3)',
-  fontSize: 12.5,
-  fontFamily: 'inherit',
-  cursor: 'pointer',
-};
-
 export const topBarKbdStyle: CSSProperties = {
+  marginLeft: 'auto',
   fontFamily: 'var(--nx-font-mono)',
-  fontSize: 11,
-  padding: '2px 5px',
-  borderRadius: 'var(--nx-radius)',
-  background: 'var(--nx-surface)',
-  border: '1px solid var(--nx-line)',
+  fontSize: 12,
   color: 'var(--nx-ink-3)',
   lineHeight: 1,
 };
@@ -622,23 +613,6 @@ export const topBarIconBtnStyle: CSSProperties = {
   border: 'none',
   color: 'var(--nx-ink-3)',
   fontSize: 15,
-  cursor: 'pointer',
-};
-
-export const topBarAvatarBtnStyle: CSSProperties = {
-  width: 26,
-  height: 26,
-  flex: 'none',
-  borderRadius: '50%',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: 'var(--nx-raised)',
-  border: '1px solid var(--nx-line)',
-  color: 'var(--nx-ink-2)',
-  fontSize: 11,
-  fontWeight: 600,
-  fontFamily: 'inherit',
   cursor: 'pointer',
 };
 
@@ -737,7 +711,7 @@ export function navRailStyle(width: number, dragging: boolean, wide: boolean): C
     display: 'flex',
     flexDirection: 'column',
     alignItems: wide ? 'stretch' : 'center',
-    background: 'var(--nx-surface)',
+    background: 'var(--nx-bg)',
     borderRight: '1px solid var(--nx-line)',
     boxSizing: 'border-box',
     position: 'relative',
@@ -800,8 +774,11 @@ export function navRailScrollStyle(wide: boolean): CSSProperties {
     alignItems: wide ? 'stretch' : 'center',
     overflowY: 'auto',
     width: '100%',
-    padding: wide ? '12px 8px' : '12px 0',
-    gap: 2,
+    // Full-bleed rows (item 7): no horizontal inset while wide — rows go
+    // edge to edge and rely on their own bottom divider (navRailBtnStyle's
+    // borderBottom) for separation instead of a gap between rows.
+    padding: wide ? '12px 0' : '12px 0',
+    gap: wide ? 0 : 2,
     boxSizing: 'border-box',
   };
 }
@@ -828,7 +805,9 @@ export function navRailBtnStyle(wide: boolean): CSSProperties {
   return {
     flex: 'none',
     width: wide ? '100%' : 36,
-    height: 36,
+    // Full-bleed rows (item 7): 44px tall, edge to edge, no gap between
+    // rows — separation comes from the bottom divider below instead.
+    height: wide ? 44 : 36,
     display: 'flex',
     alignItems: 'center',
     justifyContent: wide ? 'flex-start' : 'center',
@@ -836,8 +815,9 @@ export function navRailBtnStyle(wide: boolean): CSSProperties {
     borderRadius: 'var(--nx-radius)',
     fontSize: 13.5,
     border: 'none',
+    borderBottom: wide ? '1px solid var(--nx-line-inner)' : 'none',
     cursor: 'pointer',
-    marginBottom: 2,
+    marginBottom: wide ? 0 : 2,
     padding: wide ? '0 10px' : 0,
     textDecoration: 'none',
     boxSizing: 'border-box',
@@ -932,7 +912,7 @@ export const nxTopBarStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'stretch',
   borderBottom: '1px solid var(--nx-line)',
-  background: 'var(--nx-surface)',
+  background: 'var(--nx-bg)',
 };
 
 // Logo cell — first cell in the TopBar row. Width tracks the sidebar's
@@ -965,14 +945,70 @@ export function nxTopBarCellStyle(bordered: boolean = true): CSSProperties {
     display: 'flex',
     alignItems: 'center',
     gap: 10,
-    padding: '0 16px',
+    padding: '0 20px',
     borderRight: bordered ? '1px solid var(--nx-line)' : 'none',
   };
 }
 
 export const nxOrgSwitcherBtnStyle: CSSProperties = {
   ...orgSwitcherBtnStyle,
+  fontSize: 15,
   color: 'var(--nx-ink-2)',
+};
+
+// Search cell (item 2 of the fix pass): a plain 280px cell with a single
+// left divider — no inner boxed input, no bordered kbd chip. Pair with
+// className="nx-wipe" on the outer cell for the hover background.
+export const nxTopBarSearchCellStyle: CSSProperties = {
+  flex: 'none',
+  width: 280,
+  height: '100%',
+  boxSizing: 'border-box',
+  padding: '0 20px',
+  borderLeft: '1px solid var(--nx-line)',
+};
+
+// The button fills the whole search cell so the entire 280px width (not
+// just the text) opens the palette.
+export const topBarSearchBtnFillStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  width: '100%',
+  height: '100%',
+  padding: 0,
+  background: 'transparent',
+  border: 'none',
+  color: 'var(--nx-ink-3)',
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+};
+
+export const topBarSearchLabelStyle: CSSProperties = {
+  fontSize: 15,
+  color: 'var(--nx-ink-3)',
+};
+
+// 64px square cell shared by the bell and avatar — left border only (the
+// row's own right border, if any, comes from whichever cell sits to its
+// right).
+export function topBarSquareCellStyle(withLeftBorder: boolean = true): CSSProperties {
+  return {
+    flex: 'none',
+    width: 64,
+    height: '100%',
+    boxSizing: 'border-box',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderLeft: withLeftBorder ? '1px solid var(--nx-line)' : 'none',
+  };
+}
+
+export const topBarInitialsStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 13,
+  color: 'var(--nx-ink)',
 };
 
 export const nxDropdownStyle: CSSProperties = {
