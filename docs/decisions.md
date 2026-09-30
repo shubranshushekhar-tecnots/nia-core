@@ -6248,3 +6248,52 @@ that snapshots `workflow_limit`/`workflow_limit_set` in the root fixture
 immediately before the lifting override runs; probe 55 now asserts
 `workflow_limit_set = false and workflow_limit is null` against that
 baseline alongside its existing live `plan_id`/`plan_tier` read.
+
+## Subscription Phase 2, Slice 5: write grants restricted to admin/owner — reverses "Phase 6 Block 1: write-grant RBAC — kept all-role" (2026-09-30)
+
+Reverses the ruling recorded above under "Phase 6 Block 1: write-grant RBAC
+— kept all-role, matching DECISION-C". That ruling explicitly left this
+door open ("Role restriction on write-grant minting was considered and
+deliberately deferred, not rejected outright — revisit before an
+enterprise/org GA"); the subscription model's Phase 2 role design
+(`docs/plans/subscription-model.md`) made that call now: "Write grants:
+admin/owner only" is one of its final decisions, not an open question.
+
+`grants.create`/`grants.confirm`/`grants.revoke` move from
+`["individual", "member", "admin", "owner"]` to `["individual", "admin",
+"owner"]` in `packages/schemas/src/can.ts` (new DECISION-F there).
+`individual` stays included deliberately — a personal (owner_id-scoped)
+workspace has no admin/owner distinction, so its sole member keeps full
+access to their own connections' grants; only the org-scoped case is
+restricted. Enforced in three layers, per CONVENTIONS.md's "RLS/DB is the
+real trust boundary, can.ts is convenience only":
+1. `can.ts`'s matrix — fast 403 via `requireCapability` on
+   `apps/api/src/routes/grants.ts` (already wired to `grants.create`/
+   `confirm`/`revoke`, no route change needed — only the matrix changed).
+2. `0059_write_grants_admin_owner_only.sql` — the three RPCs'
+   org-scoped authorization branch swaps `private.is_write_member(v_org_id)`
+   for `private.is_admin(v_org_id)` (pre-existing helper, already checks
+   `role in ('admin', 'owner')`, 0004_owner_rename.sql). The personal
+   (`owner_id = auth.uid()`) branch is untouched. `supabase/tests/
+   rls_probes.sql` probe 102 covers this (member denied, admin succeeds).
+3. Canvas UI (`apps/web/src/components/canvas/NodeDrawer.tsx`'s
+   `GrantAccessPanel`) shows a read-only "Ask an admin or owner to grant
+   write access" message instead of the Grant button for non-admin/owner
+   org members; the help panel and Ask Copilot affordances stay available
+   either way.
+
+Existing grants are unaffected — this only gates future create/confirm/
+revoke calls, nothing is revoked on deploy.
+
+Bug found and closed while writing 0059: `confirm_write_grant` is
+overloaded (2-arg from `0016_write_grants.sql`, 3-arg from
+`0028_write_grant_role_name.sql`). `0057_viewer_role_restrictions.sql`
+only `create or replace`d the 2-arg overload when it introduced
+`private.is_write_member` — it never touched the 3-arg overload, which is
+the one `apps/api/src/services/grants.ts:178` actually calls (always with
+all 3 params). That overload was still running 0028's original
+`private.is_member(v_org_id)` check (any org member, including viewer)
+right up until this migration — 0057's viewer restriction on grant
+confirmation never actually took effect in production. `0059` closes both
+overloads directly to `private.is_admin`, so no path is left on anything
+looser.

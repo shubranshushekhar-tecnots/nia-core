@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { CanvasNode } from '@/lib/canvas/mapping';
-import type { CheckResult, EntityRef } from '@nia/schemas';
+import type { ActorRole, CheckResult, EntityRef } from '@nia/schemas';
 import NodeDrawer from './NodeDrawer';
 import { configPanelFadeStyle, configPanelMultiSelectStyle, configPanelShellStyle } from './styles';
 
@@ -22,6 +22,7 @@ import { configPanelFadeStyle, configPanelMultiSelectStyle, configPanelShellStyl
 export default function NodeConfigPanel({
   node,
   selectedCount,
+  role,
   workflowId,
   upstreamSource,
   checkResults,
@@ -31,6 +32,7 @@ export default function NodeConfigPanel({
 }: {
   node: CanvasNode | undefined;
   selectedCount: number;
+  role: ActorRole;
   workflowId: string;
   upstreamSource?: { connectionId?: string; manifestId?: string; entity?: EntityRef };
   checkResults?: CheckResult[] | null;
@@ -54,6 +56,7 @@ export default function NodeConfigPanel({
       <FadeSwap nodeId={node.id}>
         <NodeDrawer
           node={node}
+          role={role}
           workflowId={workflowId}
           upstreamSource={upstreamSource}
           checkResults={checkResults}

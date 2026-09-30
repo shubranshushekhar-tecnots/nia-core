@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildDropRoleStatementText, buildGrantStatementText, friendlyAppError, friendlyConnectionError, parseNodeConfig, transformOutputFields, type CheckResult, type EntityRef, type HelpSqlValues, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildDropRoleStatementText, buildGrantStatementText, can, friendlyAppError, friendlyConnectionError, parseNodeConfig, transformOutputFields, type ActorRole, type CheckResult, type EntityRef, type HelpSqlValues, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
 import { resolveTableFieldState } from '@/lib/canvas/tableFieldState';
 import { filterEntities } from '@/lib/canvas/entityFiltering';
@@ -225,13 +225,16 @@ function GrantAccessPanel({
   connectorId,
   namespace,
   pendingGrant,
+  role,
 }: {
   connectionId: string;
   connectorId?: string;
   namespace: string;
   pendingGrant?: WriteGrant;
+  role: ActorRole;
 }) {
   const queryClient = useQueryClient();
+  const canManage = can(role, 'grants.create');
   const [credential] = useState(() => ({ user: randomWriteRoleUser(), password: randomWriteRolePassword() }));
   const [grant, setGrant] = useState<WriteGrant | undefined>(pendingGrant);
   const [busy, setBusy] = useState(false);
@@ -311,6 +314,40 @@ function GrantAccessPanel({
     await navigator.clipboard.writeText(statementText);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
+  }
+
+  // Subscription Phase 2, Slice 5 (DECISION-F, docs/decisions.md):
+  // grants.create/confirm are admin/owner only. A member/viewer sees the
+  // same header (help panel + Ask Copilot stay available) but the
+  // action area — button, statement text, everything progress-related —
+  // is replaced with a read-only notice, regardless of whether a grant is
+  // already pending confirmation (confirm is gated the same way).
+  if (!canManage) {
+    return (
+      <div style={grantPanelStyle}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>Grant write access to &quot;{namespace}&quot;</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              type="button"
+              style={grantButtonStyle}
+              onClick={() =>
+                setPendingAgentPrompt(`[Connection: ${connectionId}, namespace: ${namespace}] Explain the write grant for this step.`)
+              }
+            >
+              Ask Copilot about this step
+            </button>
+            <button type="button" style={grantButtonStyle} onClick={() => setShowHelp(true)}>
+              Help with this step
+            </button>
+          </div>
+        </div>
+        {showHelp && (
+          <HelpPanel step="grant-write-access" connectorId={connectorId ?? ''} values={helpValues} onClose={() => setShowHelp(false)} />
+        )}
+        <div style={{ fontSize: 11.5, color: 'var(--ink4)' }}>Ask an admin or owner to grant write access.</div>
+      </div>
+    );
   }
 
   return (
@@ -552,6 +589,7 @@ function SourceDestForm({
   nodeType,
   connectionId,
   manifestId,
+  role,
   onChange,
 }: {
   slot: 'ribbon' | 'detail';
@@ -560,6 +598,7 @@ function SourceDestForm({
   nodeType: 'source' | 'destination';
   connectionId?: string;
   manifestId?: string;
+  role: ActorRole;
   onChange: (next: SourceDestConfig) => void;
 }) {
   const { entities, isLoading: entitiesLoading, isError: entitiesError, error: entitiesErrorMessage } = useConnectionEntities(connectionId);
@@ -605,7 +644,7 @@ function SourceDestForm({
   if (slot === 'detail') {
     if (nodeType !== 'destination' || !connectionId || namespace === undefined) return null;
     if (!grantCovers) {
-      return <GrantAccessPanel connectionId={connectionId} connectorId={manifestId} namespace={namespace} pendingGrant={pendingGrant} />;
+      return <GrantAccessPanel connectionId={connectionId} connectorId={manifestId} namespace={namespace} pendingGrant={pendingGrant} role={role} />;
     }
     if (activeGrant) {
       return <RevokeAccessPanel connectionId={connectionId} connectorId={manifestId} grant={activeGrant} namespace={namespace} />;
@@ -797,6 +836,7 @@ function NewTargetInputs({
 
 export default function NodeDrawer({
   node,
+  role,
   workflowId,
   upstreamSource,
   checkResults,
@@ -805,6 +845,7 @@ export default function NodeDrawer({
   onClose,
 }: {
   node: CanvasNode;
+  role: ActorRole;
   workflowId: string;
   upstreamSource?: { connectionId?: string; manifestId?: string; entity?: EntityRef; transformConfigs?: Record<string, unknown>[] };
   /** Latest persisted check-run results, forwarded to MappingEditor to gate Preview. See MappingEditor.tsx's prop comment. */
@@ -948,6 +989,7 @@ export default function NodeDrawer({
               nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
               connectionId={data.connectionId}
               manifestId={data.manifestId}
+              role={role}
               onChange={(next) => onConfigChange(next)}
             />
             <div style={{ marginTop: 12 }}>
@@ -958,6 +1000,7 @@ export default function NodeDrawer({
                 nodeType={data.graphNodeType === 'destination' ? 'destination' : 'source'}
                 connectionId={data.connectionId}
                 manifestId={data.manifestId}
+                role={role}
                 onChange={(next) => onConfigChange(next)}
               />
             </div>

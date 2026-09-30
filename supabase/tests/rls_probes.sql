@@ -710,19 +710,20 @@ exception when others then
 end $$;
 
 -- Probe 16 — write_grants inherit scope from the parent connection (no
--- org_id/owner_id of their own): an org member can grant/see one on the
+-- org_id/owner_id of their own): an org admin can grant/see one on the
 -- org's connection (via create_write_grant() — Phase 6 Block 1 locked
--- direct client INSERT down to RPC-only, see probes 35-40 below); an
--- outsider cannot see it.
+-- direct client INSERT down to RPC-only, see probes 35-40 below; creation
+-- itself is admin/owner-only since 0059_write_grants_admin_owner_only.sql,
+-- DECISION-F in docs/decisions.md); an outsider cannot see it.
 do $$
 declare
-  v_member   uuid := (select id from test_ids where key = 'member');
+  v_admin    uuid := (select id from test_ids where key = 'admin');
   v_outsider uuid := (select id from test_ids where key = 'outsider');
   v_conn     uuid := (select id from test_ids where key = 'connection_org');
   v_grant    uuid;
   n_outsider_sees int;
 begin
-  perform pg_temp.act_as(v_member);
+  perform pg_temp.act_as(v_admin);
   select id into v_grant from public.create_write_grant(v_conn, '{"schemas":["sales"]}'::jsonb);
   reset role;
 
@@ -1293,8 +1294,15 @@ end $$;
 
 -- =========================================================================
 -- Probes 35-40 — 0016_write_grants.sql (Phase 6 Block 1: write_grants
--- hardened to RPC-only writes; create/confirm/revoke stay all-role per
--- the DECISION-C ruling in docs/decisions.md)
+-- hardened to RPC-only writes). Probes 36/38/39 originally ran their
+-- lifecycle/idempotency/active-lookup checks as a plain member, matching
+-- the then-current DECISION-C "all-role" ruling; 0059_write_grants_admin_
+-- owner_only.sql (Subscription Phase 2, Slice 5, DECISION-F in
+-- docs/decisions.md) restricted create/confirm/revoke to admin/owner, so
+-- those three now run as admin instead — they're testing lifecycle
+-- mechanics (audit logging, idempotency, active-grant lookup), not the
+-- role gate itself, which is what the new probe 102 below covers
+-- directly (member denied, admin succeeds).
 -- =========================================================================
 
 -- Probe 35 — direct client INSERT/UPDATE on write_grants is denied for
@@ -1335,12 +1343,14 @@ exception when others then
   insert into probe_results values (35, 'write_grants direct-write-denied probe (errored: ' || sqlerrm || ')', false);
 end $$;
 
--- Probe 36 — full create -> confirm -> revoke lifecycle as a plain member
--- (all-role per the DECISION-C ruling, not admin/owner-gated) works
--- end-to-end, and each step is audit-logged.
+-- Probe 36 — full create -> confirm -> revoke lifecycle as an admin
+-- (admin/owner-gated since 0059_write_grants_admin_owner_only.sql —
+-- previously ran as a plain member under the old all-role DECISION-C
+-- ruling; see the probes-35-40 header note above) works end-to-end, and
+-- each step is audit-logged.
 do $$
 declare
-  v_member uuid := (select id from test_ids where key = 'member');
+  v_admin uuid := (select id from test_ids where key = 'admin');
   v_org    uuid := (select id from test_ids where key = 'org');
   v_conn   uuid := (select id from test_ids where key = 'connection_org');
   v_grant  public.write_grants;
@@ -1361,7 +1371,7 @@ begin
   from public.write_grants
   where connection_id = v_conn;
 
-  perform pg_temp.act_as(v_member);
+  perform pg_temp.act_as(v_admin);
 
   select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["reporting"]}'::jsonb);
   select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-36', 'nia_write_probe_36');
@@ -1370,12 +1380,10 @@ begin
   reset role;
 
   -- audit_log's own RLS (audit_log_select_admins_or_self, 0007) only
-  -- exposes org-scoped rows to admins — a plain member correctly can't
-  -- SELECT them. That's a *different* assertion than "did the RPC log the
-  -- event," which is what this probe checks, so the count runs after
-  -- reset role (superuser, bypasses RLS) rather than while still
-  -- act_as(v_member) — matching how other probes in this file separate
-  -- "data exists" checks from RLS-visibility checks.
+  -- exposes org-scoped rows to admins — the count runs after reset role
+  -- (superuser, bypasses RLS) rather than while still act_as(v_admin),
+  -- matching how other probes in this file separate "data exists" checks
+  -- from RLS-visibility checks.
   select count(*) into n_audit_events
   from public.audit_log
   where org_id = v_org
@@ -1389,9 +1397,9 @@ begin
     and n_audit_events = 3;
 
   if lifecycle_ok then
-    insert into probe_results values (36, 'plain member: create/confirm/revoke write-grant lifecycle works, audit-logged 3x', true);
+    insert into probe_results values (36, 'admin: create/confirm/revoke write-grant lifecycle works, audit-logged 3x', true);
   else
-    insert into probe_results values (36, 'plain member: create/confirm/revoke write-grant lifecycle works, audit-logged 3x', false);
+    insert into probe_results values (36, 'admin: create/confirm/revoke write-grant lifecycle works, audit-logged 3x', false);
   end if;
 exception when others then
   reset role;
@@ -1426,16 +1434,17 @@ end $$;
 
 -- Probe 38 — confirm_write_grant raises on an already-confirmed or
 -- already-revoked grant; revoke_write_grant raises on an already-revoked
--- grant. No silent double-confirm/double-revoke.
+-- grant. No silent double-confirm/double-revoke. Runs as admin (see the
+-- probes-35-40 header note above for why this moved off plain member).
 do $$
 declare
-  v_member uuid := (select id from test_ids where key = 'member');
+  v_admin uuid := (select id from test_ids where key = 'admin');
   v_conn   uuid := (select id from test_ids where key = 'connection_org');
   v_grant  public.write_grants;
   double_confirm_denied boolean := false;
   double_revoke_denied boolean := false;
 begin
-  perform pg_temp.act_as(v_member);
+  perform pg_temp.act_as(v_admin);
 
   select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["ops"]}'::jsonb);
   select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-38', 'nia_write_probe_38');
@@ -1467,15 +1476,17 @@ exception when others then
 end $$;
 
 -- Probe 39 — a revoked grant fails an active-grant lookup (the shape
--- Block 2's checkGrants/connector write path will filter on).
+-- Block 2's checkGrants/connector write path will filter on). Runs as
+-- admin (see the probes-35-40 header note above for why this moved off
+-- plain member).
 do $$
 declare
-  v_member uuid := (select id from test_ids where key = 'member');
+  v_admin uuid := (select id from test_ids where key = 'admin');
   v_conn   uuid := (select id from test_ids where key = 'connection_org');
   v_grant  public.write_grants;
   n_active int;
 begin
-  perform pg_temp.act_as(v_member);
+  perform pg_temp.act_as(v_admin);
 
   select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["finance"]}'::jsonb);
   select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-39', 'nia_write_probe_39');
@@ -1537,6 +1548,78 @@ begin
 exception when others then
   reset role;
   insert into probe_results values (40, 'personal write-grant lifecycle probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- Probe 102 — 0059_write_grants_admin_owner_only.sql (Subscription Phase 2,
+-- Slice 5, DECISION-F in docs/decisions.md): a plain member and a viewer
+-- are both denied create_write_grant/confirm_write_grant/revoke_write_grant
+-- on an org-scoped connection; an admin succeeds on all three. The
+-- personal-workspace (individual) path is untouched by this restriction
+-- and already covered by probe 40, so it's not re-asserted here.
+do $$
+declare
+  v_admin  uuid := (select id from test_ids where key = 'admin');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_viewer uuid := (select id from test_ids where key = 'viewer');
+  v_conn   uuid := (select id from test_ids where key = 'connection_org');
+  v_grant  public.write_grants;
+  member_create_denied boolean := false;
+  viewer_create_denied boolean := false;
+  member_confirm_denied boolean := false;
+  member_revoke_denied boolean := false;
+  admin_ok boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+  begin
+    perform public.create_write_grant(v_conn, '{"schemas":["rbac-probe"]}'::jsonb);
+  exception when others then
+    member_create_denied := true;
+  end;
+  reset role;
+
+  perform pg_temp.act_as(v_viewer);
+  begin
+    perform public.create_write_grant(v_conn, '{"schemas":["rbac-probe"]}'::jsonb);
+  exception when others then
+    viewer_create_denied := true;
+  end;
+  reset role;
+
+  -- confirm/revoke need a real grant to target — mint one as admin (the
+  -- now-authorized role), then switch to member and try to confirm/revoke
+  -- that admin-created grant.
+  perform pg_temp.act_as(v_admin);
+  select * into v_grant from public.create_write_grant(v_conn, '{"schemas":["rbac-probe"]}'::jsonb);
+  reset role;
+
+  perform pg_temp.act_as(v_member);
+  begin
+    perform public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-102', 'nia_write_probe_102');
+  exception when others then
+    member_confirm_denied := true;
+  end;
+  begin
+    perform public.revoke_write_grant(v_grant.id);
+  exception when others then
+    member_revoke_denied := true;
+  end;
+  reset role;
+
+  perform pg_temp.act_as(v_admin);
+  select * into v_grant from public.confirm_write_grant(v_grant.id, 'vault:write-cred-probe-102-admin', 'nia_write_probe_102');
+  select * into v_grant from public.revoke_write_grant(v_grant.id);
+  reset role;
+
+  admin_ok := v_grant.confirmed_at is not null and v_grant.revoked_at is not null;
+
+  if member_create_denied and viewer_create_denied and member_confirm_denied and member_revoke_denied and admin_ok then
+    insert into probe_results values (102, 'write_grants create/confirm/revoke: member and viewer denied, admin succeeds', true);
+  else
+    insert into probe_results values (102, 'write_grants create/confirm/revoke: member and viewer denied, admin succeeds', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (102, 'write_grants admin/owner-only RBAC probe (errored: ' || sqlerrm || ')', false);
 end $$;
 
 -- =========================================================================

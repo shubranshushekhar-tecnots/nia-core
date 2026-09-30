@@ -73,27 +73,29 @@ export type OrgAction =
  * individual, member, admin, owner — can do every piece of building work:
  * install/uninstall connectors, create/update/delete/test connections,
  * create/rename/delete projects and workflows, edit workflow definitions,
- * run workflows, and mint/revoke write grants. Admin and owner add only
- * people-level and org-level power (invite/remove members, change roles,
- * billing, audit log) — those stay unchanged below. Each work action is
- * still declared separately (rather than collapsed into one bucket) so a
- * future divergence — e.g. gating workflows.run separately from
- * grants.create — is a one-line matrix edit, not a refactor. Reads (project
+ * and run workflows. Admin and owner add only people-level and org-level
+ * power (invite/remove members, change roles, billing, audit log) — those
+ * stay unchanged below. Write grants were originally in this same
+ * all-role bucket but were carved out by DECISION-F below (admin/owner
+ * only) — see that decision for why. Each work action is still declared
+ * separately (rather than collapsed into one bucket) so a future
+ * divergence is a one-line matrix edit, not a refactor. Reads (project
  * lists, workflow detail, dashboard stats, the connector catalog) are
  * deliberately NOT in this matrix; they stay RLS-scoped only, consistent
  * with today. connections.test is a mutation (it hits an external system
  * and creates a pool entry) and stays classified with
  * create/update/delete/test, not with reads.
  *
- * IMPORTANT — read before "fixing" this: with member now equal to
- * individual/admin/owner on every action below, `can()`/`assertCan()`
- * currently gate NOTHING beyond org/members/billing/auditLog. Do not treat
- * that as a bug. `assertCan()` still wraps every mutation route — it's the
- * declaration point, so narrowing a single action later is a one-line
- * matrix edit, not a refactor. Because there is no role gate on destructive
- * or credential-minting actions, the audit log is the only record of who
- * installed what, minted which grant, or deleted whose project — treat gaps
- * in audit logging as bugs, not nice-to-haves.
+ * IMPORTANT — read before "fixing" this: with member equal to
+ * individual/admin/owner on every non-grants work action below,
+ * `can()`/`assertCan()` gates NOTHING on those actions beyond
+ * org/members/billing/auditLog (grants.* is the one work-action exception,
+ * see DECISION-F). Do not treat that as a bug. `assertCan()` still wraps
+ * every mutation route — it's the declaration point, so narrowing a single
+ * action later is a one-line matrix edit, not a refactor. Because there is
+ * no role gate on most destructive actions, the audit log is the only
+ * record of who installed what or deleted whose project — treat gaps in
+ * audit logging as bugs, not nice-to-haves.
  *
  * Deliberately deferred: whether a member can delete ANOTHER member's
  * project, or only their own. Per the matrix below, members can delete any
@@ -116,17 +118,20 @@ export type OrgAction =
  * matrix only makes the API fail fast with a typed 403 instead of a raw
  * Postgres error.
  *
- * Restricting `grants.create`/`grants.confirm`/`grants.revoke` to
- * admin/owner ONLY (i.e. taking them away from plain `member`/`individual`
- * too, not just viewer) was explicitly considered for this slice and
- * deliberately DEFERRED to a future slice ("slice 5"): it would reverse the
- * documented DECISION-C/`docs/decisions.md` "write-grant RBAC — kept
- * all-role" ruling, and doing it correctly also means updating the
- * `create_write_grant`/`confirm_write_grant`/`revoke_write_grant` RPCs'
- * own DB-level checks (0016_write_grants.sql) and that decisions doc, not
- * just this matrix — not a one-line change once RLS is accounted for. This
- * slice's actual requirement ("viewer specifically can't touch grants") is
- * already satisfied by viewer's blanket omission above.
+ * DECISION-F (Subscription Phase 2, Slice 5 — write grants admin/owner
+ * only): `grants.create`/`grants.confirm`/`grants.revoke` are now
+ * admin/owner only, reversing the "all-role" ruling DECISION-C originally
+ * made for them (see docs/decisions.md's "write-grant RBAC — kept
+ * all-role" entry and its slice 5 follow-up for the full history). Every
+ * other work action in DECISION-C's bucket is unaffected — this is a
+ * targeted exception because minting/confirming/revoking a write grant is
+ * credential-minting against a customer's own database, not ordinary
+ * building work. `individual` stays included: a personal (owner_id-scoped)
+ * workspace has no admin/owner distinction, so its sole member keeps full
+ * access to their own connections' grants. Enforced in three places:
+ * this matrix (fast 403), `private.is_admin()` in the write_grants RPCs
+ * (0059_write_grants_admin_owner_only.sql), and the Canvas UI showing a
+ * read-only panel to non-admin/owner org members.
  */
 const CAPABILITY_MATRIX = {
   "org.view": ["individual", "member", "admin", "owner", "viewer"],
@@ -153,9 +158,9 @@ const CAPABILITY_MATRIX = {
   "connections.update": ["individual", "member", "admin", "owner"],
   "connections.delete": ["individual", "member", "admin", "owner"],
   "connections.test": ["individual", "member", "admin", "owner"],
-  "grants.create": ["individual", "member", "admin", "owner"],
-  "grants.confirm": ["individual", "member", "admin", "owner"],
-  "grants.revoke": ["individual", "member", "admin", "owner"],
+  "grants.create": ["individual", "admin", "owner"],
+  "grants.confirm": ["individual", "admin", "owner"],
+  "grants.revoke": ["individual", "admin", "owner"],
 } as const satisfies Record<OrgAction, readonly ActorRole[]>;
 
 export type PermissionErrorCode = "NOT_AUTHENTICATED" | "INSUFFICIENT_ROLE" | "OWNER_PROTECTED";

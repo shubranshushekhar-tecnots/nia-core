@@ -1432,6 +1432,7 @@ function CanvasInner({
             <NodeConfigPanel
               node={selectedNode}
               selectedCount={selectedCount}
+              role={role}
               workflowId={workflow.id}
               upstreamSource={upstreamSource}
               checkResults={latestCheckRun?.results ?? null}

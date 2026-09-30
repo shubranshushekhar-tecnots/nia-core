@@ -48,4 +48,24 @@ describe("requireCapability", () => {
 
     expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401, code: "NOT_AUTHENTICATED" }));
   });
+
+  // Subscription Phase 2, Slice 5 (DECISION-F, docs/decisions.md): grants.create
+  // was reopened to admin/owner only, reversing Slice 5's earlier all-role
+  // decision — apps/api/src/routes/grants.ts gates POST /:connectionId/grants
+  // with requireCapability("grants.create").
+  it("403s a plain member's attempt to create a write grant (grants.create)", () => {
+    const req = createReq("member");
+    const next = vi.fn();
+    requireCapability("grants.create")(req, createRes(), next);
+
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403, code: "INSUFFICIENT_ROLE" }));
+  });
+
+  it("calls next() with no error for an admin creating a write grant", () => {
+    const req = createReq("admin");
+    const next = vi.fn();
+    requireCapability("grants.create")(req, createRes(), next);
+
+    expect(next).toHaveBeenCalledWith();
+  });
 });
