@@ -162,6 +162,52 @@ async function isOrgSuspended(orgId: string): Promise<boolean> {
 }
 
 /**
+ * Subscription Phase 2, Slice 6: same "first chunk only" gate and
+ * `withServiceRole` shape as isOrgSuspended above (checked once because
+ * the condition, once true, stays true for the run's duration — a member
+ * removed mid-run is caught by the *next* run's own first chunk, not
+ * this one). Personal (`ownerId`) scopes have no org_role/project_members
+ * concept, so this only ever runs for `orgId` scopes — same restriction
+ * as isOrgSuspended.
+ *
+ * `job.triggeredByUserId` is a required `z.string().uuid()` field
+ * (packages/schemas/src/jobs.ts) validated by `HeavyJob.parse()` before a
+ * job ever reaches this function (apps/worker/src/index.ts) — there is no
+ * "missing triggeredByUserId" case to special-case here, only "no longer
+ * has access":
+ *   - no organization_members row at all -> removed from the org
+ *   - role = 'viewer' -> can read, never run
+ *   - role = 'member' and no project_members row for this workflow's
+ *     project -> removed from the project (admins/owners always pass,
+ *     same as private.is_workflow_project_member's own rule)
+ *
+ * withServiceRole bypasses RLS (the worker has no live session/JWT to run
+ * as this user under — unlike apps/api's copilot executeTool.ts, which
+ * calls private.is_workflow_project_member via the caller's own withUser
+ * transaction), so this is one explicit query rather than delegating to
+ * that RLS-backed function.
+ */
+async function blockedRunnerReason(orgId: string, workflowId: string, userId: string): Promise<string | null> {
+  const result = await withServiceRole(dbPool, (db) =>
+    db.query<{ role: string | null; is_project_member: boolean }>(
+      `select om.role, exists (
+         select 1 from public.project_members pm
+         join public.workflows w on w.id = $2
+         where pm.project_id = w.project_id and pm.user_id = $3
+       ) as is_project_member
+       from public.organization_members om
+       where om.org_id = $1 and om.user_id = $3`,
+      [orgId, workflowId, userId],
+    ),
+  );
+  const row = result.rows[0];
+  if (!row) return "You no longer have access to run this workflow.";
+  if (row.role === "viewer") return "You no longer have access to run this workflow.";
+  if (row.role === "member" && !row.is_project_member) return "You no longer have access to run this workflow.";
+  return null;
+}
+
+/**
  * Phase 9 Part 1: bounds a stateful residual op's (aggregate's) in-memory
  * group accumulator — see types.ts's ResidualAccumulator doc comment and
  * the stateful branch below. Configurable via env var so tests don't need
@@ -527,6 +573,13 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
 
     if ("orgId" in scope && (await isOrgSuspended(scope.orgId))) {
       return fail(scope, job.runId, job.nodeId, SUSPENDED_ORG_RUN_MESSAGE);
+    }
+
+    if ("orgId" in scope) {
+      const blockedReason = await blockedRunnerReason(scope.orgId, job.workflowId, job.triggeredByUserId);
+      if (blockedReason) {
+        return fail(scope, job.runId, job.nodeId, blockedReason);
+      }
     }
   }
 

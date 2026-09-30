@@ -273,7 +273,11 @@ beforeEach(() => {
   dispatchPreflightMock.mockReset();
   dispatchStageMock.mockReset();
 
-  orgSuspensionQueryMock.mockResolvedValue({ rows: [{ suspended_at: null }] });
+  // Second query the same shared mock answers per job (see this file's
+  // header comment): Slice 6's blockedRunnerReason — defaults to "not
+  // blocked" (an admin, so is_project_member is irrelevant) so every
+  // pre-existing test below keeps passing unchanged.
+  orgSuspensionQueryMock.mockResolvedValue({ rows: [{ suspended_at: null, role: "admin", is_project_member: true }] });
   resolveGraphMock.mockResolvedValue(graph());
   checkCleanPlanDriftMock.mockResolvedValue({ ok: true });
   // Staged-mode defaults — a no-op destination lifecycle unless a test
@@ -400,6 +404,40 @@ describe("runEtl — suspended org (Console v1 Slice 3b)", () => {
     await runEtl(job, queue);
 
     expect(orgSuspensionQueryMock).not.toHaveBeenCalled();
+  });
+});
+
+// Subscription Phase 2, Slice 6: a run whose triggering user is a viewer,
+// or is no longer a member of the workflow's project, fails cleanly on
+// the first chunk — same gate/shape as the suspended-org check above.
+describe("runEtl — blocked runner (Subscription Phase 2, Slice 6)", () => {
+  it("fails the run on the first chunk when the triggering user is a viewer", async () => {
+    orgSuspensionQueryMock
+      .mockResolvedValueOnce({ rows: [{ suspended_at: null }] })
+      .mockResolvedValueOnce({ rows: [{ role: "viewer", is_project_member: false }] });
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({ status: "failed", message: "You no longer have access to run this workflow." });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(dispatchWriteMock).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed", { message: result.message });
+  });
+
+  it("proceeds normally when the triggering user is still an admin", async () => {
+    orgSuspensionQueryMock
+      .mockResolvedValueOnce({ rows: [{ suspended_at: null }] })
+      .mockResolvedValueOnce({ rows: [{ role: "admin", is_project_member: false }] });
+    const queue = queueStub();
+    const job = baseJob({ chunkSize: 10 });
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({ status: "done" });
+    expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
   });
 });
 

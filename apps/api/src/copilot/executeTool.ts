@@ -1,10 +1,36 @@
 import { getTool } from "./registry.js";
 import { auditToolCall } from "./audit.js";
+import { requireWorkflowAccess, resolveWorkflowIdForRun } from "./requireWorkflowAccess.js";
 import { AppError } from "../lib/appError.js";
 import type { ActingUser, ToolRender } from "./types.js";
 import type { WithUser } from "../lib/withUser.js";
 
 export type ToolCallResult = { summary: string; render: ToolRender };
+
+// Subscription Phase 2, Slice 6: every tool that reads or changes a
+// specific workflow/run goes through requireWorkflowAccess before its
+// handler runs. WRITE_TOOLS additionally refuses a viewer outright — see
+// requireWorkflowAccess.ts's header comment for the full rule. Tools
+// scoped to a connection instead of a workflow (list_connections,
+// describe_source, get_profile, explain_write_grant,
+// explain_source_rls_policy, explain_missing_privilege) aren't in this
+// set — they have no "workflow's project" to check membership against.
+const WORKFLOW_SCOPED_TOOLS = new Set([
+  "get_workflow",
+  "preview_rows",
+  "list_runs",
+  "get_run_status",
+  "get_run_result",
+  "explain_last_error",
+  "change_graph",
+  "propose_cleaning",
+  "set_destination",
+  "propose_mapping",
+  "revert_plan",
+  "start_run",
+  "cancel_run",
+]);
+const WRITE_TOOLS = new Set(["change_graph", "set_destination", "start_run", "cancel_run", "revert_plan"]);
 
 /**
  * Copilot agent (Part 1/3) — the one place every tool call actually runs
@@ -33,6 +59,17 @@ export async function executeTool(
   if (!tool) throw new AppError(400, "UNKNOWN_TOOL", `No such tool "${name}".`);
 
   const input = tool.inputSchema.parse(rawArgs);
+
+  if (WORKFLOW_SCOPED_TOOLS.has(name)) {
+    const workflowId =
+      typeof (input as { workflowId?: unknown }).workflowId === "string"
+        ? (input as { workflowId: string }).workflowId
+        : await resolveWorkflowIdForRun(withUser, (input as { runId: string }).runId);
+    if (workflowId) {
+      await requireWorkflowAccess(withUser, user, workflowId, { write: WRITE_TOOLS.has(name) });
+    }
+  }
+
   const output = await tool.handler({ withUser, user, pendingActionId: opts.pendingActionId }, input);
   const summary = tool.summarize(output, input);
   const render = tool.render(output, input);
