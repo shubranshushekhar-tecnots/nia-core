@@ -66,6 +66,21 @@ begin
     (v_org, v_admin,  'admin'),
     (v_org, v_member, 'member');
 
+  -- Lift this org's project_limit for the rest of the script.
+  -- 0050_org_plan_overrides.sql's create-org trigger defaults every new org
+  -- to the 'free' plan (project_limit=1, 0049_plans_table.sql), and this
+  -- script goes on to insert several org-scoped projects against 'org'
+  -- across many probes (11, 66-69, 73, 79+) that were never meant to be
+  -- gated by 0052_project_limit_enforcement.sql's trigger — that
+  -- enforcement is real product behavior under test elsewhere (probes
+  -- covering 0052 itself, if any) and each of those existing fixtures
+  -- predates 0052 with no exception handling of their own, so without this
+  -- override the second org-scoped project insert in the whole script trips
+  -- "Your Free plan allows 1 project" and aborts the entire transaction.
+  update public.org_plan
+  set project_limit_set = true, project_limit = null
+  where org_id = v_org;
+
   insert into test_ids values
     ('owner', v_owner), ('admin2', v_admin2), ('admin', v_admin),
     ('member', v_member), ('outsider', v_outsider), ('org', v_org);
@@ -2387,8 +2402,41 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Fixture for probe 73 — un-suspend the main org (direct update, bypassing
+-- RLS, same shape as probe 66's own suspend fixture above): kept in its
+-- own isolated, no-role-switch block rather than folded into the
+-- act_as-driven assertion below it, matching every other probe in this
+-- file's convention of starting the BEGIN section with act_as() as the
+-- very first statement (see probe 36's comment on the convention).
+-- =========================================================================
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+begin
+  update public.organizations
+  set suspended_at = null, suspended_by = null, suspended_reason = null
+  where id = v_org;
+exception when others then
+  raise notice 'un-suspend-org fixture for probe 73 failed: %', sqlerrm;
+end $$;
+
+-- =========================================================================
 -- Probe 73 — unsuspending the org (suspended_at set back to null) restores
 -- write access immediately — suspension is not a one-way/permanent state.
+--
+-- Deliberately does NOT use `returning id into v_project`: with
+-- 0054_project_members.sql's tightened projects_select_members policy, a
+-- plain (non-admin) member's own just-inserted row isn't yet visible to
+-- them at RETURNING-evaluation time — private.add_creator_as_project_member
+-- is an AFTER INSERT trigger, and Postgres evaluates the SELECT policy
+-- for RETURNING before that trigger has fired — so RETURNING spuriously
+-- raises "new row violates row-level security policy" even though the
+-- INSERT's own WITH CHECK genuinely passed. Confirmed this only affects
+-- RETURNING itself (a plain INSERT with no RETURNING clause, as the real
+-- app code in apps/web/src/lib/dashboard/actions.ts's createProject()
+-- already does, succeeds fine) — not a product bug, just means probes
+-- must fetch the new row's id the same way the app would: a follow-up
+-- SELECT after reset role.
 -- =========================================================================
 do $$
 declare
@@ -2397,15 +2445,15 @@ declare
   v_project uuid;
   v_suspended boolean;
 begin
-  update public.organizations
-  set suspended_at = null, suspended_by = null, suspended_reason = null
-  where id = v_org;
+  perform pg_temp.act_as(v_member);
+  insert into public.projects (org_id, name, created_by) values (v_org, 'Post-unsuspend project', v_member);
+  reset role;
+
+  select id into v_project
+  from public.projects
+  where org_id = v_org and created_by = v_member and name = 'Post-unsuspend project';
 
   select private.is_org_suspended(v_org) into v_suspended;
-
-  perform pg_temp.act_as(v_member);
-  insert into public.projects (org_id, name, created_by) values (v_org, 'Post-unsuspend project', v_member) returning id into v_project;
-  reset role;
 
   if not v_suspended and v_project is not null then
     insert into probe_results values (73, 'unsuspending the org restores write access', true);
@@ -2568,6 +2616,282 @@ begin
 exception when others then
   reset role;
   insert into probe_results values (78, 'owner_plan member-cannot-write probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Fixture for probes 79-88 — 0054_project_members.sql (Subscription Phase
+-- 2, Slice 2): a project in the main ('org') org created normally (through
+-- RLS, not bypassed) by v_owner, so the creator-auto-membership trigger
+-- has a real client-driven INSERT to fire on — probes 66-69's fixture
+-- project inserts as postgres specifically to bypass insert-side policies
+-- (not under test there), but the trigger itself is under test here, so
+-- this fixture deliberately goes through act_as instead. v_owner (not
+-- v_admin2) is used as the creator: v_admin2's own organization_members
+-- row was permanently deleted by probe 6b above (another owner deleting
+-- an owner's membership, by design — see probe 6b's own comment), so
+-- v_admin2 is no longer an org member by this point in the script;
+-- v_owner is never removed (probe 5's demote/delete attempts against it
+-- are the ones the last-owner trigger is supposed to block, and it does).
+--
+-- Deliberately does NOT use `returning id into v_project` — see probe 73's
+-- comment above for why: with this migration's tightened
+-- projects_select_members policy, a plain (non-admin) creator's own
+-- just-inserted row isn't visible to them yet at RETURNING-evaluation
+-- time (the creator-auto-membership trigger fires AFTER insert, but
+-- RETURNING's implicit SELECT-policy check happens before that), so this
+-- looks the row up in a separate statement after reset role instead,
+-- exactly like the real app code (apps/web/src/lib/dashboard/actions.ts's
+-- createProject()) already does.
+--
+-- The main org's project_limit is already lifted by the root fixture above
+-- (see its own comment) — this is just another org-scoped project against
+-- the same org, same as probes 11/66-69/73's fixtures before it.
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_project uuid;
+begin
+  perform pg_temp.act_as(v_owner);
+  insert into public.projects (org_id, name, created_by)
+  values (v_org, 'Project members probe project', v_owner);
+  reset role;
+
+  select id into v_project
+  from public.projects
+  where org_id = v_org and created_by = v_owner and name = 'Project members probe project';
+
+  insert into test_ids values ('pm_project', v_project);
+exception when others then
+  reset role;
+  raise notice 'project_members probe fixture setup failed: %', sqlerrm;
+end $$;
+
+-- =========================================================================
+-- Probe 79 — a plain member who was never added to project_members cannot
+-- SELECT/UPDATE/DELETE a project created by someone else in their own,
+-- healthy (non-suspended) org — this is the actual behavior change this
+-- migration makes (previously any org member could touch any org project).
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  n_visible int;
+  n_updated int;
+  n_deleted int;
+begin
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_visible from public.projects where id = v_project;
+  update public.projects set name = 'Should stay blocked' where id = v_project;
+  get diagnostics n_updated = row_count;
+  delete from public.projects where id = v_project;
+  get diagnostics n_deleted = row_count;
+  reset role;
+
+  if n_visible = 0 and n_updated = 0 and n_deleted = 0 then
+    insert into probe_results values (79, 'member without project_members cannot SELECT/UPDATE/DELETE another member''s project', true);
+  else
+    insert into probe_results values (79, 'member without project_members cannot SELECT/UPDATE/DELETE another member''s project', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (79, 'member-without-project_members probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 80 — an admin who is NOT a project_member can still SELECT/
+-- UPDATE/DELETE any project in their org — admins/owners bypass the
+-- project_members check entirely (private.is_admin(org_id) branch).
+-- =========================================================================
+do $$
+declare
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  n_visible int;
+  n_updated int;
+begin
+  perform pg_temp.act_as(v_admin);
+  select count(*) into n_visible from public.projects where id = v_project;
+  update public.projects set name = 'Renamed by admin' where id = v_project;
+  get diagnostics n_updated = row_count;
+  reset role;
+
+  if n_visible = 1 and n_updated = 1 then
+    insert into probe_results values (80, 'admin without project_members can still SELECT/UPDATE any org project', true);
+  else
+    insert into probe_results values (80, 'admin without project_members can still SELECT/UPDATE any org project', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (80, 'admin-bypasses-project_members probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 81 — creator auto-membership: private.add_creator_as_project_member
+-- inserted a project_members row for the creator (v_owner) automatically,
+-- with no explicit client-side project_members insert.
+-- =========================================================================
+do $$
+declare
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  n_rows int;
+begin
+  perform pg_temp.act_as(v_owner);
+  select count(*) into n_rows from public.project_members where project_id = v_project and user_id = v_owner;
+  reset role;
+
+  if n_rows = 1 then
+    insert into probe_results values (81, 'creator is auto-added to project_members on project INSERT', true);
+  else
+    insert into probe_results values (81, 'creator is auto-added to project_members on project INSERT', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (81, 'creator-auto-membership probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 82 — a member who is neither a project_member nor an org admin
+-- cannot see ANY project_members rows for a project they can't access
+-- (project_members_select_members_or_admins denies them, same as the
+-- project row itself).
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  n_rows int;
+begin
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_rows from public.project_members where project_id = v_project;
+  reset role;
+
+  if n_rows = 0 then
+    insert into probe_results values (82, 'non-member/non-admin cannot see a project''s project_members rows', true);
+  else
+    insert into probe_results values (82, 'non-member/non-admin cannot see a project''s project_members rows', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (82, 'project_members select isolation probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 83 — a plain member (not an org admin/owner) cannot INSERT a
+-- project_members row — granting project access is admin/owner-only.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  insert_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+  begin
+    insert into public.project_members (project_id, user_id) values (v_project, v_member);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  reset role;
+
+  if insert_denied then
+    insert into probe_results values (83, 'plain member cannot INSERT their own project_members row (admin/owner-only grant)', true);
+  else
+    insert into probe_results values (83, 'plain member cannot INSERT their own project_members row (admin/owner-only grant)', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (83, 'project_members insert-denied-for-member probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 84 — an admin CAN grant project access by INSERTing a
+-- project_members row for another user; that user can then SELECT the
+-- project immediately (end-to-end proof of the intended "admin grants
+-- access" flow, and of the exact mechanism the grandfathering backfill
+-- itself relies on).
+-- =========================================================================
+do $$
+declare
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_admin);
+  insert into public.project_members (project_id, user_id) values (v_project, v_member);
+  reset role;
+
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_visible from public.projects where id = v_project;
+  reset role;
+
+  if n_visible = 1 then
+    insert into probe_results values (84, 'admin can grant a member project access via project_members; member can then SELECT it', true);
+  else
+    insert into probe_results values (84, 'admin can grant a member project access via project_members; member can then SELECT it', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (84, 'project_members admin-grants-access probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 85 — the newly-granted member cannot remove SOMEONE ELSE's
+-- project_members row (not self, not admin) — e.g. cannot kick the
+-- project's creator out.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  n_deleted int;
+begin
+  perform pg_temp.act_as(v_member);
+  delete from public.project_members where project_id = v_project and user_id = v_owner;
+  get diagnostics n_deleted = row_count;
+  reset role;
+
+  if n_deleted = 0 then
+    insert into probe_results values (85, 'member cannot DELETE another user''s project_members row', true);
+  else
+    insert into probe_results values (85, 'member cannot DELETE another user''s project_members row', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (85, 'project_members delete-others-denied probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 86 — the member CAN remove their OWN project_members row (leaving
+-- the project themselves needs no admin rights — mirrors
+-- members_delete_admins_or_self's own self-delete branch), and immediately
+-- loses SELECT visibility into the project afterward.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  n_deleted int;
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_member);
+  delete from public.project_members where project_id = v_project and user_id = v_member;
+  get diagnostics n_deleted = row_count;
+  select count(*) into n_visible from public.projects where id = v_project;
+  reset role;
+
+  if n_deleted = 1 and n_visible = 0 then
+    insert into probe_results values (86, 'member can leave a project themselves (self-delete), losing SELECT access immediately', true);
+  else
+    insert into probe_results values (86, 'member can leave a project themselves (self-delete), losing SELECT access immediately', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (86, 'project_members self-leave probe (errored: ' || sqlerrm || ')', false);
 end $$;
 
 -- =========================================================================
