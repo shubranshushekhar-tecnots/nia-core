@@ -8,9 +8,35 @@ const STATUS_DOT: Record<ActivityItem['status'], { dot: string; bg: string; verb
   running: { dot: 'var(--ink-300)', bg: 'var(--line-100)', verb: 'is running' },
 };
 
+// Subscription Phase 3, Slice 4 — generalized so rows-moved/Copilot-action
+// meters (added below) share the same markup as the pre-existing
+// workflow-used meter instead of copy-pasting it twice more.
+function UsageMeter({ label, used, limit }: { label: string; used: number; limit: number | null }) {
+  const pct = limit === null ? 0 : Math.min(100, Math.round((100 * used) / limit));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+        <span style={{ color: 'var(--ink-200)' }}>{label}</span>
+        <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ fontWeight: 600 }}>{used.toLocaleString()}</span>{' '}
+          <span style={{ color: 'var(--ink-300)' }}>/ {limit === null ? 'Unlimited' : limit.toLocaleString()}</span>
+        </span>
+      </div>
+      <div
+        role="meter"
+        aria-valuenow={used}
+        aria-valuemin={0}
+        aria-valuemax={limit ?? undefined}
+        aria-label={label}
+        style={{ height: 6, borderRadius: 3, background: 'var(--line-200)', overflow: 'hidden' }}
+      >
+        <div style={{ width: `${pct}%`, height: 6, borderRadius: 3, background: 'var(--acc)' }} />
+      </div>
+    </div>
+  );
+}
+
 function ProfileCard({ userId, fullName, workspaceLabel, plan }: { userId: string; fullName: string | null; workspaceLabel: string; plan: PlanUsage }) {
-  const pct =
-    plan.workflowLimit === null ? 0 : Math.min(100, Math.round((100 * plan.workflowUsed) / plan.workflowLimit));
   return (
     <div
       style={{
@@ -28,24 +54,13 @@ function ProfileCard({ userId, fullName, workspaceLabel, plan }: { userId: strin
         <span style={{ fontSize: 15, fontWeight: 600 }}>{fullName ?? 'You'}</span>
         <span style={{ fontSize: 12.5, color: 'var(--ink-200)' }}>{workspaceLabel}</span>
       </div>
-      <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-          <span style={{ color: 'var(--ink-200)' }}>Workflows used</span>
-          <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-            <span style={{ fontWeight: 600 }}>{plan.workflowUsed}</span>{' '}
-            <span style={{ color: 'var(--ink-300)' }}>/ {plan.workflowLimit === null ? 'Unlimited' : plan.workflowLimit}</span>
-          </span>
-        </div>
-        <div
-          role="meter"
-          aria-valuenow={plan.workflowUsed}
-          aria-valuemin={0}
-          aria-valuemax={plan.workflowLimit ?? undefined}
-          aria-label="Workflows used"
-          style={{ height: 6, borderRadius: 3, background: 'var(--line-200)', overflow: 'hidden' }}
-        >
-          <div style={{ width: `${pct}%`, height: 6, borderRadius: 3, background: 'var(--acc)' }} />
-        </div>
+      <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
+        <UsageMeter label="Workflows used" used={plan.workflowUsed} limit={plan.workflowLimit} />
+        <UsageMeter label="Rows moved" used={plan.rowsUsed} limit={plan.rowsLimit} />
+        <UsageMeter label="Copilot actions" used={plan.copilotUsed} limit={plan.copilotLimit} />
+        <span style={{ fontSize: 11.5, color: 'var(--ink-300)' }}>
+          {plan.periodDaysLeft} {plan.periodDaysLeft === 1 ? 'day' : 'days'} left this month
+        </span>
       </div>
     </div>
   );

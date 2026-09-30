@@ -89,6 +89,23 @@ export const billingWarningBannerStyle: CSSProperties = {
   maxWidth: 460,
 };
 
+// Subscription Phase 3, Slice 4 — 100%-of-limit banner (rows/Copilot hard
+// stop), distinct from billingWarningBannerStyle's 80% amber warning: a
+// danger-colored variant so a blocked state reads differently from a
+// heads-up one.
+export const billingBlockedBannerStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  padding: '12px 14px',
+  borderRadius: 10,
+  background: 'var(--danger-bg, rgba(217,45,32,0.1))',
+  border: '1px solid var(--danger-border, rgba(217,45,32,0.35))',
+  fontSize: 12.5,
+  color: 'var(--text-2)',
+  maxWidth: 460,
+};
+
 export const billingErrorTextStyle: CSSProperties = {
   fontSize: 12.5,
   color: 'var(--danger, #d92d20)',

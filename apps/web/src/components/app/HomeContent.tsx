@@ -71,6 +71,37 @@ export default function HomeContent({
           </div>
         )}
 
+        {/* Subscription Phase 3, Slice 4 — same 80% threshold/shape as the
+            workflow banner above; rows and Copilot actions link to Billing
+            where the full usage bars + 100%-blocked messaging live. */}
+        {plan.rowsLimit !== null && plan.rowsUsed / plan.rowsLimit >= 0.8 && (
+          <div style={planBannerStyle}>
+            <span>
+              {plan.rowsUsed.toLocaleString()} of {plan.rowsLimit.toLocaleString()} rows used this month on the{' '}
+              {plan.plan} plan.
+            </span>
+            <a href="/app/billing" style={{ textDecoration: 'none' }}>
+              <button type="button" style={planBannerBtnStyle}>
+                See usage
+              </button>
+            </a>
+          </div>
+        )}
+
+        {plan.copilotLimit !== null && plan.copilotUsed / plan.copilotLimit >= 0.8 && (
+          <div style={planBannerStyle}>
+            <span>
+              {plan.copilotUsed.toLocaleString()} of {plan.copilotLimit.toLocaleString()} Copilot actions used this
+              month on the {plan.plan} plan.
+            </span>
+            <a href="/app/billing" style={{ textDecoration: 'none' }}>
+              <button type="button" style={planBannerBtnStyle}>
+                See usage
+              </button>
+            </a>
+          </div>
+        )}
+
         {recentRuns.length === 0 ? (
           <div
             style={{

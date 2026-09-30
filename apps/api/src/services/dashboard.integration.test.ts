@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { withActingUser } from "@nia/db";
 import type { Queryable } from "@nia/db";
@@ -79,6 +80,28 @@ describe("getDashboardStats — org_plan read path, real Postgres", () => {
       expect(defaultStats.planTier).toBe("Free");
       expect(defaultStats.workflowLimit).toBe(2);
       expect(defaultStats.projectLimit).toBe(1);
+      // Subscription Phase 3, Slice 4 — Free's plan-catalog defaults
+      // (0049_plans_table.sql), no usage recorded yet for this fresh org.
+      expect(defaultStats.rowsLimit).toBe(100000);
+      expect(defaultStats.copilotLimit).toBe(50);
+      expect(defaultStats.rowsUsed).toBe(0);
+      expect(defaultStats.copilotUsed).toBe(0);
+
+      // Record one of each usage kind directly against the ledger (Slices
+      // 2/3 own the insert paths themselves) and confirm getDashboardStats
+      // sums them back out, scoped to this org and the current month.
+      await dbPool.query(
+        `insert into public.usage_events (org_id, kind, quantity, subject_id) values ($1, 'rows_moved', 1234, $2)`,
+        [orgId, randomUUID()],
+      );
+      await dbPool.query(
+        `insert into public.usage_events (org_id, kind, quantity, subject_id) values ($1, 'copilot_action', 1, $2)`,
+        [orgId, randomUUID()],
+      );
+
+      const withUsageStats = await getDashboardStats(memberWithUser, { orgId: orgId! });
+      expect(withUsageStats.rowsUsed).toBe(1234);
+      expect(withUsageStats.copilotUsed).toBe(1);
 
       // 2. Simulate a Console plan change: switch to Team with an explicit
       // workflow_limit override, no project_limit override.

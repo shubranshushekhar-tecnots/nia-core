@@ -12,6 +12,11 @@ export type DashboardStats = {
   planTier: string;
   workflowLimit: number | null;
   projectLimit: number | null;
+  rowsLimit: number | null;
+  rowsUsed: number;
+  copilotLimit: number | null;
+  copilotUsed: number;
+  periodDaysLeft: number;
 };
 
 export type ContinueWorkflow = {
@@ -56,18 +61,32 @@ export type RecentRun = {
 async function getOrgPlan(
   withUser: WithUser,
   scope: WorkspaceScope,
-): Promise<{ planTier: string; workflowLimit: number | null; projectLimit: number | null }> {
+): Promise<{
+  planTier: string;
+  workflowLimit: number | null;
+  projectLimit: number | null;
+  rowsLimit: number | null;
+  copilotLimit: number | null;
+}> {
   const isPersonal = !("orgId" in scope);
   const table = isPersonal ? "owner_plan" : "org_plan";
   const scopeColumn = isPersonal ? "user_id" : "org_id";
   const scopeValue = isPersonal ? scope.ownerId : scope.orgId;
 
   const { rows } = await withUser((db) =>
-    db.query<{ plan_name: string; workflow_limit: number | null; project_limit: number | null }>(
+    db.query<{
+      plan_name: string;
+      workflow_limit: number | null;
+      project_limit: number | null;
+      rows_limit: number | null;
+      copilot_limit: number | null;
+    }>(
       `select
          pl.name as plan_name,
          case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as workflow_limit,
-         case when op.project_limit_set then op.project_limit else pl.project_limit end as project_limit
+         case when op.project_limit_set then op.project_limit else pl.project_limit end as project_limit,
+         pl.rows_per_month as rows_limit,
+         pl.copilot_actions_per_month as copilot_limit
        from public.${table} op
        join public.plans pl on pl.id = op.plan_id
        where op.${scopeColumn} = $1`,
@@ -80,11 +99,47 @@ async function getOrgPlan(
     planTier: row?.plan_name ?? "Legacy",
     workflowLimit: row ? row.workflow_limit : 25,
     projectLimit: row ? row.project_limit : null,
+    rowsLimit: row ? row.rows_limit : null,
+    copilotLimit: row ? row.copilot_limit : null,
   };
 }
 
+/**
+ * Subscription Phase 3, Slice 4 — same (kind, scoped sum, current calendar
+ * month) shape as runs.ts's assertRowsLimitNotExceeded and
+ * chat.ts's assertCopilotActionAllowed, just read-only and both kinds at
+ * once (one query, grouped) since this is display-only, not a gate.
+ */
+async function getUsageThisMonth(
+  withUser: WithUser,
+  scope: WorkspaceScope,
+): Promise<{ rowsUsed: number; copilotUsed: number }> {
+  const where = workspaceWhere(scope, 1);
+  const { rows } = await withUser((db) =>
+    db.query<{ kind: string; used: string | null }>(
+      `select kind, sum(quantity)::bigint as used
+       from public.usage_events
+       where ${where.sql}
+         and occurred_at >= date_trunc('month', now())
+       group by kind`,
+      where.params,
+    ),
+  );
+
+  return {
+    rowsUsed: Number(rows.find((r) => r.kind === "rows_moved")?.used ?? 0),
+    copilotUsed: Number(rows.find((r) => r.kind === "copilot_action")?.used ?? 0),
+  };
+}
+
+function daysLeftInMonth(): number {
+  const now = new Date();
+  const lastDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+  return lastDay - now.getUTCDate() + 1;
+}
+
 export async function getDashboardStats(withUser: WithUser, scope: WorkspaceScope): Promise<DashboardStats> {
-  const [projectsResult, workflowsResult, activeWorkflowsResult, plan] = await Promise.all([
+  const [projectsResult, workflowsResult, activeWorkflowsResult, plan, usage] = await Promise.all([
     withUser((db) => {
       const where = workspaceWhere(scope, 1);
       return db.query<{ count: number }>(`select count(*)::int as count from projects where ${where.sql}`, where.params);
@@ -101,6 +156,7 @@ export async function getDashboardStats(withUser: WithUser, scope: WorkspaceScop
       );
     }),
     getOrgPlan(withUser, scope),
+    getUsageThisMonth(withUser, scope),
   ]);
 
   return {
@@ -110,6 +166,11 @@ export async function getDashboardStats(withUser: WithUser, scope: WorkspaceScop
     planTier: plan.planTier,
     workflowLimit: plan.workflowLimit,
     projectLimit: plan.projectLimit,
+    rowsLimit: plan.rowsLimit,
+    rowsUsed: usage.rowsUsed,
+    copilotLimit: plan.copilotLimit,
+    copilotUsed: usage.copilotUsed,
+    periodDaysLeft: daysLeftInMonth(),
   };
 }
 

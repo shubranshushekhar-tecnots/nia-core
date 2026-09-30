@@ -40,6 +40,11 @@ export type DashboardStats = {
   planTier: string;
   workflowLimit: number | null;
   projectLimit: number | null;
+  rowsLimit: number | null;
+  rowsUsed: number;
+  copilotLimit: number | null;
+  copilotUsed: number;
+  periodDaysLeft: number;
 };
 
 export type ProjectDetail = {
