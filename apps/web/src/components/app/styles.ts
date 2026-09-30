@@ -155,22 +155,6 @@ export const sidebarFooterStyle: CSSProperties = {
   position: 'relative',
 };
 
-// Sole remaining consumer is CanvasHeader.tsx (TopBar.tsx moved to the
-// 64px nxTopBarStyle below) — frozen at 52px per the canvas redesign's
-// "CanvasHeader stays 52px" constraint, so recolored to nx tokens in place
-// rather than adding yet another nx-prefixed duplicate.
-export const topBarStyle: CSSProperties = {
-  height: 52,
-  flex: 'none',
-  boxSizing: 'border-box',
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  padding: '0 16px',
-  borderBottom: '1px solid var(--nx-line)',
-  background: 'var(--nx-bg)',
-};
-
 export const brandMarkStyle: CSSProperties = {
   width: 24,
   height: 24,
@@ -198,9 +182,9 @@ export const breadcrumbSepStyle: CSSProperties = {
   color: 'var(--text-4)',
 };
 
-// color recolored to --nx-ink in place: CanvasHeader.tsx is its only direct
-// consumer now (nxOrgSwitcherBtnStyle below overrides color/fontSize/gap on
-// top of this for TopBar.tsx, so that spread is unaffected).
+// No remaining direct JSX consumer — kept as the base object that
+// nxOrgSwitcherBtnStyle (below) spreads and overrides for TopBar.tsx/
+// CanvasHeader.tsx.
 export const orgSwitcherBtnStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -581,51 +565,14 @@ export const dropdownItemStyle: CSSProperties = {
   fontFamily: 'inherit',
 };
 
-// Settings menu opens upward since its trigger sits at the very bottom of
-// the sidebar.
-export const dropdownStyleUp: CSSProperties = {
-  ...dropdownStyle,
-  top: 'auto',
-  bottom: 'calc(100% + 6px)',
-};
-
-export const settingsEmailRowStyle: CSSProperties = {
-  ...dropdownItemStyle,
-  cursor: 'default',
-  color: 'var(--text-3)',
-  height: 'auto',
-  padding: '4px 8px 8px',
-};
-
-// Precision Dark redesign (Phase 2, UI-1): nx-themed variants of
-// dropdownStyleUp/settingsEmailRowStyle above, used only by the Sidebar's
-// Settings menu. Kept separate
-// rather than editing the two constants above, since those are shared with
-// CanvasHeader/ProjectDetailClient/TopBar and must keep their current
-// (non-nx) appearance everywhere else. Sharp corners (--nx-radius, 0px),
-// 1px --nx-line border, same drop shadow as the shared dropdown.
-export const nxDropdownStyleUp: CSSProperties = {
-  ...dropdownStyleUp,
-  borderRadius: 'var(--nx-radius)',
-  background: 'var(--nx-surface)',
-  border: '1px solid var(--nx-line)',
-  // UI-9 step 3 (motion): opens upward, so it slides down from its own
-  // top edge (nxMenuInUp) rather than the down-opening nxMenuIn.
-  animation: 'nxMenuInUp 160ms var(--nx-ease) both',
-};
-
-export const nxSettingsEmailRowStyle: CSSProperties = {
-  ...settingsEmailRowStyle,
-  color: 'var(--nx-ink-3)',
-};
-
 // ---------------------------------------------------------------------
 // Precision Dark redesign (Step 2): Sidebar + TopBar restyle. Where a
-// style object above is also used by CanvasHeader.tsx (topBarStyle,
-// orgSwitcherBtnStyle, dropdownStyle/dropdownItemStyle, breadcrumbSepStyle,
-// pageCrumbLinkStyle/pageCrumbCurrentStyle) a fresh nx-prefixed copy is
-// defined here instead, so CanvasHeader/the canvas route are completely
-// unaffected. TopBar-exclusive styles (topBarKbdStyle,
+// style object above (orgSwitcherBtnStyle, dropdownStyle/dropdownItemStyle,
+// breadcrumbSepStyle, pageCrumbLinkStyle/pageCrumbCurrentStyle) needed
+// nx-token colours, a fresh nx-prefixed copy is defined here instead of
+// editing the original in place — both TopBar.tsx and CanvasHeader.tsx
+// (canvas header shell rebuild) import the nx-prefixed versions directly.
+// TopBar-exclusive styles (topBarKbdStyle,
 // topBarSearchBtnStyle, topBarIconBtnStyle, topBarAvatarBtnStyle,
 // profileEmailTextStyle) and Sidebar-exclusive styles (navGroupLabelStyle,
 // treeLabelStyle, projectsNestStyle, projectRowStyle, workflowRowStyle,
@@ -840,11 +787,12 @@ export function navTreeStatusLabel(status: 'active' | 'paused' | 'draft'): strin
   return status === 'active' ? 'Active' : status === 'paused' ? 'Paused' : 'Draft';
 }
 
-// nx-themed TopBar — height 64 (was 52). Left untouched: topBarStyle
-// itself (CanvasHeader.tsx still uses the old 52px version unchanged).
-// Row itself carries no padding/gap any more — every child renders as its
-// own full-height bordered "cell" (logo/org switcher/breadcrumbs/search/
-// notifications/avatar), so spacing lives on the cells, not the row.
+// nx-themed TopBar — height 64. Now also CanvasHeader.tsx's shared shell
+// (canvas header shell rebuild dropped its old 52px topBarStyle in favor
+// of this one, matching the app shell exactly). Row itself carries no
+// padding/gap any more — every child renders as its own full-height
+// bordered "cell" (logo/org switcher/breadcrumbs/search/notifications/
+// avatar), so spacing lives on the cells, not the row.
 export const nxTopBarStyle: CSSProperties = {
   height: 64,
   flex: 'none',

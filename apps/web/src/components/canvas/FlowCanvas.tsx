@@ -1142,7 +1142,7 @@ function CanvasInner({
       />
 
       <div style={canvasShellRowStyle}>
-        <Sidebar orgId={orgId} role={role} projects={sidebarProjects} email={email} headerHeight={52} showLogo />
+        <Sidebar orgId={orgId} role={role} projects={sidebarProjects} />
 
         <div style={canvasBodyStyle}>
         {/* Viewer: no point showing the drag-to-add palette when dropping a

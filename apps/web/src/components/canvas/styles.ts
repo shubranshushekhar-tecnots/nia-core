@@ -672,7 +672,15 @@ export const copilotChatAreaStyle: CSSProperties = {
 // `--line` border), producing a visible header height/border jump when
 // navigating between /app pages and the workflow canvas.
 
-// ---------- header action buttons (Run checks / Run) ----------
+// ---------- floating full-view action buttons (fullscreen mode only) ----------
+//
+// CanvasHeader itself no longer uses these pill-shaped buttons (rebuilt as
+// full-height bordered cells below), but FlowCanvas.tsx's "full-view
+// floating controls" cluster still does — that small pill-button toolbar
+// floats directly over the canvas surface once the Fullscreen API is
+// engaged (the merged header/rail are outside fullscreenRef and disappear),
+// so it keeps its own compact pill shape rather than adopting the header's
+// full-height cell shape, which would look wrong floating.
 
 export const headerBtnBaseStyle: CSSProperties = {
   fontSize: 12.5,
@@ -712,58 +720,63 @@ export const headerCopilotToggleBtnStyle = (active: boolean): CSSProperties => (
   cursor: 'pointer',
 });
 
-// Restores the design's real "Search or run ⌘K" input box (UI feedback item
-// 5) — ported from app/styles.ts's topBarSearchBtnStyle/topBarKbdStyle, but
-// `flex: '0 1 220px'` + `minWidth: 0` so it shrinks under width pressure
-// (e.g. Copilot sidebar opening) instead of reflowing the rest of the
-// header, per the user's explicit constraint.
-export const headerSearchInputStyle: CSSProperties = {
+// ---------- header cells (Editor/Runs/Schedule tabs, Nia AI toggle, Run checks, Run) ----------
+//
+// CanvasHeader is now built from the same full-height bordered "cell"
+// pattern as TopBar.tsx (see app/styles.ts's nxTopBar* family) instead of
+// its own pill-shaped buttons — these cells are direct children of the
+// 64px nxTopBarStyle row, contiguous, 0-radius, with `.nx-wipe` for the
+// hover fill.
+
+// Editor/Runs/Schedule tab cell — pair with className="nx-wipe nx-active-
+// cell" (Editor) or "nx-wipe nx-row-disabled" (Runs/Schedule), same classes
+// Sidebar's nav rows already use for active/disabled colouring.
+export const headerTabCellStyle: CSSProperties = {
+  height: '100%',
+  boxSizing: 'border-box',
+  padding: '0 20px',
   display: 'flex',
   alignItems: 'center',
-  gap: 8,
-  height: 30,
-  flex: '0 1 220px',
-  minWidth: 0,
-  padding: '0 8px 0 10px',
-  borderRadius: 8,
-  background: 'var(--nx-raised)',
-  border: '1px solid var(--nx-line)',
-  color: 'var(--nx-ink-3)',
-  fontSize: 12.5,
-  fontFamily: 'inherit',
-  cursor: 'pointer',
-};
-
-export const headerSearchLabelStyle: CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  textAlign: 'left',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-};
-
-export const headerSearchKbdStyle: CSSProperties = {
+  border: 'none',
+  borderRight: '1px solid var(--nx-line)',
   fontFamily: 'var(--nx-font-mono)',
-  fontSize: 11,
-  padding: '2px 5px',
-  borderRadius: 5,
-  background: 'var(--nx-surface)',
-  border: '1px solid var(--nx-line)',
-  color: 'var(--nx-ink-disabled)',
-  lineHeight: 1,
-  flex: 'none',
+  fontSize: 12,
+  fontWeight: 600,
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+  cursor: 'pointer',
+  background: 'none',
+  color: 'inherit',
 };
+
+// Nia AI toggle — 64px square cell, lit with --nx-blue-panel while open.
+// Pair with className="nx-wipe" only when closed (no wipe on the
+// persistently-lit open state).
+export const headerCopilotCellStyle = (active: boolean): CSSProperties => ({
+  flex: 'none',
+  width: 64,
+  height: '100%',
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderLeft: '1px solid var(--nx-line)',
+  background: active ? 'var(--nx-blue-panel)' : 'transparent',
+  color: active ? 'var(--nx-blue-panel-text)' : 'var(--nx-ink-3)',
+  cursor: 'pointer',
+});
 
 // Static (never mutates workflow.status) — no publish/draft transition flow
 // exists today, so this only ever reflects the value already on the record.
+// Flattened to square + mono per the header shell rebuild.
 export const headerDraftChipStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 11,
   fontWeight: 600,
   color: 'var(--nx-ink-3)',
   background: 'var(--nx-raised)',
   border: '1px solid var(--nx-line)',
-  borderRadius: 5,
+  borderRadius: 'var(--nx-radius)',
   padding: '2px 7px',
   lineHeight: 1.4,
   flex: 'none',
@@ -787,32 +800,49 @@ export const headerRenameBtnStyle: CSSProperties = {
   opacity: 0.6,
 };
 
-// Editor | Runs | Schedule segmented control. Only "Editor" is ever wired
-// (Runs/Schedule have no routes yet — rendered disabled with a "Coming
-// soon" tooltip, never a fake active state).
-export const headerTabsStyle: CSSProperties = {
+// Ghost "Run checks" cell — same tab-cell shape, no right border (not part
+// of the Editor/Runs/Schedule group). Disabled/running state comes from the
+// "nx-row-disabled" class + the `disabled` attribute, same as every other
+// disabled row in this app.
+export const headerRunChecksCellStyle: CSSProperties = {
+  height: '100%',
+  boxSizing: 'border-box',
+  padding: '0 20px',
   display: 'flex',
   alignItems: 'center',
-  gap: 2,
-  background: 'var(--nx-raised)',
-  border: '1px solid var(--nx-line)',
-  borderRadius: 8,
-  padding: 2,
-  flex: 'none',
-};
-
-export const headerTabBtnStyle = (active: boolean, disabled: boolean): CSSProperties => ({
   border: 'none',
-  background: active ? 'var(--nx-surface)' : 'none',
-  color: disabled ? 'var(--nx-ink-disabled)' : active ? 'var(--nx-ink)' : 'var(--nx-ink-3)',
-  boxShadow: active ? '0 1px 2px rgba(15,23,42,.08)' : 'none',
-  cursor: disabled ? 'not-allowed' : 'pointer',
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 12,
   fontWeight: 600,
-  height: 24,
-  borderRadius: 6,
-  padding: '0 10px',
-  opacity: disabled ? 0.55 : 1,
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+  cursor: 'pointer',
+  background: 'none',
+  color: 'var(--nx-ink-3)',
+};
+
+// Primary-CTA "Run" cell — full height, --nx-blue-cta fill when enabled/
+// in-flight, --nx-raised/disabled-ink otherwise. Pair with className=
+// "nx-wipe" plus the --wipe-fill/--wipe-on custom-property overrides
+// (ink/bg) only while enabled — matches the app-wide primary-CTA wipe
+// bucket (Commit B), no wipe vars while disabled.
+export const headerRunCellStyle = (enabled: boolean, inFlight: boolean): CSSProperties => ({
+  flex: 'none',
+  height: '100%',
+  boxSizing: 'border-box',
+  padding: '0 24px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderLeft: '1px solid var(--nx-line)',
+  background: enabled || inFlight ? 'var(--nx-blue-cta)' : 'var(--nx-raised)',
+  color: enabled || inFlight ? 'var(--nx-blue-cta-text)' : 'var(--nx-ink-disabled)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  fontWeight: 600,
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+  cursor: enabled ? 'pointer' : 'not-allowed',
 });
 
 // ---------- full-view floating controls ----------

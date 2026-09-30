@@ -12,7 +12,6 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { SidebarProject } from '@/lib/dashboard/types';
 import { can, type ActorRole } from '@nia/schemas';
-import Logo from '@/components/Logo';
 import {
   navGroupLabelStyle,
   navRailBtnLabelStyle,
@@ -20,17 +19,12 @@ import {
   navRailExpandToggleStyle,
   navRailFooterStyle,
   navRailHandleStyle,
-  navRailHeaderStyle,
   navRailScrollStyle,
   navRailSoonMetaStyle,
   navRailStyle,
   navTreeStatusDotStyle,
   navTreeStatusLabel,
-  navWordmarkStyle,
   newProjectRowStyle,
-  nxDropdownItemStyle,
-  nxDropdownStyleUp,
-  nxSettingsEmailRowStyle,
   projectChevronStyle,
   projectRowStyle,
   projectsNestStyle,
@@ -80,33 +74,21 @@ import CreateWorkflowDialog from './CreateWorkflowDialog';
  * Precision Dark redesign (Step 2): row chrome now uses the nx-* token
  * styles/icons (apps/web/src/components/app/styles.ts's navRail* functions
  * + canvas/navIcons.tsx's Nx* icon set) instead of the old --text/--surface
- * styles and unicode glyphs. `headerHeight` lets the logo cell match
- * whichever header sits beside the rail — 64px under AppShell/TopBar
- * (default), 52px on the canvas route where FlowCanvas.tsx renders this
- * sidebar next to its own 52px CanvasHeader.
+ * styles and unicode glyphs.
  *
- * FIX (logo relocation): the logo/wordmark now lives in TopBar.tsx's own
- * first cell everywhere AppShell renders a TopBar, so this rail's own
- * logo header cell is gated behind `showLogo` (default false) and starts
- * directly with the nav rows there. The one exception is the workflow
- * canvas route (FlowCanvas.tsx), which has no TopBar — it still passes
- * `showLogo headerHeight={52}` so the rail keeps its own logo cell,
- * matching CanvasHeader's height.
+ * The logo/wordmark lives in the header row beside this rail (TopBar.tsx's
+ * first cell under AppShell, CanvasHeader.tsx's first cell on the workflow
+ * canvas route) — this rail always starts directly with the nav rows, on
+ * every route, with no logo cell of its own.
  */
 export default function Sidebar({
   orgId,
   role,
   projects,
-  email,
-  headerHeight = 64,
-  showLogo = false,
 }: {
   orgId: string | null;
   role: ActorRole;
   projects: SidebarProject[];
-  email: string;
-  headerHeight?: number;
-  showLogo?: boolean;
 }) {
   const pathname = usePathname();
   const railW = useAppShellStore((s) => s.railW);
@@ -121,7 +103,6 @@ export default function Sidebar({
   const setOpenProject = useAppShellStore((s) => s.setOpenProject);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [showCreateWorkflow, setShowCreateWorkflow] = useState(false);
-  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [railSnapping, setRailSnapping] = useState(false);
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
   const snapTimeoutRef = useRef<number | null>(null);
@@ -242,13 +223,6 @@ export default function Sidebar({
         title="Drag to resize \u00b7 double-click to toggle"
         style={navRailHandleStyle(railDrag)}
       />
-
-      {showLogo && (
-        <div style={navRailHeaderStyle(wide, headerHeight)}>
-          <Logo size={32} showWordmark={false} />
-          {wide && <span style={navWordmarkStyle}>NIA CORE</span>}
-        </div>
-      )}
 
       <div style={navRailScrollStyle(wide)}>
         {canManageOrg && (
@@ -464,31 +438,20 @@ export default function Sidebar({
           </a>
         )}
 
-        <div style={{ position: 'relative', width: wide ? '100%' : 'auto' }}>
-          <button
-            type="button"
-            className={`nx-wipe${showSettingsMenu ? ' nx-active-cell' : ''}`}
-            style={navRailBtnStyle(wide)}
-            onClick={() => setShowSettingsMenu((v) => !v)}
-            aria-label="Settings"
-            title={wide ? 'Settings' : undefined}
-            onMouseEnter={(e) => showHoverLabel(e, 'Settings')}
-            onMouseLeave={hideHoverLabel}
-            onFocus={(e) => showHoverLabel(e, 'Settings')}
-            onBlur={hideHoverLabel}
-          >
-            <NxSettingsIcon size={20} />
-            {wide && <span style={navRailBtnLabelStyle}>Settings</span>}
-          </button>
-          {showSettingsMenu && (
-            <div style={{ ...nxDropdownStyleUp, left: wide ? 8 : 44, bottom: 0 }}>
-              <div style={nxSettingsEmailRowStyle}>{email}</div>
-              <Link href="/app/settings" className="nx-wipe" style={nxDropdownItemStyle}>
-                All settings
-              </Link>
-            </div>
-          )}
-        </div>
+        <Link
+          href="/app/settings"
+          className={`nx-wipe${pathname === '/app/settings' ? ' nx-active-cell' : ''}`}
+          style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
+          aria-label="Settings"
+          title={wide ? 'Settings' : undefined}
+          onMouseEnter={(e) => showHoverLabel(e, 'Settings')}
+          onMouseLeave={hideHoverLabel}
+          onFocus={(e) => showHoverLabel(e, 'Settings')}
+          onBlur={hideHoverLabel}
+        >
+          <NxSettingsIcon size={20} />
+          {wide && <span style={navRailBtnLabelStyle}>Settings</span>}
+        </Link>
 
         <button
           type="button"
