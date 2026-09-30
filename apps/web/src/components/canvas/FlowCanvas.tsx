@@ -1191,7 +1191,7 @@ function CanvasInner({
                 nodeColor={(n) => (n.selected ? 'var(--nx-blue-tint)' : 'var(--nx-line)')}
                 nodeStrokeColor="transparent"
                 nodeBorderRadius={4}
-                maskColor="rgba(15,23,42,.06)"
+                maskColor="color-mix(in srgb, var(--nx-ink) 6%, transparent)"
                 maskStrokeColor="var(--nx-blue-panel)"
                 maskStrokeWidth={2}
                 style={{ width: 152, height: 96, background: 'var(--nx-surface)', border: '1px solid var(--nx-line)', borderRadius: 'var(--nx-radius)' }}

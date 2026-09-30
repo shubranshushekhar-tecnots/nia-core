@@ -165,7 +165,7 @@ function NeedsAttention({ items }: { items: NeedsAttentionItem[] }) {
               lineHeight: '18px',
               padding: '0 7px',
               background: 'var(--nx-danger)',
-              color: '#fff',
+              color: 'var(--nx-bg)',
             }}
           >
             {items.length}
