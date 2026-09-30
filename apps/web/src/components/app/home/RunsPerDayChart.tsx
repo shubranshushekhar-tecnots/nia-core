@@ -49,9 +49,7 @@ export default function RunsPerDayChart({ aggregate }: { aggregate: DashboardAgg
       aria-label="Runs per day"
       className={successPct === null ? 'nx-halftone' : undefined}
       style={{
-        background: 'var(--nx-surface)',
-        border: '1px solid var(--nx-line)',
-        borderRadius: 'var(--nx-radius)',
+        borderBottom: '1px solid var(--nx-line)',
         padding: '20px 24px 16px',
         display: 'flex',
         flexDirection: 'column',
@@ -65,7 +63,7 @@ export default function RunsPerDayChart({ aggregate }: { aggregate: DashboardAgg
             {successPct === null ? 'No runs loaded yet' : `${totalOk} succeeded, ${totalFail} failed \u00b7 ${successPct}% success`}
           </span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 12, color: 'var(--nx-ink-2)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontFamily: 'var(--nx-font-mono)', fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--nx-ink-2)' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ width: 10, height: 10, background: 'var(--nx-success)' }} />
             Succeeded

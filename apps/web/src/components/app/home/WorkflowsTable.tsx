@@ -26,7 +26,7 @@ const headerCellStyle = {
   fontFamily: 'var(--nx-font-condensed)',
   fontStretch: '62.5%',
   fontWeight: 700,
-  fontSize: 12,
+  fontSize: 14,
   letterSpacing: '0.05em',
   textTransform: 'uppercase',
   color: 'var(--nx-ink-3)',
@@ -34,12 +34,21 @@ const headerCellStyle = {
 
 export default function WorkflowsTable({ rows }: { rows: WorkflowRow[] }) {
   return (
-    <section
-      aria-label="Workflows"
-      style={{ background: 'var(--nx-surface)', border: '1px solid var(--nx-line)', borderRadius: 'var(--nx-radius)', display: 'flex', flexDirection: 'column' }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 12px 24px' }}>
+    <section aria-label="Workflows" style={{ display: 'flex', flexDirection: 'column', borderBottom: '1px solid var(--nx-line)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 20px 12px 24px' }}>
         <h2 style={{ margin: 0, ...sectionTitleStyle }}>Workflows</h2>
+        <span
+          style={{
+            fontFamily: 'var(--nx-font-mono)',
+            fontSize: 12,
+            color: 'var(--nx-ink-3)',
+            background: 'var(--nx-raised)',
+            padding: '2px 8px',
+            borderRadius: 'var(--nx-radius)',
+          }}
+        >
+          {rows.length}
+        </span>
       </div>
       <div
         role="row"
@@ -81,8 +90,18 @@ export default function WorkflowsTable({ rows }: { rows: WorkflowRow[] }) {
                 borderBottom: '1px solid var(--nx-line-inner)',
               }}
             >
-              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                <span style={{ fontFamily: 'var(--nx-font-ui)', fontSize: 15, fontWeight: 500, color: 'var(--nx-ink)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                <span
+                  style={{
+                    fontFamily: 'var(--nx-font-ui)',
+                    fontSize: 15,
+                    fontWeight: 500,
+                    color: 'var(--nx-ink)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
                   {row.workflowName}
                 </span>
               </div>

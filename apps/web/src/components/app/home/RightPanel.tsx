@@ -11,7 +11,7 @@ const sectionHeadingStyle = {
   fontFamily: 'var(--nx-font-condensed)',
   fontStretch: '62.5%',
   fontWeight: 700,
-  fontSize: 13,
+  fontSize: 22,
   letterSpacing: '0.04em',
   textTransform: 'uppercase',
   color: 'var(--nx-ink)',
@@ -42,7 +42,7 @@ function UsageMeter({ label, used, limit }: { label: string; used: number; limit
   const pct = limit === null ? 0 : Math.min(100, (100 * used) / limit);
   const warn = limit !== null && limit > 0 && used / limit >= PLAN_ALERT_THRESHOLD;
   const left = limit === null ? null : Math.max(0, limit - used);
-  const fillColor = warn ? 'var(--nx-warn)' : 'var(--nx-ink)';
+  const fillColor = warn ? 'var(--nx-warn)' : 'var(--nx-blue-panel)';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -201,7 +201,7 @@ function Activity({ items }: { items: ActivityItem[] }) {
         items.map((item) => {
           const s = STATUS_GLYPH[item.status];
           return (
-            <div key={item.id} style={{ display: 'flex', gap: 12, padding: '8px 0' }}>
+            <div key={item.id} style={{ display: 'flex', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--nx-line-inner)' }}>
               <span
                 aria-hidden
                 style={{
@@ -221,7 +221,7 @@ function Activity({ items }: { items: ActivityItem[] }) {
               <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
                 <span style={{ fontSize: 13, color: 'var(--nx-ink)' }}>
                   <span style={{ fontWeight: 500 }}>{item.workflowName}</span>{' '}
-                  <span style={{ color: 'var(--nx-ink-2)' }}>{s.verb}</span>
+                  <span style={{ color: s.color }}>{s.verb}</span>
                 </span>
                 <span style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 11.5, color: 'var(--nx-ink-3)' }}>{item.meta}</span>
               </div>

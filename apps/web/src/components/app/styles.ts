@@ -105,12 +105,12 @@ export const navScrollStyle: CSSProperties = {
 };
 
 export const navGroupLabelStyle: CSSProperties = {
-  padding: '14px 8px 6px',
+  padding: '22px 16px 8px',
   fontFamily: 'var(--nx-font-condensed)',
   fontStretch: '62.5%',
   fontWeight: 700,
   fontSize: 14,
-  letterSpacing: '0.04em',
+  letterSpacing: '0.05em',
   textTransform: 'uppercase',
   color: 'var(--nx-ink-3)',
 };
@@ -348,12 +348,21 @@ export const homeScrollStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflowY: 'auto',
-  padding: '64px 56px 56px',
   display: 'flex',
   flexDirection: 'column',
-  gap: 40,
   background: 'var(--nx-bg)',
   color: 'var(--nx-ink)',
+};
+
+// Full-bleed section wrapper for the greeting block, matching the
+// KPI strip / chart / table convention: own padding + a single
+// border-bottom divider, no card box.
+export const nxGreetingPanelStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+  padding: '32px 24px 28px',
+  borderBottom: '1px solid var(--nx-line)',
 };
 
 // Precision Dark redesign (Step 3, Home): condensed-caps eyebrow above the
@@ -361,11 +370,11 @@ export const homeScrollStyle: CSSProperties = {
 export const nxGreetingTagStyle: CSSProperties = {
   fontFamily: 'var(--nx-font-condensed)',
   fontStretch: '62.5%',
-  fontWeight: 700,
-  fontSize: 12,
-  letterSpacing: '0.06em',
+  fontWeight: 600,
+  fontSize: 16,
+  letterSpacing: '0.04em',
   textTransform: 'uppercase',
-  color: 'var(--nx-ink-3)',
+  color: 'var(--nx-ink-2)',
 };
 
 // Item 10: both headline lines (greeting + name) are Inter Tight
@@ -446,32 +455,59 @@ export function statusDotStyle(status: 'running' | 'succeeded' | 'failed' | 'dra
   };
 }
 
+// Rebuilt to match HomeEarly.dc.html's solid-purple, 3-zone plan banner:
+// a fixed 72px percent cell, a flex-grow body sentence, and a fixed
+// 180px CTA cell, each divided by a border in the on-purple text color.
 export const planBannerStyle: CSSProperties = {
   display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 16,
-  padding: '14px 18px',
-  borderRadius: 'var(--nx-radius)',
-  background: 'var(--nx-blue-tint)',
-  border: '1px solid var(--nx-line)',
-  color: 'var(--nx-ink)',
-  fontSize: 13.5,
+  alignItems: 'stretch',
+  minHeight: 64,
+  background: 'var(--nx-blue-panel)',
+  color: 'var(--nx-blue-panel-text)',
+  borderBottom: '1px solid var(--nx-line)',
   fontFamily: 'var(--nx-font-ui)',
+};
+
+export const planBannerPercentCellStyle: CSSProperties = {
+  flex: 'none',
+  width: 72,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 28,
+  fontWeight: 500,
+  letterSpacing: '-0.04em',
+  fontVariantNumeric: 'tabular-nums',
+  borderRight: '1px solid var(--nx-blue-panel-text)',
+};
+
+export const planBannerBodyStyle: CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  alignItems: 'center',
+  padding: '0 20px',
+  fontSize: 15,
+  lineHeight: '22px',
 };
 
 export const planBannerBtnStyle: CSSProperties = {
   flex: 'none',
-  height: 34,
-  padding: '0 16px',
-  borderRadius: 'var(--nx-radius)',
-  fontFamily: 'var(--nx-font-ui)',
+  width: 180,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  borderLeft: '1px solid var(--nx-blue-panel-text)',
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 13,
-  fontWeight: 600,
-  color: 'var(--nx-blue-cta-text)',
-  background: 'var(--nx-blue-cta)',
+  fontWeight: 500,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-blue-panel-text)',
+  background: 'transparent',
   border: 'none',
   cursor: 'pointer',
+  textDecoration: 'none',
 };
 
 export const runsSectionTitleStyle: CSSProperties = {
@@ -602,7 +638,7 @@ export const topBarSpacerStyle: CSSProperties = {
 export const topBarClockStyle: CSSProperties = {
   fontFamily: 'var(--nx-font-mono)',
   fontSize: 13,
-  color: 'var(--nx-ink-3)',
+  color: 'var(--nx-ink-2)',
   fontVariantNumeric: 'tabular-nums',
   letterSpacing: '0.02em',
   lineHeight: 1,
@@ -745,8 +781,8 @@ export function navRailHandleStyle(dragging: boolean): CSSProperties {
     position: 'absolute',
     top: 0,
     bottom: 0,
-    right: -3,
-    width: 7,
+    right: -4,
+    width: 8,
     zIndex: 12,
     cursor: 'col-resize',
     background: dragging ? 'var(--nx-blue-panel)' : 'transparent',
@@ -767,7 +803,7 @@ export function navRailHeaderStyle(wide: boolean, headerHeight: number): CSSProp
     display: 'flex',
     alignItems: 'center',
     justifyContent: wide ? 'flex-start' : 'center',
-    gap: 10,
+    gap: 12,
     padding: wide ? '0 16px' : 0,
     borderBottom: '1px solid var(--nx-line)',
   };
@@ -776,9 +812,9 @@ export function navRailHeaderStyle(wide: boolean, headerHeight: number): CSSProp
 export const navWordmarkStyle: CSSProperties = {
   fontFamily: 'var(--nx-font-condensed)',
   fontStretch: '62.5%',
-  fontWeight: 800,
+  fontWeight: 700,
   fontSize: 22,
-  letterSpacing: '0.02em',
+  letterSpacing: '0.01em',
   textTransform: 'uppercase',
   color: 'var(--nx-ink)',
   whiteSpace: 'nowrap',
@@ -798,8 +834,8 @@ export function navRailScrollStyle(wide: boolean): CSSProperties {
     // Full-bleed rows (item 7): no horizontal inset while wide — rows go
     // edge to edge and rely on their own bottom divider (navRailBtnStyle's
     // borderBottom) for separation instead of a gap between rows.
-    padding: wide ? '12px 0' : '12px 0',
-    gap: wide ? 0 : 2,
+    padding: wide ? '8px 0 0' : '8px 0 0',
+    gap: 0,
     boxSizing: 'border-box',
   };
 }
@@ -810,8 +846,8 @@ export function navRailFooterStyle(): CSSProperties {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: 2,
-    padding: 8,
+    gap: 0,
+    padding: 0,
     borderTop: '1px solid var(--nx-line)',
     width: '100%',
     boxSizing: 'border-box',
@@ -825,21 +861,21 @@ export function navRailFooterStyle(): CSSProperties {
 export function navRailBtnStyle(wide: boolean): CSSProperties {
   return {
     flex: 'none',
-    width: wide ? '100%' : 36,
+    width: wide ? '100%' : '100%',
     // Full-bleed rows (item 7): 44px tall, edge to edge, no gap between
     // rows — separation comes from the bottom divider below instead.
-    height: wide ? 44 : 36,
+    height: wide ? 44 : 52,
     display: 'flex',
     alignItems: 'center',
     justifyContent: wide ? 'flex-start' : 'center',
-    gap: 10,
+    gap: 12,
     borderRadius: 'var(--nx-radius)',
-    fontSize: 13.5,
+    fontSize: 15,
     border: 'none',
     borderBottom: wide ? '1px solid var(--nx-line-inner)' : 'none',
     cursor: 'pointer',
-    marginBottom: wide ? 0 : 2,
-    padding: wide ? '0 10px' : 0,
+    marginBottom: 0,
+    padding: wide ? '0 16px' : 0,
     textDecoration: 'none',
     boxSizing: 'border-box',
     fontFamily: 'inherit',
@@ -847,8 +883,8 @@ export function navRailBtnStyle(wide: boolean): CSSProperties {
 }
 
 export const navRailBtnLabelStyle: CSSProperties = {
-  fontSize: 13.5,
-  fontWeight: 500,
+  fontSize: 15,
+  fontWeight: 400,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -872,7 +908,7 @@ export const navRailSoonMetaStyle: CSSProperties = {
 export const navRailExpandToggleStyle: CSSProperties = {
   flex: 'none',
   width: '100%',
-  height: 30,
+  height: 48,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -881,9 +917,12 @@ export const navRailExpandToggleStyle: CSSProperties = {
   background: 'none',
   borderRadius: 'var(--nx-radius)',
   cursor: 'pointer',
-  fontSize: 12.5,
+  fontSize: 11,
   marginTop: 4,
-  fontFamily: 'inherit',
+  fontFamily: 'var(--nx-font-mono)',
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
 };
 
 // Sidebar tree status dot — workflow LIFECYCLE (active/paused/draft), not
@@ -974,7 +1013,8 @@ export function nxTopBarCellStyle(bordered: boolean = true): CSSProperties {
 export const nxOrgSwitcherBtnStyle: CSSProperties = {
   ...orgSwitcherBtnStyle,
   fontSize: 15,
-  color: 'var(--nx-ink-2)',
+  gap: 10,
+  color: 'var(--nx-ink)',
 };
 
 // Search cell (item 2 of the fix pass): a plain 280px cell with a single
@@ -982,7 +1022,7 @@ export const nxOrgSwitcherBtnStyle: CSSProperties = {
 // className="nx-wipe" on the outer cell for the hover background.
 export const nxTopBarSearchCellStyle: CSSProperties = {
   flex: 'none',
-  width: 280,
+  width: 300,
   height: '100%',
   boxSizing: 'border-box',
   padding: '0 20px',

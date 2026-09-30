@@ -17,7 +17,7 @@ const labelStyle: CSSProperties = {
   fontFamily: 'var(--nx-font-condensed)',
   fontStretch: '62.5%',
   fontWeight: 700,
-  fontSize: 11,
+  fontSize: 15,
   letterSpacing: '0.06em',
   textTransform: 'uppercase',
   color: 'var(--nx-ink-3)',
@@ -27,7 +27,7 @@ const valueStyle: CSSProperties = {
   fontFamily: 'var(--nx-font-ui)',
   fontSize: 44,
   lineHeight: 1,
-  fontWeight: 700,
+  fontWeight: 500,
   letterSpacing: '-0.03em',
   color: 'var(--nx-ink)',
   fontVariantNumeric: 'tabular-nums',
@@ -39,10 +39,9 @@ const footerStyle: CSSProperties = {
   color: 'var(--nx-ink-3)',
 };
 
-function DeltaBadge({ delta, goodWhenUp }: { delta: KpiDelta; goodWhenUp: boolean }) {
+function DeltaBadge({ delta }: { delta: KpiDelta; goodWhenUp: boolean }) {
   if (!delta.deltaAvailable || delta.deltaValue === null) return null;
   const up = delta.deltaValue >= 0;
-  const good = up === goodWhenUp;
   return (
     <span
       style={{
@@ -53,7 +52,7 @@ function DeltaBadge({ delta, goodWhenUp }: { delta: KpiDelta; goodWhenUp: boolea
         background: 'var(--nx-raised)',
         fontFamily: 'var(--nx-font-mono)',
         fontSize: 11.5,
-        color: good ? 'var(--nx-success)' : 'var(--nx-danger-text)',
+        color: 'var(--nx-ink-2)',
         fontVariantNumeric: 'tabular-nums',
       }}
     >
@@ -64,10 +63,9 @@ function DeltaBadge({ delta, goodWhenUp }: { delta: KpiDelta; goodWhenUp: boolea
 
 function Spark({ values }: { values: number[] }) {
   const path = sparklinePath(values);
-  if (!path) return <svg width={96} height={32} aria-hidden />;
+  if (!path) return <svg width={170} height={28} aria-hidden />;
   return (
-    <svg width={96} height={32} viewBox="0 0 96 32" aria-hidden="true">
-      <path d={path.area} fill="var(--nx-blue-panel)" fillOpacity={0.08} stroke="none" />
+    <svg width={170} height={28} viewBox="0 0 170 28" aria-hidden="true">
       <path
         className="nx-spark-draw"
         pathLength={1}
@@ -101,9 +99,7 @@ export default function KpiStrip({ aggregate }: { aggregate: DashboardAggregate 
       style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-        background: 'var(--nx-surface)',
-        border: '1px solid var(--nx-line)',
-        borderRadius: 'var(--nx-radius)',
+        borderBottom: '1px solid var(--nx-line)',
       }}
     >
       <div style={cellStyle(0)}>

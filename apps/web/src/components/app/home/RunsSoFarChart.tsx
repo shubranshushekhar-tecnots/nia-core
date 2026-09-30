@@ -30,20 +30,34 @@ export default function RunsSoFarChart({ runs }: { runs: RecentRun[] }) {
     <section
       aria-label="Run time, each run so far"
       style={{
-        background: 'var(--nx-surface)',
-        border: '1px solid var(--nx-line)',
-        borderRadius: 'var(--nx-radius)',
+        borderBottom: '1px solid var(--nx-line)',
         padding: '20px 24px',
         display: 'flex',
         flexDirection: 'column',
         gap: 12,
       }}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <h2 style={{ margin: 0, ...sectionTitleStyle }}>Run time, each run so far</h2>
-        <span style={{ fontSize: 13, color: 'var(--nx-ink-2)' }}>
-          {sorted.length} run{sorted.length === 1 ? '' : 's'} loaded, {succeededCount} succeeded
-        </span>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <h2 style={{ margin: 0, ...sectionTitleStyle }}>Run time, each run so far</h2>
+          <span style={{ fontSize: 13, color: 'var(--nx-ink-2)' }}>
+            {sorted.length} run{sorted.length === 1 ? '' : 's'} loaded, {succeededCount} succeeded
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontFamily: 'var(--nx-font-mono)', fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--nx-ink-2)' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 10, height: 10, background: 'var(--nx-ink-2)' }} />
+            Succeeded
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 10, height: 10, background: 'var(--nx-danger)' }} />
+            Failed
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 10, height: 10, background: 'var(--nx-blue-panel)' }} />
+            Running
+          </span>
+        </div>
       </div>
       <div style={{ position: 'relative', height: 170 }}>
         {ticks.map((t) => {
@@ -86,7 +100,13 @@ export default function RunsSoFarChart({ runs }: { runs: RecentRun[] }) {
           {sorted.map((run, i) => {
             const h = run.durationMs === null ? 0 : (BAR_AREA_H * run.durationMs) / maxMs;
             const color =
-              run.status === 'failed' ? 'var(--nx-danger)' : run.status === 'running' ? 'var(--nx-blue-panel)' : 'var(--nx-success)';
+              run.status === 'failed' ? 'var(--nx-danger)' : run.status === 'running' ? 'var(--nx-blue-panel)' : 'var(--nx-ink-2)';
+            const startedAt = new Date(run.startedAt);
+            const isToday = startedAt.toDateString() === new Date().toDateString();
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const isYesterday = startedAt.toDateString() === yesterday.toDateString();
+            const when = isToday ? 'NOW' : isYesterday ? 'YDAY' : startedAt.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }).toUpperCase();
             return (
               <div
                 key={run.id}
@@ -118,8 +138,9 @@ export default function RunsSoFarChart({ runs }: { runs: RecentRun[] }) {
                     animation: run.status === 'running' ? 'livePulse 1.4s ease-in-out infinite' : undefined,
                   }}
                 />
-                <span style={{ position: 'absolute', bottom: -22, fontFamily: 'var(--nx-font-mono)', fontSize: 11, color: 'var(--nx-ink-3)' }}>
-                  {i + 1}
+                <span style={{ position: 'absolute', bottom: -22, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, fontFamily: 'var(--nx-font-mono)', fontSize: 11, color: 'var(--nx-ink-3)' }}>
+                  <span>{i + 1}</span>
+                  <span style={{ fontSize: 9.5, letterSpacing: '0.04em' }}>{when}</span>
                 </span>
               </div>
             );

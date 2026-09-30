@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { logout, switchOrg } from '@/lib/auth/actions';
 import { clearStoredBearerToken } from '@/lib/auth/browserSession';
@@ -22,6 +22,8 @@ import {
   nxTopBarStyle,
   profileEmailRowStyle,
   profileEmailTextStyle,
+  topBarClockColonStyle,
+  topBarClockStyle,
   topBarInitialsStyle,
   topBarKbdStyle,
   topBarSearchBtnFillStyle,
@@ -41,6 +43,33 @@ const LOGO_CELL_WORDMARK_MIN_WIDTH = 120;
 // right after the org switcher, in the same header row — pages must not
 // also render their own duplicate breadcrumb below this one.
 export type TopBarCrumb = { label: string; href?: string };
+
+// Live HH:MM clock for the top bar spacer. Starts null so the server-
+// rendered markup has no time in it (avoids a hydration mismatch) and
+// fills in on mount; the colon blinks once a second via the nxColonBlink
+// keyframe (theme.css) rather than a second interval/state toggle.
+function TopBarClock() {
+  const [now, setNow] = useState<Date | null>(null);
+
+  useEffect(() => {
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!now) return null;
+
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+
+  return (
+    <span style={topBarClockStyle} aria-label={`${hh}:${mm}`}>
+      {hh}
+      <span aria-hidden style={topBarClockColonStyle}>{':'}</span>
+      {mm}
+    </span>
+  );
+}
 
 export default function TopBar({
   orgName,
@@ -149,7 +178,9 @@ export default function TopBar({
         </div>
       )}
 
-      <span style={topBarSpacerStyle} />
+      <div style={topBarSpacerStyle}>
+        <TopBarClock />
+      </div>
 
       <div className="nx-wipe" style={nxTopBarSearchCellStyle}>
         <button type="button" style={topBarSearchBtnFillStyle} onClick={() => setPaletteOpen(true)}>

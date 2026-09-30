@@ -1,15 +1,35 @@
 'use client';
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type MouseEvent as ReactMouseEvent,
+  type SyntheticEvent,
+} from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { SidebarProject } from '@/lib/dashboard/types';
 import { can, type ActorRole } from '@nia/schemas';
 import Logo from '@/components/Logo';
 import {
-  dropdownStyleUp,
   navGroupLabelStyle,
+  navRailBtnLabelStyle,
+  navRailBtnStyle,
+  navRailExpandToggleStyle,
+  navRailFooterStyle,
+  navRailHandleStyle,
+  navRailHeaderStyle,
+  navRailScrollStyle,
+  navRailSoonMetaStyle,
+  navRailStyle,
+  navTreeStatusDotStyle,
+  navTreeStatusLabel,
+  navWordmarkStyle,
   newProjectRowStyle,
+  nxDropdownStyleUp,
+  nxSettingsEmailRowStyle,
   projectChevronStyle,
   projectRowStyle,
   projectsNestStyle,
@@ -17,33 +37,26 @@ import {
   RAIL_COLLAPSED_WIDTH,
   RAIL_MAX_WIDTH,
   RAIL_MIN_WIDTH,
-  settingsEmailRowStyle,
-  statusDotStyle,
   treeLabelStyle,
   workflowRowStyle,
 } from './styles';
 import {
-  iconRailBtnLabelStyle,
-  iconRailBtnStyle,
-  iconRailExpandToggleStyle,
-  iconRailFooterStyle,
-  iconRailHandleStyle,
-  iconRailScrollStyle,
-  iconRailStyle,
-} from '@/components/canvas/styles';
-import {
-  BillingIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
-  ConnectionsIcon,
-  HomeIcon,
-  ProjectsIcon,
-  RunsIcon,
-  SettingsIcon,
+  NxAuditIcon,
+  NxBillingIcon,
+  NxChevronRightIcon,
+  NxCollapseIcon,
+  NxConnectionsIcon,
+  NxDashboardIcon,
+  NxHomeIcon,
+  NxMembersIcon,
+  NxProjectsIcon,
+  NxRunsIcon,
+  NxSettingsIcon,
 } from '@/components/canvas/navIcons';
 import { useAppShellStore } from './store';
 import CreateProjectDialog from './CreateProjectDialog';
 import CreateWorkflowDialog from './CreateWorkflowDialog';
+import ThemeSwitcher from './ThemeSwitcher';
 
 /**
  * The ONE sidebar used everywhere under /app/*, including the workflow
@@ -63,17 +76,37 @@ import CreateWorkflowDialog from './CreateWorkflowDialog';
  * roles, Audit log). Org dashboard / Members & roles / Audit log pages are
  * Step 3 work not yet built, so they render disabled; Connections and
  * Billing already have real pages so those are live links.
+ *
+ * Precision Dark redesign (Step 2): row chrome now uses the nx-* token
+ * styles/icons (apps/web/src/components/app/styles.ts's navRail* functions
+ * + canvas/navIcons.tsx's Nx* icon set) instead of the old --text/--surface
+ * styles and unicode glyphs. `headerHeight` lets the logo cell match
+ * whichever header sits beside the rail — 64px under AppShell/TopBar
+ * (default), 52px on the canvas route where FlowCanvas.tsx renders this
+ * sidebar next to its own 52px CanvasHeader.
+ *
+ * FIX (logo relocation): the logo/wordmark now lives in TopBar.tsx's own
+ * first cell everywhere AppShell renders a TopBar, so this rail's own
+ * logo header cell is gated behind `showLogo` (default false) and starts
+ * directly with the nav rows there. The one exception is the workflow
+ * canvas route (FlowCanvas.tsx), which has no TopBar — it still passes
+ * `showLogo headerHeight={52}` so the rail keeps its own logo cell,
+ * matching CanvasHeader's height.
  */
 export default function Sidebar({
   orgId,
   role,
   projects,
   email,
+  headerHeight = 64,
+  showLogo = false,
 }: {
   orgId: string | null;
   role: ActorRole;
   projects: SidebarProject[];
   email: string;
+  headerHeight?: number;
+  showLogo?: boolean;
 }) {
   const pathname = usePathname();
   const railW = useAppShellStore((s) => s.railW);
@@ -93,10 +126,27 @@ export default function Sidebar({
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
   const snapTimeoutRef = useRef<number | null>(null);
 
+  // Collapsed-rail hover label (Q5): a single shared piece of state driven
+  // by whichever row is currently hovered/focused, rendered `position:
+  // fixed` at the end of this component so it can never be clipped by the
+  // scroll area's `overflow: auto` (portal not needed — fixed positioning
+  // already escapes it, since no ancestor here sets a transform). Only
+  // armed when the rail is collapsed; a no-op while wide.
+  const [hoverLabel, setHoverLabel] = useState<{ text: string; top: number; left: number } | null>(null);
+
   // wide/narrow mirrors the design's `get wide(){ return railW >= 168 }` —
   // below that threshold the rail shows icon-only rows, same visual result
   // as the old boolean `collapsed` state but now driven by a live width.
   const wide = railW >= RAIL_MIN_WIDTH;
+
+  function showHoverLabel(e: SyntheticEvent<HTMLElement>, text: string) {
+    if (wide) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setHoverLabel({ text, top: rect.top + rect.height / 2, left: rect.right + 8 });
+  }
+  function hideHoverLabel() {
+    setHoverLabel(null);
+  }
 
   // Auto-expand the project tree around the workflow whose canvas is
   // currently open, so landing directly on /app/workflows/:id (bookmark,
@@ -185,34 +235,58 @@ export default function Sidebar({
   const canWrite = role !== 'viewer';
 
   return (
-    <nav style={iconRailStyle(railW, railDrag && !railSnapping, wide)} aria-label="Primary">
+    <nav style={navRailStyle(railW, railDrag && !railSnapping, wide)} aria-label="Primary">
       <div
         onPointerDown={handleRailPointerDown}
         onDoubleClick={handleRailDoubleClick}
         title="Drag to resize \u00b7 double-click to toggle"
-        style={iconRailHandleStyle(railDrag)}
+        style={navRailHandleStyle(railDrag)}
       />
 
-      <div style={{ padding: wide ? '0 8px 12px' : '0 0 12px', display: 'flex' }}>
-        <Logo size={24} showWordmark={wide} />
-      </div>
+      {showLogo && (
+        <div style={navRailHeaderStyle(wide, headerHeight)}>
+          <Logo size={32} showWordmark={false} />
+          {wide && <span style={navWordmarkStyle}>NIA CORE</span>}
+        </div>
+      )}
 
-      <div style={iconRailScrollStyle(wide)}>
+      <div style={navRailScrollStyle(wide)}>
         {canManageOrg && (
           <button
             type="button"
-            style={{ ...iconRailBtnStyle(false, wide), color: 'var(--ink4)', cursor: 'default', opacity: 0.6 }}
+            className="nx-wipe nx-row-disabled"
+            style={navRailBtnStyle(wide)}
             disabled
-            title="Org dashboard \u2014 soon"
+            aria-label="Org dashboard \u2014 soon"
+            title={wide ? 'Org dashboard \u2014 soon' : undefined}
+            onMouseEnter={(e) => showHoverLabel(e, 'Org dashboard \u2014 soon')}
+            onMouseLeave={hideHoverLabel}
+            onFocus={(e) => showHoverLabel(e, 'Org dashboard \u2014 soon')}
+            onBlur={hideHoverLabel}
           >
-            <span aria-hidden>{'\u25D1'}</span>
-            {wide && <span style={iconRailBtnLabelStyle}>Org dashboard {'\u2014'} soon</span>}
+            <NxDashboardIcon size={20} />
+            {wide && (
+              <>
+                <span style={navRailBtnLabelStyle}>Org dashboard</span>
+                <span style={navRailSoonMetaStyle}>SOON</span>
+              </>
+            )}
           </button>
         )}
 
-        <a href="/app" style={{ ...iconRailBtnStyle(pathname === '/app', wide), textDecoration: 'none' }} aria-label="Home" title="Home">
-          <HomeIcon size={16} />
-          {wide && <span style={iconRailBtnLabelStyle}>Home</span>}
+        <a
+          href="/app"
+          className={`nx-wipe${pathname === '/app' ? ' nx-active-cell' : ''}`}
+          style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
+          aria-label="Home"
+          title={wide ? 'Home' : undefined}
+          onMouseEnter={(e) => showHoverLabel(e, 'Home')}
+          onMouseLeave={hideHoverLabel}
+          onFocus={(e) => showHoverLabel(e, 'Home')}
+          onBlur={hideHoverLabel}
+        >
+          <NxHomeIcon size={20} />
+          {wide && <span style={navRailBtnLabelStyle}>Home</span>}
         </a>
 
         {wide && <div style={navGroupLabelStyle}>Projects</div>}
@@ -220,12 +294,17 @@ export default function Sidebar({
         <Link
           href="/app/projects"
           onClick={toggleNavProjectsOpen}
-          style={{ ...iconRailBtnStyle(isProjectsNavActive, wide), textDecoration: 'none' }}
+          className={`nx-wipe${isProjectsNavActive ? ' nx-active-cell' : ''}`}
+          style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
           aria-label="Projects"
-          title="Projects"
+          title={wide ? 'Projects' : undefined}
+          onMouseEnter={(e) => showHoverLabel(e, 'Projects')}
+          onMouseLeave={hideHoverLabel}
+          onFocus={(e) => showHoverLabel(e, 'Projects')}
+          onBlur={hideHoverLabel}
         >
-          <ProjectsIcon size={16} />
-          {wide && <span style={{ ...iconRailBtnLabelStyle, flex: 1 }}>Projects</span>}
+          <NxProjectsIcon size={20} />
+          {wide && <span style={{ ...navRailBtnLabelStyle, flex: 1 }}>Projects</span>}
           {wide && (
             <span
               aria-hidden
@@ -236,7 +315,7 @@ export default function Sidebar({
                 transition: 'transform .16s ease',
               }}
             >
-              <ChevronRightIcon size={12} />
+              <NxChevronRightIcon size={12} />
             </span>
           )}
         </Link>
@@ -265,7 +344,11 @@ export default function Sidebar({
                           href={`/app/workflows/${workflow.id}`}
                           style={{ ...workflowRowStyle(isActiveWorkflow), textDecoration: 'none' }}
                         >
-                          <span style={{ ...statusDotStyle(workflow.status), width: 6, height: 6 }} aria-hidden />
+                          <span
+                            role="img"
+                            aria-label={navTreeStatusLabel(workflow.status)}
+                            style={navTreeStatusDotStyle(workflow.status, isActiveWorkflow)}
+                          />
                           <span style={treeLabelStyle}>{workflow.name}</span>
                         </Link>
                       );
@@ -285,12 +368,17 @@ export default function Sidebar({
 
         <a
           href="/app/connections"
-          style={{ ...iconRailBtnStyle(pathname === '/app/connections', wide), textDecoration: 'none' }}
+          className={`nx-wipe${pathname === '/app/connections' ? ' nx-active-cell' : ''}`}
+          style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
           aria-label="Connections"
-          title="Connections"
+          title={wide ? 'Connections' : undefined}
+          onMouseEnter={(e) => showHoverLabel(e, 'Connections')}
+          onMouseLeave={hideHoverLabel}
+          onFocus={(e) => showHoverLabel(e, 'Connections')}
+          onBlur={hideHoverLabel}
         >
-          <ConnectionsIcon size={16} />
-          {wide && <span style={iconRailBtnLabelStyle}>Connections</span>}
+          <NxConnectionsIcon size={20} />
+          {wide && <span style={navRailBtnLabelStyle}>Connections</span>}
         </a>
 
         {/* No run-history page exists yet (no /app/runs route) — rendered
@@ -298,81 +386,152 @@ export default function Sidebar({
             a dead link. */}
         <button
           type="button"
-          style={{ ...iconRailBtnStyle(false, wide), color: 'var(--ink4)', cursor: 'default', opacity: 0.6 }}
+          className="nx-wipe nx-row-disabled"
+          style={navRailBtnStyle(wide)}
           disabled
-          title="Runs \u2014 soon"
+          aria-label="Runs \u2014 soon"
+          title={wide ? 'Runs \u2014 soon' : undefined}
+          onMouseEnter={(e) => showHoverLabel(e, 'Runs \u2014 soon')}
+          onMouseLeave={hideHoverLabel}
+          onFocus={(e) => showHoverLabel(e, 'Runs \u2014 soon')}
+          onBlur={hideHoverLabel}
         >
-          <RunsIcon size={16} />
-          {wide && <span style={iconRailBtnLabelStyle}>Runs {'\u2014'} soon</span>}
+          <NxRunsIcon size={20} />
+          {wide && (
+            <>
+              <span style={navRailBtnLabelStyle}>Runs</span>
+              <span style={navRailSoonMetaStyle}>SOON</span>
+            </>
+          )}
         </button>
 
         {canViewMembers && (
           <a
             href="/app/members"
-            style={{ ...iconRailBtnStyle(pathname === '/app/members', wide), textDecoration: 'none' }}
+            className={`nx-wipe${pathname === '/app/members' ? ' nx-active-cell' : ''}`}
+            style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
             aria-label="Members & roles"
-            title="Members & roles"
+            title={wide ? 'Members & roles' : undefined}
+            onMouseEnter={(e) => showHoverLabel(e, 'Members & roles')}
+            onMouseLeave={hideHoverLabel}
+            onFocus={(e) => showHoverLabel(e, 'Members & roles')}
+            onBlur={hideHoverLabel}
           >
-            <span aria-hidden>{'\u2687'}</span>
-            {wide && <span style={iconRailBtnLabelStyle}>Members & roles</span>}
+            <NxMembersIcon size={20} />
+            {wide && <span style={navRailBtnLabelStyle}>Members & roles</span>}
           </a>
         )}
 
         {canManageOrg && (
           <button
             type="button"
-            style={{ ...iconRailBtnStyle(false, wide), color: 'var(--ink4)', cursor: 'default', opacity: 0.6 }}
+            className="nx-wipe nx-row-disabled"
+            style={navRailBtnStyle(wide)}
             disabled
-            title="Audit log \u2014 soon"
+            aria-label="Audit log \u2014 soon"
+            title={wide ? 'Audit log \u2014 soon' : undefined}
+            onMouseEnter={(e) => showHoverLabel(e, 'Audit log \u2014 soon')}
+            onMouseLeave={hideHoverLabel}
+            onFocus={(e) => showHoverLabel(e, 'Audit log \u2014 soon')}
+            onBlur={hideHoverLabel}
           >
-            <span aria-hidden>{'\u2261'}</span>
-            {wide && <span style={iconRailBtnLabelStyle}>Audit log {'\u2014'} soon</span>}
+            <NxAuditIcon size={20} />
+            {wide && (
+              <>
+                <span style={navRailBtnLabelStyle}>Audit log</span>
+                <span style={navRailSoonMetaStyle}>SOON</span>
+              </>
+            )}
           </button>
         )}
       </div>
 
-      <div style={iconRailFooterStyle}>
+      <div style={navRailFooterStyle()}>
         {canBilling && (
           <a
             href="/app/billing"
-            style={{ ...iconRailBtnStyle(pathname === '/app/billing', wide), textDecoration: 'none' }}
+            className={`nx-wipe${pathname === '/app/billing' ? ' nx-active-cell' : ''}`}
+            style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
             aria-label="Billing"
-            title="Billing"
+            title={wide ? 'Billing' : undefined}
+            onMouseEnter={(e) => showHoverLabel(e, 'Billing')}
+            onMouseLeave={hideHoverLabel}
+            onFocus={(e) => showHoverLabel(e, 'Billing')}
+            onBlur={hideHoverLabel}
           >
-            <BillingIcon size={16} />
-            {wide && <span style={iconRailBtnLabelStyle}>Billing</span>}
+            <NxBillingIcon size={20} />
+            {wide && <span style={navRailBtnLabelStyle}>Billing</span>}
           </a>
         )}
 
         <div style={{ position: 'relative', width: wide ? '100%' : 'auto' }}>
           <button
             type="button"
-            style={iconRailBtnStyle(showSettingsMenu, wide)}
+            className={`nx-wipe${showSettingsMenu ? ' nx-active-cell' : ''}`}
+            style={navRailBtnStyle(wide)}
             onClick={() => setShowSettingsMenu((v) => !v)}
             aria-label="Settings"
-            title="Settings"
+            title={wide ? 'Settings' : undefined}
+            onMouseEnter={(e) => showHoverLabel(e, 'Settings')}
+            onMouseLeave={hideHoverLabel}
+            onFocus={(e) => showHoverLabel(e, 'Settings')}
+            onBlur={hideHoverLabel}
           >
-            <SettingsIcon size={16} />
-            {wide && <span style={iconRailBtnLabelStyle}>Settings</span>}
+            <NxSettingsIcon size={20} />
+            {wide && <span style={navRailBtnLabelStyle}>Settings</span>}
           </button>
           {showSettingsMenu && (
-            <div style={{ ...dropdownStyleUp, left: wide ? 8 : 44, bottom: 0 }} onMouseLeave={() => setShowSettingsMenu(false)}>
-              <div style={settingsEmailRowStyle}>{email}</div>
+            <div style={{ ...nxDropdownStyleUp, left: wide ? 8 : 44, bottom: 0 }}>
+              <div style={nxSettingsEmailRowStyle}>{email}</div>
+              <ThemeSwitcher />
             </div>
           )}
         </div>
 
         <button
           type="button"
-          style={iconRailExpandToggleStyle}
+          className="nx-wipe"
+          style={navRailExpandToggleStyle}
           onClick={toggleRailCollapse}
           aria-label={wide ? 'Collapse sidebar' : 'Expand sidebar'}
-          title={wide ? 'Collapse sidebar' : 'Expand sidebar'}
+          title={wide ? undefined : 'Expand sidebar'}
+          onMouseEnter={(e) => showHoverLabel(e, wide ? 'Collapse sidebar' : 'Expand sidebar')}
+          onMouseLeave={hideHoverLabel}
+          onFocus={(e) => showHoverLabel(e, wide ? 'Collapse sidebar' : 'Expand sidebar')}
+          onBlur={hideHoverLabel}
         >
-          {wide ? <ChevronLeftIcon size={14} /> : <ChevronRightIcon size={14} />}
+          <span aria-hidden style={{ display: 'flex', transform: wide ? undefined : 'scaleX(-1)' }}>
+            <NxCollapseIcon size={14} />
+          </span>
           {wide && <span>Collapse</span>}
         </button>
       </div>
+
+      {!wide && hoverLabel && (
+        <span
+          role="tooltip"
+          style={{
+            position: 'fixed',
+            top: hoverLabel.top,
+            left: hoverLabel.left,
+            transform: 'translateY(-50%)',
+            height: 32,
+            boxSizing: 'border-box',
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 10px',
+            background: 'var(--nx-ink)',
+            color: 'var(--nx-bg)',
+            fontSize: 13,
+            borderRadius: 'var(--nx-radius)',
+            whiteSpace: 'nowrap',
+            zIndex: 200,
+            pointerEvents: 'none',
+          }}
+        >
+          {hoverLabel.text}
+        </span>
+      )}
 
       {showCreateProject && <CreateProjectDialog orgId={orgId} onClose={() => setShowCreateProject(false)} />}
       {showCreateWorkflow && (

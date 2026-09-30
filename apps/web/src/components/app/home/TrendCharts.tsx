@@ -25,9 +25,7 @@ const sectionTitleStyle = {
 const subtitleStyle = { fontSize: 13, color: 'var(--nx-ink-2)' } as const;
 
 const cardStyle = {
-  background: 'var(--nx-surface)',
-  border: '1px solid var(--nx-line)',
-  borderRadius: 'var(--nx-radius)',
+  borderBottom: '1px solid var(--nx-line)',
   padding: '20px 24px 16px',
   display: 'flex',
   flexDirection: 'column',
@@ -79,6 +77,14 @@ function RowsMovedChart({ aggregate }: { aggregate: DashboardAggregate }) {
   const hoverDay = hoverIdx !== null ? days[hoverIdx] : undefined;
   const hoverPoint = hoverIdx !== null ? points[hoverIdx] : undefined;
   const hover = hoverDay && hoverPoint ? { day: hoverDay, point: hoverPoint } : null;
+  const endPoint = lastLoadedPoint(points);
+  const endValue = (() => {
+    for (let i = values.length - 1; i >= 0; i--) {
+      const v = values[i];
+      if (v !== undefined && v !== null) return v;
+    }
+    return null;
+  })();
 
   return (
     <section aria-label="Rows moved" className={loadedValues.length === 0 ? 'nx-halftone' : undefined} style={cardStyle}>
@@ -97,6 +103,11 @@ function RowsMovedChart({ aggregate }: { aggregate: DashboardAggregate }) {
           {lines.map((d, i) => (
             <path key={i} d={d} fill="none" stroke="var(--nx-blue-panel)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           ))}
+          {endPoint && endValue !== null && (
+            <text x={X0 + PLOT_W - 12} y={endPoint.y - 8} textAnchor="end" fontSize={11.5} fontWeight={700} fill="var(--nx-ink)">
+              {formatCompactNumber(endValue)}
+            </text>
+          )}
           {hover && hover.day.loaded && (
             <>
               <line x1={hover.point.x} x2={hover.point.x} y1={Y0} y2={Y0 + PLOT_H} stroke="var(--nx-ink-3)" strokeDasharray="2 3" />
@@ -183,7 +194,7 @@ function RunDurationChart({ aggregate, durationSeries }: { aggregate: DashboardA
           <h2 style={{ margin: 0, ...sectionTitleStyle }}>Run duration</h2>
           <span style={subtitleStyle}>Median per day \u00b7 slowest 5%: {p95Label}</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--nx-ink-2)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--nx-font-mono)', fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--nx-ink-2)' }}>
           <span style={{ width: 14, height: 2, background: 'var(--nx-blue-panel)' }} />
           Median
         </div>
