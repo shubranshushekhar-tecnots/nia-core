@@ -285,6 +285,10 @@ export const sidebarFooterStyle: CSSProperties = {
   position: 'relative',
 };
 
+// Sole remaining consumer is CanvasHeader.tsx (TopBar.tsx moved to the
+// 64px nxTopBarStyle below) — frozen at 52px per the canvas redesign's
+// "CanvasHeader stays 52px" constraint, so recolored to nx tokens in place
+// rather than adding yet another nx-prefixed duplicate.
 export const topBarStyle: CSSProperties = {
   height: 52,
   flex: 'none',
@@ -293,8 +297,8 @@ export const topBarStyle: CSSProperties = {
   alignItems: 'center',
   gap: 10,
   padding: '0 16px',
-  borderBottom: '1px solid var(--line)',
-  background: 'var(--surface)',
+  borderBottom: '1px solid var(--nx-line)',
+  background: 'var(--nx-bg)',
 };
 
 export const brandMarkStyle: CSSProperties = {
@@ -324,6 +328,9 @@ export const breadcrumbSepStyle: CSSProperties = {
   color: 'var(--text-4)',
 };
 
+// color recolored to --nx-ink in place: CanvasHeader.tsx is its only direct
+// consumer now (nxOrgSwitcherBtnStyle below overrides color/fontSize/gap on
+// top of this for TopBar.tsx, so that spread is unaffected).
 export const orgSwitcherBtnStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -331,7 +338,7 @@ export const orgSwitcherBtnStyle: CSSProperties = {
   padding: 0,
   background: 'transparent',
   border: 'none',
-  color: 'var(--text-2)',
+  color: 'var(--nx-ink)',
   fontSize: 13,
   fontFamily: 'inherit',
   cursor: 'pointer',
@@ -1216,7 +1223,7 @@ export const modalBtnPrimaryStyle: CSSProperties = {
 // Precision Dark redesign (Step 3, Home): nx-token restyle of the dialog
 // shell used by CreateProjectDialog/CreateWorkflowDialog. A parallel set
 // rather than edits to modal*Style above, since those are still used
-// as-is by AddConnectionDialog/ConnectionForm/CommandPalette.
+// as-is by AddConnectionDialog/ConnectionForm.
 export const nxModalOverlayStyle: CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -1352,6 +1359,273 @@ export function nxModalPrimaryCellStyle(pending: boolean): CSSProperties {
     cursor: pending ? 'default' : 'pointer',
   };
 }
+
+// ---------- CommandPalette (Precision Dark, Step 8A item 2) ----------
+// Matches HomeStates.dc.html's "COMMAND PALETTE · ⌘K · STUB" board — a
+// wider (640px) variant of the nxModal shell with its own header/search/
+// results rows rather than the generic nxModalTitleRowStyle/nxModalFieldRowStyle.
+
+export const nxCommandPaletteCardStyle: CSSProperties = {
+  width: 640,
+  maxWidth: '90vw',
+  boxSizing: 'border-box',
+  border: '1px solid var(--nx-ink-disabled)',
+  background: 'var(--nx-bg)',
+  display: 'flex',
+  flexDirection: 'column',
+};
+
+export const nxCommandPaletteHeaderStyle: CSSProperties = {
+  flex: 'none',
+  height: 48,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '0 20px',
+  borderBottom: '1px solid var(--nx-line)',
+};
+
+export const nxCommandPaletteHeaderTitleStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 800,
+  fontSize: 20,
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink)',
+};
+
+export const nxCommandPaletteEscStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxCommandPaletteSearchRowStyle: CSSProperties = {
+  flex: 'none',
+  height: 72,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 14,
+  padding: '0 20px',
+  borderBottom: '1px solid var(--nx-line)',
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxCommandPaletteInputStyle: CSSProperties = {
+  flex: 1,
+  border: 'none',
+  background: 'transparent',
+  color: 'var(--nx-ink)',
+  fontFamily: 'var(--font-inter-tight), var(--nx-font-ui)',
+  fontSize: 26,
+  letterSpacing: '-0.02em',
+  outline: 'none',
+};
+
+export const nxCommandPaletteResultsRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: 20,
+};
+
+export const nxCommandPaletteSoonBadgeStyle: CSSProperties = {
+  flex: 'none',
+  height: 22,
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '0 8px',
+  background: 'var(--nx-raised)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxCommandPaletteResultsTextStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 15,
+  color: 'var(--nx-ink-2)',
+};
+
+// ---------- HelpPanel (Step 8A item 7): side panel, canvas-config-panel style ----------
+// Anchored to the right edge over a dimmed backdrop (this component is a
+// modal dialog — see HelpPanel.tsx's a11y comment — not a docked flex
+// sibling like the canvas config panel, so it needs its own overlay rather
+// than reusing nxModalOverlayStyle's centered one).
+
+export const nxHelpPanelOverlayStyle: CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 60,
+  display: 'flex',
+  alignItems: 'stretch',
+  justifyContent: 'flex-end',
+  background: 'color-mix(in srgb, var(--nx-bg) 78%, transparent)',
+};
+
+export const nxHelpPanelShellStyle: CSSProperties = {
+  width: 420,
+  maxWidth: '90vw',
+  boxSizing: 'border-box',
+  borderLeft: '1px solid var(--nx-line)',
+  background: 'var(--nx-bg)',
+  display: 'flex',
+  flexDirection: 'column',
+  outline: 'none',
+};
+
+export const NX_HELP_PANEL_HEADER_HEIGHT = 56;
+
+export const nxHelpPanelHeaderStyle: CSSProperties = {
+  flex: 'none',
+  height: NX_HELP_PANEL_HEADER_HEIGHT,
+  display: 'flex',
+  alignItems: 'stretch',
+  justifyContent: 'space-between',
+  borderBottom: '1px solid var(--nx-line)',
+};
+
+export const nxHelpPanelTitleStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  alignItems: 'center',
+  padding: '0 16px',
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 800,
+  fontSize: 15,
+  textTransform: 'uppercase',
+  letterSpacing: '0.02em',
+  color: 'var(--nx-ink)',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
+
+export const nxHelpPanelCloseCellStyle: CSSProperties = {
+  flex: 'none',
+  width: NX_HELP_PANEL_HEADER_HEIGHT,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: 'none',
+  borderLeft: '1px solid var(--nx-line)',
+  background: 'transparent',
+  color: 'var(--nx-ink-2)',
+  cursor: 'pointer',
+  fontSize: 16,
+  lineHeight: 1,
+};
+
+export const nxHelpPanelBodyStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  display: 'flex',
+  flexDirection: 'column',
+};
+
+export const nxHelpPanelSectionStyle: CSSProperties = {
+  flex: 'none',
+  padding: '16px 20px',
+  borderBottom: '1px solid var(--nx-line)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+};
+
+export const nxHelpPanelSectionLabelStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxHelpPanelTextStyle: CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.6,
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxHelpPanelListStyle: CSSProperties = {
+  margin: 0,
+  paddingLeft: 18,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+};
+
+export const nxHelpPanelProblemRowStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+};
+
+export const nxHelpPanelProblemLabelStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  color: 'var(--nx-ink)',
+};
+
+export const nxHelpPanelSqlBlockStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11.5,
+  lineHeight: 1.6,
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
+  padding: 10,
+  whiteSpace: 'pre-wrap',
+  overflowX: 'auto',
+  color: 'var(--nx-ink)',
+};
+
+export const nxHelpPanelCopyBtnStyle: CSSProperties = {
+  alignSelf: 'flex-start',
+  height: 30,
+  padding: '0 12px',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  cursor: 'pointer',
+};
+
+export const nxHelpPanelWarnTextStyle: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--nx-warn)',
+};
+
+// Footer row — reserved "Still stuck?" slot (not built yet, see
+// HelpPanel.tsx) as a nx-wipe row on the left, close on the right.
+export const nxHelpPanelFooterStyle: CSSProperties = {
+  flex: 'none',
+  height: 52,
+  display: 'flex',
+  alignItems: 'stretch',
+  borderTop: '1px solid var(--nx-line)',
+};
+
+export const nxHelpPanelFooterCloseStyle: CSSProperties = {
+  marginLeft: 'auto',
+  padding: '0 20px',
+  display: 'flex',
+  alignItems: 'center',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+  background: 'transparent',
+  border: 'none',
+  cursor: 'pointer',
+};
 
 export const modalBtnDangerStyle: CSSProperties = {
   height: 36,

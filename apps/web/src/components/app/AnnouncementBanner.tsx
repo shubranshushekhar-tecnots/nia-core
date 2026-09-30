@@ -6,10 +6,10 @@ import { dismissAnnouncementAction } from '@/lib/announcements/actions';
 import {
   announcementBannerBodyStyle,
   announcementBannerDismissStyle,
+  announcementBannerMetaCellStyle,
   announcementBannerRowStyle,
   announcementBannerStackStyle,
   announcementBannerTextStyle,
-  announcementBannerTitleStyle,
 } from './announcementBannerStyles';
 
 /**
@@ -46,9 +46,9 @@ export default function AnnouncementBanner({ announcements }: { announcements: A
     <div style={announcementBannerStackStyle}>
       {visible.map((a) => (
         <div key={a.id} style={announcementBannerRowStyle(a.severity)}>
+          <span style={announcementBannerMetaCellStyle}>{a.title}</span>
           <div style={announcementBannerTextStyle}>
-            <span style={announcementBannerTitleStyle}>{a.title}</span>
-            <span style={announcementBannerBodyStyle}>{a.body}</span>
+            <p style={announcementBannerBodyStyle}>{a.body}</p>
           </div>
           {a.severity !== 'critical' && (
             <button

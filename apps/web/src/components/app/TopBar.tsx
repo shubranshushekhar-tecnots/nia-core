@@ -74,7 +74,6 @@ function TopBarClock() {
 export default function TopBar({
   orgName,
   email,
-  userId,
   fullName,
   crumbs,
   orgs,
@@ -82,7 +81,7 @@ export default function TopBar({
 }: {
   orgName: string | null;
   email: string;
-  /** Seed for the generated avatar — the current user's id. */
+  /** The current user's id (kept for callers; no longer read here directly). */
   userId: string;
   /** Used for the avatar cell's initials — same logic as the right panel. */
   fullName: string | null;
@@ -232,7 +231,7 @@ export default function TopBar({
         {profileMenuOpen && (
           <div style={{ ...nxDropdownStyle, right: 0, left: 'auto' }} onMouseLeave={() => setProfileMenuOpen(false)}>
             <div style={profileEmailRowStyle}>
-              <Avatar seed={userId} size={24} title={email} />
+              <Avatar name={fullName} size={24} title={email} />
               <span style={profileEmailTextStyle}>{email}</span>
             </div>
             <div style={{ height: 1, background: 'var(--nx-line)', margin: '4px 0' }} />

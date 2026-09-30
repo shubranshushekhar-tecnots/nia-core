@@ -3,64 +3,92 @@ import type { CSSProperties } from 'react';
 /**
  * Subscription Phase 5, Slice 4 (docs/plans/subscription-model.md, decision
  * 1). AnnouncementBanner's own styles file — deliberately separate from
- * components/app/styles.ts (off-limits, another session's concurrent UI
- * work) per this session's "new UI gets its own styles file" rule. Same
- * tone-map approach as components/console/styles.ts's
- * consoleAnnouncementPreviewStyle, reusing the same theme.css tokens
- * (--ink/--subtle/--line/--warning-deep/--error-deep) already in scope
- * under AppShell's own data-app-theme/data-om-theme="light" root.
+ * components/app/styles.ts per this session's "new UI gets its own styles
+ * file" rule. Precision Dark redesign (Step 8A item 4): matches Home's
+ * plan-banner anatomy (planBannerStyle/planBannerPercentCellStyle/
+ * planBannerBodyStyle/planBannerBtnStyle in components/app/styles.ts) — a
+ * full-width row split into fixed meta / flex-grow message / fixed action
+ * cells, each divided by a 1px border — but with a per-severity tint
+ * background and a 5px accent left bar instead of plan-banner's single
+ * solid-color treatment, since multiple announcements of different
+ * severities can stack.
  */
+
+type Severity = 'info' | 'warning' | 'critical';
+
+function tone(severity: Severity): { bar: string; bg: string; ink: string } {
+  switch (severity) {
+    case 'info':
+      return { bar: 'var(--nx-blue-panel)', bg: 'var(--nx-blue-tint)', ink: 'var(--nx-blue-soft-text)' };
+    case 'warning':
+      return { bar: 'var(--nx-warn)', bg: 'var(--nx-raised)', ink: 'var(--nx-warn)' };
+    case 'critical':
+      return { bar: 'var(--nx-danger)', bg: 'var(--nx-danger-tint)', ink: 'var(--nx-danger-text)' };
+  }
+}
+
 export const announcementBannerStackStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
-  padding: '12px 24px 0',
 };
 
-export function announcementBannerRowStyle(severity: 'info' | 'warning' | 'critical'): CSSProperties {
-  const map: Record<'info' | 'warning' | 'critical', [string, string, string]> = {
-    info: ['var(--ink)', 'var(--subtle)', 'var(--line)'],
-    warning: ['var(--warning-deep)', 'rgba(245,158,11,.1)', 'rgba(245,158,11,.4)'],
-    critical: ['var(--error-deep)', 'rgba(239,68,68,.1)', 'rgba(239,68,68,.4)'],
-  };
-  const [color, background, border] = map[severity];
+export function announcementBannerRowStyle(severity: Severity): CSSProperties {
+  const t = tone(severity);
   return {
     display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-    padding: '10px 14px',
-    borderRadius: 10,
-    color,
-    background,
-    border: `1px solid ${border}`,
+    alignItems: 'stretch',
+    minHeight: 52,
+    borderBottom: '1px solid var(--nx-line)',
+    borderLeftWidth: 5,
+    borderLeftStyle: 'solid',
+    borderLeftColor: t.bar,
+    background: t.bg,
+    color: t.ink,
+    fontFamily: 'var(--nx-font-ui)',
   };
 }
 
-export const announcementBannerTextStyle: CSSProperties = {
+export const announcementBannerMetaCellStyle: CSSProperties = {
+  flex: 'none',
   display: 'flex',
-  flexDirection: 'column',
-  gap: 2,
+  alignItems: 'center',
+  padding: '0 16px',
+  borderRight: '1px solid var(--nx-line)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  whiteSpace: 'nowrap',
 };
 
-export const announcementBannerTitleStyle: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 600,
+export const announcementBannerTextStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  alignItems: 'center',
+  padding: '10px 16px',
 };
 
 export const announcementBannerBodyStyle: CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.4,
+  margin: 0,
+  fontSize: 15,
+  lineHeight: '20px',
   whiteSpace: 'pre-wrap',
 };
 
 export const announcementBannerDismissStyle: CSSProperties = {
+  flex: 'none',
+  width: 52,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
   border: 'none',
+  borderLeftWidth: 1,
+  borderLeftStyle: 'solid',
+  borderLeftColor: 'var(--nx-line)',
   background: 'transparent',
   color: 'inherit',
   cursor: 'pointer',
-  fontSize: 15,
+  fontSize: 16,
   lineHeight: 1,
-  padding: 2,
-  opacity: 0.6,
 };

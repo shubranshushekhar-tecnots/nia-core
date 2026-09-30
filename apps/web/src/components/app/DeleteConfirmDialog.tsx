@@ -3,13 +3,16 @@
 import { useActionState, useEffect } from 'react';
 import type { ActionState } from '@/lib/auth/actions';
 import {
-  modalActionsStyle,
-  modalBtnDangerStyle,
-  modalBtnGhostStyle,
-  modalCardStyle,
-  modalErrorStyle,
-  modalOverlayStyle,
-  modalTitleStyle,
+  nxModalBodyStyle,
+  nxModalBodyTextStyle,
+  nxModalCancelCellStyle,
+  nxModalCardStyle,
+  nxModalDangerCellStyle,
+  nxModalDestructiveTagStyle,
+  nxModalErrorStyle,
+  nxModalFooterStyle,
+  nxModalOverlayStyle,
+  nxModalTitleStyle,
 } from './styles';
 
 const initialState: ActionState = null;
@@ -21,6 +24,12 @@ const initialState: ActionState = null;
 // returns `{success: true}` (there's nowhere to redirect to), so the
 // effect closes the dialog explicitly in that case. On failure (RLS
 // mismatch, etc.), `state.error` renders inline instead of doing nothing.
+//
+// Precision Dark redesign (Step 8A item 3): migrated in place to the
+// nxModal destructive pattern (same markup as NxConnectionsDeleteDialog,
+// which now duplicates this exactly and could be pointed back here — left
+// alone since collapsing it isn't part of this step). Props, copy and
+// behavior are unchanged; only the render output differs.
 export default function DeleteConfirmDialog({
   title,
   message,
@@ -41,31 +50,34 @@ export default function DeleteConfirmDialog({
   }, [state, onClose]);
 
   return (
-    <div style={modalOverlayStyle} onClick={onClose}>
-      <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
-        <span style={modalTitleStyle}>{title}</span>
-        <p style={{ fontSize: 13.5, color: 'var(--text-3)', margin: 0 }}>{message}</p>
-        <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {Object.entries(hiddenFields).map(([key, value]) => (
-            <input key={key} type="hidden" name={key} value={value} />
-          ))}
-          {state?.error && (
-            <span style={modalErrorStyle}>
-              {state.error}
-              {state.errorFix && <span style={{ display: 'block', marginTop: 2 }}>{state.errorFix}</span>}
-              {state.errorDetails && state.errorDetails !== state.error && (
-                <details style={{ marginTop: 4 }}>
-                  <summary style={{ cursor: 'pointer' }}>Show details</summary>
-                  <span style={{ display: 'block', marginTop: 2 }}>{state.errorDetails}</span>
-                </details>
-              )}
-            </span>
-          )}
-          <div style={modalActionsStyle}>
-            <button type="button" style={modalBtnGhostStyle} onClick={onClose}>
+    <div style={nxModalOverlayStyle} onClick={onClose}>
+      <div style={nxModalCardStyle} onClick={(e) => e.stopPropagation()}>
+        <form action={formAction} style={{ display: 'flex', flexDirection: 'column' }}>
+          <div style={nxModalBodyStyle}>
+            <span style={nxModalDestructiveTagStyle}>Delete</span>
+            <span style={nxModalTitleStyle}>{title}</span>
+            <p style={{ ...nxModalBodyTextStyle, margin: 0 }}>{message}</p>
+            {Object.entries(hiddenFields).map(([key, value]) => (
+              <input key={key} type="hidden" name={key} value={value} />
+            ))}
+            {state?.error && (
+              <span style={nxModalErrorStyle}>
+                {state.error}
+                {state.errorFix && <span style={{ display: 'block', marginTop: 2 }}>{state.errorFix}</span>}
+                {state.errorDetails && state.errorDetails !== state.error && (
+                  <details style={{ marginTop: 4 }}>
+                    <summary style={{ cursor: 'pointer' }}>Show details</summary>
+                    <span style={{ display: 'block', marginTop: 2 }}>{state.errorDetails}</span>
+                  </details>
+                )}
+              </span>
+            )}
+          </div>
+          <div style={nxModalFooterStyle}>
+            <button type="button" style={nxModalCancelCellStyle} onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" disabled={pending} style={modalBtnDangerStyle}>
+            <button type="submit" disabled={pending} style={nxModalDangerCellStyle(pending)}>
               {pending ? 'Deleting\u2026' : 'Delete'}
             </button>
           </div>

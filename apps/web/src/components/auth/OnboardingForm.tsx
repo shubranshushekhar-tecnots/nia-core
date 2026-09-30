@@ -1,55 +1,99 @@
 'use client';
 
 import { useActionState } from 'react';
-import AuthShell from './AuthShell';
+import Logo from '@/components/Logo';
 import { createOrganization, type ActionState } from '@/lib/auth/actions';
+import { nxModalErrorStyle, nxModalFieldStyle } from '@/components/app/styles';
 import {
-  errorTextStyle,
-  fieldLabelStyle,
-  fieldStyle,
-  noteStyle,
-  signinBtnStyle,
-  subtitleStyle,
-  titleStyle,
-} from './styles';
+  nxOnboardingAlertStyle,
+  nxOnboardingColumnStyle,
+  nxOnboardingFieldGroupStyle,
+  nxOnboardingHeaderStyle,
+  nxOnboardingHeadingStyle,
+  nxOnboardingLabelStyle,
+  nxOnboardingMainStyle,
+  nxOnboardingNoteStyle,
+  nxOnboardingPageStyle,
+  nxOnboardingPanelStyle,
+  nxOnboardingSubmitStyle,
+  nxOnboardingSubtitleStyle,
+  nxOnboardingWordmarkStyle,
+} from './onboardingStyles';
 
 const initialState: ActionState = null;
 
+// Precision Dark redesign (Step 8A item 1) — matches SettingsStates.dc.html
+// section 02 ("CREATE ORGANIZATION · ONBOARDING FORM": idle, field errors,
+// pending, server error). No longer wrapped in AuthShell (components/auth/
+// styles.ts's light-indigo [data-auth-theme] chrome) — a full-bleed
+// [data-app-theme] page of its own instead, same pattern as the
+// accept-invite page. AuthShell itself stays untouched; login/signup get
+// their own board later. Logic/copy/action are unchanged from the
+// pre-redesign version — this is a render-only restyle.
 export default function OnboardingForm() {
   const [state, formAction, pending] = useActionState(createOrganization, initialState);
+  const nameError = Boolean(state?.fieldErrors?.name);
+  const slugError = Boolean(state?.fieldErrors?.slug);
 
   return (
-    <AuthShell narrow>
-      <h1 style={titleStyle}>Set up your organization</h1>
-      <p style={subtitleStyle}>You&rsquo;ll be the first owner — invite teammates once you&rsquo;re in.</p>
+    <div data-app-theme="" data-om-theme="light" style={nxOnboardingPageStyle}>
+      <div style={nxOnboardingHeaderStyle}>
+        <Logo size={28} showWordmark={false} />
+        <span style={nxOnboardingWordmarkStyle}>Nia Core</span>
+      </div>
 
-      <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-          <label htmlFor="name" style={fieldLabelStyle}>Organization name</label>
-          <input id="name" name="name" type="text" placeholder="Ice Cream Co" style={fieldStyle(Boolean(state?.fieldErrors?.name), false)} />
-          {state?.fieldErrors?.name && <span style={errorTextStyle}>{state.fieldErrors.name[0]}</span>}
+      <div style={nxOnboardingMainStyle}>
+        <div style={nxOnboardingColumnStyle}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <h1 style={nxOnboardingHeadingStyle}>Set up your organization</h1>
+            <p style={nxOnboardingSubtitleStyle}>You&rsquo;ll be the first owner — invite teammates once you&rsquo;re in.</p>
+          </div>
+
+          <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={nxOnboardingPanelStyle}>
+              <div style={nxOnboardingFieldGroupStyle}>
+                <label htmlFor="name" style={nxOnboardingLabelStyle(nameError)}>Organization name</label>
+                <input id="name" name="name" type="text" placeholder="Ice Cream Co" style={nxModalFieldStyle(nameError)} />
+                {state?.fieldErrors?.name && <span style={nxModalErrorStyle}>{state.fieldErrors.name[0]}</span>}
+              </div>
+
+              <div style={nxOnboardingFieldGroupStyle}>
+                <label htmlFor="slug" style={nxOnboardingLabelStyle(slugError)}>URL slug</label>
+                <input
+                  id="slug"
+                  name="slug"
+                  type="text"
+                  placeholder="icecream-co"
+                  spellCheck={false}
+                  style={nxModalFieldStyle(slugError)}
+                />
+                <span style={nxOnboardingNoteStyle}>Lowercase letters, numbers, and hyphens only.</span>
+                {state?.fieldErrors?.slug && <span style={nxModalErrorStyle}>{state.fieldErrors.slug[0]}</span>}
+              </div>
+            </div>
+
+            {state?.error && (
+              <div role="alert" style={nxOnboardingAlertStyle}>
+                {state.error}
+              </div>
+            )}
+
+            <button type="submit" disabled={pending} style={nxOnboardingSubmitStyle(pending)}>
+              {pending ? (
+                <>
+                  <span className="nx-spinner" aria-hidden />
+                  Creating&hellip;
+                </>
+              ) : (
+                <>
+                  Create organization
+                  <span aria-hidden>{'\u2192'}</span>
+                </>
+              )}
+            </button>
+          </form>
         </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-          <label htmlFor="slug" style={fieldLabelStyle}>URL slug</label>
-          <input
-            id="slug"
-            name="slug"
-            type="text"
-            placeholder="icecream-co"
-            spellCheck={false}
-            style={fieldStyle(Boolean(state?.fieldErrors?.slug), false)}
-          />
-          <span style={noteStyle}>Lowercase letters, numbers, and hyphens only.</span>
-          {state?.fieldErrors?.slug && <span style={errorTextStyle}>{state.fieldErrors.slug[0]}</span>}
-        </div>
-
-        {state?.error && <span style={errorTextStyle}>{state.error}</span>}
-
-        <button type="submit" disabled={pending} style={signinBtnStyle}>
-          {pending ? 'Creating\u2026' : 'Create organization'}
-        </button>
-      </form>
-    </AuthShell>
+      </div>
+    </div>
   );
 }

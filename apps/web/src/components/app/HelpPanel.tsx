@@ -50,23 +50,24 @@ import type { HelpStepKey } from '@nia/schemas';
 import { resolveHelpSql, shouldShowCopyButton } from '@/lib/help/resolveHelpSql';
 import { useModalA11y } from '@/lib/a11y/useModalDialog';
 import {
-  modalActionsStyle,
-  modalBtnGhostStyle,
-  modalCardStyle,
-  modalOverlayStyle,
-  modalTitleStyle,
+  nxHelpPanelBodyStyle,
+  nxHelpPanelCloseCellStyle,
+  nxHelpPanelCopyBtnStyle,
+  nxHelpPanelFooterCloseStyle,
+  nxHelpPanelFooterStyle,
+  nxHelpPanelHeaderStyle,
+  nxHelpPanelListStyle,
+  nxHelpPanelOverlayStyle,
+  nxHelpPanelProblemLabelStyle,
+  nxHelpPanelProblemRowStyle,
+  nxHelpPanelSectionLabelStyle,
+  nxHelpPanelSectionStyle,
+  nxHelpPanelShellStyle,
+  nxHelpPanelSqlBlockStyle,
+  nxHelpPanelTextStyle,
+  nxHelpPanelTitleStyle,
+  nxHelpPanelWarnTextStyle,
 } from './styles';
-
-const copyButtonStyle = {
-  fontSize: 12,
-  fontWeight: 600,
-  color: 'var(--ink)',
-  background: 'var(--surface)',
-  border: '1px solid var(--line2)',
-  borderRadius: 6,
-  padding: '5px 10px',
-  cursor: 'pointer',
-} as const;
 
 export default function HelpPanel({
   step,
@@ -96,97 +97,91 @@ export default function HelpPanel({
   }
 
   return (
-    <div style={modalOverlayStyle} onClick={onClose}>
+    <div style={nxHelpPanelOverlayStyle} onClick={onClose}>
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={`${HELP_STEP_LABEL[step]} help for ${connectorLabel}`}
         tabIndex={-1}
-        style={{ ...modalCardStyle, width: 440, maxHeight: '80vh', overflowY: 'auto', outline: 'none' }}
+        style={nxHelpPanelShellStyle}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={modalTitleStyle}>
-          {HELP_STEP_LABEL[step]} — {connectorLabel}
+        <div style={nxHelpPanelHeaderStyle}>
+          <span style={nxHelpPanelTitleStyle}>
+            {HELP_STEP_LABEL[step]} — {connectorLabel}
+          </span>
+          <button type="button" aria-label="Close" style={nxHelpPanelCloseCellStyle} onClick={onClose}>
+            {'\u00D7'}
+          </button>
         </div>
 
-        {!section ? (
-          <div style={{ fontSize: 13, color: 'var(--text-2)' }}>No help content for this step yet.</div>
-        ) : (
-          <>
-            <div style={{ fontSize: 13, color: 'var(--text)' }}>{section.what}</div>
-
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Why</div>
-              <div style={{ fontSize: 13, color: 'var(--text-2)' }}>{section.why}</div>
+        <div style={nxHelpPanelBodyStyle}>
+          {!section ? (
+            <div style={nxHelpPanelSectionStyle}>
+              <p style={nxHelpPanelTextStyle}>No help content for this step yet.</p>
             </div>
-
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>How</div>
-              <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {section.how.map((line, i) => (
-                  <li key={i} style={{ fontSize: 13, color: 'var(--text-2)' }}>
-                    {line}
-                  </li>
-                ))}
-              </ol>
-            </div>
-
-            {resolvedSql.mode !== 'none' && (
-              <div>
-                {resolvedSql.mode === 'real' || resolvedSql.mode === 'illustration' ? (
-                  <>
-                    <pre
-                      style={{
-                        fontFamily: 'var(--font-data)',
-                        fontSize: 11,
-                        background: 'var(--surface2)',
-                        border: '1px solid var(--line)',
-                        borderRadius: 6,
-                        padding: 8,
-                        whiteSpace: 'pre-wrap',
-                        overflowX: 'auto',
-                        marginBottom: 8,
-                      }}
-                    >
-                      {resolvedSql.text}
-                    </pre>
-                    {showCopyButton ? (
-                      <button type="button" style={copyButtonStyle} onClick={handleCopy}>
-                        {copied ? 'Copied' : 'Copy statement'}
-                      </button>
-                    ) : (
-                      <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                        Shown for illustration only. Use the generator on the form to create your own credentials.
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div style={{ fontSize: 12, color: 'var(--warn)' }}>
-                    No statement text for this connector — ask your database admin.
-                  </div>
-                )}
+          ) : (
+            <>
+              <div style={nxHelpPanelSectionStyle}>
+                <p style={nxHelpPanelTextStyle}>{section.what}</p>
               </div>
-            )}
 
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Common problems</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={nxHelpPanelSectionStyle}>
+                <span style={nxHelpPanelSectionLabelStyle}>Why</span>
+                <p style={nxHelpPanelTextStyle}>{section.why}</p>
+              </div>
+
+              <div style={nxHelpPanelSectionStyle}>
+                <span style={nxHelpPanelSectionLabelStyle}>How</span>
+                <ol style={nxHelpPanelListStyle}>
+                  {section.how.map((line, i) => (
+                    <li key={i} style={nxHelpPanelTextStyle}>
+                      {line}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+
+              {resolvedSql.mode !== 'none' && (
+                <div style={nxHelpPanelSectionStyle}>
+                  {resolvedSql.mode === 'real' || resolvedSql.mode === 'illustration' ? (
+                    <>
+                      <pre style={nxHelpPanelSqlBlockStyle}>{resolvedSql.text}</pre>
+                      {showCopyButton ? (
+                        <button type="button" style={nxHelpPanelCopyBtnStyle} onClick={handleCopy}>
+                          {copied ? 'Copied' : 'Copy statement'}
+                        </button>
+                      ) : (
+                        <p style={nxHelpPanelTextStyle}>
+                          Shown for illustration only. Use the generator on the form to create your own credentials.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p style={nxHelpPanelWarnTextStyle}>
+                      No statement text for this connector — ask your database admin.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div style={nxHelpPanelSectionStyle}>
+                <span style={nxHelpPanelSectionLabelStyle}>Common problems</span>
                 {section.problems.map((p, i) => (
-                  <div key={i}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{p.problem}</div>
-                    <div style={{ fontSize: 13, color: 'var(--text-2)' }}>{p.fix}</div>
+                  <div key={i} style={nxHelpPanelProblemRowStyle}>
+                    <span style={nxHelpPanelProblemLabelStyle}>{p.problem}</span>
+                    <p style={nxHelpPanelTextStyle}>{p.fix}</p>
                   </div>
                 ))}
               </div>
-            </div>
-          </>
-        )}
+            </>
+          )}
+        </div>
 
-        <div style={modalActionsStyle}>
+        <div style={nxHelpPanelFooterStyle}>
           {/* Reserved for a future "Still stuck? Contact support" link (docs/plans/learning-mode.md) — not built yet. */}
-          <div style={{ flex: 1 }} />
-          <button type="button" style={modalBtnGhostStyle} onClick={onClose}>
+          <button type="button" style={nxHelpPanelFooterCloseStyle} onClick={onClose}>
             Close
           </button>
         </div>

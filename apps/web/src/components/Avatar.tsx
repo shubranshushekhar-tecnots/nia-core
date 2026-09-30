@@ -1,104 +1,65 @@
-'use client';
-
-import { useEffect, useState } from 'react';
-import { pixelAvatar } from '@/lib/avatar';
+import { initials } from '@/components/app/home/RightPanel';
 
 /**
- * Deterministic "Pixel mark" avatar (see lib/avatar.ts + the "Generated
- * avatar options" design board). `seed` is normally the user id — every
- * person gets the same avatar every time, no upload needed.
- *
- * Shuffle is intentionally client-only: there's no `avatar_seed` column on
- * `profiles` (adding one would be a schema/logic change, out of scope for
- * this redesign — see docs/decisions.md), so "shuffle" just layers a
- * localStorage-persisted suffix on top of the real seed. It only survives
- * on this browser/device; a fresh session elsewhere always falls back to
- * the deterministic default.
+ * Precision Dark redesign (Step 8A item 5): square, 0-radius avatar —
+ * replaces the old "pixel mark" generated pattern (lib/avatar.ts, deleted)
+ * with the same initials treatment TopBar's own profile trigger already
+ * uses (components/app/home/RightPanel.tsx's `initials()`). `imageUrl` is
+ * accepted for forward-compat with a future uploaded-avatar feature (no
+ * `avatar_url` column exists yet — see docs/decisions.md) — image avatars
+ * render as a square-cropped <img>, initials avatars stay text-only.
  */
 export default function Avatar({
-  seed,
+  name,
   size,
-  shuffle = false,
+  imageUrl,
   title,
 }: {
-  seed: string;
+  name: string | null;
   size: number;
-  /** Show the shuffle button (profile card only; never in the rail/topbar). */
-  shuffle?: boolean;
+  imageUrl?: string | null;
   title?: string;
 }) {
-  const storageKey = `nia-avatar-shuffle:${seed}`;
-  const [override, setOverride] = useState<string | null>(null);
+  const style = {
+    width: size,
+    height: size,
+    borderRadius: 0,
+    background: 'var(--nx-raised)',
+    color: 'var(--nx-ink)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 'none',
+    overflow: 'hidden',
+  } as const;
 
-  useEffect(() => {
-    if (!shuffle) return;
-    setOverride(window.localStorage.getItem(storageKey));
-  }, [shuffle, storageKey]);
-
-  const effectiveSeed = override ? `${seed}:${override}` : seed;
-  const grid = size <= 20 ? 3 : 5;
-  const avatar = pixelAvatar(effectiveSeed, size, grid);
-
-  function handleShuffle() {
-    const next = Math.random().toString(36).slice(2, 8);
-    window.localStorage.setItem(storageKey, next);
-    setOverride(next);
+  if (imageUrl) {
+    return (
+      <span role="img" aria-label={title ?? 'Avatar'} title={title} style={style}>
+        <img src={imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      </span>
+    );
   }
 
+  const label = initials(name);
+  const useCondensed = size >= 28;
+
   return (
-    <span style={{ position: 'relative', display: 'inline-flex', flex: 'none' }}>
-      <span
-        role="img"
-        aria-label={title ?? 'Avatar'}
-        title={title}
-        style={{
-          width: avatar.size,
-          height: avatar.size,
-          borderRadius: avatar.size / 2,
-          background: avatar.colors[1],
-          boxSizing: 'border-box',
-          padding: avatar.padding,
-          display: 'grid',
-          gridTemplateColumns: `repeat(${avatar.grid}, minmax(0, 1fr))`,
-          alignContent: 'center',
-          flex: 'none',
-        }}
-      >
-        {avatar.cells.map((cell, i) => (
-          <span
-            key={i}
-            aria-hidden
-            style={{ display: 'block', aspectRatio: '1', borderRadius: 1, background: cell.color }}
-          />
-        ))}
-      </span>
-      {shuffle && (
-        <button
-          type="button"
-          onClick={handleShuffle}
-          title="Shuffle avatar"
-          aria-label="Shuffle avatar"
-          style={{
-            position: 'absolute',
-            right: -4,
-            bottom: -4,
-            width: 26,
-            height: 26,
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'var(--surface, #FFFFFF)',
-            border: '1px solid var(--line-200, #DEDEE3)',
-            boxShadow: '0 1px 2px rgba(16,18,27,.12)',
-            color: 'var(--ink-200, #52555C)',
-            fontSize: 12,
-            cursor: 'pointer',
-          }}
-        >
-          {'\u21BB'}
-        </button>
-      )}
+    <span
+      role="img"
+      aria-label={title ?? 'Avatar'}
+      title={title}
+      style={{
+        ...style,
+        fontFamily: useCondensed ? 'var(--nx-font-condensed)' : 'var(--nx-font-mono)',
+        fontStretch: useCondensed ? '62.5%' : undefined,
+        fontWeight: useCondensed ? 700 : 500,
+        textTransform: useCondensed ? 'uppercase' : undefined,
+        letterSpacing: useCondensed ? '0.02em' : undefined,
+        fontSize: Math.max(10, Math.round(size * 0.4)),
+      }}
+    >
+      {label}
     </span>
   );
 }
