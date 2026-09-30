@@ -6215,3 +6215,36 @@ trust-device cookie or workflow to regress. If a customer ever opts into
 on every sign-in — an accepted UX cost, not a bug, in exchange for
 staff sessions never being able to skip 2FA verification via a
 remembered-device cookie.
+
+## org_plan default: Pro/25 -> Free/inherited, rls_probes.sql probe 55 updated (2026-09-30)
+
+`0042_org_plan.sql`/`0043_org_plan_default_on_create.sql` (Phase 1) gave
+every org a flat, hardcoded `plan_tier='Pro', workflow_limit=25` default.
+`0049_plans_table.sql`/`0050_org_plan_overrides.sql` replaced that with a
+`plans` catalog table plus `plan_id`/`workflow_limit_set` (and
+`project_limit_set`) override flags, and rewrote the create-org trigger to
+insert `plan_id='free', plan_tier='Free', workflow_limit=null` with
+`workflow_limit_set` left at its column default of `false` — meaning a
+freshly created org today inherits the `'free'` plan's limits
+(`workflow_limit=2`, `packages` migration `0049`) rather than getting an
+explicit Pro/25 value. This is a deliberate product/schema evolution
+(subscription plans), not a regression.
+
+`rls_probes.sql` probe 55 (added in `0044_org_plan_member_select.sql`'s
+probe coverage) asserted the old `plan_tier='Pro' and workflow_limit=25`
+values. A prior commit (`17a4164`) updated the `plan_tier`/`plan_id` half
+of that assertion to `'free'`/`'Free'` to match 0050's real default, which
+was correct, but dropped the `workflow_limit` half entirely instead of
+updating it, because the root fixture (same commit) added an unrelated
+`project_limit`/`workflow_limit`-lifting override on the same org — needed
+before probe 11 so later org-scoped project/workflow inserts don't trip
+`0052_project_limit_enforcement.sql`/`0053_workflow_limit_uses_plans.sql`'s
+enforcement triggers — which overwrites `workflow_limit`/
+`workflow_limit_set` on that org long before probe 55's position in the
+file is reached. Since the assertion was still real, current behavior
+worth covering (does a fresh org's `org_plan` row correctly inherit rather
+than get an explicit override), the fix is a `probe55_baseline` temp table
+that snapshots `workflow_limit`/`workflow_limit_set` in the root fixture
+immediately before the lifting override runs; probe 55 now asserts
+`workflow_limit_set = false and workflow_limit is null` against that
+baseline alongside its existing live `plan_id`/`plan_tier` read.

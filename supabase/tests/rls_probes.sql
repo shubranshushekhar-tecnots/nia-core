@@ -28,6 +28,13 @@ begin;
 
 create temporary table test_ids (key text primary key, id uuid not null) on commit drop;
 create temporary table probe_results (n int, name text, passed boolean) on commit drop;
+-- Captures 'org's org_plan row exactly as 0050_org_plan_overrides.sql's
+-- create-org trigger leaves it, before the project/workflow-limit-lifting
+-- override a few lines below permanently overwrites those same columns for
+-- the rest of this script. Probe 55 asserts against this snapshot (not a
+-- live query) for that reason — see the override's own comment and probe
+-- 55's comment for the full explanation.
+create temporary table probe55_baseline (workflow_limit int, workflow_limit_set boolean) on commit drop;
 
 do $$
 declare
@@ -85,6 +92,9 @@ begin
   -- plan allows 1 project"/"...2 workflows" (NIA02/NIA01) and aborts the
   -- entire transaction — including, before this fix, masking probe 70's
   -- suspension check behind an unrelated limit error.
+  insert into probe55_baseline (workflow_limit, workflow_limit_set)
+  select workflow_limit, workflow_limit_set from public.org_plan where org_id = v_org;
+
   update public.org_plan
   set project_limit_set = true, project_limit = null,
       workflow_limit_set = true, workflow_limit = null
@@ -2080,13 +2090,17 @@ end $$;
 -- very script, so 0050_org_plan_overrides.sql's create-org trigger (private.
 -- set_default_org_plan, redefined again by 0050) is what actually fires for
 -- it — 'free'/'Free', not 0043's original 'Pro' default that only ever
--- applied before the plans-catalog migrations (0049-0051) shipped.
--- Deliberately does NOT assert workflow_limit/workflow_limit_set here: the
--- root fixture above overrides both to null/true for this same org (to
--- avoid tripping 0053's workflow-limit trigger across probes 11/66-70/79+),
--- so by the time this probe runs the row reflects that test-only override,
--- not the plan's real inherited default — plan_id/plan_tier are untouched
--- by that override and are what this probe is actually about.
+-- applied before the plans-catalog migrations (0049-0051) shipped. See
+-- docs/decisions.md ("org_plan default: Pro/25 -> Free/inherited") for the
+-- full history of that model change.
+-- Also restores the workflow_limit/workflow_limit_set assertion the prior
+-- fix had dropped: that check IS still real, current behavior (a freshly
+-- created org's org_plan row inherits from the 'free' plan rather than
+-- getting an explicit override), it just can't be read live here because
+-- the root fixture's project/workflow-limit-lifting override (needed before
+-- probe 11) overwrites those same two columns on this same org long before
+-- this probe runs. probe55_baseline (captured in the root fixture,
+-- immediately before that override) holds the pre-override values instead.
 -- =========================================================================
 do $$
 declare
@@ -2094,6 +2108,8 @@ declare
   v_org    uuid := (select id from test_ids where key = 'org');
   v_plan_id text;
   v_plan_tier text;
+  v_baseline_limit int;
+  v_baseline_limit_set boolean;
 begin
   perform pg_temp.act_as(v_member);
   select plan_id, plan_tier
@@ -2101,10 +2117,15 @@ begin
   from public.org_plan where org_id = v_org;
   reset role;
 
-  if v_plan_id = 'free' and v_plan_tier = 'Free' then
-    insert into probe_results values (55, 'org_plan: a member can read their own org''s plan row (0050''s Free default for new orgs)', true);
+  select workflow_limit, workflow_limit_set
+  into v_baseline_limit, v_baseline_limit_set
+  from probe55_baseline;
+
+  if v_plan_id = 'free' and v_plan_tier = 'Free'
+     and v_baseline_limit_set = false and v_baseline_limit is null then
+    insert into probe_results values (55, 'org_plan: a member can read their own org''s plan row (0050''s Free/inherited default for new orgs)', true);
   else
-    insert into probe_results values (55, 'org_plan: a member can read their own org''s plan row (0050''s Free default for new orgs)', false);
+    insert into probe_results values (55, 'org_plan: a member can read their own org''s plan row (0050''s Free/inherited default for new orgs)', false);
   end if;
 exception when others then
   reset role;
