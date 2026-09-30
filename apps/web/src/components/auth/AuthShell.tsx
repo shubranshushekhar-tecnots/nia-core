@@ -32,8 +32,8 @@ import {
 // scoped to [data-auth-theme] (the old light-indigo auth-only palette,
 // now unused by this component). Rewired to next-themes' useTheme()/
 // setTheme(), the same "nia-theme" storage key + html[data-nx-theme]
-// mechanism that already drives the rest of the app (Sidebar's
-// ThemeSwitcher) — AuthStates.dc.html itself flags this as the open
+// mechanism that already drives the rest of the app (Settings page's
+// AppearancePicker) — AuthStates.dc.html itself flags this as the open
 // question ("whether it should drive the app theme switcher"), and this
 // is the answer: yes, for consistency there should be one theme, not two.
 // The toggle here stays a simple binary (dark/light), matching the

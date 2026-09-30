@@ -57,7 +57,6 @@ import {
 import { useAppShellStore } from './store';
 import CreateProjectDialog from './CreateProjectDialog';
 import CreateWorkflowDialog from './CreateWorkflowDialog';
-import ThemeSwitcher from './ThemeSwitcher';
 
 /**
  * The ONE sidebar used everywhere under /app/*, including the workflow
@@ -484,7 +483,6 @@ export default function Sidebar({
           {showSettingsMenu && (
             <div style={{ ...nxDropdownStyleUp, left: wide ? 8 : 44, bottom: 0 }}>
               <div style={nxSettingsEmailRowStyle}>{email}</div>
-              <ThemeSwitcher />
               <Link href="/app/settings" className="nx-wipe" style={nxDropdownItemStyle}>
                 All settings
               </Link>

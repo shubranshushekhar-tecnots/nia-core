@@ -10,8 +10,9 @@ import SettingsClient from '@/components/settings/SettingsClient';
 export const dynamic = 'force-dynamic';
 
 // Phase 1: Profile (name editable, email read-only), Appearance (3-card,
-// synced with the Sidebar's ThemeSwitcher dropdown), Organization (name/slug
-// editable for admin/owner only), Members & roles / Billing link rows, and
+// the only theme control — the Sidebar's dropdown switcher was removed),
+// Organization (name/slug editable for admin/owner only), Members & roles
+// / Billing link rows, and
 // Danger zone → Leave organization (reuses members/actions.ts's
 // removeMember self-leave path). Password, Sessions, Notifications, API
 // keys, Delete organization, Delete account are hidden — no backend exists

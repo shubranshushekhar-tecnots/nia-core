@@ -9,11 +9,9 @@ import {
   nxSettingsAppearanceSwatchStyle,
 } from './styles';
 
-// Settings page (Phase 1) — large 3-card picker. Reads/writes the exact
-// same next-themes "nia-theme" state as the Sidebar's compact ThemeSwitcher
-// dropdown (components/app/ThemeSwitcher.tsx), so the two stay in sync
-// automatically with no extra wiring: whichever one is touched last wins,
-// and the other reflects it on its next render.
+// Settings page (Phase 1) — large 3-card picker. Reads/writes next-themes'
+// "nia-theme" state directly; the only theme control in the app (the
+// Sidebar's compact dropdown switcher was removed in favor of this).
 const OPTIONS = [
   { value: 'dark', label: 'DARK', swatch: 'linear-gradient(135deg, #0A0A0B 50%, #F2F2F2 50%)' },
   { value: 'light', label: 'LIGHT', swatch: 'linear-gradient(135deg, #FAFAF8 50%, #0A0A0B 50%)' },

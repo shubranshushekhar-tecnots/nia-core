@@ -599,7 +599,7 @@ export const settingsEmailRowStyle: CSSProperties = {
 
 // Precision Dark redesign (Phase 2, UI-1): nx-themed variants of
 // dropdownStyleUp/settingsEmailRowStyle above, used only by the Sidebar's
-// Settings menu (now that it hosts the theme switcher). Kept separate
+// Settings menu. Kept separate
 // rather than editing the two constants above, since those are shared with
 // CanvasHeader/ProjectDetailClient/TopBar and must keep their current
 // (non-nx) appearance everywhere else. Sharp corners (--nx-radius, 0px),

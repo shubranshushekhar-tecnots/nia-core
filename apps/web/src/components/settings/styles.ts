@@ -188,8 +188,8 @@ export const nxSettingsLinkRowArrowStyle: CSSProperties = {
   color: 'var(--nx-ink-3)',
 };
 
-// ---- Appearance — large 3-card picker (synced with the Sidebar's
-// ThemeSwitcher dropdown via next-themes' shared `useTheme()` state) -------
+// ---- Appearance — large 3-card picker (next-themes' shared `useTheme()`
+// state) -------------------------------------------------------------
 
 export const nxSettingsAppearanceGridStyle: CSSProperties = {
   display: 'grid',
