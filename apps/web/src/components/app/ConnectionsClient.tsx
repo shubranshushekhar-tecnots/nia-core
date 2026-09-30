@@ -428,7 +428,7 @@ export default function ConnectionsClient({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={nxConnSectionHeaderStyle}>
               <span style={nxConnSectionTitleStyle}>Installed</span>
-              <span style={nxConnSectionMetaStyle}>
+              <span style={{ ...nxConnSectionMetaStyle, textTransform: 'uppercase' }}>
                 {installs.length} connector{installs.length === 1 ? '' : 's'}
               </span>
             </div>
@@ -460,7 +460,7 @@ export default function ConnectionsClient({
                     <span style={nxConnRowNameColStyle}>
                       <span style={nxConnRowNameStyle}>{meta?.name ?? install.connectorId}</span>
                       <span style={nxConnRowMetaStyle}>
-                        {meta ? CATEGORY_LABEL[meta.category] : ''}
+                        <span style={{ textTransform: 'uppercase' }}>{meta ? CATEGORY_LABEL[meta.category] : ''}</span>
                         {manifest?.version && (
                           <>
                             {' \u00b7 '}
@@ -534,7 +534,7 @@ export default function ConnectionsClient({
       <div className="nia-connector-catalog" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={nxConnSectionHeaderStyle}>
           <span style={nxConnSectionTitleStyle}>Add a connection</span>
-          <span style={nxConnSectionMetaStyle}>{filteredCatalog.length} connectors</span>
+          <span style={{ ...nxConnSectionMetaStyle, textTransform: 'uppercase' }}>{filteredCatalog.length} connectors</span>
         </div>
 
         <div style={nxConnToolbarRowStyle}>

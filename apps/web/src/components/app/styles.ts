@@ -1761,6 +1761,7 @@ export const nxConnCounterLabelStyle: CSSProperties = {
   fontSize: 16,
   fontWeight: 800,
   letterSpacing: '0.04em',
+  textTransform: 'uppercase',
 };
 
 export const nxConnCounterValueStyle: CSSProperties = {
@@ -2168,6 +2169,7 @@ export const nxConnWorksAsPillStyle = (active: boolean): CSSProperties => ({
   fontFamily: 'var(--nx-font-mono)',
   fontSize: 12,
   letterSpacing: '0.06em',
+  textTransform: 'uppercase',
   cursor: 'pointer',
 });
 
@@ -2227,6 +2229,7 @@ export const nxConnectorCardCategoryStyle: CSSProperties = {
   fontWeight: 700,
   letterSpacing: '0.04em',
   color: 'var(--nx-ink-2)',
+  textTransform: 'uppercase',
 };
 
 // Badges: "N connected" filled --nx-blue-panel, "Installed" (0
