@@ -530,6 +530,107 @@ consoleRouter.get(
 );
 
 /**
+ * Subscription Phase 5, Slice 5 (docs/plans/subscription-model.md, decision
+ * 2). Staff-initiated member removal — reason required for both the audit
+ * trail and the org-facing announcement. Last-owner / billing-owner
+ * protection is NOT reimplemented here: it's already enforced at the DB
+ * layer by private.protect_last_super_admin (0004_owner_rename.sql,
+ * extended by 0061_billing_owner.sql) on organization_members' own DELETE
+ * trigger, which fires regardless of who performs the delete (service_role
+ * included — RLS bypass never bypasses triggers). This route just attempts
+ * the delete and, on failure, surfaces the trigger's own raised exception
+ * message directly as the customer-facing error — same "the trigger's own
+ * message IS the customer-facing copy" convention
+ * apps/web/src/lib/members/actions.ts's friendlyMemberError already
+ * follows for the self-service path.
+ *
+ * Also removes the user's project_members rows for every project in this
+ * org (0054_project_members.sql) — membership in the org's own projects
+ * has no independent meaning once they're not an org member at all.
+ *
+ * Writes both audit rows (§3's rule) AND inserts a targeted announcement
+ * (audience='org', audience_roles=['owner','admin'], severity='info') so
+ * the org's owners/admins learn about the removal even though staff acted
+ * without going through them — decision 2's exact message template.
+ */
+const removeMemberBodySchema = z.object({
+  reason: z.string().trim().min(1).max(500),
+});
+
+const orgMemberParamsSchema = z.object({ orgId: z.string().uuid(), userId: z.string().uuid() });
+
+consoleRouter.post(
+  "/orgs/:orgId/members/:userId/remove",
+  validate({ params: orgMemberParamsSchema, body: removeMemberBodySchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { orgId, userId } = req.params as unknown as { orgId: string; userId: string };
+    const { reason } = req.body as unknown as { reason: string };
+
+    await withServiceRole(dbPool, async (db) => {
+      const targetResult = await db.query<{ name: string | null; email: string }>(
+        `select name, email from public."user" where id = $1`,
+        [userId],
+      );
+      const target = targetResult.rows[0];
+      if (!target) throw new AppError(404, "NOT_FOUND", "User not found.");
+
+      const orgResult = await db.query<{ name: string }>(`select name from public.organizations where id = $1`, [orgId]);
+      const org = orgResult.rows[0];
+      if (!org) throw new AppError(404, "NOT_FOUND", "Organization not found.");
+
+      let deleteResult;
+      try {
+        deleteResult = await db.query(`delete from public.organization_members where org_id = $1 and user_id = $2`, [
+          orgId,
+          userId,
+        ]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Couldn't remove that member.";
+        throw new AppError(400, "CANNOT_REMOVE_MEMBER", message);
+      }
+      if (deleteResult.rowCount === 0) {
+        throw new AppError(404, "NOT_FOUND", "That user is not a member of this organization.");
+      }
+
+      await db.query(
+        `delete from public.project_members
+         where user_id = $1 and project_id in (select id from public.projects where org_id = $2)`,
+        [userId, orgId],
+      );
+
+      const displayName = target.name ?? target.email;
+      const detail = JSON.stringify({ reason, targetUserId: userId, targetName: displayName });
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+        authUser.id,
+        "org.member_remove",
+        userId,
+        orgId,
+        detail,
+      ]);
+      await db.query("select private.log_org_audit($1, $2, $3, $4)", [
+        orgId,
+        authUser.id,
+        "organization.member_removed",
+        detail,
+      ]);
+
+      const noticeBody = `A Nia staff member removed ${displayName} from ${org.name}. Reason: ${reason}`;
+      await db.query(
+        `insert into public.announcements (title, body, severity, audience, audience_org_id, audience_roles, created_by)
+         values ($1, $2, 'info', 'org', $3, $4, $5)`,
+        ["Member removed", noticeBody, orgId, ["owner", "admin"], authUser.id],
+      );
+    });
+
+    res.json({ status: "removed" });
+  }),
+);
+
+/**
  * Build order step 9 / Slice 3b (console-plan.md, decisions 1/2, additions
  * 3-6). `POST /console/orgs/:orgId/suspend` — `reason` is required (unlike
  * unsuspend's optional `note` below): a suspension always needs one, both

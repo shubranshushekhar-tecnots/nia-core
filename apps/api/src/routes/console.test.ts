@@ -1864,3 +1864,206 @@ describe("POST /console/announcements/:id/archive", () => {
     expect(query.mock.calls.some((call) => call[0].includes("update public.announcements set archived_at"))).toBe(false);
   });
 });
+
+/**
+ * Subscription Phase 5, Slice 5 (docs/plans/subscription-model.md, decision
+ * 2): POST /console/orgs/:orgId/members/:userId/remove. The last-owner /
+ * billing-owner refusal isn't reimplemented in the route — it's the real
+ * private.protect_last_super_admin trigger on organization_members' DELETE
+ * (0004_owner_rename.sql, extended by 0061_billing_owner.sql) — so these
+ * tests simulate the trigger's own two exception messages via the mocked
+ * delete query, then assert the route surfaces them as 400s without ever
+ * touching project_members or writing any audit row / notice.
+ */
+function mockRemoveMemberQuery(options: {
+  userExists?: boolean;
+  orgExists?: boolean;
+  deleteError?: string;
+}) {
+  const { userExists = true, orgExists = true, deleteError } = options;
+  const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+    if (sql.includes("platform_staff")) return { rowCount: 1 };
+    if (sql.includes('select name, email from public."user"')) {
+      return { rows: userExists ? [{ name: "Alice Member", email: "alice@nia.dev" }] : [], rowCount: userExists ? 1 : 0 };
+    }
+    if (sql.includes("select name from public.organizations")) {
+      return { rows: orgExists ? [{ name: "Acme Inc" }] : [], rowCount: orgExists ? 1 : 0 };
+    }
+    if (sql.includes("delete from public.organization_members")) {
+      if (deleteError) throw new Error(deleteError);
+      return { rowCount: 1 };
+    }
+    if (sql.includes("delete from public.project_members")) return { rowCount: 0 };
+    if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+    if (sql.includes("private.log_org_audit")) return { rows: [], rowCount: 0 };
+    if (sql.includes("insert into public.announcements")) return { rows: [], rowCount: 1 };
+    throw new Error(`mockRemoveMemberQuery: unexpected SQL: ${sql}`);
+  });
+  withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+    fn({ query }),
+  );
+  return query;
+}
+
+describe("POST /console/orgs/:orgId/members/:userId/remove", () => {
+  const orgId = "11111111-1111-1111-1111-111111111111";
+  const userId = "22222222-2222-2222-2222-222222222222";
+
+  it("removes the member, deletes their project_members rows, writes both audit rows, and inserts an org notice for a staff session", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockRemoveMemberQuery({});
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/members/${userId}/remove`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Requested by org owner" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "removed" });
+
+    expect(
+      query.mock.calls.some(
+        (call) => call[0].includes("delete from public.project_members") && (call[1] as unknown[])[0] === userId,
+      ),
+    ).toBe(true);
+
+    const detail = JSON.stringify({ reason: "Requested by org owner", targetUserId: userId, targetName: "Alice Member" });
+    const staffAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(staffAuditCall?.[1]).toEqual(["staff-1", "org.member_remove", userId, orgId, detail]);
+    const orgAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_org_audit"));
+    expect(orgAuditCall?.[1]).toEqual([orgId, "staff-1", "organization.member_removed", detail]);
+
+    const noticeCall = query.mock.calls.find((call) => call[0].includes("insert into public.announcements"));
+    expect(noticeCall?.[1]).toEqual([
+      "Member removed",
+      "A Nia staff member removed Alice Member from Acme Inc. Reason: Requested by org owner",
+      orgId,
+      ["owner", "admin"],
+      "staff-1",
+    ]);
+  });
+
+  it("refuses to remove the last owner, surfacing the trigger's message, without deleting project_members or writing any audit row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockRemoveMemberQuery({ deleteError: "Cannot remove or demote the last owner of an organization" });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/members/${userId}/remove`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Requested by org owner" }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("CANNOT_REMOVE_MEMBER");
+    expect(body.error.message).toBe("Cannot remove or demote the last owner of an organization");
+    expect(query.mock.calls.some((call) => call[0].includes("delete from public.project_members"))).toBe(false);
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_staff_action"))).toBe(false);
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_org_audit"))).toBe(false);
+    expect(query.mock.calls.some((call) => call[0].includes("insert into public.announcements"))).toBe(false);
+  });
+
+  it("refuses to remove the billing owner, surfacing the trigger's message", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockRemoveMemberQuery({
+      deleteError: "Cannot remove or demote the billing owner — transfer billing ownership first",
+    });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/members/${userId}/remove`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Requested by org owner" }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("CANNOT_REMOVE_MEMBER");
+    expect(body.error.message).toBe("Cannot remove or demote the billing owner — transfer billing ownership first");
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_staff_action"))).toBe(false);
+  });
+
+  it("returns 404 for a target user that does not exist, without deleting or auditing anything", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockRemoveMemberQuery({ userExists: false });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/members/${userId}/remove`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Requested by org owner" }),
+    });
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.code).toBe("NOT_FOUND");
+    expect(query.mock.calls.some((call) => call[0].includes("delete from public.organization_members"))).toBe(false);
+  });
+
+  it("returns 404 for an org that does not exist", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    mockRemoveMemberQuery({ orgExists: false });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/members/${userId}/remove`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Requested by org owner" }),
+    });
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.code).toBe("NOT_FOUND");
+  });
+
+  it("rejects an empty reason with a validation error, without querying anything", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    withServiceRole.mockResolvedValue({ rowCount: 1 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/members/${userId}/remove`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "" }),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("returns 403 for a non-staff session without ever removing the member", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/members/${userId}/remove`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Requested by org owner" }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(withServiceRole).toHaveBeenCalledOnce();
+  });
+
+  it("returns 401 for an unauthenticated request", async () => {
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/members/${userId}/remove`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Requested by org owner" }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(withServiceRole).not.toHaveBeenCalled();
+  });
+});
