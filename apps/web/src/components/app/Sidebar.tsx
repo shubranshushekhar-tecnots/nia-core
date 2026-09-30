@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { SidebarProject } from '@/lib/dashboard/types';
-import type { ActorRole } from '@nia/schemas';
+import { can, type ActorRole } from '@nia/schemas';
 import Logo from '@/components/Logo';
 import {
   dropdownStyleUp,
@@ -175,6 +175,14 @@ export default function Sidebar({
   // billing.view capability in packages/schemas/src/can.ts, which is a
   // deeper permission check, not sidebar-visibility.)
   const canBilling = role !== 'member';
+  // Subscription Phase 2, Slice 7: members.view includes plain members
+  // (read-only there), excludes viewer/individual — matches
+  // packages/schemas/src/can.ts's CAPABILITY_MATRIX exactly, unlike
+  // canManageOrg above (admin/owner only) which the old placeholder used.
+  const canViewMembers = can(role, 'members.view');
+  // Viewer is read-only everywhere (0057_viewer_role_restrictions.sql)
+  // — hide the one write control this sidebar renders.
+  const canWrite = role !== 'viewer';
 
   return (
     <nav style={iconRailStyle(railW, railDrag && !railSnapping, wide)} aria-label="Primary">
@@ -265,9 +273,11 @@ export default function Sidebar({
                 </div>
               );
             })}
-            <button type="button" style={newProjectRowStyle} onClick={() => setShowCreateProject(true)}>
-              + New project
-            </button>
+            {canWrite && (
+              <button type="button" style={newProjectRowStyle} onClick={() => setShowCreateProject(true)}>
+                + New project
+              </button>
+            )}
           </div>
         )}
 
@@ -296,16 +306,16 @@ export default function Sidebar({
           {wide && <span style={iconRailBtnLabelStyle}>Runs {'\u2014'} soon</span>}
         </button>
 
-        {canManageOrg && (
-          <button
-            type="button"
-            style={{ ...iconRailBtnStyle(false, wide), color: 'var(--ink4)', cursor: 'default', opacity: 0.6 }}
-            disabled
-            title="Members & roles \u2014 soon"
+        {canViewMembers && (
+          <a
+            href="/app/members"
+            style={{ ...iconRailBtnStyle(pathname === '/app/members', wide), textDecoration: 'none' }}
+            aria-label="Members & roles"
+            title="Members & roles"
           >
             <span aria-hidden>{'\u2687'}</span>
-            {wide && <span style={iconRailBtnLabelStyle}>Members & roles {'\u2014'} soon</span>}
-          </button>
+            {wide && <span style={iconRailBtnLabelStyle}>Members & roles</span>}
+          </a>
         )}
 
         {canManageOrg && (

@@ -27,7 +27,7 @@ export default async function ProjectsListPage() {
       <Sidebar orgId={orgId} role={user.role} projects={sidebarProjects} email={user.email} />
       <div style={mainColStyle}>
         <div style={projectScrollStyle}>
-          <ProjectsListClient orgId={orgId} projects={projectsList} />
+          <ProjectsListClient orgId={orgId} projects={projectsList} role={user.role} />
         </div>
       </div>
     </AppShell>

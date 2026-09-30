@@ -2,6 +2,7 @@
 
 import { useState, type MouseEvent } from 'react';
 import Link from 'next/link';
+import type { ActorRole } from '@nia/schemas';
 import { deleteProject } from '@/lib/dashboard/actions';
 import type { ProjectListItem } from '@/lib/dashboard/types';
 import { relativeTime } from '@/lib/time';
@@ -28,7 +29,18 @@ import DeleteConfirmDialog from './DeleteConfirmDialog';
 // The design's per-row member-avatar cluster is not ported — this app has
 // no per-project membership concept (only whole-org membership), so there's
 // no real data to back it.
-export default function ProjectsListClient({ orgId, projects }: { orgId: string | null; projects: ProjectListItem[] }) {
+export default function ProjectsListClient({
+  orgId,
+  projects,
+  role,
+}: {
+  orgId: string | null;
+  projects: ProjectListItem[];
+  role: ActorRole;
+}) {
+  // Subscription Phase 2, Slice 7: viewer is read-only everywhere
+  // (0057_viewer_role_restrictions.sql) — hide every write trigger here.
+  const canWrite = role !== 'viewer';
   const [showCreate, setShowCreate] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ProjectListItem | null>(null);
 
@@ -42,17 +54,27 @@ export default function ProjectsListClient({ orgId, projects }: { orgId: string 
     <>
       <div style={projectHeaderRowStyle}>
         <span style={projectTitleStyle}>Projects</span>
-        <button type="button" style={primaryBtnStyle} onClick={() => setShowCreate(true)}>
-          New project
-        </button>
+        {canWrite ? (
+          <button type="button" style={primaryBtnStyle} onClick={() => setShowCreate(true)}>
+            New project
+          </button>
+        ) : (
+          <span style={{ fontSize: 12.5, color: 'var(--text-3)', border: '1px dashed var(--line)', borderRadius: 8, padding: '4px 10px' }}>
+            View only
+          </span>
+        )}
       </div>
 
       {projects.length === 0 ? (
         <div style={projectListEmptyStyle}>
-          <span style={projectListEmptyTextStyle}>No projects yet — a project holds your workflows and their sources</span>
-          <button type="button" style={primaryBtnStyle} onClick={() => setShowCreate(true)}>
-            Create your first project
-          </button>
+          <span style={projectListEmptyTextStyle}>
+            {canWrite ? 'No projects yet — a project holds your workflows and their sources' : 'No projects yet.'}
+          </span>
+          {canWrite && (
+            <button type="button" style={primaryBtnStyle} onClick={() => setShowCreate(true)}>
+              Create your first project
+            </button>
+          )}
         </div>
       ) : (
         <div style={projectListStyle}>
@@ -69,9 +91,11 @@ export default function ProjectsListClient({ orgId, projects }: { orgId: string 
               <span style={projectListActivityStyle}>
                 {project.lastRunAt ? `Ran ${relativeTime(project.lastRunAt)}` : 'No runs yet'}
               </span>
-              <button type="button" style={projectListDeleteBtnStyle} onClick={(e) => onDeleteClick(e, project)}>
-                Delete
-              </button>
+              {canWrite && (
+                <button type="button" style={projectListDeleteBtnStyle} onClick={(e) => onDeleteClick(e, project)}>
+                  Delete
+                </button>
+              )}
             </Link>
           ))}
         </div>

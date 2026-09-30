@@ -97,7 +97,7 @@ export async function createInvite(_prevState: InviteActionState, formData: Form
     return { error: err instanceof Error ? err.message : "Something went wrong. Try again." };
   }
 
-  revalidatePath("/app/invites");
+  revalidatePath("/app/members");
   return { success: true, token, link: `/invite/${token}` };
 }
 
@@ -148,7 +148,7 @@ export async function revokeInvite(inviteId: string): Promise<{ error?: string }
     return { error: err instanceof Error ? err.message : "Something went wrong. Try again." };
   }
 
-  revalidatePath("/app/invites");
+  revalidatePath("/app/members");
   return {};
 }
 

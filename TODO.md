@@ -2,6 +2,13 @@
 
 - Wire the org switcher (TopBar orgs/activeOrgId) on the Connections page
   once the redesign is committed.
+- Wire an org switcher into the Canvas page (workflows/[id]) too — it
+  renders its own CanvasHeader chrome instead of AppShell/TopBar (see that
+  page's own header comment), so it never picked up Subscription Phase 2's
+  TopBar switcher. Slice 7 wired every other /app/* page (all of which
+  already use TopBar) but left this one alone as a separate, riskier
+  change to an actively-developed component, same reasoning as the
+  Connections deferral above.
 - Console Slice 3b (org suspend/unsuspend, `docs/plans/console-plan.md`
   decision 2 / addition 8): `apps/worker/scripts/dispatch-smoke.ts` was not
   re-run against a live suspended org for this change — deferred per the
@@ -898,3 +905,11 @@
   Investigate with a real row; consider a repair migration or FK.
 - Connections page fetches grants with one request per connection (N+1) —
   add a batched endpoint if orgs have many connections.
+- Subscription Phase 4 — billing owner: add `organizations.billing_owner_id`
+  (FK to user, must currently hold role='owner'), backfilled from
+  `created_by`; exactly one per org; atomic transfer gated by the existing
+  (currently unused) `org.transferOwnership` capability. Needed before
+  payments. Don't repurpose `created_by` for this — it's a separate
+  concept (org creator vs. billing contact). Slice 7's Members page shows
+  every current owner but has no single "billing owner" designation or
+  transfer UI yet (deferred per this decision).

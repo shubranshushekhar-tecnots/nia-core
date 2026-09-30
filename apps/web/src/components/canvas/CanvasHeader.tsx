@@ -49,6 +49,7 @@ export default function CanvasHeader({
   onRun,
   copilotOpen,
   onToggleCopilot,
+  readOnly,
 }: {
   orgName: string | null;
   projectName: string;
@@ -65,6 +66,7 @@ export default function CanvasHeader({
   onRun: () => void;
   copilotOpen: boolean;
   onToggleCopilot: () => void;
+  readOnly: boolean;
 }) {
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -126,6 +128,11 @@ export default function CanvasHeader({
         <EditIcon size={13} />
       </button>
       {workflowStatus === 'draft' && <span style={headerDraftChipStyle}>Draft</span>}
+      {readOnly && (
+        <span style={{ fontSize: 12, color: 'var(--ink4)', border: '1px dashed var(--panel-line)', borderRadius: 6, padding: '3px 8px' }}>
+          View only
+        </span>
+      )}
       {saveState !== 'conflict' && saveState !== 'idle' && (
         <>
           <span style={breadcrumbSepStyle}>·</span>
@@ -190,9 +197,11 @@ export default function CanvasHeader({
           <Logo size={16} showWordmark={false} />
         </button>
 
-        <button type="button" onClick={onRunChecks} disabled={checksRunning} style={headerRunChecksBtnStyle(checksRunning)}>
-          {checksRunning ? 'Running…' : 'Run checks'}
-        </button>
+        {!readOnly && (
+          <button type="button" onClick={onRunChecks} disabled={checksRunning} style={headerRunChecksBtnStyle(checksRunning)}>
+            {checksRunning ? 'Running…' : 'Run checks'}
+          </button>
+        )}
 
         {runEnabled ? (
           <button type="button" onClick={onRun} title={runTooltip} style={headerRunBtnStyle(true, runInFlight)}>

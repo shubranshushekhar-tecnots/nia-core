@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getProjectDetail, getSidebarProjects } from '@/lib/api/dashboardServer';
+import { listProjectMembers } from '@/lib/projectMembers/actions';
 import AppShell from '@/components/app/AppShell';
 import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
@@ -12,7 +13,14 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const user = await requireUser();
   const orgId = user.org?.id ?? null;
 
-  const [project, projects] = await Promise.all([getProjectDetail(id), getSidebarProjects()]);
+  // Project members panel only applies to org-scoped projects (personal/
+  // owner_id projects have no membership concept beyond their one owner —
+  // see lib/projectMembers/actions.ts's header comment).
+  const [project, projects, projectMembers] = await Promise.all([
+    getProjectDetail(id),
+    getSidebarProjects(),
+    orgId ? listProjectMembers(id) : Promise.resolve(null),
+  ]);
 
   if (!project) redirect('/app');
 
@@ -32,7 +40,15 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
       <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
       <div style={mainColStyle}>
         <div style={projectScrollStyle}>
-          <ProjectDetailClient orgId={orgId} orgName={user.org?.name ?? null} project={project} projects={projects} />
+          <ProjectDetailClient
+            orgId={orgId}
+            orgName={user.org?.name ?? null}
+            project={project}
+            projects={projects}
+            callerRole={user.role}
+            callerUserId={user.userId}
+            projectMembers={projectMembers}
+          />
         </div>
       </div>
     </AppShell>

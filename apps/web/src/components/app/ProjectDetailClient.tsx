@@ -2,8 +2,10 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import type { ActorRole } from '@nia/schemas';
 import { deleteProject, renameProject } from '@/lib/dashboard/actions';
 import type { ProjectDetail, SidebarProject } from '@/lib/dashboard/types';
+import type { ProjectMemberProfile } from '@/lib/projectMembers/actions';
 import {
   dropdownItemStyle,
   dropdownStyle,
@@ -22,6 +24,7 @@ import {
 import CreateWorkflowDialog from './CreateWorkflowDialog';
 import RenameDialog from './RenameDialog';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
+import ProjectMembersPanel from '@/components/members/ProjectMembersPanel';
 
 // The "Projects / <project name>" breadcrumb lives in the shared TopBar
 // (passed via its `crumbs` prop from page.tsx) — rendering a second one
@@ -31,11 +34,17 @@ export default function ProjectDetailClient({
   orgName,
   project,
   projects,
+  callerRole,
+  callerUserId,
+  projectMembers,
 }: {
   orgId: string | null;
   orgName: string | null;
   project: ProjectDetail;
   projects: SidebarProject[];
+  callerRole: ActorRole;
+  callerUserId: string;
+  projectMembers: { members: ProjectMemberProfile[]; addable: ProjectMemberProfile[] } | null;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showRename, setShowRename] = useState(false);
@@ -44,6 +53,9 @@ export default function ProjectDetailClient({
 
   const workflowCount = project.workflows.length;
   const metaText = workflowCount === 0 ? 'No workflows yet' : `${workflowCount} workflow${workflowCount === 1 ? '' : 's'}`;
+  // Subscription Phase 2, Slice 7: viewer is read-only everywhere
+  // (0057_viewer_role_restrictions.sql) — hide every write trigger here.
+  const canWrite = callerRole !== 'viewer';
 
   return (
     <>
@@ -53,40 +65,47 @@ export default function ProjectDetailClient({
           <span style={projectMetaStyle}>{metaText}</span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button type="button" style={primaryBtnStyle} onClick={() => setShowCreateWorkflow(true)}>
-            New workflow
-          </button>
-          <div style={{ position: 'relative' }}>
-            <button type="button" style={kebabBtnStyle} onClick={() => setMenuOpen((v) => !v)} aria-label="Project actions">
-              {'\u22EF'}
+        {!canWrite && (
+          <span style={{ fontSize: 12.5, color: 'var(--text-3)', border: '1px dashed var(--line)', borderRadius: 8, padding: '4px 10px' }}>
+            View only
+          </span>
+        )}
+        {canWrite && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button type="button" style={primaryBtnStyle} onClick={() => setShowCreateWorkflow(true)}>
+              New workflow
             </button>
-            {menuOpen && (
-              <div style={{ ...dropdownStyle, right: 0, left: 'auto', minWidth: 176 }} onMouseLeave={() => setMenuOpen(false)}>
-                <button
-                  type="button"
-                  style={dropdownItemStyle}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setShowRename(true);
-                  }}
-                >
-                  Rename project
-                </button>
-                <button
-                  type="button"
-                  style={{ ...dropdownItemStyle, color: 'var(--bad)' }}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setShowDelete(true);
-                  }}
-                >
-                  Delete project
-                </button>
-              </div>
-            )}
+            <div style={{ position: 'relative' }}>
+              <button type="button" style={kebabBtnStyle} onClick={() => setMenuOpen((v) => !v)} aria-label="Project actions">
+                {'\u22EF'}
+              </button>
+              {menuOpen && (
+                <div style={{ ...dropdownStyle, right: 0, left: 'auto', minWidth: 176 }} onMouseLeave={() => setMenuOpen(false)}>
+                  <button
+                    type="button"
+                    style={dropdownItemStyle}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setShowRename(true);
+                    }}
+                  >
+                    Rename project
+                  </button>
+                  <button
+                    type="button"
+                    style={{ ...dropdownItemStyle, color: 'var(--bad)' }}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setShowDelete(true);
+                    }}
+                  >
+                    Delete project
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <div>
@@ -102,6 +121,18 @@ export default function ProjectDetailClient({
           </Link>
         ))}
       </div>
+
+      {orgId && projectMembers && (
+        <div style={{ marginTop: 28 }}>
+          <ProjectMembersPanel
+            projectId={project.id}
+            callerRole={callerRole}
+            callerUserId={callerUserId}
+            members={projectMembers.members}
+            addable={projectMembers.addable}
+          />
+        </div>
+      )}
 
       {showRename && (
         <RenameDialog

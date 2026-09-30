@@ -126,6 +126,14 @@ function CanvasInner({
   // via a Server Action that only revalidates '/app/connections' (not this
   // already-mounted route), so NodesRail calls refreshConnections() after a
   // successful create to pick up the new connection without a full reload.
+  // Subscription Phase 2, Slice 7: viewer is read-only everywhere
+  // (0057_viewer_role_restrictions.sql). scheduleSave (below) is the single
+  // chokepoint every graph mutation routes through — see its own comment on
+  // the ghost-overlay pattern for why that's already true — so guarding it
+  // there is sufficient to make every edit path (drag, drop, connect,
+  // delete, config change) a no-op for a viewer; the rest of this flag just
+  // disables the affected controls so the UI doesn't pretend they work.
+  const readOnly = role === 'viewer';
   const [connections, setConnections] = useState(initialConnections);
   const refreshConnections = useCallback(async () => {
     try {
@@ -260,6 +268,7 @@ function CanvasInner({
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleSave = useCallback(
     (nextNodes: CanvasNode[], nextEdges: CanvasEdge[]) => {
+      if (readOnly) return;
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
         setSaveState('saving');
@@ -302,7 +311,7 @@ function CanvasInner({
         }
       }, AUTOSAVE_DELAY_MS);
     },
-    [workflow.id, pushToast],
+    [workflow.id, pushToast, readOnly],
   );
 
   const handleNodesChange = useCallback(
@@ -1070,7 +1079,7 @@ function CanvasInner({
   const runInFlight = Object.values(runStates).some(
     (s) => s.status === 'starting' || s.status === 'running' || s.status === 'cancelling',
   );
-  const runEnabled = !checksStale && failingChecks === 0 && runNodeIds.length > 0 && !runInFlight;
+  const runEnabled = !readOnly && !checksStale && failingChecks === 0 && runNodeIds.length > 0 && !runInFlight;
   // Block 3.5 item 2: checkConfig's source-entity-missing case stays a
   // `warn` (see checks.ts's amended comment), so an unset entity never
   // blocks Run at the enabled/disabled level — but the run itself WILL
@@ -1080,7 +1089,9 @@ function CanvasInner({
   const unsetEntityWarning = latestCheckRun?.results.some(
     (r) => r.status === 'warn' && r.id === 'config' && r.message.includes('no table selected'),
   );
-  const runTooltip = checksStale
+  const runTooltip = readOnly
+    ? "You have view-only access — ask an admin or owner for edit access to run this workflow."
+    : checksStale
     ? 'Run checks before running the workflow.'
     : failingChecks > 0
       ? `${failingChecks} check${failingChecks === 1 ? '' : 's'} failing — fix before running.`
@@ -1127,13 +1138,18 @@ function CanvasInner({
         onRun={handleRun}
         copilotOpen={copilotOpen}
         onToggleCopilot={toggleCopilot}
+        readOnly={readOnly}
       />
 
       <div style={canvasShellRowStyle}>
         <Sidebar orgId={orgId} role={role} projects={sidebarProjects} email={email} />
 
         <div style={canvasBodyStyle}>
-        <NodesRail connections={connections} connectorInstalls={connectorInstalls} onConnectionCreated={refreshConnections} />
+        {/* Viewer: no point showing the drag-to-add palette when dropping a
+            node can never persist (scheduleSave no-ops for readOnly above). */}
+        {!readOnly && (
+          <NodesRail connections={connections} connectorInstalls={connectorInstalls} onConnectionCreated={refreshConnections} />
+        )}
 
         <div ref={fullscreenRef} style={canvasFullscreenWrapStyle}>
           <div style={canvasColumnStyle}>
@@ -1141,7 +1157,7 @@ function CanvasInner({
               ref={canvasSurfaceRef}
               data-testid="canvas-surface"
               style={canvasSurfaceStyle}
-              onDrop={onDrop}
+              onDrop={readOnly ? undefined : onDrop}
               onDragOver={(e) => e.preventDefault()}
             >
             <ReactFlow
@@ -1153,8 +1169,10 @@ function CanvasInner({
               onEdgesChange={handleEdgesChange}
               onConnect={onConnect}
               onNodeClick={onNodeClick}
-              onNodeContextMenu={onNodeContextMenu}
+              onNodeContextMenu={readOnly ? undefined : onNodeContextMenu}
               onPaneClick={onPaneClick}
+              nodesDraggable={!readOnly}
+              nodesConnectable={!readOnly}
               fitView
               // A brand-new workflow mounts with zero nodes (workflow_graphs has
               // no row yet — see seed.sql's comment on 'Canvas E2E Workflow').
