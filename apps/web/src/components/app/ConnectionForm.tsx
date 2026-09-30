@@ -5,7 +5,8 @@ import { buildReadOnlyStatementText, getHelpSection, suggestReadOnlyUsername, ty
 import { autoCompleteFor, urlPastePlaceholder } from '@/lib/connections/formFields';
 import { parseExtraSchemas } from '@/lib/connections/parseExtraSchemas';
 import HelpPanel from './HelpPanel';
-import { modalErrorStyle, modalFieldStyle, modalLabelStyle, modalTitleStyle } from './styles';
+import ConnectorLogo from './ConnectorLogo';
+import { nxModalErrorStyle, nxModalFieldStyle, nxModalLabelStyle, nxModalTitleStyle } from './styles';
 
 // Connect-form body, used by the canvas's AddConnectionDialog (single-step
 // dialog, Server Action submit) — the only entry point for adding a
@@ -46,13 +47,13 @@ function randomReadOnlyPassword(): string {
 }
 
 const helpTriggerStyle = {
-  fontSize: 12,
-  fontWeight: 600,
-  color: 'var(--ink)',
-  background: 'var(--surface)',
-  border: '1px solid var(--line2)',
-  borderRadius: 6,
-  padding: '5px 10px',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.03em',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  padding: '6px 10px',
   cursor: 'pointer',
 } as const;
 
@@ -145,8 +146,11 @@ export default function ConnectionForm({
 
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={modalTitleStyle}>{title}</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <ConnectorLogo id={connectorId} tile={40} />
+          <span style={nxModalTitleStyle}>{title}</span>
+        </div>
         <button type="button" style={helpTriggerStyle} onClick={() => setShowHelp(true)}>
           Help with this step
         </button>
@@ -154,7 +158,7 @@ export default function ConnectionForm({
       {showHelp && <HelpPanel step="add-connection" connectorId={connectorId} onClose={() => setShowHelp(false)} />}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <label htmlFor={`${idPrefix}-display-name`} style={modalLabelStyle}>
+        <label htmlFor={`${idPrefix}-display-name`} style={nxModalLabelStyle}>
           Name
         </label>
         <input
@@ -162,21 +166,23 @@ export default function ConnectionForm({
           name="displayName"
           type="text"
           placeholder={`My ${connectorName} connection`}
-          style={modalFieldStyle(Boolean(errors?.fieldErrors?.displayName))}
+          className="nx-modal-field"
+          style={nxModalFieldStyle(Boolean(errors?.fieldErrors?.displayName))}
         />
-        {errors?.fieldErrors?.displayName && <span style={modalErrorStyle}>{errors.fieldErrors.displayName[0]}</span>}
+        {errors?.fieldErrors?.displayName && <span style={nxModalErrorStyle}>{errors.fieldErrors.displayName[0]}</span>}
       </div>
 
       {showUrlPaste && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label htmlFor={`${idPrefix}-paste-url`} style={modalLabelStyle}>
+          <label htmlFor={`${idPrefix}-paste-url`} style={nxModalLabelStyle}>
             Paste connection URL (optional)
           </label>
           <input
             id={`${idPrefix}-paste-url`}
             type="text"
             placeholder={urlPastePlaceholder(connectorId)}
-            style={modalFieldStyle(false)}
+            className="nx-modal-field"
+            style={nxModalFieldStyle(false)}
             onChange={(e) => applyPastedUrl(e.target.value)}
           />
         </div>
@@ -200,7 +206,7 @@ export default function ConnectionForm({
                   fieldRefs.current[field.key] = el;
                 }}
               />
-              <label htmlFor={`${idPrefix}-field-${field.key}`} style={modalLabelStyle}>
+              <label htmlFor={`${idPrefix}-field-${field.key}`} style={nxModalLabelStyle}>
                 {field.label}
               </label>
             </div>
@@ -208,7 +214,7 @@ export default function ConnectionForm({
         }
         return (
           <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label htmlFor={`${idPrefix}-field-${field.key}`} style={modalLabelStyle}>
+            <label htmlFor={`${idPrefix}-field-${field.key}`} style={nxModalLabelStyle}>
               {field.label}
             </label>
             <input
@@ -227,7 +233,8 @@ export default function ConnectionForm({
                 fieldRefs.current[field.key] = el;
               }}
               onChange={field.key === 'database' ? (e) => setDatabase(e.target.value) : undefined}
-              style={modalFieldStyle(false)}
+              className="nx-modal-field"
+              style={nxModalFieldStyle(false)}
             />
           </div>
         );
@@ -239,12 +246,12 @@ export default function ConnectionForm({
         // step, so it shouldn't visually compete with the "I already
         // have a user" path those fields already cover on their own.
         <details>
-          <summary style={{ ...modalLabelStyle, cursor: 'pointer' }}>Need a read-only user?</summary>
+          <summary style={{ ...nxModalLabelStyle, cursor: 'pointer' }}>Need a read-only user?</summary>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
-            {readOnlyWhy && <span style={{ fontSize: 12, color: 'var(--ink4)' }}>{readOnlyWhy}</span>}
+            {readOnlyWhy && <span style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 11, color: 'var(--nx-ink-3)' }}>{readOnlyWhy}</span>}
             {showExtraSchemas && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <label htmlFor={`${idPrefix}-extra-schemas`} style={modalLabelStyle}>
+                <label htmlFor={`${idPrefix}-extra-schemas`} style={nxModalLabelStyle}>
                   Extra schemas beyond &quot;public&quot; (optional)
                 </label>
                 <input
@@ -253,7 +260,8 @@ export default function ConnectionForm({
                   placeholder="analytics, reporting"
                   value={extraSchemasInput}
                   onChange={(e) => setExtraSchemasInput(e.target.value)}
-                  style={modalFieldStyle(false)}
+                  className="nx-modal-field"
+                  style={nxModalFieldStyle(false)}
                 />
               </div>
             )}
@@ -261,12 +269,12 @@ export default function ConnectionForm({
               role="region"
               aria-label="Read-only user SQL statement"
               tabIndex={0}
+              className="nx-focus-ring"
               style={{
-                fontFamily: 'var(--font-data)',
+                fontFamily: 'var(--nx-font-mono)',
                 fontSize: 11,
-                background: 'var(--surface)',
-                border: '1px solid var(--line2)',
-                borderRadius: 6,
+                background: 'var(--nx-surface)',
+                border: '1px solid var(--nx-line)',
                 padding: 8,
                 whiteSpace: 'pre-wrap',
                 overflowX: 'auto',
@@ -276,7 +284,7 @@ export default function ConnectionForm({
               {readOnlyStatement}
             </pre>
             {isPoolerQualified && (
-              <span style={{ fontSize: 12, color: 'var(--ink4)' }}>
+              <span style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 11, color: 'var(--nx-ink-3)' }}>
                 Connect using the pooler-qualified username: <code>{suggestedReadOnlyUsername}</code>
               </span>
             )}
@@ -293,7 +301,7 @@ export default function ConnectionForm({
       )}
 
       {errors?.message && (
-        <span style={modalErrorStyle}>
+        <span style={nxModalErrorStyle}>
           {errors.message}
           {errors.fix && <span style={{ display: 'block', marginTop: 2 }}>{errors.fix}</span>}
           {errors.details && errors.details !== errors.message && (

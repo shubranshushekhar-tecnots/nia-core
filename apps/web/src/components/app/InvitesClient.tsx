@@ -105,6 +105,7 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
               id="role"
               name="role"
               defaultValue="member"
+              className="nx-modal-field"
               style={{ ...nxModalFieldStyle(false), ...nxMembersMonoFieldOverride, textTransform: 'uppercase' }}
             >
               {ROLE_OPTIONS.filter((r) => r !== 'owner' || callerRole === 'owner').map((r) => (
@@ -121,6 +122,7 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
               min={1}
               max={365}
               defaultValue={7}
+              className="nx-modal-field"
               style={{ ...nxModalFieldStyle(false), ...nxMembersMonoFieldOverride }}
             />
           </div>
@@ -135,6 +137,7 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
               type="number"
               min={1}
               placeholder="Unlimited"
+              className="nx-modal-field"
               style={{ ...nxModalFieldStyle(false), ...nxMembersMonoFieldOverride }}
             />
           </div>
@@ -145,6 +148,7 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
               name="emailDomain"
               type="text"
               placeholder="example.com"
+              className="nx-modal-field"
               style={{ ...nxModalFieldStyle(Boolean(state?.fieldErrors?.emailDomain)), ...nxMembersMonoFieldOverride }}
             />
             {state?.fieldErrors?.emailDomain && <span style={nxModalErrorStyle}>{state.fieldErrors.emailDomain[0]}</span>}

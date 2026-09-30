@@ -85,6 +85,7 @@ export default function LoginForm() {
               type="text"
               placeholder="shub@icecream.co"
               spellCheck={false}
+              className="nx-modal-field"
               style={nxModalFieldStyle(hasError || Boolean(loginState?.fieldErrors?.email))}
             />
             {loginState?.fieldErrors?.email && <span style={nxModalErrorStyle}>{loginState.fieldErrors.email[0]}</span>}
@@ -98,6 +99,7 @@ export default function LoginForm() {
                 name="password"
                 type={pwShown ? 'text' : 'password'}
                 placeholder={'\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'}
+                className="nx-modal-field"
                 style={nxAuthPasswordFieldStyle(hasError || Boolean(loginState?.fieldErrors?.password))}
               />
               <button
@@ -158,6 +160,7 @@ export default function LoginForm() {
               autoComplete="one-time-code"
               autoFocus
               spellCheck={false}
+              className="nx-modal-field"
               style={nxAuthCodeFieldStyle(hasError || Boolean(activeState?.fieldErrors?.code))}
             />
             {activeState?.fieldErrors?.code && <span style={nxModalErrorStyle}>{activeState.fieldErrors.code[0]}</span>}

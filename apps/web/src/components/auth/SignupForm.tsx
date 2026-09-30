@@ -52,7 +52,7 @@ export default function SignupForm() {
         {next && <input type="hidden" name="next" value={next} />}
         <div style={nxAuthFieldGroupStyle}>
           <label htmlFor="fullName" style={nxAuthLabelStyle(Boolean(state?.fieldErrors?.fullName))}>Full name</label>
-          <input id="fullName" name="fullName" type="text" placeholder="Shub Kumar" style={nxModalFieldStyle(Boolean(state?.fieldErrors?.fullName))} />
+          <input id="fullName" name="fullName" type="text" placeholder="Shub Kumar" className="nx-modal-field" style={nxModalFieldStyle(Boolean(state?.fieldErrors?.fullName))} />
           {state?.fieldErrors?.fullName && <span style={nxModalErrorStyle}>{state.fieldErrors.fullName[0]}</span>}
         </div>
 
@@ -64,6 +64,7 @@ export default function SignupForm() {
             type="text"
             placeholder="shub@icecream.co"
             spellCheck={false}
+            className="nx-modal-field"
             style={nxModalFieldStyle(hasError || Boolean(state?.fieldErrors?.email))}
           />
           {state?.fieldErrors?.email && <span style={nxModalErrorStyle}>{state.fieldErrors.email[0]}</span>}
@@ -77,6 +78,7 @@ export default function SignupForm() {
               name="password"
               type={pwShown ? 'text' : 'password'}
               placeholder="At least 8 characters"
+              className="nx-modal-field"
               style={nxAuthPasswordFieldStyle(hasError || Boolean(state?.fieldErrors?.password))}
             />
             <button

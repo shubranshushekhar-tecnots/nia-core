@@ -33,6 +33,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
             autoFocus
             placeholder="Search workflows, projects…"
             aria-label="Search workflows, projects…"
+            className="nx-modal-field"
             style={nxCommandPaletteInputStyle}
           />
         </label>

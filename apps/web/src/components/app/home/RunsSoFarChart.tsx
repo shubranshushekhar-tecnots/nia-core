@@ -111,6 +111,7 @@ export default function RunsSoFarChart({ runs }: { runs: RecentRun[] }) {
               <div
                 key={run.id}
                 tabIndex={0}
+                className="nx-focus-ring"
                 aria-label={`Run ${i + 1}: ${run.status}, ${formatDuration(run.durationMs)}`}
                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: BAR_AREA_H, position: 'relative' }}
               >

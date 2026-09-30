@@ -545,6 +545,7 @@ export default function ConnectionsClient({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search connectors"
+              className="nx-modal-field"
               style={nxConnSearchInputStyle}
             />
             {!search && (

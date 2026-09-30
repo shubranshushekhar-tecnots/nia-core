@@ -886,6 +886,7 @@ export default function CommandBar({
           </button>
           <input
             ref={inputRef}
+            className="nx-modal-field"
             style={barInputStyle}
             placeholder="Ask or command… (@ to mention a node, / for actions)"
             value={draft}

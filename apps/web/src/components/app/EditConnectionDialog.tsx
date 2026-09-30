@@ -7,26 +7,27 @@ import { updateConnection, ConnectionsApiError, type ConnectionUsage } from '@/l
 import { autoCompleteFor } from '@/lib/connections/formFields';
 import { useModalA11y } from '@/lib/a11y/useModalDialog';
 import HelpPanel from './HelpPanel';
+import ConnectorLogo from './ConnectorLogo';
 import {
-  modalActionsStyle,
-  modalBtnGhostStyle,
-  modalBtnPrimaryStyle,
-  modalCardStyle,
-  modalErrorStyle,
-  modalFieldStyle,
-  modalLabelStyle,
-  modalOverlayStyle,
-  modalTitleStyle,
+  nxModalCancelCellStyle,
+  nxModalCardStyle,
+  nxModalErrorStyle,
+  nxModalFieldStyle,
+  nxModalFooterStyle,
+  nxModalLabelStyle,
+  nxModalOverlayStyle,
+  nxModalPrimaryCellStyle,
+  nxModalTitleStyle,
 } from './styles';
 
 const helpTriggerStyle = {
-  fontSize: 12,
-  fontWeight: 600,
-  color: 'var(--ink)',
-  background: 'var(--surface)',
-  border: '1px solid var(--line2)',
-  borderRadius: 6,
-  padding: '5px 10px',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.03em',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  padding: '6px 10px',
   cursor: 'pointer',
 } as const;
 
@@ -97,20 +98,20 @@ export default function EditConnectionDialog({
 
   if (!manifest) {
     return (
-      <div style={modalOverlayStyle} onClick={onClose}>
+      <div style={nxModalOverlayStyle} onClick={onClose}>
         <div
           ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-label="Edit connection"
           tabIndex={-1}
-          style={{ ...modalCardStyle, outline: 'none' }}
+          style={{ ...nxModalCardStyle, outline: 'none' }}
           onClick={(e) => e.stopPropagation()}
         >
-          <span style={modalTitleStyle}>Edit connection</span>
-          <span style={modalErrorStyle}>No manifest for connector {connection.connectorId}.</span>
-          <div style={modalActionsStyle}>
-            <button type="button" style={modalBtnGhostStyle} onClick={onClose}>
+          <span style={nxModalTitleStyle}>Edit connection</span>
+          <span style={nxModalErrorStyle}>No manifest for connector {connection.connectorId}.</span>
+          <div style={nxModalFooterStyle}>
+            <button type="button" style={nxModalCancelCellStyle} onClick={onClose}>
               Close
             </button>
           </div>
@@ -163,18 +164,21 @@ export default function EditConnectionDialog({
   };
 
   return (
-    <div style={modalOverlayStyle} onClick={onClose}>
+    <div style={nxModalOverlayStyle} onClick={onClose}>
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Edit connection"
         tabIndex={-1}
-        style={{ ...modalCardStyle, outline: 'none' }}
+        style={{ ...nxModalCardStyle, outline: 'none' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={modalTitleStyle}>Edit connection</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <ConnectorLogo id={connection.connectorId} tile={40} />
+            <span style={nxModalTitleStyle}>Edit connection</span>
+          </div>
           <button type="button" style={helpTriggerStyle} onClick={() => setShowHelp(true)}>
             Help with this step
           </button>
@@ -184,7 +188,7 @@ export default function EditConnectionDialog({
         )}
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label htmlFor="edit-connection-display-name" style={modalLabelStyle}>
+            <label htmlFor="edit-connection-display-name" style={nxModalLabelStyle}>
               Name
             </label>
             <input
@@ -194,7 +198,8 @@ export default function EditConnectionDialog({
               autoFocus
               defaultValue={connection.displayName}
               required
-              style={modalFieldStyle(false)}
+              className="nx-modal-field"
+              style={nxModalFieldStyle(false)}
             />
           </div>
 
@@ -209,7 +214,7 @@ export default function EditConnectionDialog({
                     type="checkbox"
                     defaultChecked={current !== undefined ? Boolean(current) : true}
                   />
-                  <label htmlFor={`edit-connection-field-${field.key}`} style={modalLabelStyle}>
+                  <label htmlFor={`edit-connection-field-${field.key}`} style={nxModalLabelStyle}>
                     {field.label}
                   </label>
                 </div>
@@ -218,7 +223,7 @@ export default function EditConnectionDialog({
             const secret = isSecretField(field);
             return (
               <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <label htmlFor={`edit-connection-field-${field.key}`} style={modalLabelStyle}>
+                <label htmlFor={`edit-connection-field-${field.key}`} style={nxModalLabelStyle}>
                   {field.label}
                 </label>
                 <input
@@ -229,7 +234,8 @@ export default function EditConnectionDialog({
                   placeholder={secret ? 'unchanged' : field.placeholder}
                   defaultValue={secret ? '' : String(connection.config[field.key] ?? '')}
                   autoComplete={autoCompleteFor(field)}
-                  style={modalFieldStyle(false)}
+                  className="nx-modal-field"
+                  style={nxModalFieldStyle(false)}
                 />
               </div>
             );
@@ -237,10 +243,10 @@ export default function EditConnectionDialog({
 
           {usageWarning && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--warn)' }}>
+              <span style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 11.5, fontWeight: 600, color: 'var(--nx-warn)' }}>
                 This change affects {usageWarning.length} workflow{usageWarning.length === 1 ? '' : 's'}:
               </span>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--text-3)' }}>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--nx-ink-2)' }}>
                 {usageWarning.map((u) => (
                   <li key={u.id}>
                     {u.name} — {u.nodeCount} node{u.nodeCount === 1 ? '' : 's'}
@@ -251,7 +257,7 @@ export default function EditConnectionDialog({
           )}
 
           {error && (
-            <span style={modalErrorStyle}>
+            <span style={nxModalErrorStyle}>
               {error}
               {errorFix && <span style={{ display: 'block', marginTop: 2 }}>{errorFix}</span>}
               {errorDetails && errorDetails !== error && (
@@ -263,21 +269,21 @@ export default function EditConnectionDialog({
             </span>
           )}
 
-          <div style={modalActionsStyle}>
-            <button type="button" style={modalBtnGhostStyle} onClick={onClose} disabled={pending}>
+          <div style={nxModalFooterStyle}>
+            <button type="button" style={nxModalCancelCellStyle} onClick={onClose} disabled={pending}>
               Cancel
             </button>
             {usageWarning ? (
               <button
                 type="button"
-                style={modalBtnPrimaryStyle}
+                style={nxModalPrimaryCellStyle(pending)}
                 disabled={pending}
                 onClick={() => pendingSave && void submit(pendingSave, true)}
               >
                 {pending ? 'Saving\u2026' : 'Save anyway'}
               </button>
             ) : (
-              <button type="submit" disabled={pending} style={modalBtnPrimaryStyle}>
+              <button type="submit" disabled={pending} style={nxModalPrimaryCellStyle(pending)}>
                 {pending ? 'Testing & saving\u2026' : 'Save'}
               </button>
             )}

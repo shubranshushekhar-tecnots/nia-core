@@ -557,12 +557,25 @@ html[data-nx-theme='light'] [data-app-theme] {
   animation: nxSpin 800ms linear infinite;
 }
 
-/* Step 3 dialogs (CreateProjectDialog/CreateWorkflowDialog): 2px inset
-   purple focus ring on name/project fields — inline styles can't express
-   :focus, so this one rule lives here, same pattern as .hl-field:focus. */
-.nx-modal-field:focus {
-  outline: 2px solid var(--nx-blue-panel);
-  outline-offset: -2px;
+/* 2px inset purple focus-visible ring for inset text/select fields
+   (dialogs, auth forms, search bars, command bars) — inline styles can't
+   express :focus-visible, so this one rule lives here, same pattern as
+   .hl-field:focus. `!important` is required: every consumer sets an
+   inline `outline: 'none'` to suppress the browser default, and inline
+   style always wins the cascade over a non-!important external rule
+   regardless of pseudo-class specificity — without `!important` here,
+   this ring can never actually render (UI-9 step 5 fix). */
+.nx-modal-field:focus-visible {
+  outline: 2px solid var(--nx-blue-panel) !important;
+  outline-offset: -2px !important;
+}
+
+/* UI-9 step 5 (focus): 2px *outside* ring for full-bleed elements where an
+   inset ring would clip against the element's own content (e.g. a
+   scrollable read-only code block) — same token, opposite offset. */
+.nx-focus-ring:focus-visible {
+  outline: 2px solid var(--nx-blue-panel) !important;
+  outline-offset: 2px !important;
 }
 
 /* UI-9 step 3 (motion): dialog mount-in (scrim fade + panel scale up from

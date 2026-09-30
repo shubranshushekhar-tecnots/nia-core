@@ -53,7 +53,7 @@ export default function OnboardingForm() {
             <div style={nxOnboardingPanelStyle}>
               <div style={nxOnboardingFieldGroupStyle}>
                 <label htmlFor="name" style={nxOnboardingLabelStyle(nameError)}>Organization name</label>
-                <input id="name" name="name" type="text" placeholder="Ice Cream Co" style={nxModalFieldStyle(nameError)} />
+                <input id="name" name="name" type="text" placeholder="Ice Cream Co" className="nx-modal-field" style={nxModalFieldStyle(nameError)} />
                 {state?.fieldErrors?.name && <span style={nxModalErrorStyle}>{state.fieldErrors.name[0]}</span>}
               </div>
 
@@ -65,6 +65,7 @@ export default function OnboardingForm() {
                   type="text"
                   placeholder="icecream-co"
                   spellCheck={false}
+                  className="nx-modal-field"
                   style={nxModalFieldStyle(slugError)}
                 />
                 <span style={nxOnboardingNoteStyle}>Lowercase letters, numbers, and hyphens only.</span>
