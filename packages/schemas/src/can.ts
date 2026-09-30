@@ -2,15 +2,17 @@ import { z } from "zod";
 
 /**
  * Mirrors the `public.org_role` enum in supabase/migrations/0001_auth_orgs.sql
- * as renamed by 0003_owner_enum_value.sql / 0004_owner_rename.sql. Keep in
- * sync — this is the client-side (UX/routing) mirror of the Postgres RLS
- * policies, which remain the actual source of truth for enforcement.
+ * as renamed by 0003_owner_enum_value.sql / 0004_owner_rename.sql, and
+ * extended with `viewer` by 0056_viewer_role_enum.sql (Subscription Phase 2,
+ * Slice 3). Keep in sync — this is the client-side (UX/routing) mirror of
+ * the Postgres RLS policies, which remain the actual source of truth for
+ * enforcement.
  *
  * The DB enum also still defines a legacy `super_admin` value (kept for
  * reversibility, see 0004's rollback note) but no row should carry it after
  * that migration runs, so it is deliberately not exposed here.
  */
-export const OrgRole = z.enum(["member", "admin", "owner"]);
+export const OrgRole = z.enum(["member", "admin", "owner", "viewer"]);
 export type OrgRole = z.infer<typeof OrgRole>;
 
 /**
@@ -98,16 +100,43 @@ export type OrgAction =
  * project in the org. That's an ownership question for RLS, not a role
  * question — don't build ownership checks for it until cross-user project
  * visibility lands.
+ *
+ * DECISION-E (Subscription Phase 2, Slice 3 — viewer role): `viewer` is
+ * read-only. It is added to `org.view`/`billing.view` only — the same two
+ * "everyone can read" baseline actions `individual` already sits in — and
+ * deliberately omitted from every other entry, including `members.view`
+ * (conservative: a viewer has no legitimate need to see org member PII) and
+ * every mutation action. Omission alone is sufficient: `can()`/`assertCan()`
+ * reject any role not listed for an action, so viewer is automatically
+ * blocked from every create/rename/delete/install/uninstall/test/run/
+ * confirm/revoke action below without needing a negative rule — including
+ * `workflows.run` (no starting or cancelling runs) and `grants.create`/
+ * `confirm`/`revoke`. The real enforcement is still RLS (see
+ * 0057_viewer_role_restrictions.sql's `private.is_write_member`); this
+ * matrix only makes the API fail fast with a typed 403 instead of a raw
+ * Postgres error.
+ *
+ * Restricting `grants.create`/`grants.confirm`/`grants.revoke` to
+ * admin/owner ONLY (i.e. taking them away from plain `member`/`individual`
+ * too, not just viewer) was explicitly considered for this slice and
+ * deliberately DEFERRED to a future slice ("slice 5"): it would reverse the
+ * documented DECISION-C/`docs/decisions.md` "write-grant RBAC — kept
+ * all-role" ruling, and doing it correctly also means updating the
+ * `create_write_grant`/`confirm_write_grant`/`revoke_write_grant` RPCs'
+ * own DB-level checks (0016_write_grants.sql) and that decisions doc, not
+ * just this matrix — not a one-line change once RLS is accounted for. This
+ * slice's actual requirement ("viewer specifically can't touch grants") is
+ * already satisfied by viewer's blanket omission above.
  */
 const CAPABILITY_MATRIX = {
-  "org.view": ["individual", "member", "admin", "owner"],
+  "org.view": ["individual", "member", "admin", "owner", "viewer"],
   "org.update": ["admin", "owner"],
   "org.transferOwnership": ["owner"],
   "members.view": ["member", "admin", "owner"],
   "members.invite": ["admin", "owner"],
   "members.remove": ["admin", "owner"],
   "members.changeRole": ["admin", "owner"],
-  "billing.view": ["individual", "member", "admin", "owner"],
+  "billing.view": ["individual", "member", "admin", "owner", "viewer"],
   "billing.mutate": ["individual", "owner"],
   "auditLog.view": ["admin", "owner"],
   "projects.create": ["individual", "member", "admin", "owner"],

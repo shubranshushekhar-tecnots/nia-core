@@ -33,6 +33,7 @@ const FIXTURES: Array<{ email: string; password: string; name: string }> = [
   { email: "newperson@rls-probe.test", password: "password", name: "RLS Probe New Person" },
   { email: "individual@rls-probe.test", password: "password", name: "RLS Probe Individual" },
   { email: "orgb-owner@rls-probe.test", password: "password", name: "RLS Probe Org B Owner" },
+  { email: "viewer@rls-probe.test", password: "password", name: "RLS Probe Viewer" },
 ];
 
 async function main() {

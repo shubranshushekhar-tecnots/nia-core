@@ -36,6 +36,7 @@ declare
   v_admin    uuid; -- plain admin
   v_member   uuid; -- plain member
   v_outsider uuid; -- not a member of the org
+  v_viewer   uuid; -- read-only viewer (Subscription Phase 2, Slice 3)
   v_org      uuid;
 begin
   -- Fixture identities are created ahead of time through Better Auth's own
@@ -50,7 +51,9 @@ begin
   select id into v_admin    from public."user" where email = 'admin@rls-probe.test';
   select id into v_member   from public."user" where email = 'member@rls-probe.test';
   select id into v_outsider from public."user" where email = 'outsider@rls-probe.test';
-  if v_owner is null or v_admin2 is null or v_admin is null or v_member is null or v_outsider is null then
+  select id into v_viewer   from public."user" where email = 'viewer@rls-probe.test';
+  if v_owner is null or v_admin2 is null or v_admin is null or v_member is null or v_outsider is null
+     or v_viewer is null then
     raise exception 'rls_probes.sql: fixture users not found — run `pnpm --filter @nia/api seed:fixtures` against this database first.';
   end if;
   -- databaseHooks.user.create.after (packages/auth/src/config.ts) already
@@ -64,7 +67,8 @@ begin
     (v_org, v_owner,  'owner'),
     (v_org, v_admin2, 'owner'),
     (v_org, v_admin,  'admin'),
-    (v_org, v_member, 'member');
+    (v_org, v_member, 'member'),
+    (v_org, v_viewer, 'viewer');
 
   -- Lift this org's project_limit AND workflow_limit for the rest of the
   -- script. 0050_org_plan_overrides.sql's create-org trigger defaults every
@@ -88,7 +92,7 @@ begin
 
   insert into test_ids values
     ('owner', v_owner), ('admin2', v_admin2), ('admin', v_admin),
-    ('member', v_member), ('outsider', v_outsider), ('org', v_org);
+    ('member', v_member), ('outsider', v_outsider), ('viewer', v_viewer), ('org', v_org);
 end $$;
 
 -- Helper: act as a given test user for the rest of the (sub)transaction.
@@ -3128,6 +3132,202 @@ begin
 exception when others then
   reset role;
   insert into probe_results values (91, 'personal-workflow-unaffected-by-project-membership probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Fixture for probes 92-96 — 0056_viewer_role_enum.sql /
+-- 0057_viewer_role_restrictions.sql (Subscription Phase 2, Slice 3): grants
+-- v_viewer project_members access to the existing wpm_project fixture
+-- (probes 87-91's project), so probe 92 can prove a viewer with real
+-- project access can still read, while probe 93 proves that same access
+-- still doesn't let them write. Same admin-grants-access mechanism as
+-- probe 84.
+-- =========================================================================
+do $$
+declare
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_viewer uuid := (select id from test_ids where key = 'viewer');
+  v_project uuid := (select id from test_ids where key = 'wpm_project');
+begin
+  perform pg_temp.act_as(v_admin);
+  insert into public.project_members (project_id, user_id) values (v_project, v_viewer);
+  reset role;
+exception when others then
+  reset role;
+  raise notice 'viewer project-membership probe fixture setup failed: %', sqlerrm;
+end $$;
+
+-- =========================================================================
+-- Probe 92 — a viewer who IS a project_member of a workflow's project CAN
+-- still SELECT that workflow — viewer is read-only, not no-read.
+-- =========================================================================
+do $$
+declare
+  v_viewer uuid := (select id from test_ids where key = 'viewer');
+  v_workflow uuid := (select id from test_ids where key = 'wpm_workflow');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_viewer);
+  select count(*) into n_visible from public.workflows where id = v_workflow;
+  reset role;
+
+  if n_visible = 1 then
+    insert into probe_results values (92, 'viewer with project_members access CAN SELECT a workflow in that project', true);
+  else
+    insert into probe_results values (92, 'viewer with project_members access CAN SELECT a workflow in that project', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (92, 'viewer-can-read probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 93 — that same viewer, despite having project_members access,
+-- cannot INSERT a new workflow into the project, nor UPDATE/DELETE the
+-- existing one — private.is_write_member excludes 'viewer' regardless of
+-- project membership.
+-- =========================================================================
+do $$
+declare
+  v_viewer uuid := (select id from test_ids where key = 'viewer');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_project uuid := (select id from test_ids where key = 'wpm_project');
+  v_workflow uuid := (select id from test_ids where key = 'wpm_workflow');
+  insert_denied boolean := false;
+  n_updated int;
+  n_deleted int;
+begin
+  perform pg_temp.act_as(v_viewer);
+
+  begin
+    insert into public.workflows (project_id, org_id, name, created_by)
+    values (v_project, v_org, 'Should be blocked (viewer)', v_viewer);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+
+  update public.workflows set name = 'Should stay blocked (viewer)' where id = v_workflow;
+  get diagnostics n_updated = row_count;
+  delete from public.workflows where id = v_workflow;
+  get diagnostics n_deleted = row_count;
+
+  reset role;
+
+  if insert_denied and n_updated = 0 and n_deleted = 0 then
+    insert into probe_results values (93, 'viewer with project_members access still cannot INSERT/UPDATE/DELETE a workflow', true);
+  else
+    insert into probe_results values (93, 'viewer with project_members access still cannot INSERT/UPDATE/DELETE a workflow', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (93, 'viewer-cannot-write-workflow probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 94 — a viewer cannot INSERT a new project into their org, and
+-- cannot UPDATE/DELETE pm_project (an existing project they are not a
+-- project_member of).
+-- =========================================================================
+do $$
+declare
+  v_viewer uuid := (select id from test_ids where key = 'viewer');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  insert_denied boolean := false;
+  n_updated int;
+  n_deleted int;
+begin
+  perform pg_temp.act_as(v_viewer);
+
+  begin
+    insert into public.projects (org_id, name, created_by)
+    values (v_org, 'Should be blocked (viewer project)', v_viewer);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+
+  update public.projects set name = 'Should stay blocked (viewer)' where id = v_project;
+  get diagnostics n_updated = row_count;
+  delete from public.projects where id = v_project;
+  get diagnostics n_deleted = row_count;
+
+  reset role;
+
+  if insert_denied and n_updated = 0 and n_deleted = 0 then
+    insert into probe_results values (94, 'viewer cannot INSERT/UPDATE/DELETE a project', true);
+  else
+    insert into probe_results values (94, 'viewer cannot INSERT/UPDATE/DELETE a project', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (94, 'viewer-cannot-write-project probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 95 — a viewer cannot INSERT a new connection into their org, and
+-- cannot UPDATE/DELETE the existing connection_org fixture (probe 14).
+-- =========================================================================
+do $$
+declare
+  v_viewer uuid := (select id from test_ids where key = 'viewer');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_conn uuid := (select id from test_ids where key = 'connection_org');
+  insert_denied boolean := false;
+  n_updated int;
+  n_deleted int;
+begin
+  perform pg_temp.act_as(v_viewer);
+
+  begin
+    insert into public.connections
+      (org_id, connector_id, handle, display_name, owner_user_id, vault_secret_ref)
+    values
+      (v_org, 'mysql', '@viewer-blocked-conn', 'Should be blocked (viewer)', v_viewer, 'vault://blocked');
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+
+  update public.connections set display_name = 'Should stay blocked (viewer)' where id = v_conn;
+  get diagnostics n_updated = row_count;
+  delete from public.connections where id = v_conn;
+  get diagnostics n_deleted = row_count;
+
+  reset role;
+
+  if insert_denied and n_updated = 0 and n_deleted = 0 then
+    insert into probe_results values (95, 'viewer cannot INSERT/UPDATE/DELETE a connection', true);
+  else
+    insert into probe_results values (95, 'viewer cannot INSERT/UPDATE/DELETE a connection', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (95, 'viewer-cannot-write-connection probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 96 — a viewer cannot SELECT a project they are not a
+-- project_member of (pm_project) at all — read access is still scoped by
+-- project membership same as any other non-admin role, viewer is not an
+-- org-wide read bypass.
+-- =========================================================================
+do $$
+declare
+  v_viewer uuid := (select id from test_ids where key = 'viewer');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_viewer);
+  select count(*) into n_visible from public.projects where id = v_project;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (96, 'viewer cannot SELECT a project they are not a project_member of', true);
+  else
+    insert into probe_results values (96, 'viewer cannot SELECT a project they are not a project_member of', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (96, 'viewer-cannot-see-unowned-project probe (errored: ' || sqlerrm || ')', false);
 end $$;
 
 -- =========================================================================
