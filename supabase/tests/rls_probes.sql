@@ -3603,6 +3603,288 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 103 — create_organization() sets billing_owner_id to the creator.
+-- =========================================================================
+do $$
+declare
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_new_org uuid;
+  v_billing_owner uuid;
+begin
+  perform pg_temp.act_as(v_owner);
+  select public.create_organization('RLS Probe Billing Org', 'rls-probe-billing-org') into v_new_org;
+  reset role;
+
+  insert into test_ids values ('billing_org', v_new_org);
+
+  select billing_owner_id into v_billing_owner from public.organizations where id = v_new_org;
+
+  if v_billing_owner = v_owner then
+    insert into probe_results values (103, 'create_organization() sets billing_owner_id to the creator', true);
+  else
+    insert into probe_results values (103, 'create_organization() sets billing_owner_id to the creator', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (103, 'create_organization-billing-owner probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Fixture for probes 104-107 — a fresh two-owner org for billing-owner
+-- transfer tests. 'org'/'admin2' can't be reused here: probe 6b (n=62)
+-- already deletes admin2's membership in 'org' earlier in this script.
+-- admin (role='admin' in 'org') is promoted to 'owner' in this NEW org
+-- only — org-scoped, doesn't touch their role in 'org' itself.
+-- =========================================================================
+do $$
+declare
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_transfer_org uuid;
+begin
+  insert into public.organizations (name, slug, created_by)
+  values ('RLS Probe Billing Transfer Org', 'rls-probe-billing-transfer-org', v_owner)
+  returning id into v_transfer_org;
+
+  insert into public.organization_members (org_id, user_id, role) values
+    (v_transfer_org, v_owner, 'owner'),
+    (v_transfer_org, v_admin, 'owner');
+
+  insert into test_ids values ('transfer_org', v_transfer_org);
+end $$;
+
+-- =========================================================================
+-- Probe 104 — a non-billing-owner (another owner of the org) cannot call
+-- transfer_billing_owner().
+-- =========================================================================
+do $$
+declare
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_transfer_org uuid := (select id from test_ids where key = 'transfer_org');
+begin
+  perform pg_temp.act_as(v_admin);
+  begin
+    perform public.transfer_billing_owner(v_transfer_org, v_admin);
+    reset role;
+    insert into probe_results values (104, 'non-billing-owner cannot call transfer_billing_owner()', false);
+  exception when others then
+    reset role;
+    if sqlerrm like '%only the current billing owner can transfer%' then
+      insert into probe_results values (104, 'non-billing-owner cannot call transfer_billing_owner()', true);
+    else
+      insert into probe_results values (104, 'non-billing-owner cannot call transfer_billing_owner() (errored: ' || sqlerrm || ')', false);
+    end if;
+  end;
+exception when others then
+  reset role;
+  insert into probe_results values (104, 'non-billing-owner-transfer probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 105 — the current billing owner CAN transfer billing ownership to
+-- another owner of the same org.
+-- =========================================================================
+do $$
+declare
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_transfer_org uuid := (select id from test_ids where key = 'transfer_org');
+  v_billing_owner uuid;
+begin
+  perform pg_temp.act_as(v_owner);
+  perform public.transfer_billing_owner(v_transfer_org, v_admin);
+  reset role;
+
+  select billing_owner_id into v_billing_owner from public.organizations where id = v_transfer_org;
+
+  if v_billing_owner = v_admin then
+    insert into probe_results values (105, 'billing owner can transfer billing ownership to another owner', true);
+  else
+    insert into probe_results values (105, 'billing owner can transfer billing ownership to another owner', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (105, 'billing-owner-transfer probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 106 — the (now-transferred) billing owner cannot be demoted or
+-- removed, even though another owner exists.
+-- =========================================================================
+do $$
+declare
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_transfer_org uuid := (select id from test_ids where key = 'transfer_org');
+  v_demote_blocked boolean := false;
+  v_remove_blocked boolean := false;
+begin
+  perform pg_temp.act_as(v_owner);
+
+  begin
+    update public.organization_members set role = 'admin' where org_id = v_transfer_org and user_id = v_admin;
+  exception when others then
+    if sqlerrm like '%Cannot remove or demote the billing owner%' then
+      v_demote_blocked := true;
+    end if;
+  end;
+
+  begin
+    delete from public.organization_members where org_id = v_transfer_org and user_id = v_admin;
+  exception when others then
+    if sqlerrm like '%Cannot remove or demote the billing owner%' then
+      v_remove_blocked := true;
+    end if;
+  end;
+
+  reset role;
+
+  if v_demote_blocked and v_remove_blocked then
+    insert into probe_results values (106, 'billing owner cannot be demoted or removed until transferred', true);
+  else
+    insert into probe_results values (106, 'billing owner cannot be demoted or removed until transferred', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (106, 'billing-owner-protected probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 107 — an owner cannot directly UPDATE billing_owner_id (column-
+-- level REVOKE); only the transfer_billing_owner() RPC can change it.
+-- =========================================================================
+do $$
+declare
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_transfer_org uuid := (select id from test_ids where key = 'transfer_org');
+begin
+  perform pg_temp.act_as(v_owner);
+  begin
+    update public.organizations set billing_owner_id = v_owner where id = v_transfer_org;
+    reset role;
+    insert into probe_results values (107, 'owner cannot directly UPDATE billing_owner_id', false);
+  exception when others then
+    reset role;
+    if sqlstate = '42501' then
+      insert into probe_results values (107, 'owner cannot directly UPDATE billing_owner_id', true);
+    else
+      insert into probe_results values (107, 'owner cannot directly UPDATE billing_owner_id (errored: ' || sqlerrm || ')', false);
+    end if;
+  end;
+exception when others then
+  reset role;
+  insert into probe_results values (107, 'billing-owner-column-lock probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 108 — subscriptions RLS scoping: an org member sees the org's
+-- subscription; a member of a different org does not.
+-- =========================================================================
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org_b_owner uuid := (select id from test_ids where key = 'org_b_owner');
+  v_subscription uuid;
+  n_visible int;
+begin
+  insert into public.subscriptions (org_id, plan_id, provider, status)
+  values (v_org, 'team', 'razorpay', 'active')
+  returning id into v_subscription;
+
+  insert into test_ids values ('subscription_org', v_subscription);
+
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_visible from public.subscriptions where id = v_subscription;
+  reset role;
+
+  if n_visible <> 1 then
+    insert into probe_results values (108, 'org member can SELECT the org''s subscription', false);
+  else
+    perform pg_temp.act_as(v_org_b_owner);
+    select count(*) into n_visible from public.subscriptions where id = v_subscription;
+    reset role;
+
+    if n_visible = 0 then
+      insert into probe_results values (108, 'org member can SELECT the org''s subscription; a different org cannot', true);
+    else
+      insert into probe_results values (108, 'org member can SELECT the org''s subscription; a different org cannot', false);
+    end if;
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (108, 'subscriptions-rls-scoping probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 109 — invoices RLS scoping: an org member sees the org's invoice
+-- (via its subscription); a member of a different org does not.
+-- =========================================================================
+do $$
+declare
+  v_subscription uuid := (select id from test_ids where key = 'subscription_org');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org_b_owner uuid := (select id from test_ids where key = 'org_b_owner');
+  v_invoice uuid;
+  n_visible int;
+begin
+  insert into public.invoices (subscription_id, amount_minor, currency, provider, status)
+  values (v_subscription, 199900, 'INR', 'razorpay', 'paid')
+  returning id into v_invoice;
+
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_visible from public.invoices where id = v_invoice;
+  reset role;
+
+  if n_visible <> 1 then
+    insert into probe_results values (109, 'org member can SELECT the org''s invoice', false);
+  else
+    perform pg_temp.act_as(v_org_b_owner);
+    select count(*) into n_visible from public.invoices where id = v_invoice;
+    reset role;
+
+    if n_visible = 0 then
+      insert into probe_results values (109, 'org member can SELECT the org''s invoice; a different org cannot', true);
+    else
+      insert into probe_results values (109, 'org member can SELECT the org''s invoice; a different org cannot', false);
+    end if;
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (109, 'invoices-rls-scoping probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 110 — processed_webhook_events is deny-all for every client role
+-- (service_role/postgres only, permanently).
+-- =========================================================================
+do $$
+declare
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  n_visible int;
+begin
+  insert into public.processed_webhook_events (provider, provider_event_id, event_type)
+  values ('razorpay', 'evt_rls_probe_110', 'subscription.activated');
+
+  perform pg_temp.act_as(v_owner);
+  begin
+    select count(*) into n_visible from public.processed_webhook_events;
+    reset role;
+    insert into probe_results values (110, 'processed_webhook_events is deny-all for authenticated', false);
+  exception when others then
+    reset role;
+    if sqlstate = '42501' then
+      insert into probe_results values (110, 'processed_webhook_events is deny-all for authenticated', true);
+    else
+      insert into probe_results values (110, 'processed_webhook_events is deny-all for authenticated (errored: ' || sqlerrm || ')', false);
+    end if;
+  end;
+exception when others then
+  reset role;
+  insert into probe_results values (110, 'processed-webhook-events-deny-all probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

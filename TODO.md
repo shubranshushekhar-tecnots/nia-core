@@ -905,11 +905,12 @@
   Investigate with a real row; consider a repair migration or FK.
 - Connections page fetches grants with one request per connection (N+1) —
   add a batched endpoint if orgs have many connections.
-- Subscription Phase 4 — billing owner: add `organizations.billing_owner_id`
-  (FK to user, must currently hold role='owner'), backfilled from
-  `created_by`; exactly one per org; atomic transfer gated by the existing
-  (currently unused) `org.transferOwnership` capability. Needed before
-  payments. Don't repurpose `created_by` for this — it's a separate
-  concept (org creator vs. billing contact). Slice 7's Members page shows
-  every current owner but has no single "billing owner" designation or
-  transfer UI yet (deferred per this decision).
+- Subscription Phase 4, Slice 1's Members page has no "billing owner"
+  designation or transfer UI yet (`transfer_billing_owner()` RPC exists,
+  `0061_billing_owner.sql`, but nothing in apps/web calls it) — deferred
+  to a later payments slice.
+- Subscription Phase 4 (payments): "Move project to org" — Free/Pro→Team
+  upgrade does NOT auto-move the user's personal projects into the new
+  org (decided: new org starts fresh, personal workspace unchanged). A
+  manual/guided "move this project into an org" flow is a separate later
+  slice, not part of payments plumbing.
