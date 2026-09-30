@@ -207,6 +207,31 @@ const EnvSchema = z.object({
    * Default 28800 = 8 hours, per plan approval.
    */
   STAFF_SESSION_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(28_800),
+  /**
+   * Subscription Phase 4, Slice 2 (docs/plans/subscription-model.md) —
+   * Razorpay TEST mode credentials for individual Free/Legacy -> Pro
+   * checkout. RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET authenticate every
+   * REST call this service makes to Razorpay (Basic auth, see
+   * lib/razorpay.ts); RAZORPAY_WEBHOOK_SECRET is a SEPARATE value (set
+   * independently in the Razorpay Dashboard's Webhooks screen, not
+   * derived from the key secret) used only to verify the
+   * X-Razorpay-Signature HMAC on inbound webhook deliveries
+   * (routes/billingWebhook.ts) — never sent to Razorpay's API.
+   */
+  RAZORPAY_KEY_ID: z.string().min(1),
+  RAZORPAY_KEY_SECRET: z.string().min(1),
+  RAZORPAY_WEBHOOK_SECRET: z.string().min(1),
+  /**
+   * Razorpay Plan ids (rzp_test_.../plan_... ids, created once via the
+   * Razorpay Dashboard or API against the Pro tier's price) for the two
+   * billing intervals this slice offers. Not the same thing as this
+   * repo's own `plans.id` ('pro') — Razorpay's Plan is a separate,
+   * provider-side object a Subscription must reference (see
+   * lib/razorpay.ts's header comment, citing razorpay.com/docs/api/
+   * payments/subscriptions/create-plan/).
+   */
+  RAZORPAY_PRO_MONTHLY_PLAN_ID: z.string().min(1),
+  RAZORPAY_PRO_YEARLY_PLAN_ID: z.string().min(1),
 }).refine((e) => !(e.NODE_ENV === "production" && e.CONNECTOR_DEV_HOST), {
   message:
     "CONNECTOR_DEV_HOST must not be set when NODE_ENV=production — it overrides the connector service host to a dev-only address.",

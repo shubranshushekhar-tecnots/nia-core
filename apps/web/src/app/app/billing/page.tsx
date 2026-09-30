@@ -4,6 +4,7 @@ import { getPlanUsage } from '@/lib/billing/plan';
 import AppShell from '@/components/app/AppShell';
 import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
+import UpgradeSection from '@/components/billing/UpgradeSection';
 import { homeScrollStyle, mainColStyle, pageTitleStyle, soonBtnStyle } from '@/components/app/styles';
 import {
   billingUsageCardStyle,
@@ -73,15 +74,19 @@ export default async function BillingPage() {
             <UsageCard label="Projects used" used={plan.projectUsed} limit={plan.projectLimit} unit="projects" />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 460 }}>
-            <span style={{ fontSize: 13.5, color: 'var(--text-3)' }}>
-              An Organization plan adds seats, roles and higher limits. Plan management and invoicing are coming
-              soon.
-            </span>
-            <button type="button" style={soonBtnStyle} disabled title="Coming soon">
-              Upgrade plan {'\u2014'} coming soon
-            </button>
-          </div>
+          {orgId ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 460 }}>
+              <span style={{ fontSize: 13.5, color: 'var(--text-3)' }}>
+                An Organization plan adds seats, roles and higher limits. Plan management and invoicing are coming
+                soon.
+              </span>
+              <button type="button" style={soonBtnStyle} disabled title="Coming soon">
+                Upgrade plan {'\u2014'} coming soon
+              </button>
+            </div>
+          ) : (
+            <UpgradeSection />
+          )}
         </div>
       </div>
     </AppShell>

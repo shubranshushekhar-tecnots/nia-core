@@ -14,6 +14,8 @@ import { chatRouter } from "./routes/chat.js";
 import { runsRouter } from "./routes/runs.js";
 import { copilotAgentRouter } from "./routes/copilotAgent.js";
 import { consoleRouter } from "./routes/console.js";
+import { billingRouter } from "./routes/billing.js";
+import { billingWebhookRouter } from "./routes/billingWebhook.js";
 // Copilot agent (Part 1/2): importing this registers every v1 tool
 // (registerTool side effect at each module's bottom) before any request
 // can reach copilotAgentRouter below.
@@ -28,6 +30,18 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
+
+// Subscription Phase 4, Slice 2: Razorpay's webhook signature is an HMAC
+// over the exact raw request bytes — must be captured with express.raw()
+// BEFORE the global express.json() below parses (and discards) the
+// original body. `type: "*/*"` forces raw capture regardless of Razorpay's
+// actual Content-Type (application/json) — express.raw()'s own default
+// type filter only matches application/octet-stream, which would silently
+// skip parsing here and leave req.body undefined instead of a Buffer. This
+// route has no auth middleware of its own (see billingWebhook.ts's header
+// comment) — signature verification IS its authentication.
+app.use("/billing/webhook", express.raw({ type: "*/*" }), billingWebhookRouter);
+
 app.use(express.json());
 app.use(requestLogger);
 
@@ -62,6 +76,12 @@ app.use("/workflows", workflowsRouter);
 app.use("/connectors", connectorsRouter);
 app.use("/connections", connectionsRouter);
 app.use("/connections/:connectionId/grants", grantsRouter);
+
+// Authenticated billing routes (upgrade preview, checkout creation,
+// subscription-status polling). The public webhook counterpart is mounted
+// above, before express.json(), with no auth middleware — see
+// billingWebhook.ts.
+app.use("/billing", billingRouter);
 
 // Console v1 (docs/plans/console-plan.md, build order step 4) — off by
 // default (env.CONSOLE_ENABLED); per that step's own spec, "flag off" must
