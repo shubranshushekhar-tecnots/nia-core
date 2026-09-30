@@ -3,7 +3,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSubscriptionStatus } from '@/lib/api/billingClient';
-import { billingProcessingCardStyle } from './styles';
+import {
+  nxBillingBackBtnStyle,
+  nxBillingReopenLinkStyle,
+  nxBillingStatusBodyStyle,
+  nxBillingStatusCardStyle,
+  nxBillingStatusTagStyle,
+  type NxBillingStatusTone,
+} from './styles';
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -13,6 +20,20 @@ const STATUS_COPY: Record<string, string> = {
   past_due: 'Payment is past due.',
   canceled: 'This subscription was canceled.',
 };
+
+const STATUS_TAG: Record<string, string> = {
+  incomplete: 'Processing',
+  active: 'Active',
+  past_due: 'Past due',
+  canceled: 'Canceled',
+};
+
+function statusTone(status: string): NxBillingStatusTone {
+  if (status === 'active') return 'active';
+  if (status === 'past_due') return 'warn';
+  if (status === 'canceled') return 'neutral';
+  return 'neutral';
+}
 
 /**
  * Subscription Phase 4, Slice 2 — shown at /app/billing/processing/:id
@@ -65,24 +86,31 @@ export default function ProcessingStatus({ subscriptionId, checkoutUrl }: { subs
     };
   }, [subscriptionId]);
 
+  const active = status === 'active';
+
   return (
-    <div style={billingProcessingCardStyle}>
-      <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
-        {STATUS_COPY[status] ?? status}
-      </span>
-      {status === 'incomplete' && (
-        <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
-          Complete the payment in the Razorpay tab we opened. This page updates automatically once it's confirmed.
+    <div style={nxBillingStatusCardStyle(active)}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <span style={nxBillingStatusTagStyle(error ? 'danger' : statusTone(status))}>
+          {error ? 'Error' : STATUS_TAG[status] ?? status}
         </span>
-      )}
-      {error && <span style={{ fontSize: 12.5, color: 'var(--danger, #d92d20)' }}>{error}</span>}
-      <button
-        type="button"
-        style={{ fontSize: 12.5, color: 'var(--text-3)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
-        onClick={() => router.push('/app/billing')}
-      >
-        ← Back to billing
-      </button>
+        <span style={nxBillingStatusBodyStyle}>{error ?? STATUS_COPY[status] ?? status}</span>
+        {status === 'incomplete' && !error && (
+          <span style={{ ...nxBillingStatusBodyStyle, fontSize: 12.5, opacity: 0.75 }}>
+            Complete the payment in the Razorpay tab we opened. This page updates automatically once it's confirmed.
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {status === 'incomplete' && checkoutUrl && (
+          <button type="button" style={nxBillingReopenLinkStyle} onClick={() => window.open(checkoutUrl, '_blank', 'noopener,noreferrer')}>
+            Reopen Razorpay checkout {'\u2197'}
+          </button>
+        )}
+        <button type="button" style={nxBillingBackBtnStyle} onClick={() => router.push('/app/billing')}>
+          {'\u2190'} Back to billing
+        </button>
+      </div>
     </div>
   );
 }

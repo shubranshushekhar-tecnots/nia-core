@@ -3,12 +3,16 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createCheckout, getUpgradePreview, type UpgradePreview } from '@/lib/api/billingClient';
-import { primaryBtnStyle } from '@/components/app/styles';
 import {
-  billingErrorTextStyle,
-  billingIntervalOptionStyle,
-  billingIntervalToggleStyle,
-  billingWarningBannerStyle,
+  nxBillingBannerStrongStyle,
+  nxBillingBannerStyle,
+  nxBillingCtaBtnStyle,
+  nxBillingErrorTextStyle,
+  nxBillingIntervalOptionStyle,
+  nxBillingIntervalToggleStyle,
+  nxBillingMutedTextStyle,
+  nxBillingUpgradeTagStyle,
+  nxBillingUpgradeTitleStyle,
 } from './styles';
 
 const WARNING_LABEL: Record<UpgradePreview['warnings'][number]['field'], string> = {
@@ -63,17 +67,17 @@ export default function UpgradeSection() {
   }, []);
 
   if (loading) {
-    return <span style={{ fontSize: 13, color: 'var(--text-3)' }}>Loading upgrade options…</span>;
+    return <span style={nxBillingMutedTextStyle}>Loading upgrade options…</span>;
   }
 
   if (error && !preview) {
-    return <span style={billingErrorTextStyle}>{error}</span>;
+    return <span style={nxBillingErrorTextStyle}>{error}</span>;
   }
 
   if (!preview) return null;
 
   if (preview.currentPlanId === 'pro') {
-    return <span style={{ fontSize: 13, color: 'var(--text-3)' }}>You're already on the Pro plan.</span>;
+    return <span style={nxBillingMutedTextStyle}>You're already on the Pro plan.</span>;
   }
 
   async function handleUpgrade() {
@@ -89,16 +93,17 @@ export default function UpgradeSection() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 460 }}>
-      <span style={{ fontSize: 13.5, color: 'var(--text-3)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <span style={nxBillingUpgradeTagStyle}>Upgrade</span>
+      <h2 style={nxBillingUpgradeTitleStyle}>
         Upgrade from {preview.currentPlanName} to {preview.proPlanName}.
-      </span>
+      </h2>
 
-      <div style={billingIntervalToggleStyle}>
+      <div style={nxBillingIntervalToggleStyle}>
         <button
           type="button"
           disabled={!preview.monthlyAvailable}
-          style={billingIntervalOptionStyle(interval === 'monthly')}
+          style={nxBillingIntervalOptionStyle(interval === 'monthly', !preview.monthlyAvailable)}
           onClick={() => setInterval('monthly')}
         >
           Monthly
@@ -106,7 +111,7 @@ export default function UpgradeSection() {
         <button
           type="button"
           disabled={!preview.yearlyAvailable}
-          style={billingIntervalOptionStyle(interval === 'yearly')}
+          style={nxBillingIntervalOptionStyle(interval === 'yearly', !preview.yearlyAvailable)}
           onClick={() => setInterval('yearly')}
         >
           Yearly
@@ -114,8 +119,8 @@ export default function UpgradeSection() {
       </div>
 
       {preview.warnings.length > 0 && (
-        <div style={billingWarningBannerStyle}>
-          <strong>Pro has lower limits on your current usage:</strong>
+        <div style={nxBillingBannerStyle('warn')}>
+          <span style={nxBillingBannerStrongStyle}>Pro has lower limits on your current usage:</span>
           {preview.warnings.map((w) => (
             <span key={w.field}>
               {WARNING_LABEL[w.field]}: {formatLimit(w.current)} → {formatLimit(w.upgraded)}
@@ -124,9 +129,9 @@ export default function UpgradeSection() {
         </div>
       )}
 
-      {error && <span style={billingErrorTextStyle}>{error}</span>}
+      {error && <span style={nxBillingErrorTextStyle}>{error}</span>}
 
-      <button type="button" style={{ ...primaryBtnStyle, alignSelf: 'flex-start' }} disabled={submitting} onClick={handleUpgrade}>
+      <button type="button" style={nxBillingCtaBtnStyle} disabled={submitting} onClick={handleUpgrade}>
         {submitting ? 'Starting checkout…' : `Upgrade to ${preview.proPlanName}`}
       </button>
     </div>
