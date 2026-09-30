@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect } from 'react';
+import { useActionState, useEffect, type CSSProperties } from 'react';
 import { installConnectorAction } from '@/lib/connections/actions';
 import type { ConnectorCatalogMeta } from '@/lib/connections/catalogMeta';
 import ConnectorLogo from './ConnectorLogo';
@@ -93,13 +93,23 @@ export default function ConnectorCard({
         <span aria-hidden="true">Soon</span>
       </button>
     ) : mainKind === 'uninstall' ? (
-      <button type="button" className="nx-wipe" style={nxConnectorCardMainBtnStyle('uninstall')} onClick={handleUninstallClick}>
+      <button
+        type="button"
+        className="nx-wipe"
+        style={{ ...nxConnectorCardMainBtnStyle('uninstall'), '--wipe-fill': 'var(--nx-danger)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
+        onClick={handleUninstallClick}
+      >
         Uninstall
         <span aria-hidden="true">{'\u00d7'}</span>
       </button>
     ) : (
       <form action={installAction} style={{ flex: '1 1 auto', minWidth: 0, display: 'flex' }}>
-        <button type="submit" disabled={installPending} className="nx-wipe" style={{ ...nxConnectorCardMainBtnStyle('install'), width: '100%' }}>
+        <button
+          type="submit"
+          disabled={installPending}
+          className="nx-wipe"
+          style={{ ...nxConnectorCardMainBtnStyle('install'), width: '100%', '--wipe-fill': 'var(--nx-blue-panel)', '--wipe-on': 'var(--nx-blue-panel-text)' } as CSSProperties}
+        >
           {installPending ? 'Installing\u2026' : 'Install'}
           <span aria-hidden="true">{'\u2192'}</span>
         </button>

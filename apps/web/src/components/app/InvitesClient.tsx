@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useRef, useState } from 'react';
+import { useActionState, useRef, useState, type CSSProperties } from 'react';
 import type { OrgRole } from '@nia/schemas';
 import { createInvite, revokeInvite, type InviteActionState, type InviteLink } from '@/lib/invites/actions';
 import { nxModalLabelStyle, nxModalFieldStyle, nxModalErrorStyle } from '@/components/app/styles';
@@ -210,7 +210,8 @@ export default function InvitesClient({ invites, callerRole }: { invites: Invite
                     type="button"
                     onClick={() => handleRevoke(invite.id)}
                     disabled={revokingId === invite.id}
-                    style={nxMembersRevokeBtnStyle}
+                    className="nx-wipe"
+                    style={{ ...nxMembersRevokeBtnStyle, '--wipe-fill': 'var(--nx-danger)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
                   >
                     {revokingId === invite.id ? 'Revoking\u2026' : 'Revoke'}
                   </button>

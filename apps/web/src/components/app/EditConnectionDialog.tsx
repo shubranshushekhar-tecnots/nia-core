@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { friendlyConnectionError, getConnectorManifest, type ConfigField } from '@nia/schemas';
 import type { Connection } from '@/lib/connections/types';
 import { updateConnection, ConnectionsApiError, type ConnectionUsage } from '@/lib/api/connectionsClient';
@@ -276,14 +276,20 @@ export default function EditConnectionDialog({
             {usageWarning ? (
               <button
                 type="button"
-                style={nxModalPrimaryCellStyle(pending)}
+                className="nx-wipe"
+                style={{ ...nxModalPrimaryCellStyle(pending), '--wipe-fill': 'var(--nx-ink)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
                 disabled={pending}
                 onClick={() => pendingSave && void submit(pendingSave, true)}
               >
                 {pending ? 'Saving\u2026' : 'Save anyway'}
               </button>
             ) : (
-              <button type="submit" disabled={pending} style={nxModalPrimaryCellStyle(pending)}>
+              <button
+                type="submit"
+                disabled={pending}
+                className="nx-wipe"
+                style={{ ...nxModalPrimaryCellStyle(pending), '--wipe-fill': 'var(--nx-ink)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
+              >
                 {pending ? 'Testing & saving\u2026' : 'Save'}
               </button>
             )}

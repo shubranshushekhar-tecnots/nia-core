@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useActionState, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { CONNECTOR_MANIFESTS } from '@nia/schemas';
 import type { Connection, ConnectorCatalogEntry, ConnectorInstall } from '@/lib/connections/types';
@@ -485,7 +485,8 @@ export default function ConnectionsClient({
                     </div>
                     <button
                       type="button"
-                      style={nxConnDangerBtnStyle}
+                      className="nx-wipe"
+                      style={{ ...nxConnDangerBtnStyle, '--wipe-fill': 'var(--nx-danger)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
                       onClick={() => setDialog({ type: 'uninstall', installId: install.id, name: meta?.name ?? install.connectorId })}
                     >
                       Uninstall

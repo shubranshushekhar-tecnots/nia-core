@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import type { ActorRole } from '@nia/schemas';
 import { deleteProject, renameProject } from '@/lib/dashboard/actions';
@@ -88,7 +88,12 @@ export default function ProjectDetailClient({
         </div>
 
         {canWrite ? (
-          <button type="button" style={nxProjDetailNewWorkflowBtnStyle} onClick={() => setShowCreateWorkflow(true)}>
+          <button
+            type="button"
+            className="nx-wipe"
+            style={{ ...nxProjDetailNewWorkflowBtnStyle, '--wipe-fill': 'var(--nx-ink)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
+            onClick={() => setShowCreateWorkflow(true)}
+          >
             <span style={nxProjDetailNewWorkflowLabelStyle}>Create</span>
             <span style={nxProjDetailNewWorkflowTextRowStyle}>
               New workflow

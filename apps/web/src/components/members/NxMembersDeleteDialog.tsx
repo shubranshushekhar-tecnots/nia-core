@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect } from 'react';
+import { useActionState, useEffect, type CSSProperties } from 'react';
 import type { ActionState } from '@/lib/auth/actions';
 import { nxModalOverlayStyle } from '@/components/app/styles';
 import {
@@ -70,7 +70,12 @@ export default function NxMembersDeleteDialog({
             <button type="button" style={nxMembersDialogCancelCellStyle} onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" disabled={pending} style={nxMembersDialogConfirmCellStyle(pending)}>
+            <button
+              type="submit"
+              disabled={pending}
+              className="nx-wipe"
+              style={{ ...nxMembersDialogConfirmCellStyle(pending), '--wipe-fill': 'var(--nx-danger)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
+            >
               {pending ? `${confirmLabel === 'Leave' ? 'Leaving' : 'Deleting'}\u2026` : confirmLabel}
               {!pending && <span>{'\u00d7'}</span>}
             </button>

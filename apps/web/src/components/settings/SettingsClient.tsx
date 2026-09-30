@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useState, type CSSProperties } from 'react';
 import type { ActionState } from '@/lib/auth/actions';
 import { updateOrganization, updateProfileName } from '@/lib/settings/actions';
 import { removeMember } from '@/lib/members/actions';
@@ -195,7 +195,12 @@ export default function SettingsClient({
         {org && (
           <section style={nxSettingsSectionDangerStyle}>
             <h2 style={nxSettingsSectionTitleDangerStyle}>Danger zone</h2>
-            <button type="button" style={nxSettingsDangerBtnStyle} onClick={() => setLeaving(true)}>
+            <button
+              type="button"
+              className="nx-wipe"
+              style={{ ...nxSettingsDangerBtnStyle, '--wipe-fill': 'var(--nx-danger)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
+              onClick={() => setLeaving(true)}
+            >
               Leave organization
             </button>
           </section>

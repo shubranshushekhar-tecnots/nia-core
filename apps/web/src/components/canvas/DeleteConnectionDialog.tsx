@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import {
   deleteConnection,
   getConnectionUsages,
@@ -168,7 +168,8 @@ export default function DeleteConnectionDialog({
           </button>
           <button
             type="button"
-            style={nxModalDangerCellStyle(deleting)}
+            className="nx-wipe"
+            style={{ ...nxModalDangerCellStyle(deleting), '--wipe-fill': 'var(--nx-danger)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
             onClick={handleDelete}
             disabled={deleting || usages === null}
           >

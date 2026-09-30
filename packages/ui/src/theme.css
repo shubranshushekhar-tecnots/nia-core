@@ -426,16 +426,21 @@ html[data-nx-theme='light'] [data-app-theme] {
 }
 
 /* Precision Dark redesign (Step 2): shared hover-wipe utility for Sidebar/
-   TopBar interactive rows — a solid `--nx-raised` panel wipes in from the
-   left via `::before` + `transform: scaleX()` on hover/focus-visible.
-   Inline CSSProperties objects can't express :hover/:focus-visible/
-   ::before, so this lives here and is applied via className alongside
-   each row's normal inline layout
-   styles (apps/web/src/components/app/styles.ts's navRailBtnStyle etc.).
-   `isolation: isolate` contains the pseudo-element's negative z-index to
-   this row only, so it never paints over/under sibling rows. Reduced
-   motion is already handled by the global `*` rule below — no override
-   needed here. */
+   TopBar interactive rows — a solid panel wipes in from the left via
+   `::before` + `transform: scaleX()` on hover/focus-visible. Inline
+   CSSProperties objects can't express :hover/:focus-visible/::before, so
+   this lives here and is applied via className alongside each row's
+   normal inline layout styles (apps/web/src/components/app/styles.ts's
+   navRailBtnStyle etc.). `isolation: isolate` contains the pseudo-
+   element's negative z-index to this row only, so it never paints over/
+   under sibling rows. Reduced motion is already handled by the global
+   `*` rule below — no override needed here.
+   Fill/text colour are `--wipe-fill`/`--wipe-on` custom properties
+   (default `--nx-raised`/`--nx-ink`, i.e. unchanged neutral behaviour)
+   so call sites can override them per action type — e.g. an install
+   button sets `--wipe-fill: var(--nx-blue-panel)`, a destructive button
+   sets `--wipe-fill: var(--nx-danger)` — without introducing a second
+   utility class. */
 .nx-wipe {
   position: relative;
   isolation: isolate;
@@ -447,14 +452,14 @@ html[data-nx-theme='light'] [data-app-theme] {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: var(--nx-raised);
+  background: var(--wipe-fill, var(--nx-raised));
   transform: scaleX(0);
   transform-origin: left;
   transition: transform 220ms var(--nx-ease);
 }
 .nx-wipe:hover,
 .nx-wipe:focus-visible {
-  color: var(--nx-ink);
+  color: var(--wipe-on, var(--nx-ink));
 }
 .nx-wipe:hover::before,
 .nx-wipe:focus-visible::before {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect } from 'react';
+import { useActionState, useEffect, type CSSProperties } from 'react';
 import { createProject } from '@/lib/dashboard/actions';
 import type { ActionState } from '@/lib/auth/actions';
 import {
@@ -54,7 +54,12 @@ export default function CreateProjectDialog({ orgId, onClose }: { orgId: string 
             <button type="button" style={nxModalCancelCellStyle} onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" disabled={pending} style={nxModalPrimaryCellStyle(pending)}>
+            <button
+              type="submit"
+              disabled={pending}
+              className="nx-wipe"
+              style={{ ...nxModalPrimaryCellStyle(pending), '--wipe-fill': 'var(--nx-ink)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
+            >
               {pending && <span className="nx-spinner" aria-hidden style={{ color: 'var(--nx-blue-panel)' }} />}
               {pending ? 'Creating\u2026' : 'Create project'}
               {!pending && (
