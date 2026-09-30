@@ -18,7 +18,12 @@ import { dbPool } from "./dbPool.js";
  * getOrgPlan()/resolvePlanLimit() use) reproduces the exact prior
  * constant (25 workflows, unlimited projects) for every backfilled row —
  * a later plan change (Legacy -> Pro) would otherwise silently stay capped
- * at the old default forever.
+ * at the old default forever. The "backfill" describe blocks below don't
+ * depend on a real 0050/0051 backfill having produced rows (a from-zero
+ * database has none — those migrations' UPDATEs ran against empty tables):
+ * they build a row in the backfill's exact documented shape and assert the
+ * same resolution expression, so they pass identically on a from-zero
+ * database or one with real production history.
  *
  * Real local Postgres only (apps/api/.env's DATABASE_URL). Run explicitly
  * with `pnpm test:integration` (apps/api/vitest.integration.config.ts).
@@ -29,34 +34,69 @@ afterAll(async () => {
 });
 
 describe("org_plan backfill — real Postgres", () => {
-  it("every existing org_plan row (the 0050 backfill) has plan_id='legacy' with no override, and resolves to the exact prior constant (workflow_limit=25, project_limit=unlimited)", async () => {
-    const { rows, rowCount } = await dbPool.query<{
-      org_id: string;
-      plan_id: string;
-      workflow_limit_set: boolean;
-      project_limit_set: boolean;
-      effective_workflow_limit: number | null;
-      effective_project_limit: number | null;
-    }>(
-      `select
-         op.org_id,
-         op.plan_id,
-         op.workflow_limit_set,
-         op.project_limit_set,
-         case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as effective_workflow_limit,
-         case when op.project_limit_set then op.project_limit else pl.project_limit end as effective_project_limit
-       from public.org_plan op
-       join public.plans pl on pl.id = op.plan_id`,
+  it("an org_plan row left in the 0050 backfill's exact shape (plan_id='legacy', no override) resolves to the exact prior constant (workflow_limit=25, project_limit=unlimited)", async () => {
+    // Self-contained: a from-zero database has no rows left over from a
+    // real 0050 backfill (that migration's UPDATE ran against an empty
+    // org_plan table). Instead of depending on incidental leftover data,
+    // create a real org (the auto-provisioning trigger gives it a Free
+    // row), then overwrite it into 0050's documented backfill shape —
+    // plan_id='legacy', workflow_limit_set=false, project_limit_set=false
+    // — and assert the same resolution expression the product code and
+    // the RLS trigger both use.
+    const { rows: userRows } = await dbPool.query<{ id: string }>(
+      'select id from public."user" limit 1',
     );
+    const createdBy = userRows[0]?.id;
+    expect(createdBy).toBeTruthy();
 
-    expect(rowCount).toBeGreaterThan(0);
+    const { rows: orgRows } = await dbPool.query<{ id: string }>(
+      `insert into public.organizations (name, slug, created_by)
+       values ($1, $2, $3)
+       returning id`,
+      [
+        "org_plan backfill-shape test org",
+        `org-plan-backfill-test-${Date.now()}`,
+        createdBy,
+      ],
+    );
+    const orgId = orgRows[0]?.id;
+    expect(orgId).toBeTruthy();
 
-    for (const row of rows) {
-      expect(row.plan_id).toBe("legacy");
-      expect(row.workflow_limit_set).toBe(false);
-      expect(row.project_limit_set).toBe(false);
-      expect(row.effective_workflow_limit).toBe(25);
-      expect(row.effective_project_limit).toBeNull();
+    try {
+      await dbPool.query(
+        `update public.org_plan
+         set plan_id = 'legacy', workflow_limit_set = false, project_limit_set = false
+         where org_id = $1`,
+        [orgId],
+      );
+
+      const { rows } = await dbPool.query<{
+        plan_id: string;
+        workflow_limit_set: boolean;
+        project_limit_set: boolean;
+        effective_workflow_limit: number | null;
+        effective_project_limit: number | null;
+      }>(
+        `select
+           op.plan_id,
+           op.workflow_limit_set,
+           op.project_limit_set,
+           case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as effective_workflow_limit,
+           case when op.project_limit_set then op.project_limit else pl.project_limit end as effective_project_limit
+         from public.org_plan op
+         join public.plans pl on pl.id = op.plan_id
+         where op.org_id = $1`,
+        [orgId],
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.plan_id).toBe("legacy");
+      expect(rows[0]?.workflow_limit_set).toBe(false);
+      expect(rows[0]?.project_limit_set).toBe(false);
+      expect(rows[0]?.effective_workflow_limit).toBe(25);
+      expect(rows[0]?.effective_project_limit).toBeNull();
+    } finally {
+      await dbPool.query("delete from public.organizations where id = $1", [orgId]);
     }
   });
 
@@ -230,34 +270,54 @@ describe("org creation via the real customer path (create_organization RPC, auth
  * this round at all).
  */
 describe("owner_plan backfill — real Postgres", () => {
-  it("every existing owner_plan row has plan_id='legacy' with no override, resolving to the exact prior constant", async () => {
-    const { rows, rowCount } = await dbPool.query<{
-      user_id: string;
-      plan_id: string;
-      workflow_limit_set: boolean;
-      project_limit_set: boolean;
-      effective_workflow_limit: number | null;
-      effective_project_limit: number | null;
-    }>(
-      `select
-         op.user_id,
-         op.plan_id,
-         op.workflow_limit_set,
-         op.project_limit_set,
-         case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as effective_workflow_limit,
-         case when op.project_limit_set then op.project_limit else pl.project_limit end as effective_project_limit
-       from public.owner_plan op
-       join public.plans pl on pl.id = op.plan_id`,
-    );
+  it("an owner_plan row left in 0051's exact backfill shape (plan_id='legacy', no override) resolves to the exact prior constant", async () => {
+    // Self-contained for the same reason as the org_plan backfill test
+    // above: a from-zero database never ran 0051's backfill UPDATE against
+    // real pre-existing rows. Sign up a real user (the auto-provisioning
+    // trigger gives it a Free row), overwrite it into 0051's documented
+    // backfill shape, and assert the resolution expression.
+    const email = `owner-plan-backfill-shape-test-${Date.now()}@nia.dev`;
+    const result = await auth.api.signUpEmail({
+      body: { email, password: "password", name: "owner_plan backfill-shape test" },
+    });
+    const userId = result.user.id;
+    expect(userId).toBeTruthy();
 
-    expect(rowCount).toBeGreaterThan(0);
+    try {
+      await dbPool.query(
+        `update public.owner_plan
+         set plan_id = 'legacy', workflow_limit_set = false, project_limit_set = false
+         where user_id = $1`,
+        [userId],
+      );
 
-    for (const row of rows) {
-      expect(row.plan_id).toBe("legacy");
-      expect(row.workflow_limit_set).toBe(false);
-      expect(row.project_limit_set).toBe(false);
-      expect(row.effective_workflow_limit).toBe(25);
-      expect(row.effective_project_limit).toBeNull();
+      const { rows } = await dbPool.query<{
+        plan_id: string;
+        workflow_limit_set: boolean;
+        project_limit_set: boolean;
+        effective_workflow_limit: number | null;
+        effective_project_limit: number | null;
+      }>(
+        `select
+           op.plan_id,
+           op.workflow_limit_set,
+           op.project_limit_set,
+           case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as effective_workflow_limit,
+           case when op.project_limit_set then op.project_limit else pl.project_limit end as effective_project_limit
+         from public.owner_plan op
+         join public.plans pl on pl.id = op.plan_id
+         where op.user_id = $1`,
+        [userId],
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.plan_id).toBe("legacy");
+      expect(rows[0]?.workflow_limit_set).toBe(false);
+      expect(rows[0]?.project_limit_set).toBe(false);
+      expect(rows[0]?.effective_workflow_limit).toBe(25);
+      expect(rows[0]?.effective_project_limit).toBeNull();
+    } finally {
+      await dbPool.query('delete from public."user" where id = $1', [userId]);
     }
   });
 
