@@ -7,28 +7,49 @@ import { deleteProject, renameProject } from '@/lib/dashboard/actions';
 import type { ProjectDetail, SidebarProject } from '@/lib/dashboard/types';
 import type { ProjectMemberProfile } from '@/lib/projectMembers/actions';
 import {
-  dropdownItemStyle,
-  dropdownStyle,
-  kebabBtnStyle,
-  primaryBtnStyle,
-  projectHeaderRowStyle,
-  projectMetaStyle,
-  projectTitleColStyle,
-  projectTitleStyle,
-  statusDotStyle,
-  workflowListMetaStyle,
-  workflowListNameStyle,
-  workflowListRowStyle,
-  workflowListStatusStyle,
+  nxProjDetailBodyStyle,
+  nxProjDetailBreadcrumbStyle,
+  nxProjDetailColHeaderCellStyle,
+  nxProjDetailColHeaderRowStyle,
+  nxProjDetailDropdownItemStyle,
+  nxProjDetailDropdownStyle,
+  nxProjDetailEmptyBoxStyle,
+  nxProjDetailEmptyTextStyle,
+  nxProjDetailHeaderRowStyle,
+  nxProjDetailKebabBtnStyle,
+  nxProjDetailKebabColStyle,
+  nxProjDetailLeftColStyle,
+  nxProjDetailMembersColStyle,
+  nxProjDetailMetaStyle,
+  nxProjDetailNewWorkflowBtnStyle,
+  nxProjDetailNewWorkflowLabelStyle,
+  nxProjDetailNewWorkflowTextRowStyle,
+  nxProjDetailRowArrowCellStyle,
+  nxProjDetailRowDotCellStyle,
+  nxProjDetailRowNameCellStyle,
+  nxProjDetailRowStatusCellStyle,
+  nxProjDetailRowStyle,
+  nxProjDetailRowUpdatedCellStyle,
+  nxProjDetailTitleStyle,
+  nxProjDetailViewOnlyPanelStyle,
+  nxProjDetailWorkflowsColStyle,
+  nxProjViewOnlyChipStyle,
+  nxWorkflowStatusDotStyle,
+  nxWorkflowStatusInkColor,
 } from './styles';
 import CreateWorkflowDialog from './CreateWorkflowDialog';
 import RenameDialog from './RenameDialog';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
 import ProjectMembersPanel from '@/components/members/ProjectMembersPanel';
 
-// The "Projects / <project name>" breadcrumb lives in the shared TopBar
-// (passed via its `crumbs` prop from page.tsx) — rendering a second one
-// here was the duplicated-breadcrumb bug.
+// Precision Dark redesign (Step 8B): matches ProjectDetail.dc.html /
+// ProjectsStates.dc.html — 240px header (breadcrumb + hero name, a
+// --nx-blue-cta "New workflow" panel, a kebab column), then a 1fr/420px
+// body: a bordered "WORKFLOWS" table on the left, ProjectMembersPanel
+// (reused as-is from Step 6) on the right. The "Projects / <name>"
+// breadcrumb here is the board's own decorative hero-kicker label (font-
+// condensed, same family as "WORKSPACE / PROJECTS" on the list page) — a
+// separate element from the shared TopBar's own `crumbs` breadcrumb.
 export default function ProjectDetailClient({
   orgId,
   orgName,
@@ -59,80 +80,107 @@ export default function ProjectDetailClient({
 
   return (
     <>
-      <div style={projectHeaderRowStyle}>
-        <div style={projectTitleColStyle}>
-          <span style={projectTitleStyle}>{project.name}</span>
-          <span style={projectMetaStyle}>{metaText}</span>
+      <div style={canWrite ? nxProjDetailHeaderRowStyle : { ...nxProjDetailHeaderRowStyle, gridTemplateColumns: 'minmax(0, 1fr) 280px' }}>
+        <div style={nxProjDetailLeftColStyle}>
+          <span style={nxProjDetailBreadcrumbStyle}>Projects / {project.name}</span>
+          <h1 style={nxProjDetailTitleStyle}>{project.name}</h1>
+          <span style={nxProjDetailMetaStyle}>{metaText}</span>
         </div>
 
-        {!canWrite && (
-          <span style={{ fontSize: 12.5, color: 'var(--text-3)', border: '1px dashed var(--line)', borderRadius: 8, padding: '4px 10px' }}>
-            View only
-          </span>
-        )}
-        {canWrite && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button type="button" style={primaryBtnStyle} onClick={() => setShowCreateWorkflow(true)}>
+        {canWrite ? (
+          <button type="button" style={nxProjDetailNewWorkflowBtnStyle} onClick={() => setShowCreateWorkflow(true)}>
+            <span style={nxProjDetailNewWorkflowLabelStyle}>Create</span>
+            <span style={nxProjDetailNewWorkflowTextRowStyle}>
               New workflow
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+              </svg>
+            </span>
+          </button>
+        ) : (
+          <div className="nx-halftone" style={nxProjDetailViewOnlyPanelStyle}>
+            <span style={nxProjViewOnlyChipStyle}>View only</span>
+          </div>
+        )}
+
+        {canWrite && (
+          <div style={nxProjDetailKebabColStyle}>
+            <button type="button" className="nx-wipe" style={nxProjDetailKebabBtnStyle(menuOpen)} onClick={() => setMenuOpen((v) => !v)} aria-label="Project actions">
+              {'\u22EF'}
             </button>
-            <div style={{ position: 'relative' }}>
-              <button type="button" style={kebabBtnStyle} onClick={() => setMenuOpen((v) => !v)} aria-label="Project actions">
-                {'\u22EF'}
-              </button>
-              {menuOpen && (
-                <div style={{ ...dropdownStyle, right: 0, left: 'auto', minWidth: 176 }} onMouseLeave={() => setMenuOpen(false)}>
-                  <button
-                    type="button"
-                    style={dropdownItemStyle}
-                    onClick={() => {
-                      setMenuOpen(false);
-                      setShowRename(true);
-                    }}
-                  >
-                    Rename project
-                  </button>
-                  <button
-                    type="button"
-                    style={{ ...dropdownItemStyle, color: 'var(--bad)' }}
-                    onClick={() => {
-                      setMenuOpen(false);
-                      setShowDelete(true);
-                    }}
-                  >
-                    Delete project
-                  </button>
-                </div>
-              )}
-            </div>
+            {menuOpen && (
+              <div style={nxProjDetailDropdownStyle} onMouseLeave={() => setMenuOpen(false)}>
+                <button
+                  type="button"
+                  style={nxProjDetailDropdownItemStyle()}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setShowRename(true);
+                  }}
+                >
+                  Rename project
+                </button>
+                <button
+                  type="button"
+                  style={nxProjDetailDropdownItemStyle(true)}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setShowDelete(true);
+                  }}
+                >
+                  Delete project
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      <div>
-        {project.workflows.length === 0 && (
-          <p style={{ fontSize: 13.5, color: 'var(--text-3)' }}>No workflows yet in this project.</p>
-        )}
-        {project.workflows.map((workflow) => (
-          <Link key={workflow.id} href={`/app/workflows/${workflow.id}`} style={workflowListRowStyle}>
-            <span style={statusDotStyle(workflow.status)} aria-hidden />
-            <span style={workflowListNameStyle}>{workflow.name}</span>
-            <span style={workflowListStatusStyle}>{workflow.status}</span>
-            <span style={workflowListMetaStyle}>{new Date(workflow.updatedAt).toLocaleDateString()}</span>
-          </Link>
-        ))}
-      </div>
+      <div style={nxProjDetailBodyStyle}>
+        <div style={nxProjDetailWorkflowsColStyle}>
+          <div style={nxProjDetailColHeaderRowStyle}>
+            <span style={nxProjDetailColHeaderCellStyle(0)} />
+            <span style={nxProjDetailColHeaderCellStyle(4)}>Workflow</span>
+            <span style={nxProjDetailColHeaderCellStyle(20)}>Status</span>
+            <span style={nxProjDetailColHeaderCellStyle(20)}>Updated</span>
+            <span style={nxProjDetailColHeaderCellStyle(0)} />
+          </div>
 
-      {orgId && projectMembers && (
-        <div style={{ marginTop: 28 }}>
-          <ProjectMembersPanel
-            projectId={project.id}
-            callerRole={callerRole}
-            callerUserId={callerUserId}
-            members={projectMembers.members}
-            addable={projectMembers.addable}
-          />
+          {project.workflows.length === 0 ? (
+            <div style={nxProjDetailEmptyBoxStyle}>
+              <p style={nxProjDetailEmptyTextStyle}>No workflows yet in this project.</p>
+            </div>
+          ) : (
+            project.workflows.map((workflow) => (
+              <Link key={workflow.id} href={`/app/workflows/${workflow.id}`} className="nx-wipe" style={nxProjDetailRowStyle}>
+                <span style={nxProjDetailRowDotCellStyle}>
+                  <span style={nxWorkflowStatusDotStyle(workflow.status)} aria-hidden />
+                </span>
+                <span style={nxProjDetailRowNameCellStyle}>{workflow.name}</span>
+                <span style={{ ...nxProjDetailRowStatusCellStyle, color: nxWorkflowStatusInkColor(workflow.status) }}>{workflow.status}</span>
+                <span style={nxProjDetailRowUpdatedCellStyle}>{new Date(workflow.updatedAt).toLocaleDateString()}</span>
+                <span style={nxProjDetailRowArrowCellStyle}>
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                    <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+                  </svg>
+                </span>
+              </Link>
+            ))
+          )}
         </div>
-      )}
+
+        {orgId && projectMembers && (
+          <div style={nxProjDetailMembersColStyle}>
+            <ProjectMembersPanel
+              projectId={project.id}
+              callerRole={callerRole}
+              callerUserId={callerUserId}
+              members={projectMembers.members}
+              addable={projectMembers.addable}
+            />
+          </div>
+        )}
+      </div>
 
       {showRename && (
         <RenameDialog

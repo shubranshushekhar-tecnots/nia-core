@@ -1,25 +1,95 @@
 'use client';
 
-import { useActionState, useEffect, useState } from 'react';
+import { useActionState, useEffect, useState, type ReactNode } from 'react';
 import QRCode from 'qrcode';
-import AuthShell from '../auth/AuthShell';
+import Logo from '@/components/Logo';
+import AuthBackground from '../auth/AuthBackground';
 import {
   enableTwoFactorEnrollment,
   verifyTwoFactorEnrollment,
   type EnrollActionState,
 } from '@/lib/auth/actions';
 import {
+  authCardStyle,
+  brandRowStyle,
   errorTextStyle,
   eyeBtnStyle,
   fieldLabelStyle,
   fieldStyle,
   noteStyle,
   signinBtnStyle,
+  signinRootStyle,
   subtitleStyle,
+  themeToggleStyle,
   titleStyle,
 } from '../auth/styles';
 
 const initialState: EnrollActionState = null;
+
+const STORAGE_KEY = 'nia-om-theme';
+type OmTheme = 'dark' | 'light';
+
+function useOmTheme() {
+  const [theme, setTheme] = useState<OmTheme>('light');
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored === 'light' || stored === 'dark') setTheme(stored);
+  }, []);
+
+  const toggle = () => {
+    setTheme((current) => {
+      const next: OmTheme = current === 'dark' ? 'light' : 'dark';
+      window.localStorage.setItem(STORAGE_KEY, next);
+      return next;
+    });
+  };
+
+  return { theme, toggle };
+}
+
+// AuthShell (../auth/AuthShell) was rewritten in Step 8B to the Auth.dc.html/
+// AuthStates.dc.html board layout (kicker/heading/subtitle left column,
+// nx-* tokens) — console enrollment isn't part of that design port, so this
+// is the old pre-nx shell (narrow card, [data-auth-theme], nia-om-theme
+// localStorage toggle), inlined here since this is now its only consumer.
+function ConsoleAuthShell({ children }: { children: ReactNode }) {
+  const { theme, toggle } = useOmTheme();
+
+  return (
+    <div data-auth-theme="" data-om-theme={theme} style={signinRootStyle}>
+      <AuthBackground />
+
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        style={themeToggleStyle}
+      >
+        {theme === 'dark' ? '\u2600' : '\u263D'}
+      </button>
+
+      <div
+        style={{
+          position: 'relative',
+          zIndex: 2,
+          width: 400,
+          maxWidth: '100%',
+          margin: 'auto 0',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'stretch',
+        }}
+      >
+        <div style={brandRowStyle}>
+          <Logo size={28} />
+        </div>
+
+        <div style={authCardStyle(true)}>{children}</div>
+      </div>
+    </div>
+  );
+}
 
 export default function ConsoleEnrollClient() {
   const [enableState, enableAction, enablePending] = useActionState(enableTwoFactorEnrollment, initialState);
@@ -37,7 +107,7 @@ export default function ConsoleEnrollClient() {
 
   if (!enrolled) {
     return (
-      <AuthShell narrow>
+      <ConsoleAuthShell>
         <h1 style={titleStyle}>Set up two-factor</h1>
         <p style={subtitleStyle}>
           Console access requires two-factor authentication. Confirm your password to get started.
@@ -75,12 +145,12 @@ export default function ConsoleEnrollClient() {
             {enablePending ? 'Continuing\u2026' : 'Continue'}
           </button>
         </form>
-      </AuthShell>
+      </ConsoleAuthShell>
     );
   }
 
   return (
-    <AuthShell narrow>
+    <ConsoleAuthShell>
       <h1 style={titleStyle}>Scan the code</h1>
       <p style={subtitleStyle}>
         Scan with your authenticator app, or enter the key manually. Then enter the 6-digit code to finish.
@@ -147,6 +217,6 @@ export default function ConsoleEnrollClient() {
           {verifyPending ? 'Verifying\u2026' : 'Verify and continue'}
         </button>
       </form>
-    </AuthShell>
+    </ConsoleAuthShell>
   );
 }

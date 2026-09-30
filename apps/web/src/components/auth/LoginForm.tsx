@@ -1,22 +1,24 @@
 'use client';
 
 import { useActionState, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import AuthShell from './AuthShell';
 import { login, verifyTwoFactor, type ActionState } from '@/lib/auth/actions';
 import { setStoredBearerToken } from '@/lib/auth/browserSession';
+import { nxModalErrorStyle, nxModalFieldStyle } from '@/components/app/styles';
+import { nxOnboardingAlertStyle } from './onboardingStyles';
 import {
-  createLinkStyle,
-  errorTextStyle,
-  eyeBtnStyle,
-  fieldLabelStyle,
-  fieldStyle,
-  forgotLinkStyle,
-  signinBtnStyle,
-  subtitleStyle,
-  titleStyle,
-} from './styles';
+  nxAuthCodeFieldStyle,
+  nxAuthEyeBtnStyle,
+  nxAuthFieldGroupStyle,
+  nxAuthFormStyle,
+  nxAuthLabelStyle,
+  nxAuthPasswordFieldStyle,
+  nxAuthPasswordRowStyle,
+  nxAuthSubmitBtnStyle,
+  nxAuthSubmitLabelRowStyle,
+  nxAuthToggleLinkStyle,
+} from './nxStyles';
 
 const initialState: ActionState = null;
 
@@ -58,111 +60,133 @@ export default function LoginForm() {
 
   return (
     <AuthShell
-      footer={
-        <>
-          <span style={{ fontSize: 14.5, color: 'var(--text-2)' }}>New to Nia Core? </span>
-          <Link href={next ? `/signup?next=${encodeURIComponent(next)}` : '/signup'} style={createLinkStyle}>Create an account</Link>
-        </>
+      kicker={twoFactorRequired ? 'ACCOUNT / TWO-FACTOR' : 'ACCOUNT / SIGN IN'}
+      heading={twoFactorRequired ? 'Enter your code' : 'Sign in'}
+      subtitle={
+        twoFactorRequired
+          ? useBackupCode
+            ? 'Enter one of your backup codes.'
+            : 'Enter the 6-digit code from your authenticator app.'
+          : "Use your work account to reach your organization's data."
       }
+      footerQuestion="New to Nia Core?"
+      footerLinkText="Create an account"
+      footerHref={next ? `/signup?next=${encodeURIComponent(next)}` : '/signup'}
     >
       {!twoFactorRequired ? (
-        <>
-          <h1 style={titleStyle}>Sign in</h1>
-          <p style={subtitleStyle}>Use your work account to reach your organization&rsquo;s data.</p>
+        <form action={loginAction} className="nx-auth-form-pad" style={nxAuthFormStyle}>
+          {next && <input type="hidden" name="next" value={next} />}
 
-          <form action={loginAction} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {next && <input type="hidden" name="next" value={next} />}
+          <div style={nxAuthFieldGroupStyle}>
+            <label htmlFor="email" style={nxAuthLabelStyle(Boolean(loginState?.fieldErrors?.email))}>Work email</label>
+            <input
+              id="email"
+              name="email"
+              type="text"
+              placeholder="shub@icecream.co"
+              spellCheck={false}
+              style={nxModalFieldStyle(hasError || Boolean(loginState?.fieldErrors?.email))}
+            />
+            {loginState?.fieldErrors?.email && <span style={nxModalErrorStyle}>{loginState.fieldErrors.email[0]}</span>}
+          </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-              <label htmlFor="email" style={fieldLabelStyle}>Work email</label>
+          <div style={nxAuthFieldGroupStyle}>
+            <label htmlFor="password" style={nxAuthLabelStyle(Boolean(loginState?.fieldErrors?.password))}>Password</label>
+            <div style={nxAuthPasswordRowStyle}>
               <input
-                id="email"
-                name="email"
-                type="text"
-                placeholder="shub@icecream.co"
-                spellCheck={false}
-                style={fieldStyle(hasError, false)}
+                id="password"
+                name="password"
+                type={pwShown ? 'text' : 'password'}
+                placeholder={'\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'}
+                style={nxAuthPasswordFieldStyle(hasError || Boolean(loginState?.fieldErrors?.password))}
               />
-              {loginState?.fieldErrors?.email && <span style={errorTextStyle}>{loginState.fieldErrors.email[0]}</span>}
+              <button
+                type="button"
+                onClick={() => setPwShown((v) => !v)}
+                aria-label={pwShown ? 'Hide password' : 'Show password'}
+                aria-pressed={pwShown}
+                style={nxAuthEyeBtnStyle}
+              >
+                {pwShown ? (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                    <path d="M2 2l12 12M6.6 6.7A2.5 2.5 0 0 0 8 10.5c.5 0 .97-.15 1.36-.4M4.3 4.5C2.7 5.6 1.5 8 1.5 8s2 4.5 6.5 4.5c1 0 1.9-.22 2.66-.58M9.6 3.72A6.8 6.8 0 0 1 8 3.5c4.5 0 6.5 4.5 6.5 4.5a10 10 0 0 1-1.86 2.5" />
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                    <path d="M1.5 8S3.5 3.5 8 3.5 14.5 8 14.5 8 12.5 12.5 8 12.5 1.5 8 1.5 8Z" />
+                    <circle cx="8" cy="8" r="2" />
+                  </svg>
+                )}
+              </button>
             </div>
+            {loginState?.fieldErrors?.password && (
+              <span style={nxModalErrorStyle}>{loginState.fieldErrors.password[0]}</span>
+            )}
+          </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-              <label htmlFor="password" style={fieldLabelStyle}>Password</label>
-              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                <input
-                  id="password"
-                  name="password"
-                  type={pwShown ? 'text' : 'password'}
-                  placeholder={'\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'}
-                  style={fieldStyle(hasError, true)}
-                />
-                <button
-                  type="button"
-                  onClick={() => setPwShown((v) => !v)}
-                  aria-label={pwShown ? 'Hide password' : 'Show password'}
-                  aria-pressed={pwShown}
-                  style={eyeBtnStyle}
-                >
-                  {pwShown ? '\uD83D\uDF8B' : '\u25C9'}
-                </button>
-              </div>
-              {loginState?.fieldErrors?.password && (
-                <span style={errorTextStyle}>{loginState.fieldErrors.password[0]}</span>
-              )}
+          {loginState?.error && (
+            <div role="alert" style={nxOnboardingAlertStyle}>
+              {loginState.error}
             </div>
+          )}
 
-            {loginState?.error && <span style={errorTextStyle}>{loginState.error}</span>}
-
-            <button type="submit" disabled={loginPending} style={signinBtnStyle}>
+          <button type="submit" disabled={loginPending} style={nxAuthSubmitBtnStyle(loginPending)}>
+            <span style={nxAuthSubmitLabelRowStyle}>
+              {loginPending && <span className="nx-spinner" aria-hidden />}
               {loginPending ? 'Signing in\u2026' : 'Sign in'}
-            </button>
-          </form>
-        </>
+            </span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+              <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+            </svg>
+          </button>
+        </form>
       ) : (
-        <>
-          <h1 style={titleStyle}>Enter your code</h1>
-          <p style={subtitleStyle}>
-            {useBackupCode
-              ? 'Enter one of your backup codes.'
-              : 'Enter the 6-digit code from your authenticator app.'}
-          </p>
+        <form action={verifyAction} className="nx-auth-form-pad" style={nxAuthFormStyle}>
+          {stepTwoNext && <input type="hidden" name="next" value={stepTwoNext} />}
+          <input type="hidden" name="method" value={useBackupCode ? 'backup' : 'totp'} />
 
-          <form action={verifyAction} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {stepTwoNext && <input type="hidden" name="next" value={stepTwoNext} />}
-            <input type="hidden" name="method" value={useBackupCode ? 'backup' : 'totp'} />
+          <div style={nxAuthFieldGroupStyle}>
+            <label htmlFor="code" style={nxAuthLabelStyle(Boolean(activeState?.fieldErrors?.code))}>
+              {useBackupCode ? 'Backup code' : 'Verification code'}
+            </label>
+            <input
+              id="code"
+              name="code"
+              type="text"
+              placeholder={useBackupCode ? 'xxxx-xxxx' : '000000'}
+              inputMode={useBackupCode ? 'text' : 'numeric'}
+              autoComplete="one-time-code"
+              autoFocus
+              spellCheck={false}
+              style={nxAuthCodeFieldStyle(hasError || Boolean(activeState?.fieldErrors?.code))}
+            />
+            {activeState?.fieldErrors?.code && <span style={nxModalErrorStyle}>{activeState.fieldErrors.code[0]}</span>}
+          </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-              <label htmlFor="code" style={fieldLabelStyle}>
-                {useBackupCode ? 'Backup code' : 'Verification code'}
-              </label>
-              <input
-                id="code"
-                name="code"
-                type="text"
-                inputMode={useBackupCode ? 'text' : 'numeric'}
-                autoComplete="one-time-code"
-                autoFocus
-                spellCheck={false}
-                style={fieldStyle(hasError, false)}
-              />
-              {activeState?.fieldErrors?.code && <span style={errorTextStyle}>{activeState.fieldErrors.code[0]}</span>}
+          {activeState?.error && (
+            <div role="alert" style={nxOnboardingAlertStyle}>
+              {activeState.error}
             </div>
+          )}
 
-            {activeState?.error && <span style={errorTextStyle}>{activeState.error}</span>}
-
-            <button type="submit" disabled={verifyPending} style={signinBtnStyle}>
+          <button type="submit" disabled={verifyPending} style={nxAuthSubmitBtnStyle(verifyPending)}>
+            <span style={nxAuthSubmitLabelRowStyle}>
+              {verifyPending && <span className="nx-spinner" aria-hidden />}
               {verifyPending ? 'Verifying\u2026' : 'Verify'}
-            </button>
+            </span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+              <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+            </svg>
+          </button>
 
-            <button
-              type="button"
-              onClick={() => setUseBackupCode((v) => !v)}
-              style={{ ...forgotLinkStyle, textAlign: 'left' }}
-            >
-              {useBackupCode ? 'Use an authenticator code instead' : 'Use a backup code instead'}
-            </button>
-          </form>
-        </>
+          <button
+            type="button"
+            onClick={() => setUseBackupCode((v) => !v)}
+            style={nxAuthToggleLinkStyle}
+          >
+            {useBackupCode ? 'Use an authenticator code instead' : 'Use a backup code instead'}
+          </button>
+        </form>
       )}
     </AuthShell>
   );

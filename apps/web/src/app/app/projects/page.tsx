@@ -4,7 +4,7 @@ import AppShell from '@/components/app/AppShell';
 import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
 import ProjectsListClient from '@/components/app/ProjectsListClient';
-import { mainColStyle, projectScrollStyle } from '@/components/app/styles';
+import { mainColStyle, nxConnScrollStyle } from '@/components/app/styles';
 
 export default async function ProjectsListPage() {
   const user = await requireUser();
@@ -27,7 +27,7 @@ export default async function ProjectsListPage() {
     >
       <Sidebar orgId={orgId} role={user.role} projects={sidebarProjects} email={user.email} />
       <div style={mainColStyle}>
-        <div style={projectScrollStyle}>
+        <div style={nxConnScrollStyle}>
           <ProjectsListClient orgId={orgId} projects={projectsList} role={user.role} />
         </div>
       </div>

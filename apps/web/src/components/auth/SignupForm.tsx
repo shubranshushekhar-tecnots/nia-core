@@ -1,22 +1,23 @@
 'use client';
 
 import { useActionState, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import AuthShell from './AuthShell';
 import { signup, type ActionState } from '@/lib/auth/actions';
 import { setStoredBearerToken } from '@/lib/auth/browserSession';
+import { nxModalErrorStyle, nxModalFieldStyle } from '@/components/app/styles';
+import { nxOnboardingAlertStyle } from './onboardingStyles';
 import {
-  createLinkStyle,
-  errorTextStyle,
-  eyeBtnStyle,
-  fieldLabelStyle,
-  fieldStyle,
-  noteStyle,
-  signinBtnStyle,
-  subtitleStyle,
-  titleStyle,
-} from './styles';
+  nxAuthEyeBtnStyle,
+  nxAuthFieldGroupStyle,
+  nxAuthFormStyle,
+  nxAuthLabelStyle,
+  nxAuthNoteStyle,
+  nxAuthPasswordFieldStyle,
+  nxAuthPasswordRowStyle,
+  nxAuthSubmitBtnStyle,
+  nxAuthSubmitLabelRowStyle,
+} from './nxStyles';
 
 const initialState: ActionState = null;
 
@@ -40,65 +41,81 @@ export default function SignupForm() {
 
   return (
     <AuthShell
-      footer={
-        <>
-          <span style={{ fontSize: 14.5, color: 'var(--text-2)' }}>Already have an account? </span>
-          <Link href={next ? `/login?next=${encodeURIComponent(next)}` : '/login'} style={createLinkStyle}>Sign in</Link>
-        </>
-      }
+      kicker="ACCOUNT / SIGN UP"
+      heading="Create your account"
+      subtitle="One account, any number of organizations."
+      footerQuestion="Already have an account?"
+      footerLinkText="Sign in"
+      footerHref={next ? `/login?next=${encodeURIComponent(next)}` : '/login'}
     >
-      <h1 style={titleStyle}>Create your account</h1>
-      <p style={subtitleStyle}>One account, any number of organizations.</p>
-
-      <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <form action={formAction} className="nx-auth-form-pad" style={nxAuthFormStyle}>
         {next && <input type="hidden" name="next" value={next} />}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-          <label htmlFor="fullName" style={fieldLabelStyle}>Full name</label>
-          <input id="fullName" name="fullName" type="text" placeholder="Shub Kumar" style={fieldStyle(false, false)} />
-          {state?.fieldErrors?.fullName && <span style={errorTextStyle}>{state.fieldErrors.fullName[0]}</span>}
+        <div style={nxAuthFieldGroupStyle}>
+          <label htmlFor="fullName" style={nxAuthLabelStyle(Boolean(state?.fieldErrors?.fullName))}>Full name</label>
+          <input id="fullName" name="fullName" type="text" placeholder="Shub Kumar" style={nxModalFieldStyle(Boolean(state?.fieldErrors?.fullName))} />
+          {state?.fieldErrors?.fullName && <span style={nxModalErrorStyle}>{state.fieldErrors.fullName[0]}</span>}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-          <label htmlFor="email" style={fieldLabelStyle}>Work email</label>
+        <div style={nxAuthFieldGroupStyle}>
+          <label htmlFor="email" style={nxAuthLabelStyle(Boolean(state?.fieldErrors?.email))}>Work email</label>
           <input
             id="email"
             name="email"
             type="text"
             placeholder="shub@icecream.co"
             spellCheck={false}
-            style={fieldStyle(hasError, false)}
+            style={nxModalFieldStyle(hasError || Boolean(state?.fieldErrors?.email))}
           />
-          {state?.fieldErrors?.email && <span style={errorTextStyle}>{state.fieldErrors.email[0]}</span>}
+          {state?.fieldErrors?.email && <span style={nxModalErrorStyle}>{state.fieldErrors.email[0]}</span>}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-          <label htmlFor="password" style={fieldLabelStyle}>Password</label>
-          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+        <div style={nxAuthFieldGroupStyle}>
+          <label htmlFor="password" style={nxAuthLabelStyle(Boolean(state?.fieldErrors?.password))}>Password</label>
+          <div style={nxAuthPasswordRowStyle}>
             <input
               id="password"
               name="password"
               type={pwShown ? 'text' : 'password'}
               placeholder="At least 8 characters"
-              style={fieldStyle(hasError, true)}
+              style={nxAuthPasswordFieldStyle(hasError || Boolean(state?.fieldErrors?.password))}
             />
             <button
               type="button"
               onClick={() => setPwShown((v) => !v)}
               aria-label={pwShown ? 'Hide password' : 'Show password'}
               aria-pressed={pwShown}
-              style={eyeBtnStyle}
+              style={nxAuthEyeBtnStyle}
             >
-              {pwShown ? '\uD83D\uDF8B' : '\u25C9'}
+              {pwShown ? (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                  <path d="M2 2l12 12M6.6 6.7A2.5 2.5 0 0 0 8 10.5c.5 0 .97-.15 1.36-.4M4.3 4.5C2.7 5.6 1.5 8 1.5 8s2 4.5 6.5 4.5c1 0 1.9-.22 2.66-.58M9.6 3.72A6.8 6.8 0 0 1 8 3.5c4.5 0 6.5 4.5 6.5 4.5a10 10 0 0 1-1.86 2.5" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                  <path d="M1.5 8S3.5 3.5 8 3.5 14.5 8 14.5 8 12.5 12.5 8 12.5 1.5 8 1.5 8Z" />
+                  <circle cx="8" cy="8" r="2" />
+                </svg>
+              )}
             </button>
           </div>
-          <span style={noteStyle}>Long passphrases beat complex short ones.</span>
-          {state?.fieldErrors?.password && <span style={errorTextStyle}>{state.fieldErrors.password[0]}</span>}
+          <span style={nxAuthNoteStyle}>Long passphrases beat complex short ones.</span>
+          {state?.fieldErrors?.password && <span style={nxModalErrorStyle}>{state.fieldErrors.password[0]}</span>}
         </div>
 
-        {state?.error && <span style={errorTextStyle}>{state.error}</span>}
+        {state?.error && (
+          <div role="alert" style={nxOnboardingAlertStyle}>
+            {state.error}
+          </div>
+        )}
 
-        <button type="submit" disabled={pending} style={signinBtnStyle}>
-          {pending ? 'Creating account\u2026' : 'Create account'}
+        <button type="submit" disabled={pending} style={nxAuthSubmitBtnStyle(pending)}>
+          <span style={nxAuthSubmitLabelRowStyle}>
+            {pending && <span className="nx-spinner" aria-hidden />}
+            {pending ? 'Creating account\u2026' : 'Create account'}
+          </span>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+            <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+          </svg>
         </button>
       </form>
     </AuthShell>

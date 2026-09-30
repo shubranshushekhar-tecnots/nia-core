@@ -7,28 +7,47 @@ import { deleteProject } from '@/lib/dashboard/actions';
 import type { ProjectListItem } from '@/lib/dashboard/types';
 import { relativeTime } from '@/lib/time';
 import {
-  primaryBtnStyle,
-  projectHeaderRowStyle,
-  projectListActivityStyle,
-  projectListCountStyle,
-  projectListDeleteBtnStyle,
-  projectListEmptyStyle,
-  projectListEmptyTextStyle,
-  projectListNameColStyle,
-  projectListNameStyle,
-  projectListRowStyle,
-  projectListStyle,
-  projectTitleStyle,
+  nxProjColHeaderCellStyle,
+  nxProjColHeaderRowStyle,
+  nxProjCounterCellStyle,
+  nxProjCounterColStyle,
+  nxProjCounterCtaStyle,
+  nxProjCounterLabelStyle,
+  nxProjCounterRowStyle,
+  nxProjCounterValueStyle,
+  nxProjEmptyBoxStyle,
+  nxProjEmptyCtaStyle,
+  nxProjEmptyHeadingStyle,
+  nxProjEmptySublineStyle,
+  nxProjHeaderLeftColStyle,
+  nxProjPageHeaderRowStyle,
+  nxProjPageTagStyle,
+  nxProjPageTitleStyle,
+  nxProjRowActivityCellStyle,
+  nxProjRowActivityDotStyle,
+  nxProjRowArrowCellStyle,
+  nxProjRowDeleteCellStyle,
+  nxProjRowIndexCellStyle,
+  nxProjRowNameCellStyle,
+  nxProjRowNameStyle,
+  nxProjRowStyle,
+  nxProjRowWorkflowsCellStyle,
+  nxProjSectionHeaderStyle,
+  nxProjSectionMetaStyle,
+  nxProjSectionTitleStyle,
+  nxProjViewOnlyChipStyle,
+  nxProjViewOnlyStripStyle,
 } from './styles';
 import CreateProjectDialog from './CreateProjectDialog';
 import DeleteConfirmDialog from './DeleteConfirmDialog';
 
-// Ported from the design's `isProjects` section (designs/Nia Core App.html):
-// title + "New project" header, then a flat list of rows (name + workflow
-// count / last-run activity / delete), 1px bottom border, no card wrapping.
-// The design's per-row member-avatar cluster is not ported — this app has
-// no per-project membership concept (only whole-org membership), so there's
-// no real data to back it.
+// Precision Dark redesign (Step 8B): matches Projects.dc.html /
+// ProjectsStates.dc.html — 240px header (hero title + --nx-blue-panel
+// PROJECTS/WORKFLOWS counter column + "New project" CTA strip), then a
+// bordered "ALL PROJECTS" table (index/name/workflows/last-activity/
+// delete/arrow columns). Both counters are computed client-side from the
+// already-loaded list — ProjectListItem carries workflowCount per row, so
+// no server change was needed to show both.
 export default function ProjectsListClient({
   orgId,
   projects,
@@ -50,55 +69,104 @@ export default function ProjectsListClient({
     setDeleteTarget(project);
   }
 
+  const projectCount = projects.length;
+  const workflowCount = projects.reduce((sum, p) => sum + p.workflowCount, 0);
+
   return (
     <>
-      <div style={projectHeaderRowStyle}>
-        <span style={projectTitleStyle}>Projects</span>
-        {canWrite ? (
-          <button type="button" style={primaryBtnStyle} onClick={() => setShowCreate(true)}>
-            New project
-          </button>
-        ) : (
-          <span style={{ fontSize: 12.5, color: 'var(--text-3)', border: '1px dashed var(--line)', borderRadius: 8, padding: '4px 10px' }}>
-            View only
-          </span>
-        )}
+      <div style={nxProjPageHeaderRowStyle}>
+        <div style={nxProjHeaderLeftColStyle}>
+          <span style={nxProjPageTagStyle}>Workspace / Projects</span>
+          <h1 style={nxProjPageTitleStyle}>Projects</h1>
+        </div>
+        <div style={nxProjCounterColStyle}>
+          <div style={nxProjCounterRowStyle}>
+            <div style={nxProjCounterCellStyle(false)}>
+              <span style={nxProjCounterLabelStyle}>Projects</span>
+              <span style={nxProjCounterValueStyle}>{String(projectCount).padStart(2, '0')}</span>
+            </div>
+            <div style={nxProjCounterCellStyle(true)}>
+              <span style={nxProjCounterLabelStyle}>Workflows</span>
+              <span style={nxProjCounterValueStyle}>{String(workflowCount).padStart(2, '0')}</span>
+            </div>
+          </div>
+          {canWrite ? (
+            <button type="button" className="nx-wipe" style={nxProjCounterCtaStyle} onClick={() => setShowCreate(true)}>
+              New project
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+              </svg>
+            </button>
+          ) : (
+            <div className="nx-halftone" style={nxProjViewOnlyStripStyle}>
+              <span style={nxProjViewOnlyChipStyle}>View only</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={nxProjSectionHeaderStyle}>
+        <h2 style={nxProjSectionTitleStyle}>All projects</h2>
+        <span style={nxProjSectionMetaStyle}>{projectCount} project{projectCount === 1 ? '' : 's'}</span>
       </div>
 
       {projects.length === 0 ? (
-        <div style={projectListEmptyStyle}>
-          <span style={projectListEmptyTextStyle}>
-            {canWrite ? 'No projects yet — a project holds your workflows and their sources' : 'No projects yet.'}
-          </span>
+        <div className="nx-halftone" style={nxProjEmptyBoxStyle}>
+          <h3 style={nxProjEmptyHeadingStyle}>No projects yet{canWrite ? '' : '.'}</h3>
           {canWrite && (
-            <button type="button" style={primaryBtnStyle} onClick={() => setShowCreate(true)}>
-              Create your first project
-            </button>
+            <>
+              <p style={nxProjEmptySublineStyle}>a project holds your workflows and their sources</p>
+              <button type="button" style={nxProjEmptyCtaStyle} onClick={() => setShowCreate(true)}>
+                Create your first project
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                  <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+                </svg>
+              </button>
+            </>
           )}
         </div>
       ) : (
-        <div style={projectListStyle}>
-          {projects.map((project) => (
-            <Link key={project.id} href={`/app/projects/${project.id}`} style={projectListRowStyle}>
-              <span style={projectListNameColStyle}>
-                <span style={projectListNameStyle}>{project.name}</span>
-                <span style={projectListCountStyle}>
-                  {project.workflowCount === 0
-                    ? 'No workflows'
-                    : `${project.workflowCount} workflow${project.workflowCount === 1 ? '' : 's'}`}
+        <>
+          <div style={nxProjColHeaderRowStyle}>
+            <span style={{ ...nxProjColHeaderCellStyle, paddingLeft: 20 }}>#</span>
+            <span style={nxProjColHeaderCellStyle}>Project</span>
+            <span style={nxProjColHeaderCellStyle}>Workflows</span>
+            <span style={nxProjColHeaderCellStyle}>Last activity</span>
+            <span style={nxProjColHeaderCellStyle} />
+            <span style={nxProjColHeaderCellStyle} />
+          </div>
+          {projects.map((project, i) => {
+            const hasWorkflows = project.workflowCount > 0;
+            const hasRun = Boolean(project.lastRunAt);
+            return (
+              <div key={project.id} style={nxProjRowStyle}>
+                <span style={nxProjRowIndexCellStyle}>{String(i + 1).padStart(2, '0')}</span>
+                <Link href={`/app/projects/${project.id}`} className="nx-wipe" style={nxProjRowNameCellStyle}>
+                  <span style={nxProjRowNameStyle}>{project.name}</span>
+                </Link>
+                <span style={nxProjRowWorkflowsCellStyle(hasWorkflows)}>
+                  {hasWorkflows ? `${project.workflowCount} workflow${project.workflowCount === 1 ? '' : 's'}` : 'No workflows'}
                 </span>
-              </span>
-              <span style={projectListActivityStyle}>
-                {project.lastRunAt ? `Ran ${relativeTime(project.lastRunAt)}` : 'No runs yet'}
-              </span>
-              {canWrite && (
-                <button type="button" style={projectListDeleteBtnStyle} onClick={(e) => onDeleteClick(e, project)}>
-                  Delete
-                </button>
-              )}
-            </Link>
-          ))}
-        </div>
+                <span style={nxProjRowActivityCellStyle}>
+                  <span style={nxProjRowActivityDotStyle(hasRun)} />
+                  {hasRun ? `Ran ${relativeTime(project.lastRunAt as string)}` : 'No runs yet'}
+                </span>
+                {canWrite ? (
+                  <button type="button" className="nx-wipe" style={nxProjRowDeleteCellStyle} onClick={(e) => onDeleteClick(e, project)}>
+                    Delete
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <Link href={`/app/projects/${project.id}`} className="nx-wipe" style={nxProjRowArrowCellStyle} aria-hidden tabIndex={-1}>
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+                    <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+                  </svg>
+                </Link>
+              </div>
+            );
+          })}
+        </>
       )}
 
       {showCreate && <CreateProjectDialog orgId={orgId} onClose={() => setShowCreate(false)} />}

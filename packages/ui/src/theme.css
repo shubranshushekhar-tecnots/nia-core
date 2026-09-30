@@ -537,6 +537,40 @@ html[data-nx-theme='light'] [data-app-theme] {
   outline-offset: -2px;
 }
 
+/* Precision Dark redesign (Step 8B) — Auth screens (AuthShell.tsx/
+   LoginForm.tsx/SignupForm.tsx, apps/web/src/components/auth/nxStyles.ts).
+   The handful of properties that change below 960px (per AuthStates
+   .dc.html's "BELOW 960PX" note: hero column collapses to a 200px band
+   with a 64px heading; form column goes full width with 24px padding,
+   its left rule becomes a top rule instead) can't be expressed by inline
+   CSSProperties objects, so — same pattern as .hl-container/.hl-lead
+   above — they live here instead. */
+.nx-auth-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 560px;
+  min-height: 0;
+}
+.nx-auth-hero {
+  padding: 40px;
+}
+.nx-auth-heading {
+  font-size: 128px;
+  line-height: 112px;
+}
+.nx-auth-form-col {
+  border-left: 1px solid var(--nx-line);
+}
+.nx-auth-form-pad {
+  padding: 0 40px;
+}
+@media (max-width: 960px) {
+  .nx-auth-body { grid-template-columns: 1fr; grid-template-rows: 200px auto; }
+  .nx-auth-hero { padding: 24px; }
+  .nx-auth-heading { font-size: 64px; line-height: 1.05; }
+  .nx-auth-form-col { border-left: none; border-top: 1px solid var(--nx-line); }
+  .nx-auth-form-pad { padding: 0 24px; }
+}
+
 /* ------------------------------------------------------------
    Nia Core App.html — auth screen theme (login/signup/forgot/reset/
    onboarding), extracted verbatim from the `const T = "..."` override

@@ -6,7 +6,7 @@ import AppShell from '@/components/app/AppShell';
 import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
 import ProjectDetailClient from '@/components/app/ProjectDetailClient';
-import { mainColStyle, projectScrollStyle } from '@/components/app/styles';
+import { mainColStyle, nxConnScrollStyle } from '@/components/app/styles';
 
 export default async function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -40,7 +40,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
     >
       <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
       <div style={mainColStyle}>
-        <div style={projectScrollStyle}>
+        <div style={nxConnScrollStyle}>
           <ProjectDetailClient
             orgId={orgId}
             orgName={user.org?.name ?? null}
