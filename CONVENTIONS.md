@@ -75,6 +75,17 @@ process tied to the current session — it dies when the session ends. Run it
 as a plain foreground command from `apps/web/` (the IDE routes long-running
 foreground commands to a persistent terminal). Standardized on port 3100.
 
+**Workspace package tests always run against source, not dist:** `apps/api`,
+`apps/web`, and `apps/worker`'s `vitest.config.ts`/`vitest.integration.config.ts`
+alias every `@nia/*` import to that package's `src/index.ts`. Without this,
+editing a workspace package (e.g. `packages/schemas/src/can.ts`) and then
+running `vitest` directly (`pnpm --filter @nia/api exec vitest run ...`)
+silently tests against yesterday's `dist/index.js` — `turbo run test`'s
+`^build` dependency (`turbo.json`) only saves you if you actually go through
+turbo, and bit us for real once (a stale `dist/can.js` made a fixed RBAC bug
+look green). If a new workspace package gets imported by a test, add it to
+the relevant `resolve.alias` block too.
+
 ## Local testing (Docker boot tests)
 This machine's Docker Desktop crashes from memory pressure (~4.6 GB). Rules
 for any local prod-compose boot test (`docker-compose.prod.yml` against a

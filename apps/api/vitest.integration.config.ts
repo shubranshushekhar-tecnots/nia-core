@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import path from "node:path";
 
 // Integration config: tests here deliberately exercise a real local service
 // instead of mocking it — sse.replay.test.ts/checksQueue.timeout.test.ts
@@ -17,6 +18,16 @@ import { defineConfig } from "vitest/config";
 // unit suite always means a real regression, not "Redis/Postgres wasn't
 // up." Run explicitly with `pnpm test:integration`.
 export default defineConfig({
+  // Same reasoning as vitest.config.ts's resolve.alias — see there.
+  resolve: {
+    alias: {
+      "@nia/schemas": path.resolve(__dirname, "../../packages/schemas/src/index.ts"),
+      "@nia/db": path.resolve(__dirname, "../../packages/db/src/index.ts"),
+      "@nia/auth": path.resolve(__dirname, "../../packages/auth/src/index.ts"),
+      "@nia/guardrails": path.resolve(__dirname, "../../packages/guardrails/src/index.ts"),
+      "@nia/secrets": path.resolve(__dirname, "../../packages/secrets/src/index.ts"),
+    },
+  },
   test: {
     include: [
       "src/lib/sse.replay.test.ts",

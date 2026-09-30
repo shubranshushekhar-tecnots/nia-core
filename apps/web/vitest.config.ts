@@ -14,7 +14,16 @@ export default defineConfig({
     // resolver honors tsconfig paths automatically; vitest doesn't, so any
     // module under src/lib/** that imports "@/..." at runtime — not just
     // in a type-only position — needs this to resolve outside Next.
-    alias: { "@": path.resolve(__dirname, "src") },
+    //
+    // The @nia/* entries resolve straight to src/index.ts instead of
+    // dist/index.js — same stale-dist footgun/fix as apps/api/vitest.config.ts,
+    // see there and CONVENTIONS.md.
+    alias: {
+      "@": path.resolve(__dirname, "src"),
+      "@nia/schemas": path.resolve(__dirname, "../../packages/schemas/src/index.ts"),
+      "@nia/db": path.resolve(__dirname, "../../packages/db/src/index.ts"),
+      "@nia/auth": path.resolve(__dirname, "../../packages/auth/src/index.ts"),
+    },
   },
   test: {
     include: ["src/lib/**/*.test.ts", "src/app/console/**/*.test.ts"],
