@@ -3885,6 +3885,37 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 111 — positive-path regression check for 0061's column re-grant:
+-- an owner CAN still rename the org (name/slug), even though the
+-- table-level UPDATE grant was dropped and replaced with a per-column one
+-- (see docs/decisions.md). Only billing_owner_id and id are excluded.
+-- =========================================================================
+do $$
+declare
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_transfer_org uuid := (select id from test_ids where key = 'transfer_org');
+  v_name text;
+  v_slug text;
+begin
+  perform pg_temp.act_as(v_owner);
+  update public.organizations
+  set name = 'RLS Probe Billing Transfer Org (Renamed)', slug = 'rls-probe-billing-transfer-org-renamed'
+  where id = v_transfer_org;
+  reset role;
+
+  select name, slug into v_name, v_slug from public.organizations where id = v_transfer_org;
+
+  if v_name = 'RLS Probe Billing Transfer Org (Renamed)' and v_slug = 'rls-probe-billing-transfer-org-renamed' then
+    insert into probe_results values (111, 'owner can still rename the org (name/slug) after the column re-grant', true);
+  else
+    insert into probe_results values (111, 'owner can still rename the org (name/slug) after the column re-grant', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (111, 'org-rename-still-works probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$

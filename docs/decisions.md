@@ -6297,3 +6297,26 @@ right up until this migration — 0057's viewer restriction on grant
 confirmation never actually took effect in production. `0059` closes both
 overloads directly to `private.is_admin`, so no path is left on anything
 looser.
+
+## organizations.id is deliberately excluded from authenticated's UPDATE grant
+
+`0061_billing_owner.sql` (Subscription Phase 4, Slice 1) replaced
+`organizations`'s original bulk `grant select, update on public.organizations
+to authenticated` (`0001_auth_orgs.sql`) with a per-column UPDATE grant
+(`name, slug, created_by, created_at, suspended_at, suspended_by,
+suspended_reason`) so `billing_owner_id` could be locked to the
+`transfer_billing_owner()` RPC — a plain `revoke update (billing_owner_id)`
+is a no-op against a pre-existing table-level grant, since table-level
+UPDATE implicitly covers every column, including ones added later
+(`0046`'s suspended_* columns, `0061`'s billing_owner_id itself). Auditing
+every column the old bulk grant covered turned up one more delta beyond
+the intended `billing_owner_id` restriction: `id` (the primary key) was
+also implicitly UPDATE-able by `authenticated` before, and is not in the
+new column list. This is left out on purpose, not re-added: no code in
+this repo has ever updated `organizations.id`, doing so would violate
+referential integrity across 8+ FK-referencing tables (none of which have
+`ON UPDATE CASCADE`), and there is no product reason a client should ever
+rename a row's primary key. Treated as a safe tightening, not a
+regression. `supabase/tests/rls_probes.sql` probe 111 is the positive-path
+check that the columns owners actually use (name/slug, for org rename)
+still work after the re-grant.
