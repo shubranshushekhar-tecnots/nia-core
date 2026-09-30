@@ -4032,6 +4032,373 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Fixture for probes 115-125 — 0067_announcements.sql. Inserted as postgres
+-- (bypasses RLS — announcements has no insert grant to authenticated at
+-- all, staff-only via service_role). One row per audience/timing/severity
+-- case under test; 'pm_project' (created by v_owner, who is auto-added to
+-- project_members — see probe 79's fixture comment above) is reused as the
+-- project-audience target so v_owner is a member and v_member is not.
+-- =========================================================================
+do $$
+declare
+  v_owner   uuid := (select id from test_ids where key = 'owner');
+  v_org     uuid := (select id from test_ids where key = 'org');
+  v_project uuid := (select id from test_ids where key = 'pm_project');
+  v_ann_all       uuid;
+  v_ann_org       uuid;
+  v_ann_org_roles uuid;
+  v_ann_project   uuid;
+  v_ann_scheduled uuid;
+  v_ann_ended     uuid;
+  v_ann_archived  uuid;
+  v_ann_critical  uuid;
+begin
+  insert into public.announcements (title, body, severity, audience, created_by)
+  values ('All-audience notice', 'Visible to everyone.', 'info', 'all', v_owner)
+  returning id into v_ann_all;
+
+  insert into public.announcements (title, body, severity, audience, audience_org_id, created_by)
+  values ('Org notice', 'Visible to org members.', 'info', 'org', v_org, v_owner)
+  returning id into v_ann_org;
+
+  insert into public.announcements (title, body, severity, audience, audience_org_id, audience_roles, created_by)
+  values ('Owners/admins only notice', 'Visible to owners and admins.', 'info', 'org', v_org, array['owner', 'admin']::public.org_role[], v_owner)
+  returning id into v_ann_org_roles;
+
+  insert into public.announcements (title, body, severity, audience, audience_project_id, created_by)
+  values ('Project notice', 'Visible to project members.', 'info', 'project', v_project, v_owner)
+  returning id into v_ann_project;
+
+  insert into public.announcements (title, body, severity, audience, starts_at, created_by)
+  values ('Scheduled notice', 'Not started yet.', 'info', 'all', now() + interval '1 day', v_owner)
+  returning id into v_ann_scheduled;
+
+  insert into public.announcements (title, body, severity, audience, starts_at, ends_at, created_by)
+  values ('Ended notice', 'Already ended.', 'info', 'all', now() - interval '2 days', now() - interval '1 day', v_owner)
+  returning id into v_ann_ended;
+
+  insert into public.announcements (title, body, severity, audience, starts_at, archived_at, created_by)
+  values ('Archived notice', 'Archived despite active window.', 'info', 'all', now() - interval '1 hour', now(), v_owner)
+  returning id into v_ann_archived;
+
+  insert into public.announcements (title, body, severity, audience, created_by)
+  values ('Critical notice', 'Cannot be dismissed.', 'critical', 'all', v_owner)
+  returning id into v_ann_critical;
+
+  insert into test_ids values
+    ('ann_all', v_ann_all), ('ann_org', v_ann_org), ('ann_org_roles', v_ann_org_roles),
+    ('ann_project', v_ann_project), ('ann_scheduled', v_ann_scheduled), ('ann_ended', v_ann_ended),
+    ('ann_archived', v_ann_archived), ('ann_critical', v_ann_critical);
+end $$;
+
+-- =========================================================================
+-- Probe 115 — 0067_announcements.sql: an 'all'-audience announcement is
+-- visible to any authenticated user, including one with no org at all.
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_ann uuid := (select id from test_ids where key = 'ann_all');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_visible from public.announcements where id = v_ann;
+  reset role;
+
+  if n_visible = 1 then
+    insert into probe_results values (115, 'announcements: all-audience notice is visible to any authenticated user', true);
+  else
+    insert into probe_results values (115, 'announcements: all-audience notice is visible to any authenticated user', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (115, 'announcements all-audience probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 116 — 0067_announcements.sql: an 'org'-audience announcement is
+-- visible to a member of that org, and invisible to an outsider.
+-- =========================================================================
+do $$
+declare
+  v_member   uuid := (select id from test_ids where key = 'member');
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_ann uuid := (select id from test_ids where key = 'ann_org');
+  n_member_visible int;
+  n_outsider_visible int;
+begin
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_member_visible from public.announcements where id = v_ann;
+  reset role;
+
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_outsider_visible from public.announcements where id = v_ann;
+  reset role;
+
+  if n_member_visible = 1 and n_outsider_visible = 0 then
+    insert into probe_results values (116, 'announcements: org-audience notice visible to a member, invisible to an outsider', true);
+  else
+    insert into probe_results values (116, 'announcements: org-audience notice visible to a member, invisible to an outsider', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (116, 'announcements org-audience probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 117 — 0067_announcements.sql: audience_roles further narrows an
+-- 'org'-audience announcement to owners/admins only — a plain member does
+-- not see it even though they are a member of the targeted org.
+-- =========================================================================
+do $$
+declare
+  v_admin  uuid := (select id from test_ids where key = 'admin');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_ann uuid := (select id from test_ids where key = 'ann_org_roles');
+  n_admin_visible int;
+  n_member_visible int;
+begin
+  perform pg_temp.act_as(v_admin);
+  select count(*) into n_admin_visible from public.announcements where id = v_ann;
+  reset role;
+
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_member_visible from public.announcements where id = v_ann;
+  reset role;
+
+  if n_admin_visible = 1 and n_member_visible = 0 then
+    insert into probe_results values (117, 'announcements: audience_roles narrows an org notice to owner/admin, excluding plain member', true);
+  else
+    insert into probe_results values (117, 'announcements: audience_roles narrows an org notice to owner/admin, excluding plain member', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (117, 'announcements audience_roles probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 118 — 0067_announcements.sql: a 'project'-audience announcement is
+-- visible to a member of that project, and invisible to an org peer who is
+-- not a member of that specific project.
+-- =========================================================================
+do $$
+declare
+  v_owner  uuid := (select id from test_ids where key = 'owner');
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_ann uuid := (select id from test_ids where key = 'ann_project');
+  n_owner_visible int;
+  n_member_visible int;
+begin
+  perform pg_temp.act_as(v_owner);
+  select count(*) into n_owner_visible from public.announcements where id = v_ann;
+  reset role;
+
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_member_visible from public.announcements where id = v_ann;
+  reset role;
+
+  if n_owner_visible = 1 and n_member_visible = 0 then
+    insert into probe_results values (118, 'announcements: project-audience notice visible to a project member, invisible to a non-project-member org peer', true);
+  else
+    insert into probe_results values (118, 'announcements: project-audience notice visible to a project member, invisible to a non-project-member org peer', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (118, 'announcements project-audience probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 119 — 0067_announcements.sql: a scheduled (starts_at in the
+-- future) announcement is not yet visible to its targeted audience.
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_ann uuid := (select id from test_ids where key = 'ann_scheduled');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_visible from public.announcements where id = v_ann;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (119, 'announcements: a scheduled (not-yet-started) notice is not visible', true);
+  else
+    insert into probe_results values (119, 'announcements: a scheduled (not-yet-started) notice is not visible', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (119, 'announcements scheduled probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 120 — 0067_announcements.sql: an already-ended (ends_at in the
+-- past) announcement is no longer visible.
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_ann uuid := (select id from test_ids where key = 'ann_ended');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_visible from public.announcements where id = v_ann;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (120, 'announcements: an ended notice is no longer visible', true);
+  else
+    insert into probe_results values (120, 'announcements: an ended notice is no longer visible', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (120, 'announcements ended probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 121 — 0067_announcements.sql: an archived announcement is not
+-- visible even though it is still within its starts_at/ends_at window.
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_ann uuid := (select id from test_ids where key = 'ann_archived');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_outsider);
+  select count(*) into n_visible from public.announcements where id = v_ann;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (121, 'announcements: an archived notice is not visible despite being within its active window', true);
+  else
+    insert into probe_results values (121, 'announcements: an archived notice is not visible despite being within its active window', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (121, 'announcements archived probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 122 — 0067_announcements.sql: the targeted user can dismiss an
+-- info-severity announcement (own-row insert into announcement_dismissals
+-- succeeds).
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_ann uuid := (select id from test_ids where key = 'ann_all');
+  n_dismissed int;
+begin
+  perform pg_temp.act_as(v_outsider);
+  insert into public.announcement_dismissals (announcement_id, user_id) values (v_ann, v_outsider);
+  reset role;
+
+  select count(*) into n_dismissed from public.announcement_dismissals where announcement_id = v_ann and user_id = v_outsider;
+
+  if n_dismissed = 1 then
+    insert into probe_results values (122, 'announcement_dismissals: targeted user can dismiss an info-severity notice', true);
+  else
+    insert into probe_results values (122, 'announcement_dismissals: targeted user can dismiss an info-severity notice', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (122, 'announcement_dismissals info-dismiss probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 123 — 0067_announcements.sql: a critical-severity announcement
+-- cannot be dismissed — the INSERT's WITH CHECK rejects it.
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_ann uuid := (select id from test_ids where key = 'ann_critical');
+  denied boolean := false;
+begin
+  perform pg_temp.act_as(v_outsider);
+  begin
+    insert into public.announcement_dismissals (announcement_id, user_id) values (v_ann, v_outsider);
+  exception when insufficient_privilege or others then
+    denied := true;
+  end;
+  reset role;
+
+  insert into probe_results values (123, 'announcement_dismissals: a critical-severity notice cannot be dismissed', denied);
+exception when others then
+  reset role;
+  insert into probe_results values (123, 'announcement_dismissals critical-cannot-dismiss probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 124 — 0067_announcements.sql: a user cannot dismiss an
+-- announcement that is not currently targeted at them (org-audience notice,
+-- attempted by an outsider) — the exists() subquery is itself scoped by
+-- announcements_select_targeted.
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  v_ann uuid := (select id from test_ids where key = 'ann_org');
+  denied boolean := false;
+begin
+  perform pg_temp.act_as(v_outsider);
+  begin
+    insert into public.announcement_dismissals (announcement_id, user_id) values (v_ann, v_outsider);
+  exception when insufficient_privilege or others then
+    denied := true;
+  end;
+  reset role;
+
+  insert into probe_results values (124, 'announcement_dismissals: cannot dismiss a notice not targeted at you', denied);
+exception when others then
+  reset role;
+  insert into probe_results values (124, 'announcement_dismissals not-targeted probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 125 — 0067_announcements.sql grants select-only — an org member
+-- cannot INSERT/UPDATE/DELETE announcements at all; it remains staff-write
+-- only via service_role.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_existing_id uuid := (select id from test_ids where key = 'ann_all');
+  insert_denied boolean := false;
+  update_denied boolean := false;
+  delete_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_member);
+  begin
+    insert into public.announcements (title, body, severity, audience, created_by)
+    values ('Forged notice', 'Should not be allowed.', 'info', 'all', v_member);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  begin
+    update public.announcements set title = 'Hijacked' where id = v_existing_id;
+  exception when insufficient_privilege then
+    update_denied := true;
+  end;
+  begin
+    delete from public.announcements where id = v_existing_id;
+  exception when insufficient_privilege then
+    delete_denied := true;
+  end;
+  reset role;
+
+  if insert_denied and update_denied and delete_denied then
+    insert into probe_results values (125, 'announcements: an org member cannot INSERT/UPDATE/DELETE (SELECT-only grant)', true);
+  else
+    insert into probe_results values (125, 'announcements: an org member cannot INSERT/UPDATE/DELETE (SELECT-only grant)', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (125, 'announcements member-cannot-write probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$
