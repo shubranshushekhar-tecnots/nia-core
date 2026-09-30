@@ -484,7 +484,10 @@ html[data-nx-theme='light'] [data-app-theme] {
   animation: nxFadeUp 420ms var(--nx-ease) both;
 }
 
-@keyframes nxClipLine { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+/* Vertical inset stays negative (rather than 0) so this purely-horizontal
+   reveal wipe never clips glyph descenders/ascenders that overflow a tight
+   line-height (e.g. the 80px/76px greeting headline). */
+@keyframes nxClipLine { from { clip-path: inset(-20px 100% -20px 0); } to { clip-path: inset(-20px 0 -20px 0); } }
 .nx-clip-line {
   display: inline-block;
   animation: nxClipLine 560ms var(--nx-ease) both;
@@ -510,6 +513,20 @@ html[data-nx-theme='light'] [data-app-theme] {
 .nx-halftone {
   background-image: radial-gradient(circle, var(--nx-line-inner) 1px, transparent 1px);
   background-size: 14px 14px;
+}
+
+/* Step 4 (Connections): square spinner for "Installing…"/"Deleting…"
+   busy states — no spinner utility existed before this step. Reduced
+   motion is handled globally by the `*` rule below, same as every
+   other nx-* animation utility on this page. */
+@keyframes nxSpin { to { transform: rotate(360deg); } }
+.nx-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  animation: nxSpin 600ms linear infinite;
 }
 
 /* Step 3 dialogs (CreateProjectDialog/CreateWorkflowDialog): 2px inset
