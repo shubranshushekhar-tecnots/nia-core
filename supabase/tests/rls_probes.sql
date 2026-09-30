@@ -66,19 +66,24 @@ begin
     (v_org, v_admin,  'admin'),
     (v_org, v_member, 'member');
 
-  -- Lift this org's project_limit for the rest of the script.
-  -- 0050_org_plan_overrides.sql's create-org trigger defaults every new org
-  -- to the 'free' plan (project_limit=1, 0049_plans_table.sql), and this
-  -- script goes on to insert several org-scoped projects against 'org'
-  -- across many probes (11, 66-69, 73, 79+) that were never meant to be
-  -- gated by 0052_project_limit_enforcement.sql's trigger — that
-  -- enforcement is real product behavior under test elsewhere (probes
-  -- covering 0052 itself, if any) and each of those existing fixtures
-  -- predates 0052 with no exception handling of their own, so without this
-  -- override the second org-scoped project insert in the whole script trips
-  -- "Your Free plan allows 1 project" and aborts the entire transaction.
+  -- Lift this org's project_limit AND workflow_limit for the rest of the
+  -- script. 0050_org_plan_overrides.sql's create-org trigger defaults every
+  -- new org to the 'free' plan (project_limit=1, workflow_limit=2,
+  -- 0049_plans_table.sql), and this script goes on to insert several
+  -- org-scoped projects (probes 11, 66-69, 73, 79+) and workflows (probes
+  -- 11, 66-70) against 'org' that were never meant to be gated by
+  -- 0052_project_limit_enforcement.sql / 0053_workflow_limit_uses_plans.sql's
+  -- triggers — that enforcement is real product behavior under test
+  -- elsewhere (probes covering those migrations themselves) and each of
+  -- these existing fixtures predates them with no exception handling of
+  -- their own, so without this override the second org-scoped project
+  -- insert (or third workflow insert) in the whole script trips "Your Free
+  -- plan allows 1 project"/"...2 workflows" (NIA02/NIA01) and aborts the
+  -- entire transaction — including, before this fix, masking probe 70's
+  -- suspension check behind an unrelated limit error.
   update public.org_plan
-  set project_limit_set = true, project_limit = null
+  set project_limit_set = true, project_limit = null,
+      workflow_limit_set = true, workflow_limit = null
   where org_id = v_org;
 
   insert into test_ids values
@@ -319,6 +324,16 @@ begin
     raise exception 'rls_probes.sql: fixture user not found — run `pnpm --filter @nia/api seed:fixtures` against this database first.';
   end if;
 
+  -- Lift this individual's project_limit for the rest of the script, same
+  -- reasoning as the 'org' override above — probe 7 creates a personal
+  -- project and probe 71 (suspension-unaffected personal project) creates
+  -- a second one; the free plan's project_limit=1 (0049_plans_table.sql)
+  -- would otherwise trip 0052_project_limit_enforcement.sql on that second
+  -- insert, unrelated to what probe 71 is actually testing.
+  update public.owner_plan
+  set project_limit_set = true, project_limit = null
+  where user_id = v_individual;
+
   insert into test_ids values ('individual', v_individual);
 end $$;
 
@@ -468,6 +483,16 @@ begin
   returning id into v_org_b;
 
   insert into public.organization_members (org_id, user_id, role) values (v_org_b, v_org_b_owner, 'owner');
+
+  -- Lift org B's project_limit for the rest of the script, same reasoning
+  -- as the 'org' override above — the fixture below creates one org-scoped
+  -- project and probe 72 (cross-org isolation) creates a second one; the
+  -- free plan's project_limit=1 (0049_plans_table.sql) would otherwise trip
+  -- 0052_project_limit_enforcement.sql on that second insert, unrelated to
+  -- what probe 72 is actually testing.
+  update public.org_plan
+  set project_limit_set = true, project_limit = null
+  where org_id = v_org_b;
 
   -- Fixtures inserted as postgres (bypasses RLS) — only the SELECT-side
   -- isolation is under test here, not the insert-side policies (already
@@ -2046,25 +2071,36 @@ end $$;
 
 -- =========================================================================
 -- Probe 55 — 0044_org_plan_member_select.sql: a member of the org CAN read
--- their own org's org_plan row (correct plan_tier/workflow_limit values,
--- not just "some row").
+-- their own org's org_plan row (correct plan_id/plan_tier values, not just
+-- "some row"). Stale-expectations fix: this org is created fresh by this
+-- very script, so 0050_org_plan_overrides.sql's create-org trigger (private.
+-- set_default_org_plan, redefined again by 0050) is what actually fires for
+-- it — 'free'/'Free', not 0043's original 'Pro' default that only ever
+-- applied before the plans-catalog migrations (0049-0051) shipped.
+-- Deliberately does NOT assert workflow_limit/workflow_limit_set here: the
+-- root fixture above overrides both to null/true for this same org (to
+-- avoid tripping 0053's workflow-limit trigger across probes 11/66-70/79+),
+-- so by the time this probe runs the row reflects that test-only override,
+-- not the plan's real inherited default — plan_id/plan_tier are untouched
+-- by that override and are what this probe is actually about.
 -- =========================================================================
 do $$
 declare
   v_member uuid := (select id from test_ids where key = 'member');
   v_org    uuid := (select id from test_ids where key = 'org');
+  v_plan_id text;
   v_plan_tier text;
-  v_workflow_limit int;
 begin
   perform pg_temp.act_as(v_member);
-  select plan_tier, workflow_limit into v_plan_tier, v_workflow_limit
+  select plan_id, plan_tier
+  into v_plan_id, v_plan_tier
   from public.org_plan where org_id = v_org;
   reset role;
 
-  if v_plan_tier = 'Pro' and v_workflow_limit = 25 then
-    insert into probe_results values (55, 'org_plan: a member can read their own org''s plan row (0043''s Pro/25 default)', true);
+  if v_plan_id = 'free' and v_plan_tier = 'Free' then
+    insert into probe_results values (55, 'org_plan: a member can read their own org''s plan row (0050''s Free default for new orgs)', true);
   else
-    insert into probe_results values (55, 'org_plan: a member can read their own org''s plan row (0043''s Pro/25 default)', false);
+    insert into probe_results values (55, 'org_plan: a member can read their own org''s plan row (0050''s Free default for new orgs)', false);
   end if;
 exception when others then
   reset role;
@@ -2892,6 +2928,206 @@ begin
 exception when others then
   reset role;
   insert into probe_results values (86, 'project_members self-leave probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Fixture for probes 87-90 — an org-scoped project (with a workflow and a
+-- workflow_run under it) that 'member' is NOT a project_member of —
+-- 0055_workflow_project_membership.sql's analogue of the pm_project
+-- fixture above. A fresh project is used rather than reusing pm_project,
+-- since pm_project's own membership state was mutated by probes 84-86
+-- (member was granted access, then removed itself); a clean project keeps
+-- 87-90 unambiguous.
+-- =========================================================================
+do $$
+declare
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_owner uuid := (select id from test_ids where key = 'owner');
+  v_project uuid;
+  v_workflow uuid;
+begin
+  perform pg_temp.act_as(v_owner);
+  insert into public.projects (org_id, name, created_by)
+  values (v_org, 'Workflow project-membership probe project', v_owner);
+  reset role;
+
+  select id into v_project
+  from public.projects
+  where org_id = v_org and created_by = v_owner and name = 'Workflow project-membership probe project';
+
+  -- Inserted as v_owner (a project_member via the creator-auto-membership
+  -- trigger from 0054) rather than as postgres, so 0055's own insert-side
+  -- check (private.is_admin(org_id) or private.is_project_member(project_id))
+  -- is exercised by the fixture itself, same discipline as pm_project's own
+  -- fixture comment above.
+  perform pg_temp.act_as(v_owner);
+  insert into public.workflows (project_id, org_id, name, created_by)
+  values (v_project, v_org, 'Workflow project-membership probe workflow', v_owner);
+  reset role;
+
+  select id into v_workflow
+  from public.workflows
+  where project_id = v_project and name = 'Workflow project-membership probe workflow';
+
+  -- workflow_runs has no client-facing insert policy (system-authored only,
+  -- see 0002_projects_workflows.sql's own header comment), so this one is
+  -- inserted as postgres.
+  insert into public.workflow_runs (workflow_id, org_id, status, rows_processed)
+  values (v_workflow, v_org, 'succeeded', 1);
+
+  insert into test_ids values ('wpm_project', v_project), ('wpm_workflow', v_workflow);
+exception when others then
+  reset role;
+  raise notice 'workflow project-membership probe fixture setup failed: %', sqlerrm;
+end $$;
+
+-- =========================================================================
+-- Probe 87 — 0055_workflow_project_membership.sql: a member who is NOT a
+-- project_member of a workflow's project cannot SELECT that workflow, even
+-- though they ARE a member of the org (mirrors probe 79's project-level
+-- behavior, one level down).
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_workflow uuid := (select id from test_ids where key = 'wpm_workflow');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_visible from public.workflows where id = v_workflow;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (87, 'member without project_members cannot SELECT a workflow in another member''s project', true);
+  else
+    insert into probe_results values (87, 'member without project_members cannot SELECT a workflow in another member''s project', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (87, 'workflow project-membership select probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 88 — same as probe 87, one level down: a member who is NOT a
+-- project_member of the underlying workflow's project cannot SELECT its
+-- workflow_run either (private.is_workflow_project_member(workflow_id)).
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_workflow uuid := (select id from test_ids where key = 'wpm_workflow');
+  n_visible int;
+begin
+  perform pg_temp.act_as(v_member);
+  select count(*) into n_visible from public.workflow_runs where workflow_id = v_workflow;
+  reset role;
+
+  if n_visible = 0 then
+    insert into probe_results values (88, 'member without project_members cannot SELECT a workflow_run in another member''s project', true);
+  else
+    insert into probe_results values (88, 'member without project_members cannot SELECT a workflow_run in another member''s project', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (88, 'workflow_run project-membership select probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 89 — a member who is NOT a project_member of the project cannot
+-- INSERT a new workflow into it, nor UPDATE/DELETE the existing one —
+-- mirrors probe 70's suspended-org shape, but for the project-membership
+-- check instead of org suspension.
+-- =========================================================================
+do $$
+declare
+  v_member uuid := (select id from test_ids where key = 'member');
+  v_org uuid := (select id from test_ids where key = 'org');
+  v_project uuid := (select id from test_ids where key = 'wpm_project');
+  v_workflow uuid := (select id from test_ids where key = 'wpm_workflow');
+  insert_denied boolean := false;
+  n_updated int;
+  n_deleted int;
+begin
+  perform pg_temp.act_as(v_member);
+
+  begin
+    insert into public.workflows (project_id, org_id, name, created_by)
+    values (v_project, v_org, 'Should be blocked', v_member);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+
+  update public.workflows set name = 'Should stay blocked' where id = v_workflow;
+  get diagnostics n_updated = row_count;
+  delete from public.workflows where id = v_workflow;
+  get diagnostics n_deleted = row_count;
+
+  reset role;
+
+  if insert_denied and n_updated = 0 and n_deleted = 0 then
+    insert into probe_results values (89, 'member without project_members cannot INSERT/UPDATE/DELETE a workflow in another member''s project', true);
+  else
+    insert into probe_results values (89, 'member without project_members cannot INSERT/UPDATE/DELETE a workflow in another member''s project', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (89, 'workflow project-membership insert/update/delete probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 90 — an admin who is NOT a project_member can still SELECT/UPDATE
+-- any workflow in their org — admins/owners bypass the project_members
+-- check entirely, same as probe 80's project-level equivalent.
+-- =========================================================================
+do $$
+declare
+  v_admin uuid := (select id from test_ids where key = 'admin');
+  v_workflow uuid := (select id from test_ids where key = 'wpm_workflow');
+  n_visible int;
+  n_updated int;
+begin
+  perform pg_temp.act_as(v_admin);
+  select count(*) into n_visible from public.workflows where id = v_workflow;
+  update public.workflows set name = 'Renamed by admin' where id = v_workflow;
+  get diagnostics n_updated = row_count;
+  reset role;
+
+  if n_visible = 1 and n_updated = 1 then
+    insert into probe_results values (90, 'admin without project_members can still SELECT/UPDATE any org workflow', true);
+  else
+    insert into probe_results values (90, 'admin without project_members can still SELECT/UPDATE any org workflow', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (90, 'workflow project-membership admin-bypass probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 91 — a personally-owned workflow (org_id null, owner_id = self) is
+-- completely unaffected by the project-membership rule — the owner_id
+-- branch of every 0055-amended policy was deliberately left untouched.
+-- =========================================================================
+do $$
+declare
+  v_individual uuid := (select id from test_ids where key = 'individual');
+  v_workflow uuid := (select id from test_ids where key = 'personal_workflow');
+  n_visible int;
+  n_updated int;
+begin
+  perform pg_temp.act_as(v_individual);
+  select count(*) into n_visible from public.workflows where id = v_workflow;
+  update public.workflows set name = 'Renamed personal workflow' where id = v_workflow;
+  get diagnostics n_updated = row_count;
+  reset role;
+
+  if n_visible = 1 and n_updated = 1 then
+    insert into probe_results values (91, 'personally-owned workflow unaffected by the project-membership rule', true);
+  else
+    insert into probe_results values (91, 'personally-owned workflow unaffected by the project-membership rule', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (91, 'personal-workflow-unaffected-by-project-membership probe (errored: ' || sqlerrm || ')', false);
 end $$;
 
 -- =========================================================================

@@ -107,6 +107,18 @@ throwaway Postgres, etc.):
   design); tests sign in through the real `/login` form (`auth.setup.ts`)
   or are written but skipped/documented until a seeded test account exists
   out-of-band.
+- Never `insert into public.projects (...) returning id` (or any RETURNING
+  clause on `projects`) while acting as a real, non-admin caller
+  (`withActingUser`/`act_as`/`set local role authenticated`, i.e. RLS
+  actually applies). `0054_project_members.sql`'s tightened
+  `projects_select_members` policy means a plain member/individual's
+  just-inserted row isn't visible to them yet at RETURNING-evaluation time
+  — the creator-auto-membership trigger that grants that visibility only
+  fires AFTER the insert. Insert without RETURNING, then look the row up in
+  a separate SELECT after the insert (see `apps/web/src/lib/dashboard/
+  actions.ts`'s `createProject()`). This only matters for real
+  RLS-enforced connections — service_role/superuser inserts (table owner,
+  bypasses RLS entirely) are unaffected and may use RETURNING freely.
 
 ## Known Supabase-client exceptions
 One place still genuinely uses `@supabase/supabase-js` against a running
