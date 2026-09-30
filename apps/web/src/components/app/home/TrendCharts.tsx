@@ -12,6 +12,28 @@ const PLOT_W = 354;
 const Y0 = 10;
 const PLOT_H = 130;
 
+const sectionTitleStyle = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 800,
+  fontSize: 22,
+  letterSpacing: '0.01em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink)',
+} as const;
+
+const subtitleStyle = { fontSize: 13, color: 'var(--nx-ink-2)' } as const;
+
+const cardStyle = {
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  borderRadius: 'var(--nx-radius)',
+  padding: '20px 24px 16px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+} as const;
+
 function dayLabel(dateKey: string): string {
   const d = new Date(`${dateKey}T00:00:00`);
   return d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
@@ -29,9 +51,9 @@ function Gridlines({ ticks, formatTick }: { ticks: number[]; formatTick: (v: num
               x2={X0 + PLOT_W}
               y1={y}
               y2={y}
-              stroke={i === ticks.length - 1 ? 'var(--line-200)' : 'var(--line-100)'}
+              stroke={i === ticks.length - 1 ? 'var(--nx-line)' : 'var(--nx-line-inner)'}
             />
-            <text x={X0 - 8} y={y + 4} textAnchor="end" fontSize={11} fill="var(--ink-300)">
+            <text x={X0 - 8} y={y + 4} textAnchor="end" fontSize={11} fontFamily="var(--nx-font-mono)" fill="var(--nx-ink-3)">
               {formatTick(t)}
             </text>
           </g>
@@ -59,21 +81,10 @@ function RowsMovedChart({ aggregate }: { aggregate: DashboardAggregate }) {
   const hover = hoverDay && hoverPoint ? { day: hoverDay, point: hoverPoint } : null;
 
   return (
-    <section
-      aria-label="Rows moved"
-      style={{
-        background: 'var(--surface)',
-        border: '1px solid var(--line-100)',
-        borderRadius: 12,
-        padding: '20px 24px 16px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-      }}
-    >
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <h2 style={{ margin: 0, fontSize: 15, lineHeight: '22px', fontWeight: 600 }}>Rows moved</h2>
-        <span style={{ fontSize: 12.5, color: 'var(--ink-200)' }}>
+    <section aria-label="Rows moved" className={loadedValues.length === 0 ? 'nx-halftone' : undefined} style={cardStyle}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <h2 style={{ margin: 0, ...sectionTitleStyle }}>Rows moved</h2>
+        <span style={subtitleStyle}>
           {loadedValues.length === 0 ? 'No runs loaded yet' : `${formatCompactNumber(total)} rows across all workflows`}
         </span>
       </div>
@@ -81,21 +92,21 @@ function RowsMovedChart({ aggregate }: { aggregate: DashboardAggregate }) {
         <svg width="100%" height={150} viewBox={`0 0 ${VB_W} 150`} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }}>
           <Gridlines ticks={ticks} formatTick={(v) => (v === 0 ? '0' : formatCompactNumber(Math.round(v)))} />
           {areas.map((d, i) => (
-            <path key={i} d={d} fill="var(--acc)" fillOpacity={0.1} />
+            <path key={i} d={d} fill="var(--nx-blue-panel)" fillOpacity={0.1} />
           ))}
           {lines.map((d, i) => (
-            <path key={i} d={d} fill="none" stroke="var(--acc)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            <path key={i} d={d} fill="none" stroke="var(--nx-blue-panel)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           ))}
           {hover && hover.day.loaded && (
             <>
-              <line x1={hover.point.x} x2={hover.point.x} y1={Y0} y2={Y0 + PLOT_H} stroke="#8A8D94" strokeDasharray="2 3" />
-              <circle cx={hover.point.x} cy={hover.point.y} r={4.5} fill="var(--acc)" stroke="var(--surface)" strokeWidth={2} />
+              <line x1={hover.point.x} x2={hover.point.x} y1={Y0} y2={Y0 + PLOT_H} stroke="var(--nx-ink-3)" strokeDasharray="2 3" />
+              <circle cx={hover.point.x} cy={hover.point.y} r={4.5} fill="var(--nx-blue-panel)" stroke="var(--nx-surface)" strokeWidth={2} />
             </>
           )}
-          <text x={X0} y={164} fontSize={11} fill="var(--ink-300)">
+          <text x={X0} y={164} fontSize={11} fontFamily="var(--nx-font-mono)" fill="var(--nx-ink-3)">
             {dayLabel(days[0]?.date ?? '')}
           </text>
-          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fill="var(--ink-300)">
+          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fontFamily="var(--nx-font-mono)" fill="var(--nx-ink-3)">
             {dayLabel(days[days.length - 1]?.date ?? '')}
           </text>
         </svg>
@@ -116,19 +127,20 @@ function RowsMovedChart({ aggregate }: { aggregate: DashboardAggregate }) {
               left: Math.min(hover.point.x + 12, VB_W - 130),
               width: 120,
               padding: '8px 10px',
-              background: 'var(--chart-tooltip-bg)',
-              color: '#FFFFFF',
-              borderRadius: 8,
-              fontSize: 12.5,
+              background: 'var(--nx-ink)',
+              color: 'var(--nx-bg)',
+              borderRadius: 'var(--nx-radius)',
+              fontFamily: 'var(--nx-font-mono)',
+              fontSize: 12,
               lineHeight: '19px',
               pointerEvents: 'none',
             }}
           >
-            <div style={{ fontSize: 12, color: '#B4B6BD' }}>{dayLabel(hover.day.date)}</div>
+            <div style={{ opacity: 0.7 }}>{dayLabel(hover.day.date)}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ width: 10, height: 2, background: 'var(--chart-tooltip-ok)' }} />
-              <span style={{ fontWeight: 600 }}>{hover.day.rowsProcessed.toLocaleString()}</span>
-              <span style={{ color: '#B4B6BD' }}>rows</span>
+              <span style={{ width: 10, height: 2, background: 'var(--nx-blue-panel)' }} />
+              <span style={{ fontWeight: 700 }}>{hover.day.rowsProcessed.toLocaleString()}</span>
+              <span style={{ opacity: 0.7 }}>rows</span>
             </div>
           </div>
         )}
@@ -165,25 +177,14 @@ function RunDurationChart({ aggregate, durationSeries }: { aggregate: DashboardA
     p95DurationMs.value === null ? 'not enough runs yet' : `${formatDuration(p95DurationMs.value)} (last 14 days)`;
 
   return (
-    <section
-      aria-label="Run duration"
-      style={{
-        background: 'var(--surface)',
-        border: '1px solid var(--line-100)',
-        borderRadius: 12,
-        padding: '20px 24px 16px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-      }}
-    >
+    <section aria-label="Run duration" className={loadedValues.length === 0 ? 'nx-halftone' : undefined} style={cardStyle}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <h2 style={{ margin: 0, fontSize: 15, lineHeight: '22px', fontWeight: 600 }}>Run duration</h2>
-          <span style={{ fontSize: 12.5, color: 'var(--ink-200)' }}>Median per day \u00b7 slowest 5%: {p95Label}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <h2 style={{ margin: 0, ...sectionTitleStyle }}>Run duration</h2>
+          <span style={subtitleStyle}>Median per day \u00b7 slowest 5%: {p95Label}</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--ink-200)' }}>
-          <span style={{ width: 14, height: 2, background: 'var(--acc)' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--nx-ink-2)' }}>
+          <span style={{ width: 14, height: 2, background: 'var(--nx-blue-panel)' }} />
           Median
         </div>
       </div>
@@ -191,17 +192,17 @@ function RunDurationChart({ aggregate, durationSeries }: { aggregate: DashboardA
         <svg width="100%" height={170} viewBox={`0 0 ${VB_W} 170`} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }}>
           <Gridlines ticks={ticks} formatTick={(v) => `${Math.round(v)}s`} />
           {lines.map((d, i) => (
-            <path key={i} d={d} fill="none" stroke="var(--acc)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            <path key={i} d={d} fill="none" stroke="var(--nx-blue-panel)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           ))}
           {endPoint && endValueMs !== null && (
-            <text x={X0 + PLOT_W - 12} y={endPoint.y + 4} textAnchor="end" fontSize={11.5} fill="var(--ink-100)" fontWeight={500}>
+            <text x={X0 + PLOT_W - 12} y={endPoint.y + 4} textAnchor="end" fontSize={11.5} fontWeight={700} fill="var(--nx-ink)">
               {formatDuration(endValueMs)}
             </text>
           )}
-          <text x={X0} y={164} fontSize={11} fill="var(--ink-300)">
+          <text x={X0} y={164} fontSize={11} fontFamily="var(--nx-font-mono)" fill="var(--nx-ink-3)">
             {dayLabel(durationSeries[0]?.date ?? '')}
           </text>
-          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fill="var(--ink-300)">
+          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fontFamily="var(--nx-font-mono)" fill="var(--nx-ink-3)">
             {dayLabel(durationSeries[durationSeries.length - 1]?.date ?? '')}
           </text>
         </svg>
@@ -214,7 +215,7 @@ function RunDurationChart({ aggregate, durationSeries }: { aggregate: DashboardA
               alignItems: 'center',
               justifyContent: 'center',
               fontSize: 12.5,
-              color: 'var(--ink-300)',
+              color: 'var(--nx-ink-3)',
             }}
           >
             No runs loaded yet

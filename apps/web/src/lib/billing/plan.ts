@@ -17,6 +17,11 @@
 
 import type { DashboardStats } from "@/lib/dashboard/types";
 
+// Shared "getting close to the limit" threshold — the Home page banners
+// and the usage meter's warn state must agree on a single number rather
+// than each hardcoding their own 0.8.
+export const PLAN_ALERT_THRESHOLD = 0.8;
+
 export type PlanUsage = {
   plan: string;
   workflowLimit: number | null;

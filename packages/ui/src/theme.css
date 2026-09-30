@@ -323,6 +323,196 @@
 }
 
 /* ------------------------------------------------------------
+   "Precision Dark" redesign — new design-system token layer (--nx-*),
+   from designs/Nia Core — Precision Dark redesign.pdf ("01 · Design
+   direction & system"). This is Phase 1 of a page-by-page UI reskin —
+   only the app-shell background/body text and the Settings dropdown's
+   Appearance switcher read these so far; everything else still reads
+   the existing --bg/--surface/--line/--success/etc. tokens above
+   untouched. Deliberately namespaced (--nx- prefix) rather than
+   overwriting those existing names, which are wired app-wide via
+   tailwind's bg-bg/border-line/text-success/etc. utilities (Landing,
+   Auth, Canvas, Home...) — reusing those names here would repaint the
+   whole app the moment data-nx-theme is set, not just the app shell.
+   Scoping is `html[data-nx-theme] [data-app-theme]` rather than a bare
+   `[data-nx-theme]`/`:root` block: data-nx-theme has to live on <html>
+   (next-themes' no-flash boot script requires the attribute at the
+   document root), but by requiring the [data-app-theme] descendant too,
+   the new tokens never reach Landing/Auth/.hl-scope — none of those
+   render inside an element carrying data-app-theme. The pre-existing
+   [data-app-theme][data-om-theme='light'] Indigo/Slate block above (and
+   AppShell.tsx's hardcoded data-om-theme="light") is completely
+   untouched by this layer and keeps driving every already-built
+   app-shell page exactly as before. Hex values copied verbatim from the
+   PDF's token table; blue-panel/blue-cta "text on it" pairs confirmed
+   2026-09-30. */
+html[data-nx-theme='dark'] [data-app-theme] {
+  --nx-bg: #0A0A0B;
+  --nx-surface: #111113;
+  --nx-raised: #1A1A1D;
+  --nx-line: #3A3A40;
+  --nx-line-inner: #242428;
+  --nx-ink: #F2F2F2;
+  --nx-ink-2: #A1A1AA;
+  --nx-ink-3: #8A8A93;
+  --nx-ink-disabled: #62626C;
+  --nx-blue-panel: #8C82FF;
+  --nx-blue-panel-text: #0A0A0B;
+  --nx-blue-cta: #5446E0;
+  --nx-blue-cta-text: #FFFFFF;
+  --nx-blue-tint: #17153A;
+  --nx-blue-soft-text: #C9C4FF;
+  --nx-warn: #F5A524;
+  --nx-danger: #FF5C5C;
+  --nx-danger-text: #FF7A7A;
+  --nx-danger-tint: #1A0F10;
+  --nx-success: #D4D4D8;
+}
+
+html[data-nx-theme='light'] [data-app-theme] {
+  --nx-bg: #FAFAF8;
+  --nx-surface: #F0F0EB;
+  --nx-raised: #EDEDE8;
+  --nx-line: #1F1F22;
+  --nx-line-inner: #D6D6D1;
+  --nx-ink: #0A0A0B;
+  --nx-ink-2: #55555C;
+  --nx-ink-3: #6B6B73;
+  --nx-ink-disabled: #A1A1AA;
+  --nx-blue-panel: #5446E0;
+  --nx-blue-panel-text: #FFFFFF;
+  --nx-blue-cta: #5446E0;
+  --nx-blue-cta-text: #FFFFFF;
+  --nx-blue-tint: #E6E3FF;
+  --nx-blue-soft-text: #3F32C9;
+  --nx-warn: #B45309;
+  --nx-danger: #D92D20;
+  --nx-danger-text: #C2261F;
+  --nx-danger-tint: #FDECEC;
+  --nx-success: #3F3F46;
+}
+
+/* Shared across both --nx-theme states: 0-radius/1px-line Swiss grid
+   rule, the redesign's motion curve, and its font stack (Suisse Intl
+   listed first per the brief, even though it isn't licensed/loaded yet,
+   so it drops in later without another token edit — Google-fonts-backed
+   Inter Tight/Inter, Archivo, JetBrains Mono are the real fallbacks for
+   now, loaded via next/font/google in the root layout). Reduced-motion
+   is already handled project-wide by the `*` rule further down this
+   file — no redesign-specific override needed. */
+html[data-nx-theme='dark'] [data-app-theme],
+html[data-nx-theme='light'] [data-app-theme] {
+  --nx-radius: 0px;
+  --nx-ease: cubic-bezier(.22, 1, .36, 1);
+  /* var(--font-inter-tight)/var(--font-archivo) come from next/font/google
+     in the root layout (apps/web/src/app/layout.tsx), same indirection
+     pattern already used for --font-geist above — next/font renames the
+     literal family internally, so it can only be referenced via its CSS
+     var, not the string 'Inter Tight'. */
+  --nx-font-ui: 'Suisse Intl', var(--font-inter-tight), var(--font-inter), system-ui, -apple-system, sans-serif;
+  --nx-font-condensed: 'Suisse Intl', var(--font-archivo), system-ui, sans-serif;
+  --nx-font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
+}
+
+/* Settings-menu theme switcher (ThemeSwitcher.tsx) segment focus ring —
+   inline styles can't express :focus-visible, so this one rule lives here
+   next to its tokens, same pattern as .hl-seg:focus-visible below. */
+.nx-theme-seg:focus-visible {
+  outline: 2px solid var(--nx-blue-panel);
+  outline-offset: -2px;
+}
+
+/* Precision Dark redesign (Step 2): shared hover-wipe utility for Sidebar/
+   TopBar interactive rows — a solid `--nx-raised` panel wipes in from the
+   left via `::before` + `transform: scaleX()` on hover/focus-visible.
+   Inline CSSProperties objects can't express :hover/:focus-visible/
+   ::before, so (same pattern as .nx-theme-seg above) this lives here and
+   is applied via className alongside each row's normal inline layout
+   styles (apps/web/src/components/app/styles.ts's navRailBtnStyle etc.).
+   `isolation: isolate` contains the pseudo-element's negative z-index to
+   this row only, so it never paints over/under sibling rows. Reduced
+   motion is already handled by the global `*` rule below — no override
+   needed here. */
+.nx-wipe {
+  position: relative;
+  isolation: isolate;
+  color: var(--nx-ink-2);
+  transition: color 220ms var(--nx-ease);
+}
+.nx-wipe::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--nx-raised);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 220ms var(--nx-ease);
+}
+.nx-wipe:hover,
+.nx-wipe:focus-visible {
+  color: var(--nx-ink);
+}
+.nx-wipe:hover::before,
+.nx-wipe:focus-visible::before {
+  transform: scaleX(1);
+}
+.nx-wipe:focus-visible {
+  outline: 2px solid var(--nx-blue-panel);
+  outline-offset: -2px;
+}
+
+/* Active/selected row — solid ink cell, no wipe. */
+.nx-active-cell {
+  background: var(--nx-ink);
+  color: var(--nx-bg);
+}
+
+/* Disabled "soon" row — dimmed ink, no pointer, no hover wipe. */
+.nx-row-disabled {
+  color: var(--nx-ink-disabled);
+  cursor: not-allowed;
+}
+
+/* Precision Dark redesign (Step 3, Home): mount-in utilities for Home's
+   sections/rows. Inline styles can't express keyframe animations, so
+   these small utility classes carry them; reduced motion is already
+   handled globally by the `*` rule below — no per-utility override
+   needed. Each takes an optional inline `animationDelay` for stagger. */
+@keyframes nxFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.nx-fade-up {
+  animation: nxFadeUp 420ms var(--nx-ease) both;
+}
+
+@keyframes nxClipLine { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+.nx-clip-line {
+  display: inline-block;
+  animation: nxClipLine 560ms var(--nx-ease) both;
+}
+
+@keyframes nxBarGrow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+.nx-bar-grow {
+  transform-origin: bottom;
+  animation: nxBarGrow 420ms var(--nx-ease) both;
+}
+
+@keyframes nxSparkDraw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.nx-spark-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: nxSparkDraw 700ms var(--nx-ease) 120ms both;
+}
+
+/* Halftone dot-grid background for empty states (no-runs, no-data chart
+   states) — same radial-gradient-dot technique as the landing hero canvas
+   (HeroCanvasLayer.tsx), sized down and recolored to --nx-line-inner so it
+   reads as a quiet texture rather than a graphic. */
+.nx-halftone {
+  background-image: radial-gradient(circle, var(--nx-line-inner) 1px, transparent 1px);
+  background-size: 14px 14px;
+}
+
+/* ------------------------------------------------------------
    Nia Core App.html — auth screen theme (login/signup/forgot/reset/
    onboarding), extracted verbatim from the `const T = "..."` override
    string used only by those screens. This is a light-only, indigo-

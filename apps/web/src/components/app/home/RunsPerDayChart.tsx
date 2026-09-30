@@ -9,8 +9,20 @@ const BAR_W = 28;
 
 const HATCH_STYLE = {
   backgroundImage:
-    'repeating-linear-gradient(-45deg, var(--line-200) 0, var(--line-200) 3px, transparent 3px, transparent 7px)',
+    'repeating-linear-gradient(-45deg, var(--nx-line-inner) 0, var(--nx-line-inner) 3px, transparent 3px, transparent 7px)',
 } as const;
+
+const sectionTitleStyle = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 800,
+  fontSize: 22,
+  letterSpacing: '0.01em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink)',
+} as const;
+
+const subtitleStyle = { fontSize: 13, color: 'var(--nx-ink-2)' } as const;
 
 function dayLabel(dateKey: string): { weekday: string; dom: string } {
   const d = new Date(`${dateKey}T00:00:00`);
@@ -35,10 +47,11 @@ export default function RunsPerDayChart({ aggregate }: { aggregate: DashboardAgg
   return (
     <section
       aria-label="Runs per day"
+      className={successPct === null ? 'nx-halftone' : undefined}
       style={{
-        background: 'var(--surface)',
-        border: '1px solid var(--line-100)',
-        borderRadius: 12,
+        background: 'var(--nx-surface)',
+        border: '1px solid var(--nx-line)',
+        borderRadius: 'var(--nx-radius)',
         padding: '20px 24px 16px',
         display: 'flex',
         flexDirection: 'column',
@@ -46,23 +59,23 @@ export default function RunsPerDayChart({ aggregate }: { aggregate: DashboardAgg
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <h2 style={{ margin: 0, fontSize: 15, lineHeight: '22px', fontWeight: 600 }}>Runs per day</h2>
-          <span style={{ fontSize: 12.5, color: 'var(--ink-200)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <h2 style={{ margin: 0, ...sectionTitleStyle }}>Runs per day</h2>
+          <span style={subtitleStyle}>
             {successPct === null ? 'No runs loaded yet' : `${totalOk} succeeded, ${totalFail} failed \u00b7 ${successPct}% success`}
           </span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 12, color: 'var(--ink-200)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 12, color: 'var(--nx-ink-2)' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--chart-ok)' }} />
+            <span style={{ width: 10, height: 10, background: 'var(--nx-success)' }} />
             Succeeded
           </span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--chart-fail)' }} />
+            <span style={{ width: 10, height: 10, background: 'var(--nx-danger)' }} />
             Failed
           </span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, ...HATCH_STYLE }} />
+            <span style={{ width: 10, height: 10, ...HATCH_STYLE }} />
             No data loaded
           </span>
         </div>
@@ -80,7 +93,7 @@ export default function RunsPerDayChart({ aggregate }: { aggregate: DashboardAgg
                 right: 0,
                 top: y,
                 height: 0,
-                borderTop: `1px solid ${t === 0 ? 'var(--line-200)' : 'var(--line-100)'}`,
+                borderTop: `1px solid ${t === 0 ? 'var(--nx-line)' : 'var(--nx-line-inner)'}`,
               }}
             >
               <span
@@ -90,8 +103,9 @@ export default function RunsPerDayChart({ aggregate }: { aggregate: DashboardAgg
                   top: -9,
                   width: 24,
                   textAlign: 'right',
+                  fontFamily: 'var(--nx-font-mono)',
                   fontSize: 11,
-                  color: 'var(--ink-300)',
+                  color: 'var(--nx-ink-3)',
                   fontVariantNumeric: 'tabular-nums',
                 }}
               >
@@ -123,8 +137,19 @@ export default function RunsPerDayChart({ aggregate }: { aggregate: DashboardAgg
                   alignItems: 'center',
                 }}
               >
-                <div style={{ width: BAR_W, height: 12, borderRadius: '4px 4px 0 0', ...HATCH_STYLE }} />
-                <span style={{ position: 'absolute', bottom: -22, left: 0, right: 0, textAlign: 'center', fontSize: 11, color: 'var(--ink-300)' }}>
+                <div style={{ width: BAR_W, height: 12, ...HATCH_STYLE }} />
+                <span
+                  style={{
+                    position: 'absolute',
+                    bottom: -22,
+                    left: 0,
+                    right: 0,
+                    textAlign: 'center',
+                    fontFamily: 'var(--nx-font-mono)',
+                    fontSize: 11,
+                    color: 'var(--nx-ink-3)',
+                  }}
+                >
                   {dom}
                 </span>
               </div>
@@ -152,22 +177,22 @@ export default function RunsPerDayChart({ aggregate }: { aggregate: DashboardAgg
                 flexDirection: 'column',
                 justifyContent: 'flex-end',
                 alignItems: 'center',
-                gap: 2,
+                gap: 1,
                 outline: 'none',
                 cursor: 'default',
-                background: on ? 'rgba(89,76,223,0.05)' : undefined,
-                borderRadius: on ? 6 : undefined,
+                background: on ? 'var(--nx-raised)' : undefined,
               }}
             >
               {day.failed > 0 && (
-                <div style={{ width: BAR_W, height: hFail, background: 'var(--chart-fail)', borderRadius: '4px 4px 0 0' }} />
+                <div className="nx-bar-grow" style={{ width: BAR_W, height: hFail, background: 'var(--nx-danger)' }} />
               )}
               <div
+                className="nx-bar-grow"
                 style={{
                   width: BAR_W,
                   height: hOk,
-                  background: on ? 'var(--chart-ok-hover)' : 'var(--chart-ok)',
-                  borderRadius: day.failed === 0 ? '4px 4px 0 0' : 0,
+                  background: 'var(--nx-success)',
+                  opacity: on ? 0.8 : 1,
                 }}
               />
               <span
@@ -177,8 +202,9 @@ export default function RunsPerDayChart({ aggregate }: { aggregate: DashboardAgg
                   left: 0,
                   right: 0,
                   textAlign: 'center',
+                  fontFamily: 'var(--nx-font-mono)',
                   fontSize: 11,
-                  color: on ? 'var(--ink-100)' : 'var(--ink-300)',
+                  color: on ? 'var(--nx-ink)' : 'var(--nx-ink-3)',
                   fontVariantNumeric: 'tabular-nums',
                 }}
               >
@@ -196,27 +222,27 @@ export default function RunsPerDayChart({ aggregate }: { aggregate: DashboardAgg
               left: Math.min(36 + slot * (hoverIdx ?? 0) + slot / 2 + 22, PLOT_W - 138),
               width: 150,
               padding: '10px 12px',
-              background: 'var(--chart-tooltip-bg)',
-              color: '#FFFFFF',
-              borderRadius: 8,
-              fontSize: 12.5,
+              background: 'var(--nx-ink)',
+              color: 'var(--nx-bg)',
+              borderRadius: 'var(--nx-radius)',
+              fontFamily: 'var(--nx-font-mono)',
+              fontSize: 12,
               lineHeight: '20px',
-              boxShadow: '0 8px 24px rgba(14,14,18,0.18)',
               pointerEvents: 'none',
             }}
           >
-            <div style={{ fontSize: 12, color: '#B4B6BD', marginBottom: 4 }}>
+            <div style={{ opacity: 0.7, marginBottom: 4 }}>
               {dayLabel(hover.date).weekday}, {dayLabel(hover.date).dom}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ width: 10, height: 2, background: 'var(--chart-tooltip-ok)' }} />
-              <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums', minWidth: 18 }}>{hover.succeeded}</span>
-              <span style={{ color: '#B4B6BD' }}>succeeded</span>
+              <span style={{ width: 10, height: 2, background: 'var(--nx-success)' }} />
+              <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', minWidth: 18 }}>{hover.succeeded}</span>
+              <span style={{ opacity: 0.7 }}>succeeded</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ width: 10, height: 2, background: 'var(--chart-tooltip-fail)' }} />
-              <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums', minWidth: 18 }}>{hover.failed}</span>
-              <span style={{ color: '#B4B6BD' }}>failed</span>
+              <span style={{ width: 10, height: 2, background: 'var(--nx-danger)' }} />
+              <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', minWidth: 18 }}>{hover.failed}</span>
+              <span style={{ opacity: 0.7 }}>failed</span>
             </div>
           </div>
         )}

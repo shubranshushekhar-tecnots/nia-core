@@ -17,8 +17,12 @@ export const shellRootStyle: CSSProperties = {
   inset: 0,
   display: 'flex',
   flexDirection: 'column',
-  background: 'var(--bg)',
-  color: 'var(--text)',
+  // Precision Dark redesign (Phase 1, UI-1): app background + body text read
+  // from the --nx-* tokens (packages/ui/src/theme.css) instead of --bg/--text
+  // so the shell responds to the dark/light theme switcher. Nothing else in
+  // this file/step reads --nx-* yet.
+  background: 'var(--nx-bg)',
+  color: 'var(--nx-ink)',
   fontFamily: 'var(--font-ui)',
   WebkitFontSmoothing: 'antialiased',
 };
@@ -106,7 +110,7 @@ export const navGroupLabelStyle: CSSProperties = {
   fontWeight: 600,
   letterSpacing: '.04em',
   textTransform: 'uppercase',
-  color: 'var(--text-3)',
+  color: 'var(--nx-ink-3)',
 };
 
 // `wide=false` renders the icon-only collapsed-rail row: centered icon,
@@ -183,7 +187,7 @@ export function projectChevronStyle(open: boolean): CSSProperties {
     flex: 'none',
     fontSize: 11,
     lineHeight: 1,
-    color: 'var(--text-4)',
+    color: 'var(--nx-ink-3)',
     transform: `rotate(${open ? 90 : 0}deg)`,
     transition: 'transform .16s ease',
   };
@@ -203,8 +207,9 @@ export const treeLabelStyle: CSSProperties = {
 
 // The project tree nested under the "Projects" parent row — no left
 // padding here, indentation comes entirely from each row's own
-// `padding-left` (24px project rows, 40px workflow rows, 30px "+ New
-// project"), matching the design's indent ladder exactly.
+// `padding-left` (Precision Dark redesign, Step 2, item b: 48px project
+// rows, 60px workflow rows; "+ New project" bumped from 30 to 48 to stay
+// under the project-row text start).
 export const projectsNestStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -218,12 +223,12 @@ export function projectRowStyle(active: boolean): CSSProperties {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
-    padding: '6px 8px 6px 24px',
-    borderRadius: 8,
+    padding: '6px 8px 6px 48px',
+    borderRadius: 'var(--nx-radius)',
     border: 'none',
     cursor: 'pointer',
-    background: active ? 'var(--surface2)' : 'transparent',
-    color: 'var(--text-2)',
+    background: active ? 'var(--nx-raised)' : 'transparent',
+    color: 'var(--nx-ink-2)',
     fontFamily: 'inherit',
     textAlign: 'left',
   };
@@ -235,12 +240,12 @@ export function workflowRowStyle(active: boolean): CSSProperties {
     display: 'flex',
     alignItems: 'center',
     gap: 9,
-    padding: '6px 8px 6px 40px',
-    borderRadius: 8,
+    padding: '6px 8px 6px 60px',
+    borderRadius: 'var(--nx-radius)',
     border: 'none',
     cursor: 'pointer',
-    background: active ? 'var(--surface2)' : 'transparent',
-    color: active ? 'var(--live-fill)' : 'var(--text-3)',
+    background: active ? 'var(--nx-raised)' : 'transparent',
+    color: active ? 'var(--nx-ink)' : 'var(--nx-ink-3)',
     fontSize: 13,
     fontFamily: 'inherit',
     textAlign: 'left',
@@ -257,12 +262,12 @@ export const newProjectRowStyle: CSSProperties = {
   width: '100%',
   display: 'flex',
   alignItems: 'center',
-  padding: '7px 10px 7px 30px',
+  padding: '7px 10px 7px 48px',
   fontSize: 12,
-  color: 'var(--text-4)',
+  color: 'var(--nx-ink-3)',
   background: 'transparent',
   border: 'none',
-  borderRadius: 8,
+  borderRadius: 'var(--nx-radius)',
   cursor: 'pointer',
   textAlign: 'left',
   fontFamily: 'inherit',
@@ -345,19 +350,36 @@ export const homeScrollStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 40,
+  background: 'var(--nx-bg)',
+  color: 'var(--nx-ink)',
+};
+
+// Precision Dark redesign (Step 3, Home): condensed-caps eyebrow above the
+// greeting headline ("YOUR WORKSPACE").
+export const nxGreetingTagStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 700,
+  fontSize: 12,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
 };
 
 export const greetingStyle: CSSProperties = {
-  fontFamily: 'var(--font-display)',
-  fontSize: '2.4rem',
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 44,
   fontWeight: 700,
-  letterSpacing: '-.036em',
-  lineHeight: 1.08,
+  letterSpacing: '-.035em',
+  lineHeight: 1.05,
+  color: 'var(--nx-ink)',
 };
 
 export const greetingLineStyle: CSSProperties = {
-  fontSize: 13.5,
-  color: 'var(--text-3)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12.5,
+  letterSpacing: '0.02em',
+  color: 'var(--nx-ink-2)',
 };
 
 export const continueCardStyle: CSSProperties = {
@@ -420,24 +442,25 @@ export const planBannerStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 16,
-  padding: '16px 18px',
-  borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
-  color: 'var(--text-2)',
+  padding: '14px 18px',
+  borderRadius: 'var(--nx-radius)',
+  background: 'var(--nx-blue-tint)',
+  border: '1px solid var(--nx-line)',
+  color: 'var(--nx-ink)',
   fontSize: 13.5,
+  fontFamily: 'var(--nx-font-ui)',
 };
 
 export const planBannerBtnStyle: CSSProperties = {
   flex: 'none',
-  height: 36,
+  height: 34,
   padding: '0 16px',
-  borderRadius: 9,
-  fontFamily: 'inherit',
-  fontSize: 13.5,
+  borderRadius: 'var(--nx-radius)',
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 13,
   fontWeight: 600,
-  color: 'var(--onacc)',
-  background: 'var(--live-fill)',
+  color: 'var(--nx-blue-cta-text)',
+  background: 'var(--nx-blue-cta)',
   border: 'none',
   cursor: 'pointer',
 };
@@ -566,23 +589,23 @@ export const topBarSearchBtnStyle: CSSProperties = {
   gap: 8,
   height: 30,
   padding: '0 8px 0 10px',
-  borderRadius: 8,
-  background: 'var(--surface2)',
-  border: '1px solid var(--line)',
-  color: 'var(--text-3)',
+  borderRadius: 'var(--nx-radius)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
+  color: 'var(--nx-ink-3)',
   fontSize: 12.5,
   fontFamily: 'inherit',
   cursor: 'pointer',
 };
 
 export const topBarKbdStyle: CSSProperties = {
-  fontFamily: 'var(--font-data)',
+  fontFamily: 'var(--nx-font-mono)',
   fontSize: 11,
   padding: '2px 5px',
-  borderRadius: 5,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
-  color: 'var(--text-4)',
+  borderRadius: 'var(--nx-radius)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  color: 'var(--nx-ink-3)',
   lineHeight: 1,
 };
 
@@ -594,10 +617,10 @@ export const topBarIconBtnStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  borderRadius: 8,
+  borderRadius: 'var(--nx-radius)',
   background: 'transparent',
   border: 'none',
-  color: 'var(--text-3)',
+  color: 'var(--nx-ink-3)',
   fontSize: 15,
   cursor: 'pointer',
 };
@@ -610,9 +633,9 @@ export const topBarAvatarBtnStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line)',
-  color: 'var(--text-2)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
+  color: 'var(--nx-ink-2)',
   fontSize: 11,
   fontWeight: 600,
   fontFamily: 'inherit',
@@ -666,6 +689,330 @@ export const settingsEmailRowStyle: CSSProperties = {
   padding: '4px 8px 8px',
 };
 
+// Precision Dark redesign (Phase 2, UI-1): nx-themed variants of
+// dropdownStyleUp/settingsEmailRowStyle above, used only by the Sidebar's
+// Settings menu (now that it hosts the theme switcher). Kept separate
+// rather than editing the two constants above, since those are shared with
+// CanvasHeader/ProjectDetailClient/TopBar and must keep their current
+// (non-nx) appearance everywhere else. Sharp corners (--nx-radius, 0px),
+// 1px --nx-line border, same drop shadow as the shared dropdown.
+export const nxDropdownStyleUp: CSSProperties = {
+  ...dropdownStyleUp,
+  borderRadius: 'var(--nx-radius)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+};
+
+export const nxSettingsEmailRowStyle: CSSProperties = {
+  ...settingsEmailRowStyle,
+  color: 'var(--nx-ink-3)',
+};
+
+// ---------------------------------------------------------------------
+// Precision Dark redesign (Step 2): Sidebar + TopBar restyle. Where a
+// style object above is also used by CanvasHeader.tsx (topBarStyle,
+// orgSwitcherBtnStyle, dropdownStyle/dropdownItemStyle, breadcrumbSepStyle,
+// pageCrumbLinkStyle/pageCrumbCurrentStyle) a fresh nx-prefixed copy is
+// defined here instead, so CanvasHeader/the canvas route are completely
+// unaffected. TopBar-exclusive styles (topBarKbdStyle,
+// topBarSearchBtnStyle, topBarIconBtnStyle, topBarAvatarBtnStyle,
+// profileEmailTextStyle) and Sidebar-exclusive styles (navGroupLabelStyle,
+// treeLabelStyle, projectsNestStyle, projectRowStyle, workflowRowStyle,
+// projectChevronStyle, newProjectRowStyle) are instead edited in place,
+// further up this file. The old canvas/styles.ts `iconRail*` rail-layout
+// functions (Sidebar-exclusive, but living in the canvas folder as a
+// leftover from an earlier consolidation — see Sidebar.tsx's top comment)
+// are left untouched; the functions below replace them for Sidebar.tsx.
+// ---------------------------------------------------------------------
+
+// Row color/background now comes from the .nx-wipe/.nx-active-cell/
+// .nx-row-disabled CSS classes (theme.css) instead of inline styles, since
+// plain CSSProperties can't express :hover/:focus-visible — these
+// functions are layout-only (size/spacing/radius).
+export function navRailStyle(width: number, dragging: boolean, wide: boolean): CSSProperties {
+  return {
+    flex: 'none',
+    width,
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: wide ? 'stretch' : 'center',
+    background: 'var(--nx-surface)',
+    borderRight: '1px solid var(--nx-line)',
+    boxSizing: 'border-box',
+    position: 'relative',
+    transition: dragging ? 'none' : 'width 450ms var(--nx-ease)',
+  };
+}
+
+export function navRailHandleStyle(dragging: boolean): CSSProperties {
+  return {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    right: -3,
+    width: 7,
+    zIndex: 12,
+    cursor: 'col-resize',
+    background: dragging ? 'var(--nx-blue-panel)' : 'transparent',
+    opacity: dragging ? 0.5 : 1,
+    transition: 'background 120ms var(--nx-ease)',
+  };
+}
+
+// Logo header cell — height matches whichever header sits beside the rail
+// (64px under AppShell/TopBar, 52px on the canvas route next to
+// CanvasHeader; Sidebar.tsx takes this as a `headerHeight` prop, default
+// 64). Bottom border lines up with the header it sits beside.
+export function navRailHeaderStyle(wide: boolean, headerHeight: number): CSSProperties {
+  return {
+    flex: 'none',
+    height: headerHeight,
+    boxSizing: 'border-box',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: wide ? 'flex-start' : 'center',
+    gap: 10,
+    padding: wide ? '0 16px' : 0,
+    borderBottom: '1px solid var(--nx-line)',
+  };
+}
+
+export const navWordmarkStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 800,
+  fontSize: 22,
+  letterSpacing: '0.02em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink)',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
+
+export function navRailScrollStyle(wide: boolean): CSSProperties {
+  return {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: wide ? 'stretch' : 'center',
+    overflowY: 'auto',
+    width: '100%',
+    padding: wide ? '12px 8px' : '12px 0',
+    gap: 2,
+    boxSizing: 'border-box',
+  };
+}
+
+export function navRailFooterStyle(): CSSProperties {
+  return {
+    flex: 'none',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 2,
+    padding: 8,
+    borderTop: '1px solid var(--nx-line)',
+    width: '100%',
+    boxSizing: 'border-box',
+    position: 'relative',
+  };
+}
+
+// Nav row layout (Home, Projects, Connections, Billing, Settings, etc.) —
+// pair with className="nx-wipe" (+ "nx-active-cell" when active, or
+// "nx-row-disabled" when disabled) for color/hover/focus.
+export function navRailBtnStyle(wide: boolean): CSSProperties {
+  return {
+    flex: 'none',
+    width: wide ? '100%' : 36,
+    height: 36,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: wide ? 'flex-start' : 'center',
+    gap: 10,
+    borderRadius: 'var(--nx-radius)',
+    fontSize: 13.5,
+    border: 'none',
+    cursor: 'pointer',
+    marginBottom: 2,
+    padding: wide ? '0 10px' : 0,
+    textDecoration: 'none',
+    boxSizing: 'border-box',
+    fontFamily: 'inherit',
+  };
+}
+
+export const navRailBtnLabelStyle: CSSProperties = {
+  fontSize: 13.5,
+  fontWeight: 500,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+// Right-aligned "SOON" meta badge for disabled nav rows (Org dashboard,
+// Runs, Audit log) — the row label itself now shows only the plain name;
+// this carries the "— soon" context visually instead of baking it into
+// the label text. `margin-left: auto` pushes it flush right inside the
+// row's flex layout regardless of label width. Screen readers still get
+// the full "<Label> — soon" context via the row's aria-label/title.
+export const navRailSoonMetaStyle: CSSProperties = {
+  marginLeft: 'auto',
+  flex: 'none',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 10,
+  letterSpacing: '0.04em',
+  color: 'var(--nx-ink-disabled)',
+};
+
+export const navRailExpandToggleStyle: CSSProperties = {
+  flex: 'none',
+  width: '100%',
+  height: 30,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  border: 'none',
+  background: 'none',
+  borderRadius: 'var(--nx-radius)',
+  cursor: 'pointer',
+  fontSize: 12.5,
+  marginTop: 4,
+  fontFamily: 'inherit',
+};
+
+// Sidebar tree status dot — workflow LIFECYCLE (active/paused/draft), not
+// RUN status (running/succeeded/failed), which stays on the existing
+// `statusDotStyle` above (shared with ProjectDetailClient.tsx, reserved
+// for future RunStatus pages e.g. Home run history). 6px square: active/
+// paused are solid fills, draft is a hollow 1px-bordered square.
+// `onActiveCell` is true when the row itself has the solid --nx-ink
+// active background — flips draft's border to --nx-bg so it doesn't
+// disappear against the dark cell; active/paused fills are unchanged
+// there.
+export function navTreeStatusDotStyle(
+  status: 'active' | 'paused' | 'draft',
+  onActiveCell: boolean = false,
+): CSSProperties {
+  if (status === 'draft') {
+    return {
+      width: 6,
+      height: 6,
+      flex: 'none',
+      boxSizing: 'border-box',
+      border: `1px solid ${onActiveCell ? 'var(--nx-bg)' : 'var(--nx-ink-3)'}`,
+      background: 'transparent',
+    };
+  }
+  return {
+    width: 6,
+    height: 6,
+    flex: 'none',
+    background: status === 'active' ? 'var(--nx-blue-panel)' : 'var(--nx-warn)',
+  };
+}
+
+export function navTreeStatusLabel(status: 'active' | 'paused' | 'draft'): string {
+  return status === 'active' ? 'Active' : status === 'paused' ? 'Paused' : 'Draft';
+}
+
+// nx-themed TopBar — height 64 (was 52). Left untouched: topBarStyle
+// itself (CanvasHeader.tsx still uses the old 52px version unchanged).
+// Row itself carries no padding/gap any more — every child renders as its
+// own full-height bordered "cell" (logo/org switcher/breadcrumbs/search/
+// notifications/avatar), so spacing lives on the cells, not the row.
+export const nxTopBarStyle: CSSProperties = {
+  height: 64,
+  flex: 'none',
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'stretch',
+  borderBottom: '1px solid var(--nx-line)',
+  background: 'var(--nx-surface)',
+};
+
+// Logo cell — first cell in the TopBar row. Width tracks the sidebar's
+// live railW (Zustand store, read-only in TopBar.tsx) so its right border
+// continues the sidebar's right edge in one straight line. `overflow:
+// hidden` clips the wordmark cleanly while the cell narrows during drag.
+export function nxTopBarLogoCellStyle(width: number): CSSProperties {
+  return {
+    flex: 'none',
+    width,
+    height: '100%',
+    boxSizing: 'border-box',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '0 16px',
+    overflow: 'hidden',
+    borderRight: '1px solid var(--nx-line)',
+  };
+}
+
+// Generic bordered TopBar cell (org switcher / breadcrumbs / search /
+// notifications / avatar) — full height, 16px horizontal padding, right
+// divider. Pair with className="nx-wipe" for the hover background wipe.
+// `bordered=false` drops the right divider for the row's last cell.
+export function nxTopBarCellStyle(bordered: boolean = true): CSSProperties {
+  return {
+    height: '100%',
+    boxSizing: 'border-box',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '0 16px',
+    borderRight: bordered ? '1px solid var(--nx-line)' : 'none',
+  };
+}
+
+export const nxOrgSwitcherBtnStyle: CSSProperties = {
+  ...orgSwitcherBtnStyle,
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxDropdownStyle: CSSProperties = {
+  ...dropdownStyle,
+  borderRadius: 'var(--nx-radius)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+};
+
+export const nxDropdownItemStyle: CSSProperties = {
+  ...dropdownItemStyle,
+  borderRadius: 'var(--nx-radius)',
+  color: 'var(--nx-ink)',
+};
+
+// Breadcrumbs (item f): mono 12px --nx-ink-3 links, "/" separators in
+// --nx-line, last (current) crumb in --nx-ink.
+export const nxBreadcrumbSepStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  color: 'var(--nx-line)',
+};
+
+export const nxPageCrumbLinkStyle: CSSProperties = {
+  padding: 0,
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  color: 'var(--nx-ink-3)',
+  background: 'transparent',
+  border: 'none',
+  cursor: 'pointer',
+  textDecoration: 'none',
+};
+
+export const nxPageCrumbCurrentStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 12,
+  color: 'var(--nx-ink)',
+};
+
 // Top bar profile dropdown (avatar → email + Sign out) — the header-right
 // counterpart to the old sidebar-footer sign-out row.
 export const profileEmailRowStyle: CSSProperties = {
@@ -678,7 +1025,7 @@ export const profileEmailRowStyle: CSSProperties = {
 export const profileEmailTextStyle: CSSProperties = {
   fontSize: 12.5,
   fontWeight: 500,
-  color: 'var(--text)',
+  color: 'var(--nx-ink)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -768,6 +1115,123 @@ export const modalBtnPrimaryStyle: CSSProperties = {
   border: 'none',
   cursor: 'pointer',
 };
+
+// Precision Dark redesign (Step 3, Home): nx-token restyle of the dialog
+// shell used by CreateProjectDialog/CreateWorkflowDialog. A parallel set
+// rather than edits to modal*Style above, since those are still used
+// as-is by AddConnectionDialog/ConnectionForm/CommandPalette.
+export const nxModalOverlayStyle: CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 60,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: 'color-mix(in srgb, var(--nx-bg) 78%, transparent)',
+};
+
+export const nxModalCardStyle: CSSProperties = {
+  width: 400,
+  maxWidth: '90vw',
+  boxSizing: 'border-box',
+  border: '1px solid var(--nx-line)',
+  borderRadius: 'var(--nx-radius)',
+  background: 'var(--nx-bg)',
+  display: 'flex',
+  flexDirection: 'column',
+};
+
+export const nxModalBodyStyle: CSSProperties = {
+  padding: '24px 24px 20px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+};
+
+export const nxModalTagStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 700,
+  fontSize: 12,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+};
+
+export const nxModalTitleStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 26,
+  fontWeight: 700,
+  letterSpacing: '-0.035em',
+  color: 'var(--nx-ink)',
+};
+
+export const nxModalLabelStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 700,
+  fontSize: 11.5,
+  letterSpacing: '0.05em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+};
+
+export function nxModalFieldStyle(hasError: boolean): CSSProperties {
+  return {
+    width: '100%',
+    boxSizing: 'border-box',
+    height: 40,
+    padding: '0 12px',
+    fontFamily: 'var(--nx-font-ui)',
+    fontSize: 14,
+    color: 'var(--nx-ink)',
+    background: 'var(--nx-surface)',
+    border: `1px solid ${hasError ? 'var(--nx-danger)' : 'var(--nx-line)'}`,
+    borderRadius: 'var(--nx-radius)',
+    outline: 'none',
+  };
+}
+
+export const nxModalErrorStyle: CSSProperties = { fontSize: 12.5, color: 'var(--nx-danger-text)' };
+
+// Footer: 52px row, a 120px "CANCEL" cell with a right divider, primary
+// action filling the rest — per the Step 3 dialog spec.
+export const nxModalFooterStyle: CSSProperties = {
+  display: 'flex',
+  height: 52,
+  borderTop: '1px solid var(--nx-line)',
+};
+
+export const nxModalCancelCellStyle: CSSProperties = {
+  width: 120,
+  flex: 'none',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 11,
+  letterSpacing: '0.05em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-2)',
+  background: 'transparent',
+  border: 'none',
+  borderRight: '1px solid var(--nx-line)',
+  cursor: 'pointer',
+};
+
+export function nxModalPrimaryCellStyle(pending: boolean): CSSProperties {
+  return {
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    fontFamily: 'var(--nx-font-ui)',
+    fontSize: 13.5,
+    fontWeight: 600,
+    color: pending ? 'var(--nx-blue-soft-text)' : 'var(--nx-blue-cta-text)',
+    background: pending ? 'var(--nx-blue-tint)' : 'var(--nx-blue-cta)',
+    border: 'none',
+    cursor: pending ? 'default' : 'pointer',
+  };
+}
 
 export const modalBtnDangerStyle: CSSProperties = {
   height: 36,

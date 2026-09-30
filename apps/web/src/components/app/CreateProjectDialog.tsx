@@ -4,15 +4,17 @@ import { useActionState, useEffect } from 'react';
 import { createProject } from '@/lib/dashboard/actions';
 import type { ActionState } from '@/lib/auth/actions';
 import {
-  modalActionsStyle,
-  modalBtnGhostStyle,
-  modalBtnPrimaryStyle,
-  modalCardStyle,
-  modalErrorStyle,
-  modalFieldStyle,
-  modalLabelStyle,
-  modalOverlayStyle,
-  modalTitleStyle,
+  nxModalBodyStyle,
+  nxModalCancelCellStyle,
+  nxModalCardStyle,
+  nxModalErrorStyle,
+  nxModalFieldStyle,
+  nxModalFooterStyle,
+  nxModalLabelStyle,
+  nxModalOverlayStyle,
+  nxModalPrimaryCellStyle,
+  nxModalTagStyle,
+  nxModalTitleStyle,
 } from './styles';
 
 const initialState: ActionState = null;
@@ -25,29 +27,37 @@ export default function CreateProjectDialog({ orgId, onClose }: { orgId: string 
   }, [state, onClose]);
 
   return (
-    <div style={modalOverlayStyle} onClick={onClose}>
-      <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
-        <span style={modalTitleStyle}>New project</span>
-        <form action={formAction} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label htmlFor="project-name" style={modalLabelStyle}>Name</label>
-            <input
-              id="project-name"
-              name="name"
-              type="text"
-              autoFocus
-              placeholder="Sales Analytics"
-              style={modalFieldStyle(Boolean(state?.fieldErrors?.name))}
-            />
-            {state?.fieldErrors?.name && <span style={modalErrorStyle}>{state.fieldErrors.name[0]}</span>}
+    <div style={nxModalOverlayStyle} onClick={onClose}>
+      <div style={nxModalCardStyle} onClick={(e) => e.stopPropagation()}>
+        <form action={formAction} style={{ display: 'flex', flexDirection: 'column' }}>
+          <div style={nxModalBodyStyle}>
+            <span style={nxModalTagStyle}>New</span>
+            <span style={nxModalTitleStyle}>New project</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label htmlFor="project-name" style={nxModalLabelStyle}>Name</label>
+              <input
+                id="project-name"
+                name="name"
+                type="text"
+                autoFocus
+                placeholder="Sales Analytics"
+                style={nxModalFieldStyle(Boolean(state?.fieldErrors?.name))}
+              />
+              {state?.fieldErrors?.name && <span style={nxModalErrorStyle}>{state.fieldErrors.name[0]}</span>}
+            </div>
+            {state?.error && <span style={nxModalErrorStyle}>{state.error}</span>}
           </div>
-          {state?.error && <span style={modalErrorStyle}>{state.error}</span>}
-          <div style={modalActionsStyle}>
-            <button type="button" style={modalBtnGhostStyle} onClick={onClose}>
+          <div style={nxModalFooterStyle}>
+            <button type="button" style={nxModalCancelCellStyle} onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" disabled={pending} style={modalBtnPrimaryStyle}>
+            <button type="submit" disabled={pending} style={nxModalPrimaryCellStyle(pending)}>
               {pending ? 'Creating\u2026' : 'Create project'}
+              {!pending && (
+                <span aria-hidden style={{ fontSize: 14 }}>
+                  {'\u2192'}
+                </span>
+              )}
             </button>
           </div>
         </form>
