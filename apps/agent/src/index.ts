@@ -1,9 +1,30 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { addConnection, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
+import { getStatus } from "./ops/state.js";
 
 async function main(argv: string[]): Promise<void> {
   const [command, subcommand, ...rest] = argv;
+
+  if (command === "status") {
+    const status = getStatus();
+    if (!status.startedAt) {
+      console.log("agent has not recorded a start yet (not running, or running under a different NIA_AGENT_HOME)");
+    } else {
+      console.log(`uptime: ${status.uptimeSeconds}s (started ${status.startedAt})`);
+    }
+    const connectionIds = Object.keys(status.connections);
+    if (connectionIds.length === 0) {
+      console.log("no sync history yet");
+    }
+    for (const id of connectionIds) {
+      const c = status.connections[id]!;
+      const sync = c.lastSyncAt ? `last sync ${c.lastSyncAt} (${c.lastSyncRows} rows)` : "no sync yet";
+      const error = c.lastError ? `, last error ${c.lastErrorAt}: ${c.lastError}` : "";
+      console.log(`${id}: ${sync}${error}`);
+    }
+    return;
+  }
 
   if (command === "connection" && subcommand === "add") {
     const { values } = parseArgs({
@@ -86,7 +107,7 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  console.error("usage: nia-agent connection <add|test|list|remove> ...");
+  console.error("usage: nia-agent connection <add|test|list|remove> ... | nia-agent status");
   process.exitCode = 1;
 }
 
