@@ -47,7 +47,7 @@ export default async function MembersPage() {
         />
       }
     >
-      <Sidebar orgId={user.org?.id ?? null} role={user.role} projects={projects} email={user.email} />
+      <Sidebar orgId={user.org?.id ?? null} role={user.role} projects={projects} />
       <div style={mainColStyle}>
         <div style={homeScrollStyle}>
           {allowed && user.org ? (

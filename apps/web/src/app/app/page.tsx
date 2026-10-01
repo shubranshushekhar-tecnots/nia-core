@@ -34,7 +34,7 @@ export default async function AppHomePage() {
         />
       }
     >
-      <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
+      <Sidebar orgId={orgId} role={user.role} projects={projects} />
       <div style={mainColStyle}>
         <HomeContent
           greeting={greeting}

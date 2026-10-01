@@ -36,7 +36,6 @@ import {
   workflowRowStyle,
 } from './styles';
 import {
-  NxAuditIcon,
   NxBillingIcon,
   NxChevronRightIcon,
   NxCollapseIcon,
@@ -45,7 +44,6 @@ import {
   NxHomeIcon,
   NxMembersIcon,
   NxProjectsIcon,
-  NxRunsIcon,
   NxSettingsIcon,
 } from '@/components/canvas/navIcons';
 import { useAppShellStore } from './store';
@@ -355,30 +353,6 @@ export default function Sidebar({
           {wide && <span style={navRailBtnLabelStyle}>Connections</span>}
         </a>
 
-        {/* No run-history page exists yet (no /app/runs route) — rendered
-            disabled like the org-governance placeholders below rather than
-            a dead link. */}
-        <button
-          type="button"
-          className="nx-wipe nx-row-disabled"
-          style={navRailBtnStyle(wide)}
-          disabled
-          aria-label="Runs \u2014 soon"
-          title={wide ? 'Runs \u2014 soon' : undefined}
-          onMouseEnter={(e) => showHoverLabel(e, 'Runs \u2014 soon')}
-          onMouseLeave={hideHoverLabel}
-          onFocus={(e) => showHoverLabel(e, 'Runs \u2014 soon')}
-          onBlur={hideHoverLabel}
-        >
-          <NxRunsIcon size={20} />
-          {wide && (
-            <>
-              <span style={navRailBtnLabelStyle}>Runs</span>
-              <span style={navRailSoonMetaStyle}>SOON</span>
-            </>
-          )}
-        </button>
-
         {canViewMembers && (
           <a
             href="/app/members"
@@ -396,28 +370,6 @@ export default function Sidebar({
           </a>
         )}
 
-        {canManageOrg && (
-          <button
-            type="button"
-            className="nx-wipe nx-row-disabled"
-            style={navRailBtnStyle(wide)}
-            disabled
-            aria-label="Audit log \u2014 soon"
-            title={wide ? 'Audit log \u2014 soon' : undefined}
-            onMouseEnter={(e) => showHoverLabel(e, 'Audit log \u2014 soon')}
-            onMouseLeave={hideHoverLabel}
-            onFocus={(e) => showHoverLabel(e, 'Audit log \u2014 soon')}
-            onBlur={hideHoverLabel}
-          >
-            <NxAuditIcon size={20} />
-            {wide && (
-              <>
-                <span style={navRailBtnLabelStyle}>Audit log</span>
-                <span style={navRailSoonMetaStyle}>SOON</span>
-              </>
-            )}
-          </button>
-        )}
       </div>
 
       <div style={navRailFooterStyle()}>

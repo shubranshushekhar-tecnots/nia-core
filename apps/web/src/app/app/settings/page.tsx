@@ -41,7 +41,7 @@ export default async function SettingsPage() {
         />
       }
     >
-      <Sidebar orgId={user.org?.id ?? null} role={user.role} projects={projects} email={user.email} />
+      <Sidebar orgId={user.org?.id ?? null} role={user.role} projects={projects} />
       <div style={mainColStyle}>
         <div style={homeScrollStyle}>
           <SettingsClient

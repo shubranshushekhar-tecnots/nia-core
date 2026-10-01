@@ -40,7 +40,7 @@ export default async function BillingProcessingPage({
         />
       }
     >
-      <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
+      <Sidebar orgId={orgId} role={user.role} projects={projects} />
       <div style={mainColStyle}>
         <div style={homeScrollStyle}>
           <div style={nxBillingProcessingRowStyle}>

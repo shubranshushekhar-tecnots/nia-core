@@ -39,7 +39,7 @@ export default async function ChatPage() {
         />
       }
     >
-      <Sidebar orgId={orgId} role={user.role} projects={projects} email={user.email} />
+      <Sidebar orgId={orgId} role={user.role} projects={projects} />
       <div style={mainColStyle}>
         <ChatClient
           currentUserId={user.userId}

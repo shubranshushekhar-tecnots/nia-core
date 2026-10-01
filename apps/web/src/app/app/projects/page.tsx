@@ -25,7 +25,7 @@ export default async function ProjectsListPage() {
         />
       }
     >
-      <Sidebar orgId={orgId} role={user.role} projects={sidebarProjects} email={user.email} />
+      <Sidebar orgId={orgId} role={user.role} projects={sidebarProjects} />
       <div style={mainColStyle}>
         <div style={nxConnScrollStyle}>
           <ProjectsListClient orgId={orgId} projects={projectsList} role={user.role} />
