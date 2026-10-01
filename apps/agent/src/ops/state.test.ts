@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getStatus, readState, recordAgentStarted, recordCatalogFingerprint, recordSyncComplete, recordSyncFailed } from "./state.js";
+import { getStatus, readState, recordAgentStarted, recordCatalogFingerprint, recordPoll, recordSyncComplete, recordSyncFailed } from "./state.js";
 
 describe("agent state", () => {
   let dir: string;
@@ -51,5 +51,26 @@ describe("agent state", () => {
 
     const status = getStatus(dir);
     expect(status.connections["conn-1"]).toMatchObject({ catalogFingerprint: "abc123", lastSyncRows: 5 });
+  });
+
+  it("records poll timestamps independently of sync state", () => {
+    recordPoll("conn-1", dir);
+    const status = getStatus(dir);
+    expect(status.connections["conn-1"]!.lastPollAt).toBeDefined();
+  });
+
+  it("increments consecutive failures across repeated failures and returns the running count", () => {
+    expect(recordSyncFailed("conn-1", "boom", dir)).toBe(1);
+    expect(recordSyncFailed("conn-1", "boom again", dir)).toBe(2);
+    expect(recordSyncFailed("conn-1", "boom again", dir)).toBe(3);
+    expect(getStatus(dir).connections["conn-1"]).toMatchObject({ consecutiveFailures: 3 });
+  });
+
+  it("resets consecutive failures to 0 on the next successful sync", () => {
+    recordSyncFailed("conn-1", "boom", dir);
+    recordSyncFailed("conn-1", "boom", dir);
+    recordSyncComplete("conn-1", 7, dir);
+
+    expect(getStatus(dir).connections["conn-1"]).toMatchObject({ consecutiveFailures: 0 });
   });
 });

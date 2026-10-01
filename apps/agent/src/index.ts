@@ -4,7 +4,22 @@ import { addConnection, listConnections, removeConnection, testConnection } from
 import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
 import { runDoctor } from "./cli/doctorCommand.js";
 import { getStatus } from "./ops/state.js";
+import { getSpoolUsage } from "./ops/spoolUsage.js";
 import { versionString } from "./cli/versionCommand.js";
+import { loadConfig } from "./config/store.js";
+import { defaultSpoolDir } from "./config/paths.js";
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
 
 async function main(argv: string[]): Promise<void> {
   const [command, subcommand, ...rest] = argv;
@@ -21,15 +36,22 @@ async function main(argv: string[]): Promise<void> {
     } else {
       console.log(`uptime: ${status.uptimeSeconds}s (started ${status.startedAt})`);
     }
+
+    const config = loadConfig();
+    const spoolDir = config.spoolDir ?? defaultSpoolDir();
+    const spoolUsage = getSpoolUsage(spoolDir);
+    console.log(`spool usage: ${formatBytes(spoolUsage.bytes)} across ${spoolUsage.fileCount} file(s) in ${spoolDir}`);
+
     const connectionIds = Object.keys(status.connections);
     if (connectionIds.length === 0) {
       console.log("no sync history yet");
     }
     for (const id of connectionIds) {
       const c = status.connections[id]!;
+      const poll = c.lastPollAt ? `last poll ${c.lastPollAt}` : "no poll yet";
       const sync = c.lastSyncAt ? `last sync ${c.lastSyncAt} (${c.lastSyncRows} rows)` : "no sync yet";
-      const error = c.lastError ? `, last error ${c.lastErrorAt}: ${c.lastError}` : "";
-      console.log(`${id}: ${sync}${error}`);
+      const error = c.lastError ? `, last error ${c.lastErrorAt}: ${c.lastError}${c.consecutiveFailures && c.consecutiveFailures > 1 ? ` (${c.consecutiveFailures} in a row)` : ""}` : "";
+      console.log(`${id}: ${poll}, ${sync}${error}`);
     }
     return;
   }

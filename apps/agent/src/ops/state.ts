@@ -2,10 +2,13 @@ import fs from "node:fs";
 import { defaultHomeDir, stateFilePath } from "../config/paths.js";
 
 /**
- * Small local state file (Phase 2 §7: "`agent status` CLI reading a
- * small local state file — last sync/error per connection, catalog
- * fingerprint, uptime"). Never holds row data or secrets — only
- * timestamps, counts, and error messages.
+ * Small local state file (Phase 2 §7, extended by Phase 3b §3: "`agent
+ * status` shows per-connection state — last poll, last sync, last
+ * error, spool usage"). Never holds row data or secrets — only
+ * timestamps, counts, and error messages. Spool usage itself isn't
+ * stored here (it's read live off disk at status time — see
+ * ops/spoolUsage.ts) since it can change between polls without any
+ * state-file write.
  */
 export interface ConnectionState {
   lastSyncAt?: string;
@@ -13,6 +16,10 @@ export interface ConnectionState {
   lastErrorAt?: string;
   lastError?: string;
   catalogFingerprint?: string;
+  /** Set on every `GET /v1/work` poll, whether or not it returned work. */
+  lastPollAt?: string;
+  /** Consecutive sync failures for this connection, reset to 0 on the next success. Drives the repeated-failure log escalation (ops/syncFailureLog.ts) without needing to scan the log file itself. */
+  consecutiveFailures?: number;
 }
 
 export interface AgentState {
@@ -55,23 +62,34 @@ export function recordSyncComplete(connectionId: string, rows: number, dir = def
     lastSyncRows: rows,
     lastError: undefined,
     lastErrorAt: undefined,
+    consecutiveFailures: 0,
   };
   writeState(state, dir);
 }
 
-export function recordSyncFailed(connectionId: string, error: string, dir = defaultHomeDir()): void {
+/** Returns the connection's new consecutive-failure count, so the caller (ops/syncFailureLog.ts) can decide whether to escalate the log line without a second state read. */
+export function recordSyncFailed(connectionId: string, error: string, dir = defaultHomeDir()): number {
   const state = readState(dir);
+  const consecutiveFailures = (state.connections[connectionId]?.consecutiveFailures ?? 0) + 1;
   state.connections[connectionId] = {
     ...state.connections[connectionId],
     lastErrorAt: new Date().toISOString(),
     lastError: error,
+    consecutiveFailures,
   };
   writeState(state, dir);
+  return consecutiveFailures;
 }
 
 export function recordCatalogFingerprint(connectionId: string, fingerprint: string, dir = defaultHomeDir()): void {
   const state = readState(dir);
   state.connections[connectionId] = { ...state.connections[connectionId], catalogFingerprint: fingerprint };
+  writeState(state, dir);
+}
+
+export function recordPoll(connectionId: string, dir = defaultHomeDir()): void {
+  const state = readState(dir);
+  state.connections[connectionId] = { ...state.connections[connectionId], lastPollAt: new Date().toISOString() };
   writeState(state, dir);
 }
 
