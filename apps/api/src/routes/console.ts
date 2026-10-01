@@ -9,6 +9,7 @@ import { asyncHandler } from "../lib/asyncHandler.js";
 import { AppError } from "../lib/appError.js";
 import { dbPool } from "../lib/dbPool.js";
 import { sanitizeRunError } from "../lib/sanitizeRunError.js";
+import { consoleUsageRouter } from "./consoleUsage.js";
 
 /**
  * Console v1 (docs/plans/console-plan.md, build order step 4). Mounted at
@@ -35,6 +36,13 @@ consoleRouter.use(requireAuth, attachDb, requireStaff);
 consoleRouter.get("/ping", (_req, res) => {
   res.json({ status: "ok" });
 });
+
+// Console v2 Slice 4 — token usage + cost API (summary/timeseries/breakdown/
+// top-consumers/export, model price CRUD). A separate router file (see its
+// own header comment) mounted here, after the auth chain above, so every
+// route in it inherits requireAuth -> attachDb -> requireStaff exactly like
+// every route defined directly in this file.
+consoleRouter.use(consoleUsageRouter);
 
 /**
  * Build order step 5 / Slice 1 (console-plan.md §3, §5). List/search orgs

@@ -2067,3 +2067,28 @@ describe("POST /console/orgs/:orgId/members/:userId/remove", () => {
     expect(withServiceRole).not.toHaveBeenCalled();
   });
 });
+
+describe("GET /console/usage/summary — consoleUsageRouter inherits the auth chain", () => {
+  it("returns 403 for a non-staff session without ever querying usage", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/usage/summary`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(403);
+    expect(withServiceRole).toHaveBeenCalledOnce();
+  });
+
+  it("returns 401 for an unauthenticated request", async () => {
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/usage/summary`);
+
+    expect(res.status).toBe(401);
+    expect(withServiceRole).not.toHaveBeenCalled();
+  });
+});
