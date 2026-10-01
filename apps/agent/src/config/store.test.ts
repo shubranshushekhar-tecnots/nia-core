@@ -54,6 +54,12 @@ describe("config store", () => {
     expect(() => loadConfig(dir)).toThrow(ConfigValidationError);
   });
 
+  it("round-trips an optional monitoring config", () => {
+    const config = { ...emptyConfig(), monitoring: { heartbeatUrl: "https://monitor.example.com/ingest", intervalSeconds: 300 } };
+    saveConfig(config, dir);
+    expect(loadConfig(dir)).toEqual(config);
+  });
+
   it("upserts and removes a connection", () => {
     let config = upsertConnection(emptyConfig(), entry);
     expect(findConnection(config, "conn-1")).toEqual(entry);

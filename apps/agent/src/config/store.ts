@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { type AgentConfig, type ConnectionEntry, CURRENT_CONFIG_VERSION, emptyConfig } from "./types.js";
+import { type AgentConfig, type ConnectionEntry, type MonitoringConfig, CURRENT_CONFIG_VERSION, emptyConfig } from "./types.js";
 import { configFilePath, defaultHomeDir } from "./paths.js";
 
 export class ConfigValidationError extends Error {}
@@ -43,7 +43,17 @@ export function validateConfig(value: unknown): AgentConfig {
   return {
     version: CURRENT_CONFIG_VERSION,
     spoolDir: typeof v.spoolDir === "string" ? v.spoolDir : undefined,
+    monitoring: validateMonitoring(v.monitoring),
     connections: v.connections as ConnectionEntry[],
+  };
+}
+
+function validateMonitoring(value: unknown): MonitoringConfig | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const v = value as Record<string, unknown>;
+  return {
+    heartbeatUrl: typeof v.heartbeatUrl === "string" ? v.heartbeatUrl : undefined,
+    intervalSeconds: typeof v.intervalSeconds === "number" ? v.intervalSeconds : undefined,
   };
 }
 

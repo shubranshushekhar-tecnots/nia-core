@@ -34,10 +34,24 @@ export interface ConnectionEntry {
   lastCatalogFingerprint?: string;
 }
 
+/**
+ * Optional monitoring heartbeat (Phase 3b §3: "an optional heartbeat to a
+ * configurable URL... off by default, no customer data — only agent
+ * version, connection ids, last-success times, error counts"). Distinct
+ * from PlanometryConnectionConfig's per-run heartbeat above, which reports
+ * run liveness to Planometry itself, not agent health to Nia staff.
+ */
+export interface MonitoringConfig {
+  heartbeatUrl?: string;
+  intervalSeconds?: number;
+}
+
 export interface AgentConfig {
   version: 1;
   /** Defaults under the same app-data dir as the config file itself — see paths.ts. */
   spoolDir?: string;
+  /** Unset by default — no heartbeat is sent unless explicitly configured. */
+  monitoring?: MonitoringConfig;
   connections: ConnectionEntry[];
 }
 
