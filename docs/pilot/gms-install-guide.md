@@ -1,0 +1,177 @@
+# GMS install guide — Nia Agent
+
+Audience: GMS IT. Installs the on-premise Nia Agent that reads GMS's 7
+`SummitERP_*` SQL Server 2008 databases and pushes rows to Planometry.
+The agent never writes to SQL Server, never stores row data at rest, and
+makes no inbound network connections — it only needs outbound HTTPS to
+Planometry.
+
+## 1. Prerequisites
+
+- **Node.js 20 or later** on the host that will run the agent. This host
+  must have network access to the SQL Server instance (same LAN or a
+  routed network) and outbound HTTPS access to Planometry's endpoint.
+- A SQL Server login for the agent to use — created in step 3 below. The
+  agent is never given `sa` or any administrative login.
+- Local disk space for the spool directory (used to stage rows briefly
+  before upload — see `docs/plans/planometry-integration.md` §4 for the
+  spool design). A few hundred MB free is enough for typical chunk sizes;
+  `agent doctor` (step 6) checks this.
+
+> **Windows-specific — confirm with GMS IT**: how the agent process should
+> run long-term (Windows service vs. scheduled task) is not yet decided —
+> see `TODO.md`/`docs/plans/planometry-integration.md` §9 (packaging is
+> deferred until GMS confirms host OS). For the pilot, running the agent
+> as a long-lived console process under a dedicated service account is
+> enough; a proper Windows service install is follow-up work.
+
+> **Linux-specific — confirm with GMS IT**: same packaging gap. For the
+> pilot, a systemd unit or just a `nohup`'d process under a dedicated
+> service account is enough.
+
+## 2. Install the agent
+
+1. Copy the `apps/agent` build output (or the whole repo, for the pilot)
+   onto the agent host.
+2. From `apps/agent`, install dependencies and build:
+   ```
+   pnpm install
+   pnpm --filter @nia/agent build
+   ```
+3. Confirm the CLI runs:
+   ```
+   node dist/index.js status
+   ```
+   A fresh install prints "agent has not recorded a start yet" — that's
+   expected; there's no config yet.
+
+All agent state (config, encrypted secrets, the spool directory, logs,
+and run status) lives under one app-data directory:
+- Windows: `%ProgramData%\NiaAgent`
+- Linux: `/etc/nia-agent`
+
+This directory is created automatically the first time a command needs
+it. It never contains row data, and secrets inside it are encrypted at
+rest (see `docs/plans/planometry-integration.md` §3) — but it should
+still be access-restricted to the service account the agent runs under,
+the same as any directory holding database credentials.
+
+## 3. Generate the SQL Server readonly login
+
+Run this on a machine with the agent installed (it doesn't need to be the
+SQL Server box itself — it only generates a `.sql` script):
+
+```
+node dist/index.js sql readonly --login nia_agent --databases SummitERP_1,SummitERP_2,SummitERP_3,SummitERP_4,SummitERP_5,SummitERP_6,SummitERP_7 --out nia-readonly-setup.sql
+```
+
+This writes a T-SQL script (compatible with SQL Server 2008 — no syntax
+newer than that) that:
+- Creates one server login (`nia_agent` above, or whatever `--login` you
+  choose) with a **placeholder password** — the script never contains a
+  real password, and must not be committed anywhere with one filled in.
+- Grants `VIEW SERVER STATE` at the server level (needed so the agent can
+  see its own running query in `sys.dm_exec_requests` — this is how it
+  confirms a cancelled query actually stopped; it is a read-only
+  visibility grant, not a write permission).
+- For each database listed, creates a database user mapped to the login,
+  adds it to `db_datareader`, and grants `VIEW DEFINITION` (needed to read
+  the schema/catalog).
+- Grants **no write permission anywhere** — no `db_datawriter`, no
+  `INSERT`/`UPDATE`/`DELETE`/`ALTER`/`db_owner`/`CONTROL`. This is
+  enforced by a test (`sqlReadonlyScript.test.ts`) that scans the
+  generated SQL for exactly these keywords and fails if any appear.
+
+**Hand `nia-readonly-setup.sql` to a GMS DBA.** They should:
+1. Open it in SSMS or `sqlcmd` and review it (it's short and fully
+   commented — every statement is idempotent, so re-running it is safe).
+2. Replace `<CHANGE_ME_STRONG_PASSWORD>` with a strong password of their
+   choosing, generated/stored however GMS normally handles service
+   account credentials.
+3. Run the script against the SQL Server instance (as `sa` or an admin
+   login with rights to create server logins).
+4. Give the Nia team the login name and password out of band (not over
+   email/chat) — it's needed for step 4 below.
+
+## 4. Register each connection
+
+One `connection add` per `SummitERP_*` database (7 total for GMS), each
+pointing at the **same login** from step 3 but a different `database`:
+
+```
+node dist/index.js connection add \
+  --id summit-erp-1 --label "SummitERP_1" \
+  --host <sql-server-host> --port 1433 --database SummitERP_1 \
+  --user nia_agent --password <the-password-from-step-3> \
+  --encrypt false \
+  --planometry-url <planometry-base-url> \
+  --agent-key <agent-key-from-planometry>
+```
+
+Repeat for `SummitERP_2` through `SummitERP_7`, changing `--id`,
+`--label`, and `--database` each time.
+
+Notes on the flags:
+- `--encrypt false` is appropriate for a LAN-only SQL Server 2008
+  instance (its own default). If GMS requires TLS, set `--encrypt true`;
+  if the instance can't negotiate TLS 1.2+ at all (SQL Server 2008 often
+  can't), see `--allow-legacy-tls true` — documented in
+  `docs/plans/planometry-integration.md` §Phase 1 as explicitly insecure
+  and intended only for a private, trusted LAN. Try without it first.
+- `--agent-key` is issued by Planometry when GMS's connection is paired
+  on their side — not something generated locally.
+- Credentials and the agent key are encrypted at rest immediately; they
+  are never written to `agent.config.json` in plain text.
+
+Confirm each connection independently before moving on:
+```
+node dist/index.js connection test summit-erp-1
+```
+This connects and fetches a table/view catalog — it does not yet involve
+Planometry. A failure here means the SQL Server side isn't right yet
+(wrong host/port/database/credentials, or firewall/VPN); fix that before
+step 5.
+
+## 5. Run `agent doctor`
+
+Once all 7 connections are added, run the full diagnostic:
+```
+node dist/index.js doctor
+```
+or for a single connection:
+```
+node dist/index.js doctor summit-erp-1
+```
+
+This checks, per connection: SQL Server reachability, TLS mode, login
+credentials, read access (catalog), that the login truly can't write,
+`sys.dm_exec_requests` visibility (cancel confirmation), spool directory
+free disk space, Planometry URL reachability, clock skew between this
+host and Planometry, and that the agent key is accepted. Every failing
+check prints a suggested fix. **All 7 connections must show every check
+passing (`[PASS]`) before starting the agent for the pilot** — see
+`docs/pilot/gms-pilot-runbook.md` for the full pilot-day sequence.
+
+## 6. Start the agent
+
+> **Placeholder — confirm with GMS IT once host OS and long-term process
+> management are decided (see §1 and `docs/plans/planometry-integration.md`
+> §9).** For the pilot, running the built agent as a long-lived process
+> under a dedicated, restricted service account (not an administrator) is
+> sufficient:
+> ```
+> node dist/index.js start
+> ```
+> *(the sync-runner entry point is still being wired up as part of this
+> phase's build order — this command is a placeholder until that lands.)*
+
+Once running, `node dist/index.js status` reports uptime and the last
+sync time/row count/error per connection.
+
+## See also
+- `docs/pilot/gms-pilot-runbook.md` — pilot-day sequence and success
+  criteria.
+- `docs/pilot/shaping-data-for-planometry.md` — for GMS's DBAs, how to
+  shape `SummitERP_*` tables into the hierarchies/facts Planometry
+  expects.
+- `docs/plans/planometry-integration.md` — full technical design.
