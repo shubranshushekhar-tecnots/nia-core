@@ -1,13 +1,16 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
 
-// Scoped to lib/** plus a handful of app/** server-only files (see below):
-// today that's lib/canvas/mapping.ts's pure GraphDoc<->React Flow
-// round-trip tests, plus app/console/layout.test.ts. Nothing here touches
-// Next's App Router rendering — app/console/layout.tsx is a plain async
-// function called directly, not rendered — so no jsdom/next-test-env setup
-// is needed yet; add one if/when a test needs to actually render a
-// component.
+// Scoped to lib/** plus a handful of app/** and components/** server-safe,
+// plain-function, non-JSX files (see below): today that's
+// lib/canvas/mapping.ts's pure GraphDoc<->React Flow round-trip tests,
+// app/console/layout.test.ts, and navGroups.test.ts (Slice 10). Nothing
+// here touches Next's App Router rendering or JSX — every file above is a
+// plain function in a .ts (not .tsx) module called directly, not rendered
+// — so no jsdom/next-test-env setup is needed yet; add one if/when a test
+// needs to actually render a component (tsconfig.json's "jsx": "preserve"
+// means vite's default esbuild transform can't parse a .tsx file anyway,
+// so keep test-covered logic that doesn't need JSX in plain .ts modules).
 export default defineConfig({
   resolve: {
     // Mirrors tsconfig.json's "@/*" -> "./src/*" path alias (Next's own
@@ -26,6 +29,6 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/lib/**/*.test.ts", "src/app/console/**/*.test.ts"],
+    include: ["src/lib/**/*.test.ts", "src/app/console/**/*.test.ts", "src/components/console/**/*.test.ts"],
   },
 });
