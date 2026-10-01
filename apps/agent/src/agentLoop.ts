@@ -57,7 +57,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
   try {
     await Promise.all(
       config.connections.map((entry) =>
-        runConnectionLoop({ entry, dir, secrets, spoolDir, connectionSemaphore, hostSemaphore, agentVersion: options.agentVersion, signal: options.signal, logger }),
+        runConnectionLoop({ entry, dir, secrets, spoolDir, masterKey, connectionSemaphore, hostSemaphore, agentVersion: options.agentVersion, signal: options.signal, logger }),
       ),
     );
   } finally {
@@ -70,6 +70,7 @@ interface ConnectionLoopOptions {
   dir: string;
   secrets: LocalSecretStore;
   spoolDir: string;
+  masterKey: Buffer;
   connectionSemaphore: KeyedSemaphore;
   hostSemaphore: KeyedSemaphore;
   agentVersion: string;
@@ -78,7 +79,7 @@ interface ConnectionLoopOptions {
 }
 
 async function runConnectionLoop(options: ConnectionLoopOptions): Promise<void> {
-  const { entry, dir, secrets, spoolDir, connectionSemaphore, hostSemaphore, agentVersion, signal, logger } = options;
+  const { entry, dir, secrets, spoolDir, masterKey, connectionSemaphore, hostSemaphore, agentVersion, signal, logger } = options;
 
   const credentials = secrets.get<{ user: string; password: string }>(entry.credentialRef);
   const agentKeyRecord = secrets.get<{ agentKey: string }>(entry.agentKeyRef);
@@ -105,7 +106,7 @@ async function runConnectionLoop(options: ConnectionLoopOptions): Promise<void> 
       connectionId: entry.id,
       signal,
       onPoll: () => recordPoll(entry.id, dir),
-      onWork: (work) => handleWork({ entry, dir, client, sqlConfig, work, spoolDir, connectionSemaphore, hostSemaphore, signal, logger }),
+      onWork: (work) => handleWork({ entry, dir, client, sqlConfig, work, spoolDir, masterKey, connectionSemaphore, hostSemaphore, signal, logger }),
     });
   } finally {
     await client.close();
@@ -119,6 +120,7 @@ interface HandleWorkOptions {
   sqlConfig: MssqlConnectionConfig;
   work: WorkItem;
   spoolDir: string;
+  masterKey: Buffer;
   connectionSemaphore: KeyedSemaphore;
   hostSemaphore: KeyedSemaphore;
   signal: AbortSignal;
@@ -126,7 +128,7 @@ interface HandleWorkOptions {
 }
 
 async function handleWork(options: HandleWorkOptions): Promise<void> {
-  const { entry, dir, client, sqlConfig, work, spoolDir, connectionSemaphore, hostSemaphore, signal, logger } = options;
+  const { entry, dir, client, sqlConfig, work, spoolDir, masterKey, connectionSemaphore, hostSemaphore, signal, logger } = options;
   try {
     const pool = await connect(sqlConfig);
     let catalog;
@@ -142,7 +144,7 @@ async function handleWork(options: HandleWorkOptions): Promise<void> {
       recordCatalogFingerprint(entry.id, fingerprint, dir);
     }
 
-    const result = await runSync({ client, work, catalog, sqlConfig, connectionId: entry.id, spoolDir, connectionSemaphore, hostSemaphore, signal });
+    const result = await runSync({ client, work, catalog, sqlConfig, connectionId: entry.id, spoolDir, masterKey, connectionSemaphore, hostSemaphore, signal });
     if (result.outcome === "complete") {
       recordSyncComplete(entry.id, result.totalRows, dir);
     } else if (result.outcome === "failed") {

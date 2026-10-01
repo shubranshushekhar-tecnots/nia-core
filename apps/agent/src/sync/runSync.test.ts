@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -5,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Catalog } from "@nia/extract";
 import type { NdjsonWriter } from "@nia/extract";
+import { MASTER_KEY_LENGTH_BYTES } from "../secrets/crypto.js";
 
 const connectMock = vi.fn();
 const streamExtractMock = vi.fn();
@@ -20,6 +22,7 @@ const { runSync } = await import("./runSync.js");
 
 const catalog: Catalog = { generatedAt: "now", sourceTimeZone: "UTC", tables: [] };
 const sqlConfig = { server: "db.internal", database: "sales", user: "u", password: "p" };
+const masterKey = randomBytes(MASTER_KEY_LENGTH_BYTES);
 
 describe("runSync", () => {
   let server: Awaited<ReturnType<typeof FakePlanometryServer.start>>;
@@ -67,7 +70,7 @@ describe("runSync", () => {
     server.enqueueWork("conn-1", { runId: "run-ok", request: { table: "t", columns: ["id"], filter: [] } });
     const work = (await client.pollWork("conn-1")).work!;
 
-    await runSync({ client, work, catalog, sqlConfig, connectionId: "conn-1", spoolDir, ...freshSemaphores() });
+    await runSync({ client, work, catalog, sqlConfig, connectionId: "conn-1", spoolDir, masterKey, ...freshSemaphores() });
 
     expect(order).toEqual(["pool-closed", "chunk-uploaded"]);
     expect(server.getRun("run-ok")?.complete).toEqual({ totalRows: 2, totalChunks: 1 });
@@ -83,7 +86,7 @@ describe("runSync", () => {
     server.enqueueWork("conn-1", { runId: "run-fail", request: { table: "t", columns: ["id"], filter: [] } });
     const work = (await client.pollWork("conn-1")).work!;
 
-    await runSync({ client, work, catalog, sqlConfig, connectionId: "conn-1", spoolDir, ...freshSemaphores() });
+    await runSync({ client, work, catalog, sqlConfig, connectionId: "conn-1", spoolDir, masterKey, ...freshSemaphores() });
 
     expect(server.getRun("run-fail")?.failed).toEqual({ error: "query timed out" });
     expect(fakePool.close).toHaveBeenCalledTimes(1);
@@ -101,7 +104,7 @@ describe("runSync", () => {
     const work = (await client.pollWork("conn-1")).work!;
     server.setRunFaults("run-409", { force409: new Set([0]) });
 
-    await runSync({ client, work, catalog, sqlConfig, connectionId: "conn-1", spoolDir, ...freshSemaphores() });
+    await runSync({ client, work, catalog, sqlConfig, connectionId: "conn-1", spoolDir, masterKey, ...freshSemaphores() });
 
     const run = server.getRun("run-409");
     expect(run?.complete).toBeUndefined();

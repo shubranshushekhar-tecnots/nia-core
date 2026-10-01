@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { ChunkRejectedError, type PlanometryClient } from "../planometry/client.js";
 import type { HeartbeatScheduler } from "../planometry/heartbeatScheduler.js";
+import { decryptSpoolBuffer } from "./spoolCrypto.js";
 import type { SpoolChunkFile } from "./spoolWriter.js";
 
 export interface ChunkUploaderOptions {
@@ -21,14 +22,20 @@ const DEFAULT_BASE_DELAY_MS = 500;
  * backoff + jitter, up to `maxAttempts`. A 409 (`ChunkRejectedError`,
  * "run superseded") is never retried — it propagates immediately so the
  * caller can abort the run and clean up the spool.
+ *
+ * Each file is decrypted (spoolCrypto.ts) right after reading it off disk,
+ * before the gzip bytes ever leave this process — a truncated/tampered
+ * spool file fails the authTag check here and aborts the run instead of
+ * silently uploading garbage.
  */
-export async function uploadChunks(client: PlanometryClient, runId: string, files: SpoolChunkFile[], heartbeat: HeartbeatScheduler, options: ChunkUploaderOptions = {}): Promise<void> {
+export async function uploadChunks(client: PlanometryClient, runId: string, files: SpoolChunkFile[], masterKey: Buffer, heartbeat: HeartbeatScheduler, options: ChunkUploaderOptions = {}): Promise<void> {
   const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
 
   for (const file of files) {
     if (options.signal?.aborted) throw new Error("aborted");
-    const body = await readFile(file.path);
+    const raw = await readFile(file.path);
+    const body = decryptSpoolBuffer(masterKey, raw);
     await uploadWithRetry(client, runId, file.seq, file.rows, body, maxAttempts, baseDelayMs);
     heartbeat.markActivity();
   }

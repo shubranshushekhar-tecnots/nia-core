@@ -18,6 +18,8 @@ export interface RunSyncOptions {
   sqlConfig: MssqlConnectionConfig;
   connectionId: string;
   spoolDir: string;
+  /** Agent's local master key (secrets/keyfile.ts) — used to encrypt spool chunk files at rest and decrypt them before upload. */
+  masterKey: Buffer;
   connectionSemaphore: KeyedSemaphore;
   hostSemaphore: KeyedSemaphore;
   heartbeatIntervalMs?: number;
@@ -45,7 +47,7 @@ export type RunSyncResult =
  * plus a per-host:port semaphore, per Phase 2 §5.
  */
 export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
-  const { client, work, catalog, sqlConfig, connectionId, connectionSemaphore, hostSemaphore } = options;
+  const { client, work, catalog, sqlConfig, connectionId, masterKey, connectionSemaphore, hostSemaphore } = options;
   const runSpoolDir = path.join(options.spoolDir, work.runId);
   const hostKey = `${sqlConfig.server}:${sqlConfig.port ?? 1433}`;
 
@@ -57,7 +59,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
   });
 
   try {
-    const spool = new SpoolWriter(runSpoolDir, work.runId);
+    const spool = new SpoolWriter(runSpoolDir, work.runId, masterKey);
     await spool.prepare();
     await assertDiskSpace(runSpoolDir);
 
@@ -85,7 +87,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     }
 
     try {
-      await uploadChunks(client, work.runId, files, heartbeat, { signal: options.signal });
+      await uploadChunks(client, work.runId, files, masterKey, heartbeat, { signal: options.signal });
     } catch (err) {
       if (err instanceof ChunkRejectedError) {
         // Superseded run: Planometry rejected the chunk itself, nothing further to report.

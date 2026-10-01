@@ -1,7 +1,9 @@
 import { createWriteStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import type { CipherGCM } from "node:crypto";
 import path from "node:path";
 import zlib from "node:zlib";
+import { createSpoolCipher } from "./spoolCrypto.js";
 
 export interface SpoolChunkFile {
   seq: number;
@@ -43,6 +45,11 @@ const DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
  * c), so embedding it in the uploaded bytes would be redundant. Instead
  * the trailer is captured here and returned from `finish()` for the
  * sync executor to act on.
+ *
+ * Every chunk file is encrypted at rest (AES-256-GCM, agent's local master
+ * key — see sync/spoolCrypto.ts) as it streams to disk: gzip output is
+ * piped through a per-file cipher before hitting the file stream, since
+ * these files hold raw customer row data while a sync is in flight.
  */
 export class SpoolWriter {
   private readonly maxRows: number;
@@ -50,6 +57,7 @@ export class SpoolWriter {
   private columnsLine: string | undefined;
   private seq = 0;
   private currentGzip: zlib.Gzip | undefined;
+  private currentCipher: CipherGCM | undefined;
   private currentFileStream: ReturnType<typeof createWriteStream> | undefined;
   private currentRows = 0;
   private currentBytes = 0;
@@ -61,6 +69,7 @@ export class SpoolWriter {
   constructor(
     private readonly dir: string,
     private readonly runId: string,
+    private readonly masterKey: Buffer,
     options: SpoolWriterOptions = {},
   ) {
     this.maxRows = options.maxRows ?? DEFAULT_MAX_ROWS;
@@ -68,7 +77,8 @@ export class SpoolWriter {
   }
 
   async prepare(): Promise<void> {
-    await mkdir(this.dir, { recursive: true });
+    // Owner-only (0o700): chunk files under here hold raw customer row data.
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
   }
 
   /** Pass as `NdjsonWriter`'s `write` callback. */
@@ -124,11 +134,19 @@ export class SpoolWriter {
     const seq = this.seq;
     this.seq += 1;
     const filePath = path.join(this.dir, `${this.runId}.${String(seq).padStart(5, "0")}.ndjson.gz`);
-    const fileStream = createWriteStream(filePath);
+    // Owner-only (0o600): this file holds encrypted customer row data.
+    const fileStream = createWriteStream(filePath, { mode: 0o600 });
+    const { iv, cipher } = createSpoolCipher(this.masterKey);
+    fileStream.write(iv);
     const gzip = zlib.createGzip();
-    gzip.pipe(fileStream);
+    gzip.pipe(cipher);
+    cipher.pipe(fileStream, { end: false });
+    cipher.on("end", () => {
+      fileStream.end(cipher.getAuthTag());
+    });
     gzip.on("drain", () => this.drainListener?.());
     this.currentGzip = gzip;
+    this.currentCipher = cipher;
     this.currentFileStream = fileStream;
     this.currentRows = 0;
     this.currentBytes = 0;
@@ -153,6 +171,7 @@ export class SpoolWriter {
       }),
     );
     this.currentGzip = undefined;
+    this.currentCipher = undefined;
     this.currentFileStream = undefined;
   }
 }

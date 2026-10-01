@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { Catalog } from "@nia/extract";
 import { connect, introspectCatalog } from "@nia/extract/mssql";
 import { PlanometryClient } from "../planometry/client.js";
+import { MASTER_KEY_LENGTH_BYTES } from "../secrets/crypto.js";
 import { FakePlanometryServer } from "../testing/fakePlanometryServer.js";
 import { KeyedSemaphore } from "./concurrency.js";
 import { runSync } from "./runSync.js";
@@ -54,6 +56,7 @@ async function waitUntil(condition: () => boolean | Promise<boolean>, timeoutMs:
 
 const connectionId = "conn-integration";
 const sqlConfig = { server: HOST, port: PORT, database: DATABASE, user: USER, password: PASSWORD, encrypt: true, trustServerCertificate: true };
+const masterKey = randomBytes(MASTER_KEY_LENGTH_BYTES);
 
 describe("runSync integration (throwaway SQL Server harness + fake Planometry server)", () => {
   let pool: Pool;
@@ -92,7 +95,7 @@ describe("runSync integration (throwaway SQL Server harness + fake Planometry se
     server.enqueueWork(connectionId, { runId: "run-rowcount", request: { table: "dbo.widgets", columns: ["id", "name"], filter: [] } });
     const work = (await client.pollWork(connectionId)).work!;
 
-    await runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, ...freshSemaphores() });
+    await runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, masterKey, ...freshSemaphores() });
 
     expect(server.getRun("run-rowcount")).toMatchObject({ totalRows: 3, chunkCount: 1, complete: { totalRows: 3, totalChunks: 1 } });
     expect(existsSync(path.join(spoolDir, "run-rowcount"))).toBe(false);
@@ -102,7 +105,7 @@ describe("runSync integration (throwaway SQL Server harness + fake Planometry se
     server.enqueueWork(connectionId, { runId: "run-dup", request: { table: "dbo.widgets", columns: ["id"], filter: [] } });
     const work = (await client.pollWork(connectionId)).work!;
 
-    await runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, ...freshSemaphores() });
+    await runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, masterKey, ...freshSemaphores() });
     expect(server.getRun("run-dup")?.totalRows).toBe(3);
 
     // Re-deliver the already-recorded seq with a different row count — must be a no-op re-ack, never a double-count.
@@ -115,7 +118,7 @@ describe("runSync integration (throwaway SQL Server harness + fake Planometry se
     const work = (await client.pollWork(connectionId)).work!;
     server.setRunFaults("run-retry", { dropOnFirstAttempt: new Set([0]) });
 
-    await runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, ...freshSemaphores() });
+    await runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, masterKey, ...freshSemaphores() });
 
     expect(server.getRun("run-retry")).toMatchObject({ totalRows: 3, chunkCount: 1 });
     expect(existsSync(path.join(spoolDir, "run-retry"))).toBe(false);
@@ -126,7 +129,7 @@ describe("runSync integration (throwaway SQL Server harness + fake Planometry se
     const work = (await client.pollWork(connectionId)).work!;
     server.setRunFaults("run-409", { force409: new Set([0]) });
 
-    await runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, ...freshSemaphores() });
+    await runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, masterKey, ...freshSemaphores() });
 
     const run = server.getRun("run-409");
     expect(run?.complete).toBeUndefined();
@@ -138,7 +141,7 @@ describe("runSync integration (throwaway SQL Server harness + fake Planometry se
     server.enqueueWork(connectionId, { runId: "run-heartbeat", request: { table: "dbo.vw_slow", columns: [], filter: [] } });
     const work = (await client.pollWork(connectionId)).work!;
 
-    await runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, heartbeatIntervalMs: 1000, ...freshSemaphores() });
+    await runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, masterKey, heartbeatIntervalMs: 1000, ...freshSemaphores() });
 
     const run = server.getRun("run-heartbeat");
     expect(run?.heartbeatCount).toBeGreaterThan(0);
@@ -156,7 +159,7 @@ describe("runSync integration (throwaway SQL Server harness + fake Planometry se
       return PlanometryClient.prototype.pushChunk.apply(client, args as never);
     });
 
-    const syncPromise = runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, ...freshSemaphores() });
+    const syncPromise = runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, masterKey, ...freshSemaphores() });
 
     const started = await waitUntil(() => queryTextRunning(pool, "vw_slow"), 15_000);
     expect(started).toBe(true);
@@ -180,7 +183,7 @@ describe("runSync integration (throwaway SQL Server harness + fake Planometry se
     const work = (await client.pollWork(connectionId)).work!;
     const controller = new AbortController();
 
-    const syncPromise = runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, signal: controller.signal, ...freshSemaphores() });
+    const syncPromise = runSync({ client, work, catalog, sqlConfig, connectionId, spoolDir, masterKey, signal: controller.signal, ...freshSemaphores() });
 
     const started = await waitUntil(() => queryTextRunning(pool, "vw_slow"), 15_000);
     expect(started).toBe(true);
