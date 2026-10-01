@@ -932,3 +932,5 @@
   Fix seed.sql to set the seeded orgs' plan (e.g. legacy/pro via
   org_plan) BEFORE inserting projects/workflows, so it runs cleanly on a
   fresh DB without disabling triggers.
+- connector-mysql and connector-supabase tests time out intermittently
+  under full parallel load (pass in isolation) — investigate.
