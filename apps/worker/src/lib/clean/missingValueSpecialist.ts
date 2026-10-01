@@ -1,4 +1,5 @@
 import type { ColumnStats } from "@nia/schemas";
+import type { WorkspaceScope } from "@nia/db";
 import type { ChatMessage } from "../llm/gatewayClient.js";
 import { formatColumnProfile, runSpecialist } from "./specialistEngine.js";
 import type { ColumnRoute } from "./router.js";
@@ -50,7 +51,13 @@ export function routeToMissingValue(route: ColumnRoute): boolean {
   return route.route === "missing-value" || route.route === "both";
 }
 
-export async function proposeMissingValueCleaning(columns: ColumnStats[], routes: ColumnRoute[]): Promise<SpecialistResult> {
+export async function proposeMissingValueCleaning(
+  columns: ColumnStats[],
+  routes: ColumnRoute[],
+  scope: WorkspaceScope,
+  workflowId?: string,
+  userId?: string,
+): Promise<SpecialistResult> {
   const routedNames = new Set(routes.filter(routeToMissingValue).map((r) => r.column));
   const routedColumns = columns.filter((c) => routedNames.has(c.name));
   return runSpecialist({
@@ -59,5 +66,8 @@ export async function proposeMissingValueCleaning(columns: ColumnStats[], routes
     llmNode: "clean-missing-value-specialist",
     columns: routedColumns,
     buildPrompt,
+    scope,
+    workflowId,
+    userId,
   });
 }

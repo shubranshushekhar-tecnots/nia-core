@@ -20,6 +20,7 @@ beforeEach(() => {
 });
 
 const amountColumn = () => computeColumnStats("amount", "varchar", ["$10.00", "$25.50", "$3.75"]);
+const testScope = { ownerId: "00000000-0000-0000-0000-000000000001" };
 
 function trivialPrompt() {
   return [{ role: "user" as const, content: "propose" }];
@@ -59,6 +60,7 @@ describe("runSpecialist", () => {
       llmNode: "test-node",
       columns: [amountColumn()],
       buildPrompt: trivialPrompt,
+      scope: testScope,
     });
 
     expect(completeMock).toHaveBeenCalledTimes(2);
@@ -91,6 +93,7 @@ describe("runSpecialist", () => {
       llmNode: "test-node",
       columns: [amountColumn()],
       buildPrompt: trivialPrompt,
+      scope: testScope,
     });
 
     expect(completeMock).toHaveBeenCalledTimes(1);
@@ -121,6 +124,7 @@ describe("runSpecialist", () => {
       llmNode: "test-node",
       columns: [amountColumn()],
       buildPrompt: trivialPrompt,
+      scope: testScope,
     });
 
     expect(completeMock).toHaveBeenCalledTimes(2);
@@ -138,6 +142,7 @@ describe("runSpecialist", () => {
       llmNode: "test-node",
       columns: [amountColumn()],
       buildPrompt: trivialPrompt,
+      scope: testScope,
     });
 
     expect(completeMock).toHaveBeenCalledTimes(1);
@@ -151,6 +156,7 @@ describe("runSpecialist", () => {
       llmNode: "test-node",
       columns: [],
       buildPrompt: trivialPrompt,
+      scope: testScope,
     });
 
     expect(completeMock).not.toHaveBeenCalled();

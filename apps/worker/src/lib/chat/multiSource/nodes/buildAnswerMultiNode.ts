@@ -33,7 +33,7 @@ export async function buildAnswerMultiNode(state: MultiSourceStateType): Promise
   const answer = await streamComplete(
     messages,
     (delta) => publishChatEvent(state.scope, state.jobId,{ type: "token", text: delta }),
-    { node: "buildAnswerMulti", model: env.ANSWER_MODEL },
+    { node: "buildAnswerMulti", feature: "chat_build_answer_multi", scope: state.scope, jobId: state.jobId, model: env.ANSWER_MODEL },
   );
 
   // Clear the prior faithfulness reason once it's been fed into this

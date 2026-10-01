@@ -17,8 +17,10 @@ describe("stripFences", () => {
   });
 });
 
+const testScope = { ownerId: "00000000-0000-0000-0000-000000000001" };
+
 describe("extractJson", () => {
-  const ctx = { node: "test-node" };
+  const ctx = { node: "test-node", feature: "test-feature", scope: testScope };
 
   it("parses plain JSON directly", () => {
     expect(extractJson('{"a":1}', ctx)).toEqual({ a: 1 });
@@ -75,7 +77,7 @@ describe("extractJson", () => {
 });
 
 describe("completeJson", () => {
-  const ctx = { node: "test-node" };
+  const ctx = { node: "test-node", feature: "test-feature", scope: testScope };
   const messages = [{ role: "system" as const, content: "sys" }, { role: "user" as const, content: "usr" }];
 
   beforeEach(() => {

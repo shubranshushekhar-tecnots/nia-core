@@ -97,7 +97,14 @@ export async function generatePlanNode(state: PlanStateType): Promise<Partial<Pl
     // is a fixed snapshot, not a rolling alias — see docs/decisions.md's
     // Phase 13 gate entry). Plan generation should be deterministic given
     // identical input; pinned here only, not gateway-wide.
-    parsed = await completeJson(messages, { node: "generatePlan", temperature: 0 });
+    parsed = await completeJson(messages, {
+      node: "generatePlan",
+      feature: "plan_generation",
+      scope: state.scope,
+      workflowId: state.workflowId,
+      userId: state.userId,
+      temperature: 0,
+    });
   } catch (err) {
     if (!(err instanceof JsonExtractionError)) throw err;
     return { error: `Plan generation returned unparseable JSON: ${err.message}` };

@@ -15,7 +15,7 @@ export async function faithfulnessNode(state: ChatStateType): Promise<Partial<Ch
     answer: state.answer!,
     result: state.tabularResult!,
   });
-  const raw = await complete(messages, { node: "faithfulness" });
+  const raw = await complete(messages, { node: "faithfulness", feature: "chat_faithfulness", scope: state.scope, jobId: state.jobId });
   const verdict = parseFaithfulnessVerdict(raw);
   return applyFaithfulnessVerdict(verdict, state.answerGenAttempts);
 }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ComputedFieldStep, ExprSchema, type ColumnStats, type OnFailurePolicy } from "@nia/schemas";
+import type { WorkspaceScope } from "@nia/db";
 import { completeJson, JsonExtractionError } from "../llm/parseHelpers.js";
 import type { ChatMessage } from "../llm/gatewayClient.js";
 import type { ColumnProposal, SpecialistName, SpecialistResult } from "./specialistTypes.js";
@@ -49,6 +50,10 @@ export interface SpecialistEngineConfig {
   columns: ColumnStats[];
   /** `retryContext` is only present on the one retry call, carrying the columns that failed last time plus their validation errors. */
   buildPrompt: (columns: ColumnStats[], retryContext?: { column: string; error: string }[]) => ChatMessage[];
+  /** Attribution for the llm_usage ledger (Console v2) — threaded down from proposeCleaning.ts, the only caller with these values in hand. */
+  scope: WorkspaceScope;
+  workflowId?: string;
+  userId?: string;
 }
 
 /** Builds and validates the candidate step for one "step"-action column entry. Returns the validated step, or an error string on failure — this validation (ComputedFieldStep.safeParse, which recursively validates the Expr tree's fn names/arity via ExprSchema's superRefine) is this module's "compile check": an unknown function name or a bad arity fails here, before any step is ever proposed. */
@@ -66,9 +71,15 @@ function validateStepOutput(entry: Extract<RawColumnOutput, { action: "step" }>,
   return { ok: true, step: { kind: "computed_field", name: parsed.data.name, expression: parsed.data.expression, onFailure: parsed.data.onFailure } };
 }
 
-async function callAndParse(messages: ChatMessage[], llmNode: string): Promise<{ ok: true; value: RawColumnOutput[] } | { ok: false; error: string }> {
+async function callAndParse(
+  messages: ChatMessage[],
+  llmNode: string,
+  scope: WorkspaceScope,
+  workflowId: string | undefined,
+  userId: string | undefined,
+): Promise<{ ok: true; value: RawColumnOutput[] } | { ok: false; error: string }> {
   try {
-    const raw = await completeJson(messages, { node: llmNode, temperature: 0 });
+    const raw = await completeJson(messages, { node: llmNode, feature: "cleaning_proposal", scope, workflowId, userId, temperature: 0 });
     const parsed = RawSpecialistOutput.safeParse(raw);
     if (!parsed.success) {
       return { ok: false, error: parsed.error.message };
@@ -103,7 +114,7 @@ export function formatColumnProfile(stats: ColumnStats): string {
 }
 
 export async function runSpecialist(config: SpecialistEngineConfig): Promise<SpecialistResult> {
-  const { specialist, onFailure, llmNode, columns, buildPrompt } = config;
+  const { specialist, onFailure, llmNode, columns, buildPrompt, scope, workflowId, userId } = config;
   if (columns.length === 0) {
     return { specialist, onFailure, proposals: [] };
   }
@@ -112,7 +123,7 @@ export async function runSpecialist(config: SpecialistEngineConfig): Promise<Spe
   const proposals = new Map<string, ColumnProposal>();
   const errorsByColumn = new Map<string, string>();
 
-  const firstPass = await callAndParse(buildPrompt(columns), llmNode);
+  const firstPass = await callAndParse(buildPrompt(columns), llmNode, scope, workflowId, userId);
   if (!firstPass.ok) {
     // The whole call failed to produce a parseable shape — every requested column needs a retry.
     for (const name of requested.keys()) errorsByColumn.set(name, firstPass.error);
@@ -141,7 +152,7 @@ export async function runSpecialist(config: SpecialistEngineConfig): Promise<Spe
   if (errorsByColumn.size > 0) {
     const retryColumns = [...errorsByColumn.keys()].map((name) => requested.get(name)!);
     const retryContext = [...errorsByColumn.entries()].map(([column, error]) => ({ column, error }));
-    const retryPass = await callAndParse(buildPrompt(retryColumns, retryContext), llmNode);
+    const retryPass = await callAndParse(buildPrompt(retryColumns, retryContext), llmNode, scope, workflowId, userId);
 
     if (!retryPass.ok) {
       for (const name of errorsByColumn.keys()) {

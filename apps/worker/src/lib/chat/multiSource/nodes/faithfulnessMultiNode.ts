@@ -25,7 +25,7 @@ export async function faithfulnessMultiNode(state: MultiSourceStateType): Promis
     plan,
     outcome,
   });
-  const raw = await complete(messages, { node: "faithfulnessMulti" });
+  const raw = await complete(messages, { node: "faithfulnessMulti", feature: "chat_faithfulness_multi", scope: state.scope, jobId: state.jobId });
   const verdict = parseFaithfulnessVerdict(raw);
   return applyFaithfulnessVerdict(verdict, state.answerGenAttempts);
 }

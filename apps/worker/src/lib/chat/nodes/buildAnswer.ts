@@ -37,7 +37,7 @@ export async function buildAnswerNode(state: ChatStateType): Promise<Partial<Cha
   const modelText = await streamComplete(
     messages,
     (delta) => publishChatEvent(state.scope, state.jobId, { type: "token", text: delta }),
-    { node: "buildAnswer", model: env.ANSWER_MODEL },
+    { node: "buildAnswer", feature: "chat_build_answer", scope: state.scope, jobId: state.jobId, model: env.ANSWER_MODEL },
   );
   answer += modelText;
 

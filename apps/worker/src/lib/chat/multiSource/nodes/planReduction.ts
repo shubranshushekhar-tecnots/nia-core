@@ -31,6 +31,9 @@ export async function planReductionNode(state: MultiSourceStateType): Promise<Pa
     // default model. See PHASE4_EXIT.md §4 Fix 1.
     const parsed = await completeJson(buildReductionPlanPrompt({ question: state.standaloneMessage }), {
       node: "planReduction",
+      feature: "chat_reduction_plan",
+      scope: state.scope,
+      jobId: state.jobId,
     });
     plan = validateReductionPlanShape(parsed);
   } catch (err) {

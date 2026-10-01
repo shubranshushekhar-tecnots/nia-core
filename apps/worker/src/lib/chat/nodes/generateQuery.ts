@@ -41,7 +41,7 @@ export async function generateQueryNode(state: GenerateQueryState): Promise<Part
     // (gemini-2.5-flash, gemini-3.5-flash) failed Fix 1's quality gate or
     // speed goal on this gateway account — see PHASE4_EXIT.md §4 Fix 1.
     // Stays on the default model, same as planReduction.ts.
-    parsed = await completeJson(messages, { node: "generateQuery" });
+    parsed = await completeJson(messages, { node: "generateQuery", feature: "chat_generate_query", scope: state.scope, jobId: state.jobId });
   } catch (err) {
     if (!(err instanceof JsonExtractionError)) throw err;
     return { error: `Query generation returned unparseable JSON: ${err.message}` };

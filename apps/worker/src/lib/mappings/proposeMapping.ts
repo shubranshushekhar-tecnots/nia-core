@@ -135,7 +135,7 @@ export async function proposeMapping(workflowId: string, destNodeId: string, sco
           content: `Source fields: ${JSON.stringify(unmatchedSourceFields)}\nDestination fields: ${JSON.stringify(unmatchedDestFields)}`,
         },
       ],
-      { node: "propose-mapping" },
+      { node: "propose-mapping", feature: "mapping_proposal", scope, workflowId },
     );
 
     const parsed = ProposalSchema.safeParse(raw);

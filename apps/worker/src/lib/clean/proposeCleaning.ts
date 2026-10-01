@@ -119,7 +119,10 @@ export async function proposeCleaning(workflowId: string, nodeId: string, scope:
   const columns = sample.value.columns.map((name) => computeColumnStats(name, declaredTypes.get(name) ?? "unknown", sample.value.rows.map((row) => row[name])));
 
   const routes = routeColumns(columns);
-  const [missingValue, coercion] = await Promise.all([proposeMissingValueCleaning(columns, routes), proposeCoercionCleaning(columns, routes)]);
+  const [missingValue, coercion] = await Promise.all([
+    proposeMissingValueCleaning(columns, routes, scope, workflowId, triggeredByUserId),
+    proposeCoercionCleaning(columns, routes, scope, workflowId, triggeredByUserId),
+  ]);
 
   const signature = computeSignature(columns);
   const profileHash = computeProfileHash(signature);
