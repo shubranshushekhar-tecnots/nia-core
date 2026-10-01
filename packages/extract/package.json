@@ -13,6 +13,10 @@
     "./mssql": {
       "types": "./dist/mssql/index.d.ts",
       "import": "./dist/mssql/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
     }
   },
   "scripts": {
