@@ -12,10 +12,20 @@ export const consoleShellRootStyle: CSSProperties = {
   inset: 0,
   display: 'flex',
   flexDirection: 'column',
-  background: 'var(--bg)',
-  color: 'var(--text)',
-  fontFamily: 'var(--font-ui)',
+  background: 'var(--nx-bg)',
+  color: 'var(--nx-ink)',
+  fontFamily: 'var(--nx-font-ui)',
   WebkitFontSmoothing: 'antialiased',
+};
+
+// Slice 1 (red Precision Dark theme) — thin strip rendered as the very first
+// child of the shell root, above the top bar, so Console is visually
+// distinguishable at a glance from the customer app shell even on a
+// screenshot that crops out the "STAFF CONSOLE" badge.
+export const consoleStaffBarStyle: CSSProperties = {
+  flex: 'none',
+  height: 3,
+  background: 'var(--nx-staff-accent)',
 };
 
 export const consoleTopBarStyle: CSSProperties = {
@@ -26,8 +36,8 @@ export const consoleTopBarStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 14,
-  background: 'var(--surface)',
-  borderBottom: '1px solid var(--line2)',
+  background: 'var(--nx-surface)',
+  borderBottom: '1px solid var(--nx-line)',
 };
 
 export const consoleBrandMarkStyle: CSSProperties = {
@@ -45,7 +55,7 @@ export const consoleBrandMarkStyle: CSSProperties = {
 };
 
 export const consoleBrandTextStyle: CSSProperties = {
-  fontFamily: 'var(--font-display)',
+  fontFamily: 'var(--nx-font-ui)',
   fontSize: 14,
   fontWeight: 700,
   letterSpacing: '-.02em',
@@ -60,9 +70,24 @@ export const consoleInternalBadgeStyle: CSSProperties = {
   fontSize: 10.5,
   fontWeight: 700,
   letterSpacing: '.14em',
-  color: 'var(--warning-deep)',
+  color: 'var(--nx-warn)',
   background: 'rgba(245,158,11,.06)',
   border: '1px dashed rgba(245,158,11,.65)',
+};
+
+// Slice 1 — "STAFF CONSOLE" pill next to the brand mark, using the new red
+// staff-accent tokens (distinct from the amber "INTERNAL" badge above).
+export const consoleStaffBadgeStyle: CSSProperties = {
+  boxSizing: 'border-box',
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '4px 10px',
+  borderRadius: 7,
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: '.1em',
+  color: 'var(--nx-staff-accent-text)',
+  background: 'var(--nx-staff-accent)',
 };
 
 export const consoleTopBarSpacerStyle: CSSProperties = { flex: 1 };
@@ -72,7 +97,7 @@ export const consoleIdentityWrapStyle: CSSProperties = {
   alignItems: 'center',
   gap: 9,
   paddingLeft: 6,
-  borderLeft: '1px solid var(--line)',
+  borderLeft: '1px solid var(--nx-line)',
 };
 
 export const consoleIdentityAvatarStyle: CSSProperties = {
@@ -83,10 +108,10 @@ export const consoleIdentityAvatarStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   borderRadius: '50%',
-  background: 'var(--primary-soft)',
+  background: 'var(--nx-staff-accent-soft)',
   fontSize: 11.5,
   fontWeight: 700,
-  color: 'var(--primary)',
+  color: 'var(--nx-staff-accent)',
 };
 
 export const consoleIdentityColStyle: CSSProperties = {
@@ -98,12 +123,12 @@ export const consoleIdentityColStyle: CSSProperties = {
 export const consoleIdentityNameStyle: CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
-  color: 'var(--text)',
+  color: 'var(--nx-ink)',
 };
 
 export const consoleIdentitySubStyle: CSSProperties = {
   fontSize: 11.5,
-  color: 'var(--muted)',
+  color: 'var(--nx-ink-3)',
 };
 
 // design's `ghost()` helper — used for the sign-out button.
@@ -117,9 +142,9 @@ export const consoleGhostBtnStyle: CSSProperties = {
   fontWeight: 600,
   whiteSpace: 'nowrap',
   borderRadius: 8,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
-  color: 'var(--secondary)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
+  color: 'var(--nx-ink-2)',
   cursor: 'pointer',
 };
 
@@ -137,8 +162,8 @@ export const consoleSidebarStyle: CSSProperties = {
   flexDirection: 'column',
   gap: 2,
   padding: '14px 10px',
-  background: 'var(--surface)',
-  borderRight: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  borderRight: '1px solid var(--nx-line)',
 };
 
 // `active` mirrors the design's NAV.map active-state logic; `enabled` is a
@@ -160,8 +185,8 @@ export function consoleNavItemStyle(active: boolean, enabled: boolean): CSSPrope
     fontFamily: 'inherit',
     fontSize: 13.5,
     fontWeight: active ? 700 : 500,
-    background: active ? 'var(--primary-soft)' : 'transparent',
-    color: !enabled ? 'var(--text-4)' : active ? 'var(--primary)' : 'var(--secondary)',
+    background: active ? 'var(--nx-staff-accent-soft)' : 'transparent',
+    color: !enabled ? 'var(--nx-ink-disabled)' : active ? 'var(--nx-staff-accent)' : 'var(--nx-ink-2)',
     textDecoration: 'none',
   };
 }
@@ -172,7 +197,7 @@ export function consoleNavIconStyle(active: boolean): CSSProperties {
     width: 16,
     textAlign: 'center',
     fontSize: 12,
-    color: active ? 'var(--primary)' : 'var(--muted)',
+    color: active ? 'var(--nx-staff-accent)' : 'var(--nx-ink-3)',
   };
 }
 
@@ -181,7 +206,7 @@ export const consoleSidebarFooterStyle: CSSProperties = {
   flexDirection: 'column',
   gap: 6,
   padding: '12px 10px',
-  borderTop: '1px solid var(--line)',
+  borderTop: '1px solid var(--nx-line)',
 };
 
 export const consoleSidebarFooterLabelStyle: CSSProperties = {
@@ -189,12 +214,12 @@ export const consoleSidebarFooterLabelStyle: CSSProperties = {
   fontWeight: 700,
   letterSpacing: '.1em',
   textTransform: 'uppercase',
-  color: 'var(--muted)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleSidebarFooterValueStyle: CSSProperties = {
   fontSize: 11.5,
-  color: 'var(--muted)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleMainColStyle: CSSProperties = {
@@ -202,7 +227,7 @@ export const consoleMainColStyle: CSSProperties = {
   minWidth: 0,
   display: 'flex',
   flexDirection: 'column',
-  background: 'var(--bg)',
+  background: 'var(--nx-bg)',
 };
 
 export const consoleContentStyle: CSSProperties = {

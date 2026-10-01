@@ -20,6 +20,8 @@ import {
   consoleSidebarFooterStyle,
   consoleSidebarFooterValueStyle,
   consoleSidebarStyle,
+  consoleStaffBadgeStyle,
+  consoleStaffBarStyle,
   consoleTopBarSpacerStyle,
   consoleTopBarStyle,
 } from './styles';
@@ -85,9 +87,11 @@ export default function ConsoleShell({
 
   return (
     <div data-app-theme="" data-om-theme="light" style={consoleShellRootStyle}>
+      <div style={consoleStaffBarStyle} />
       <header style={consoleTopBarStyle}>
         <span style={consoleBrandMarkStyle}>N</span>
         <span style={consoleBrandTextStyle}>Nia Console</span>
+        <span style={consoleStaffBadgeStyle}>STAFF CONSOLE</span>
         <span style={consoleInternalBadgeStyle}>INTERNAL</span>
         <span style={consoleTopBarSpacerStyle} />
         <div style={consoleIdentityWrapStyle}>

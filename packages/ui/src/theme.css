@@ -377,6 +377,16 @@ html[data-nx-theme='dark'] [data-app-theme] {
      fixed hex marks keep contrast against both --nx-bg states — the
      only new color this step introduces. */
   --nx-logo-tile: #FFFFFF;
+  /* Console redesign: a separate "staff" accent, distinct from --nx-danger
+     even though both are red-family — --nx-danger is a semantic (this
+     action is destructive) color used app-wide, while this is a *brand*
+     accent scoped to the staff Console surface only (active nav, primary
+     buttons, focus rings, top bar strip, "STAFF CONSOLE" badge). Keeping
+     them separate means a destructive button inside the Console doesn't
+     visually collide with "this is staff mode". */
+  --nx-staff-accent: #FF4D4D;
+  --nx-staff-accent-text: #FFFFFF;
+  --nx-staff-accent-soft: #2A1414;
 }
 
 html[data-nx-theme='light'] [data-app-theme] {
@@ -401,6 +411,9 @@ html[data-nx-theme='light'] [data-app-theme] {
   --nx-danger-tint: #FDECEC;
   --nx-success: #3F3F46;
   --nx-logo-tile: #FFFFFF;
+  --nx-staff-accent: #C2261F;
+  --nx-staff-accent-text: #FFFFFF;
+  --nx-staff-accent-soft: #FBE7E5;
 }
 
 /* Shared across both --nx-theme states: 0-radius/1px-line Swiss grid
