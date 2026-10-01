@@ -184,51 +184,72 @@ describe("private.enforce_workflow_limit() — org-scoped, real Postgres", () =>
   });
 });
 
+async function makePersonalTestUser(): Promise<{ userId: string }> {
+  // A dedicated, freshly created user — never the shared fixture user —
+  // so this test's project insert can never collide with pre-existing
+  // personal projects/workflows left over from other runs or seed data
+  // (that's what made this test flaky: the shared fixture user's project
+  // count could already be at/over the Free plan's project_limit=1,
+  // tripping private.enforce_project_limit() before this test even got to
+  // the workflow-limit trigger it's actually testing). A brand-new user
+  // starts at zero projects/workflows, so 0051's set_default_owner_plan
+  // trigger's Free-plan defaults (project_limit=1, workflow_limit=2) are
+  // always satisfiable here regardless of what any other data looks like.
+  const email = `workflow-limit-trigger-test-${Date.now()}-${Math.random().toString(36).slice(2, 10)}@nia-test.invalid`;
+  const { rows } = await dbPool.query<{ id: string }>(
+    `insert into public."user" (name, email) values ($1, $2) returning id`,
+    ["workflow limit trigger test user", email],
+  );
+  return { userId: rows[0]!.id };
+}
+
+async function dropPersonalTestUser(userId: string, projectId: string | undefined): Promise<void> {
+  // workflows.project_id -> projects(id) is ON DELETE CASCADE (0002), so
+  // deleting the project also removes any workflows created under it.
+  // projects/workflows.created_by/owner_id -> public.user(id) has no
+  // cascade (0035 preserves each column's original, un-cascaded FK
+  // behavior), so the project must be gone before the user can be deleted.
+  if (projectId) await dbPool.query("delete from public.projects where id = $1", [projectId]);
+  await dbPool.query('delete from public."user" where id = $1', [userId]);
+}
+
 describe("private.enforce_workflow_limit() — personal (owner_id) workspace, real Postgres", () => {
-  it("resolves the fixture user's real owner_plan (plan name + effective limit) and names that plan in the refusal", async () => {
-    const { rows: userRows } = await dbPool.query<{ id: string }>('select id from public."user" limit 1');
-    const userId = userRows[0]?.id;
-    expect(userId).toBeTruthy();
-
-    // Don't assume which plan the fixture user is on (backfilled 'legacy'
-    // vs a fresh signup's 'free') — read the actual effective limit/name
-    // owner_plan+plans resolve to, the same way the trigger itself does.
-    const { rows: planRows } = await dbPool.query<{ plan_name: string; effective_limit: number | null }>(
-      `select pl.name as plan_name,
-              case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as effective_limit
-         from public.owner_plan op
-         join public.plans pl on pl.id = op.plan_id
-        where op.user_id = $1`,
-      [userId],
-    );
-    const { plan_name: planName, effective_limit: limit } = planRows[0]!;
-    expect(limit).not.toBeNull();
-
-    const { rows: projectRows } = await dbPool.query<{ id: string }>(
-      `insert into public.projects (owner_id, name, created_by) values ($1, $2, $1) returning id`,
-      [userId, "workflow limit trigger test personal project"],
-    );
-    const projectId = projectRows[0]!.id;
-
-    const insertPersonalWorkflow = (name: string) =>
-      dbPool.query<{ id: string }>(
-        `insert into public.workflows (project_id, owner_id, name, created_by) values ($1, $2, $3, $2) returning id`,
-        [projectId, userId, name],
-      );
-
-    // The trigger's personal-workspace count is scoped by owner_id alone
-    // (not project_id) — start from this fixture user's REAL existing
-    // count, whatever it is, and top up to exactly the boundary, rather
-    // than assuming this user has zero personal workflows already.
-    const { rows: countRows } = await dbPool.query<{ count: string }>(
-      "select count(*) as count from public.workflows where owner_id = $1",
-      [userId],
-    );
-    const existing = Number(countRows[0]?.count ?? 0);
-    const toInsert = Math.max(0, limit! - existing);
+  it("resolves a fresh user's real owner_plan (plan name + effective limit) and names that plan in the refusal", async () => {
+    const { userId } = await makePersonalTestUser();
+    let projectId: string | undefined;
 
     try {
-      for (let i = 0; i < toInsert; i++) {
+      // Don't hardcode which plan a new user lands on — read the actual
+      // effective limit/name owner_plan+plans resolve to, the same way
+      // the trigger itself does (0051 defaults new users to 'free', but
+      // this keeps the assertion honest against the real resolved data
+      // rather than assuming that default never changes).
+      const { rows: planRows } = await dbPool.query<{ plan_name: string; effective_limit: number | null }>(
+        `select pl.name as plan_name,
+                case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as effective_limit
+           from public.owner_plan op
+           join public.plans pl on pl.id = op.plan_id
+          where op.user_id = $1`,
+        [userId],
+      );
+      const { plan_name: planName, effective_limit: limit } = planRows[0]!;
+      expect(limit).not.toBeNull();
+
+      const { rows: projectRows } = await dbPool.query<{ id: string }>(
+        `insert into public.projects (owner_id, name, created_by) values ($1, $2, $1) returning id`,
+        [userId, "workflow limit trigger test personal project"],
+      );
+      projectId = projectRows[0]!.id;
+
+      const insertPersonalWorkflow = (name: string) =>
+        dbPool.query<{ id: string }>(
+          `insert into public.workflows (project_id, owner_id, name, created_by) values ($1, $2, $3, $2) returning id`,
+          [projectId, userId, name],
+        );
+
+      // A fresh user has zero personal workflows, so the boundary is
+      // exactly `limit` inserts — no need to read/top-up an existing count.
+      for (let i = 0; i < limit!; i++) {
         await insertPersonalWorkflow(`wf-personal-${i}`);
       }
 
@@ -237,10 +258,7 @@ describe("private.enforce_workflow_limit() — personal (owner_id) workspace, re
         message: `Your ${planName} plan allows ${limit} workflow${limit === 1 ? "" : "s"}. Delete one or upgrade to add more.`,
       } satisfies Partial<PgError>);
     } finally {
-      // Only this test's own rows (all under this freshly created project)
-      // — never touches the fixture user's pre-existing personal workflows.
-      await dbPool.query("delete from public.workflows where project_id = $1", [projectId]);
-      await dbPool.query("delete from public.projects where id = $1", [projectId]);
+      await dropPersonalTestUser(userId, projectId);
     }
   });
 });
