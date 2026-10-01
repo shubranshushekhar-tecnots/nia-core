@@ -19,9 +19,9 @@ export const consoleDashboardChartCardStyle: CSSProperties = {
   flexDirection: 'column',
   gap: 10,
   padding: '16px 18px',
-  borderRadius: 12,
-  background: 'var(--nx-surface)',
-  border: '1px solid var(--nx-line)',
+  borderRadius: 0,
+  background: 'var(--c-surface)',
+  border: '1px solid var(--c-line)',
 };
 
 export const consoleDashboardChartHeaderStyle: CSSProperties = {
@@ -33,15 +33,15 @@ export const consoleDashboardChartHeaderStyle: CSSProperties = {
 
 export const consoleDashboardChartTitleStyle: CSSProperties = {
   margin: 0,
-  fontFamily: 'var(--font-display)',
+  fontFamily: 'var(--c-font-sans)',
   fontSize: 14,
-  fontWeight: 700,
-  color: 'var(--nx-ink)',
+  fontWeight: 600,
+  color: 'var(--c-text)',
 };
 
 export const consoleDashboardChartSubStyle: CSSProperties = {
   fontSize: 12,
-  color: 'var(--nx-ink-3)',
+  color: 'var(--c-text-3)',
 };
 
 export const consoleDashboardChartLegendStyle: CSSProperties = {
@@ -57,7 +57,7 @@ export const consoleDashboardChartLegendItemStyle: CSSProperties = {
   fontSize: 11,
   letterSpacing: '.04em',
   textTransform: 'uppercase',
-  color: 'var(--nx-ink-2)',
+  color: 'var(--c-text-2)',
 };
 
 export function consoleDashboardChartLegendSwatchStyle(color: string): CSSProperties {
@@ -70,7 +70,7 @@ export const consoleDashboardChartEmptyStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   fontSize: 12.5,
-  color: 'var(--nx-ink-3)',
+  color: 'var(--c-text-3)',
 };
 
 export const consoleDashboardChartTooltipStyle: CSSProperties = {
@@ -78,10 +78,11 @@ export const consoleDashboardChartTooltipStyle: CSSProperties = {
   top: 0,
   width: 150,
   padding: '8px 10px',
-  background: 'var(--nx-ink)',
-  color: 'var(--nx-bg)',
-  borderRadius: 10,
-  fontFamily: 'var(--font-data)',
+  background: 'var(--c-surface-2)',
+  color: 'var(--c-text)',
+  border: '1px solid var(--c-line-strong)',
+  borderRadius: 0,
+  fontFamily: 'var(--c-font-mono)',
   fontSize: 12,
   lineHeight: '18px',
   pointerEvents: 'none',
@@ -102,9 +103,9 @@ export const consoleDashboardAttentionRowStyle: CSSProperties = {
   justifyContent: 'space-between',
   gap: 12,
   padding: '12px 16px',
-  borderRadius: 12,
-  background: 'var(--nx-surface)',
-  border: '1px solid var(--nx-line)',
+  borderRadius: 0,
+  background: 'var(--c-surface)',
+  border: '1px solid var(--c-line)',
 };
 
 export const consoleDashboardAttentionOrgColStyle: CSSProperties = {
@@ -116,8 +117,8 @@ export const consoleDashboardAttentionOrgColStyle: CSSProperties = {
 
 export const consoleDashboardAttentionOrgNameStyle: CSSProperties = {
   fontSize: 13,
-  fontWeight: 700,
-  color: 'var(--nx-ink)',
+  fontWeight: 600,
+  color: 'var(--c-text)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -125,7 +126,7 @@ export const consoleDashboardAttentionOrgNameStyle: CSSProperties = {
 
 export const consoleDashboardAttentionDetailStyle: CSSProperties = {
   fontSize: 12,
-  color: 'var(--nx-ink-3)',
+  color: 'var(--c-text-3)',
 };
 
 export const consoleDashboardSectionStyle: CSSProperties = {

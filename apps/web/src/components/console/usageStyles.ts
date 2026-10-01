@@ -15,9 +15,9 @@ export const consoleUsageFilterBarStyle: CSSProperties = {
   alignItems: 'flex-end',
   gap: 12,
   padding: '14px 16px',
-  borderRadius: 12,
-  background: 'var(--nx-surface)',
-  border: '1px solid var(--nx-line)',
+  borderRadius: 0,
+  background: 'var(--c-surface)',
+  border: '1px solid var(--c-line)',
 };
 
 export const consoleUsageFilterFieldStyle: CSSProperties = {
@@ -31,7 +31,7 @@ export const consoleUsageFilterLabelStyle: CSSProperties = {
   fontWeight: 600,
   letterSpacing: '.06em',
   textTransform: 'uppercase',
-  color: 'var(--nx-ink-3)',
+  color: 'var(--c-text-3)',
 };
 
 export const consoleUsageFilterInputStyle: CSSProperties = {
@@ -41,10 +41,10 @@ export const consoleUsageFilterInputStyle: CSSProperties = {
   padding: '0 10px',
   fontFamily: 'inherit',
   fontSize: 12.5,
-  color: 'var(--nx-ink)',
-  background: 'var(--nx-raised)',
-  border: '1px solid var(--nx-line)',
-  borderRadius: 8,
+  color: 'var(--c-text)',
+  background: 'var(--c-surface)',
+  border: '1px solid var(--c-line-strong)',
+  borderRadius: 0,
   outline: 'none',
 };
 
@@ -58,7 +58,7 @@ export const consoleUsageFilterActionsStyle: CSSProperties = {
 export const consoleUsageFilterErrorStyle: CSSProperties = {
   flex: '1 1 100%',
   fontSize: 12.5,
-  color: 'var(--nx-danger-text)',
+  color: 'var(--c-error)',
 };
 
 // Chart cards (TokensChart/CostChart in ConsoleUsageCharts.tsx) — same
@@ -69,9 +69,9 @@ export const consoleUsageChartCardStyle: CSSProperties = {
   flexDirection: 'column',
   gap: 10,
   padding: '16px 18px',
-  borderRadius: 12,
-  background: 'var(--nx-surface)',
-  border: '1px solid var(--nx-line)',
+  borderRadius: 0,
+  background: 'var(--c-surface)',
+  border: '1px solid var(--c-line)',
 };
 
 export const consoleUsageChartHeaderStyle: CSSProperties = {
@@ -83,15 +83,15 @@ export const consoleUsageChartHeaderStyle: CSSProperties = {
 
 export const consoleUsageChartTitleStyle: CSSProperties = {
   margin: 0,
-  fontFamily: 'var(--font-display)',
+  fontFamily: 'var(--c-font-sans)',
   fontSize: 14,
-  fontWeight: 700,
-  color: 'var(--nx-ink)',
+  fontWeight: 600,
+  color: 'var(--c-text)',
 };
 
 export const consoleUsageChartSubStyle: CSSProperties = {
   fontSize: 12,
-  color: 'var(--nx-ink-3)',
+  color: 'var(--c-text-3)',
 };
 
 export const consoleUsageChartLegendStyle: CSSProperties = {
@@ -107,7 +107,7 @@ export const consoleUsageChartLegendItemStyle: CSSProperties = {
   fontSize: 11,
   letterSpacing: '.04em',
   textTransform: 'uppercase',
-  color: 'var(--nx-ink-2)',
+  color: 'var(--c-text-2)',
 };
 
 export function consoleUsageChartLegendSwatchStyle(color: string): CSSProperties {
@@ -120,7 +120,7 @@ export const consoleUsageChartEmptyStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   fontSize: 12.5,
-  color: 'var(--nx-ink-3)',
+  color: 'var(--c-text-3)',
 };
 
 export const consoleUsageChartTooltipStyle: CSSProperties = {
@@ -128,10 +128,11 @@ export const consoleUsageChartTooltipStyle: CSSProperties = {
   top: 0,
   width: 140,
   padding: '8px 10px',
-  background: 'var(--nx-ink)',
-  color: 'var(--nx-bg)',
-  borderRadius: 10,
-  fontFamily: 'var(--font-data)',
+  background: 'var(--c-surface-2)',
+  color: 'var(--c-text)',
+  border: '1px solid var(--c-line-strong)',
+  borderRadius: 0,
+  fontFamily: 'var(--c-font-mono)',
   fontSize: 12,
   lineHeight: '18px',
   pointerEvents: 'none',
@@ -154,9 +155,9 @@ export const consoleUsageSectionsRowStyle: CSSProperties = {
 };
 
 export const consoleUsageTableWrapStyle: CSSProperties = {
-  borderRadius: 12,
-  background: 'var(--nx-surface)',
-  border: '1px solid var(--nx-line)',
+  borderRadius: 0,
+  background: 'var(--c-surface)',
+  border: '1px solid var(--c-line)',
   padding: '4px 16px',
 };
 
@@ -165,12 +166,12 @@ export const consoleUsageTableHeadRowStyle: CSSProperties = {
   alignItems: 'center',
   gap: 10,
   padding: '9px 0',
-  borderBottom: '1px solid var(--nx-line)',
+  borderBottom: '1px solid var(--c-line)',
   fontSize: 10.5,
   fontWeight: 600,
   letterSpacing: '.06em',
   textTransform: 'uppercase',
-  color: 'var(--nx-ink-3)',
+  color: 'var(--c-text-3)',
 };
 
 export const consoleUsageRowStyle: CSSProperties = {
@@ -178,14 +179,14 @@ export const consoleUsageRowStyle: CSSProperties = {
   alignItems: 'center',
   gap: 10,
   padding: '10px 0',
-  borderBottom: '1px solid var(--nx-line)',
+  borderBottom: '1px solid var(--c-line)',
 };
 
 export const consoleUsageColLabelStyle: CSSProperties = {
   flex: '2 1 120px',
   minWidth: 90,
   fontSize: 12.5,
-  color: 'var(--nx-ink)',
+  color: 'var(--c-text)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -195,17 +196,19 @@ export const consoleUsageColNumberStyle: CSSProperties = {
   flex: '1 1 70px',
   minWidth: 60,
   textAlign: 'right',
-  fontFamily: 'var(--font-data)',
+  fontFamily: 'var(--c-font-mono)',
   fontSize: 11.5,
-  color: 'var(--nx-ink-2)',
+  color: 'var(--c-text-2)',
+  fontVariantNumeric: 'tabular-nums',
 };
 
 export const consoleUsageColCostStyle: CSSProperties = {
   flex: '1 1 80px',
   minWidth: 70,
   textAlign: 'right',
-  fontFamily: 'var(--font-data)',
+  fontFamily: 'var(--c-font-mono)',
   fontSize: 12,
-  fontWeight: 700,
-  color: 'var(--nx-ink)',
+  fontWeight: 600,
+  color: 'var(--c-text)',
+  fontVariantNumeric: 'tabular-nums',
 };

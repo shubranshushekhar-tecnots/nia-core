@@ -438,6 +438,101 @@ html[data-nx-theme='light'] [data-app-theme] {
   --nx-font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
 }
 
+/* ------------------------------------------------------------
+   Console theme (staff/superadmin only) — Console dark/red/square spec.
+   Deliberately a SEPARATE token namespace (--c-*) from --nx-* above: the
+   --nx-* "staff accent" tokens only apply when html[data-nx-theme] is set
+   by the app's global theme provider, which means they're one state of a
+   toggle shared with every other [data-app-theme] element in the app —
+   not a guaranteed, leak-proof console identity. Scoping under
+   [data-theme="console"] (set once, on ConsoleShell.tsx's root div, the
+   single chrome component every /console/* page renders) means Console
+   is always dark/red/square regardless of any app-wide theme state, and
+   these --c-* names are never read by anything outside /console. Do not
+   reuse --nx-* names here and do not let --c-* leak outside this block.
+   ------------------------------------------------------------ */
+[data-theme='console'] {
+  /* surfaces */
+  --c-bg: #09090B;
+  --c-bg-subtle: #0C0C0E;
+  --c-surface: #111114;
+  --c-surface-2: #17171B;
+  --c-surface-3: #1E1E23;
+  /* lines */
+  --c-line: #1F1F24;
+  --c-line-strong: #2C2C33;
+  --c-line-focus: #F87171;
+  /* text */
+  --c-text: #F4F4F5;
+  --c-text-2: #A1A1AA;
+  --c-text-3: #8B8B94;
+  --c-text-disabled: #52525B;
+  /* accent (console red) */
+  --c-accent: #DC2626;
+  --c-accent-hover: #B91C1C;
+  --c-accent-text: #F87171;
+  --c-accent-soft: rgba(220, 38, 38, .12);
+  --c-accent-line: rgba(248, 113, 113, .35);
+  /* status */
+  --c-success: #4ADE80;
+  --c-success-bg: rgba(34, 197, 94, .12);
+  --c-warning: #FBBF24;
+  --c-warning-bg: rgba(245, 158, 11, .12);
+  --c-info: #60A5FA;
+  --c-info-bg: rgba(59, 130, 246, .12);
+  --c-error: #FCA5A5;
+  --c-error-bg: rgba(239, 68, 68, .14);
+  /* radius — every console element is square (radio buttons excepted) */
+  --c-radius: 0px;
+  /* fonts — no new imports: Satoshi is already self-hosted via the
+     unconditional @font-face block at the top of this file (the same
+     font every customer-facing light-mode app page renders), and
+     JetBrains Mono is already loaded/used by Console via --font-data. */
+  --c-font-sans: 'Satoshi', system-ui, -apple-system, sans-serif;
+  --c-font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
+}
+
+/* Rules that can't be expressed as CSS variables, scoped to the same
+   .console-theme class ConsoleShell.tsx's root div carries alongside
+   data-theme="console". */
+.console-theme ::selection {
+  background: rgba(248, 113, 113, .3);
+}
+
+.console-theme ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.console-theme ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.console-theme ::-webkit-scrollbar-thumb {
+  background: var(--c-surface-3);
+  border-radius: 0;
+}
+
+.console-theme :focus-visible {
+  outline: 2px solid #F87171;
+  outline-offset: 2px;
+}
+
+@keyframes c-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+
+.console-theme .c-status-dot--running {
+  animation: c-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-theme .c-status-dot--running {
+    animation: none;
+  }
+}
+
 /* Precision Dark redesign (Step 2): shared hover-wipe utility for Sidebar/
    TopBar interactive rows — a solid panel wipes in from the left via
    `::before` + `transform: scaleX()` on hover/focus-visible. Inline

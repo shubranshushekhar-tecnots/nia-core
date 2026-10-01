@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import type { ConsoleStaffPage } from '@/lib/api/consoleServer';
 import { loadMoreStaffAction } from '@/lib/console/actions';
+import StatusPill from './StatusPill';
 import {
   consoleColAccountStyle,
   consoleColJoinedStyle,
@@ -17,7 +18,6 @@ import {
   consoleLoadMoreErrorStyle,
   consoleLoadMoreRowStyle,
   consoleMonoStyle,
-  consolePillStyle,
   consoleRowAccountCellStyle,
   consoleRowJoinedCellStyle,
   consoleRowKindStyle,
@@ -92,9 +92,10 @@ export default function ConsoleStaffClient({ initialPage }: { initialPage: Conso
               </span>
             </span>
             <span style={consoleColMembersStyle}>
-              <span style={consolePillStyle(s.twoFactorEnabled ? 'ok' : 'warn')}>
-                {s.twoFactorEnabled ? 'Enabled' : 'Disabled'}
-              </span>
+              <StatusPill
+                tone={s.twoFactorEnabled ? 'success' : 'warning'}
+                label={s.twoFactorEnabled ? 'Enabled' : 'Disabled'}
+              />
             </span>
             <span style={consoleRowJoinedCellStyle}>{s.grantedBy.name || s.grantedBy.email}</span>
             <span style={consoleRowJoinedCellStyle}>{formatDate(s.grantedAt)}</span>

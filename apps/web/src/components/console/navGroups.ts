@@ -1,4 +1,23 @@
-export type NavItem = { id: string; label: string; icon: string; href?: string };
+// `icon` is a lookup key into the NAV_ICON map (apps/web/src/components/
+// console/ConsoleShell.tsx), not a rendered glyph/component — this file
+// stays JSX-free (and importable by navGroups.test.ts under vitest's
+// esbuild/"jsx":"preserve" setup, see that test's comment) by never
+// touching apps/web/src/components/console/icons.tsx, which is a real
+// .tsx module.
+export type NavIconKey =
+  | 'overview'
+  | 'token-analytics'
+  | 'system-health'
+  | 'users'
+  | 'organizations'
+  | 'platform-staff'
+  | 'projects-workflows'
+  | 'plans'
+  | 'audit-logs'
+  | 'announcements'
+  | 'model-prices';
+
+export type NavItem = { id: string; label: string; icon: NavIconKey; href?: string };
 export type NavGroup = { label: string; items: NavItem[] };
 
 // Console redesign Slice 3 (grouped sidebar). Replaces the old flat NAV
@@ -20,37 +39,37 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Dashboard',
     items: [
-      { id: 'dash', label: 'Overview', icon: '\u25D1', href: '/console/dashboard' },
-      { id: 'usage', label: 'Token Analytics', icon: '\u25C6', href: '/console/usage' },
-      { id: 'health', label: 'System Health', icon: '\u25C9', href: '/console/health' },
+      { id: 'dash', label: 'Overview', icon: 'overview', href: '/console/dashboard' },
+      { id: 'usage', label: 'Token Analytics', icon: 'token-analytics', href: '/console/usage' },
+      { id: 'health', label: 'System Health', icon: 'system-health', href: '/console/health' },
     ],
   },
   {
     label: 'Users & Access',
     items: [
-      { id: 'users', label: 'Users', icon: '\u25CB', href: '/console/users' },
-      { id: 'directory', label: 'Organizations', icon: '\u25A4', href: '/console' },
-      { id: 'staff', label: 'Platform Staff', icon: '\u25D4', href: '/console/staff' },
+      { id: 'users', label: 'Users', icon: 'users', href: '/console/users' },
+      { id: 'directory', label: 'Organizations', icon: 'organizations', href: '/console' },
+      { id: 'staff', label: 'Platform Staff', icon: 'platform-staff', href: '/console/staff' },
     ],
   },
   {
     label: 'Content',
     items: [
-      { id: 'projects', label: 'Projects & Workflows', icon: '\u25A6', href: '/console/projects' },
+      { id: 'projects', label: 'Projects & Workflows', icon: 'projects-workflows', href: '/console/projects' },
     ],
   },
   {
     label: 'Platform',
     items: [
-      { id: 'plans', label: 'Plans', icon: '\u25C8', href: '/console/plans' },
-      { id: 'audit-logs', label: 'Audit Logs', icon: '\u2637', href: '/console/audit-logs' },
-      { id: 'notify', label: 'Announcements', icon: '\u25CD', href: '/console/announcements' },
+      { id: 'plans', label: 'Plans', icon: 'plans', href: '/console/plans' },
+      { id: 'audit-logs', label: 'Audit Logs', icon: 'audit-logs', href: '/console/audit-logs' },
+      { id: 'notify', label: 'Announcements', icon: 'announcements', href: '/console/announcements' },
     ],
   },
   {
     label: 'Config',
     items: [
-      { id: 'model-prices', label: 'Model Prices', icon: '\u2699', href: '/console/model-prices' },
+      { id: 'model-prices', label: 'Model Prices', icon: 'model-prices', href: '/console/model-prices' },
     ],
   },
 ];

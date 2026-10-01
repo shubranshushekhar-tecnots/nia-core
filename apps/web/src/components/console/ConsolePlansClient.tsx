@@ -79,7 +79,7 @@ export default function ConsolePlansClient({ initialPlans }: { initialPlans: Con
             />
           ) : (
             <div key={plan.id} style={consoleRowStyle}>
-              <span style={{ flex: '2 1 160px', minWidth: 120, fontSize: 13, color: 'var(--nx-ink)' }}>{plan.name}</span>
+              <span style={{ flex: '2 1 160px', minWidth: 120, fontSize: 13, color: 'var(--c-text)' }}>{plan.name}</span>
               <span style={consoleRowNumberStyle}>{plan.projectLimit ?? '\u221E'}</span>
               <span style={consoleRowNumberStyle}>{plan.workflowLimit ?? '\u221E'}</span>
               <span style={consoleRowNumberStyle}>{plan.rowsPerMonth ?? '\u221E'}</span>
@@ -180,7 +180,7 @@ function PlanEditRow({
 
   return (
     <div style={consolePlanFormStyle}>
-      <span style={{ flex: '1 1 100%', fontSize: 13, fontWeight: 600, color: 'var(--nx-ink)' }}>{plan.name}</span>
+      <span style={{ flex: '1 1 100%', fontSize: 13, fontWeight: 600, color: 'var(--c-text)' }}>{plan.name}</span>
 
       <div style={consolePlanFieldStyle}>
         <label style={consolePlanFieldLabelStyle} htmlFor={`project-limit-${plan.id}`}>

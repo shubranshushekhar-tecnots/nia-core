@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ConsoleDashboardData, ConsoleNeedsAttentionItem } from '@/lib/api/consoleServer';
 import ConsoleDashboardCharts from './ConsoleDashboardCharts';
 import ConsoleUsageCharts, { formatUsd } from './ConsoleUsageCharts';
+import StatusPill, { type StatusTone } from './StatusPill';
 import {
   consoleContentStyle,
   consoleEmptyStyle,
@@ -9,7 +10,6 @@ import {
   consoleHeaderSubStyle,
   consoleHeaderTitleColStyle,
   consoleHeaderTitleStyle,
-  consolePillStyle,
   consoleRowLinkStyle,
   consoleSectionTitleStyle,
   consoleStatCardStyle,
@@ -38,8 +38,8 @@ import {
  * row linking to that org's Org Detail page.
  */
 
-function attentionTone(reason: ConsoleNeedsAttentionItem['reason']): 'bad' | 'warn' {
-  return reason === 'suspended' ? 'bad' : reason === 'failing_runs' ? 'bad' : 'warn';
+function attentionTone(reason: ConsoleNeedsAttentionItem['reason']): StatusTone {
+  return reason === 'suspended' ? 'error' : reason === 'failing_runs' ? 'error' : 'warning';
 }
 
 function attentionLabel(reason: ConsoleNeedsAttentionItem['reason']): string {
@@ -63,7 +63,7 @@ function NeedsAttentionList({ items }: { items: ConsoleNeedsAttentionItem[] }) {
                   <span style={consoleDashboardAttentionOrgNameStyle}>{item.orgName}</span>
                   <span style={consoleDashboardAttentionDetailStyle}>{item.detail}</span>
                 </div>
-                <span style={consolePillStyle(attentionTone(item.reason))}>{attentionLabel(item.reason)}</span>
+                <StatusPill tone={attentionTone(item.reason)} label={attentionLabel(item.reason)} />
               </div>
             </Link>
           ))}

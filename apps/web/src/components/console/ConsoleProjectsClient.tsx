@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import type { ConsoleProjectsPage } from '@/lib/api/consoleServer';
 import { loadMoreProjectsAction } from '@/lib/console/actions';
+import StatusPill, { type StatusTone } from './StatusPill';
 import {
   consoleColAccountStyle,
   consoleColRunStartedStyle,
@@ -17,7 +18,6 @@ import {
   consoleHeaderTitleStyle,
   consoleLoadMoreErrorStyle,
   consoleLoadMoreRowStyle,
-  consolePillStyle,
   consoleRowNumberStyle,
   consoleRowRunStartedCellStyle,
   consoleRowRunStatusCellStyle,
@@ -88,9 +88,9 @@ export default function ConsoleProjectsClient({ initialPage }: { initialPage: Co
             <span style={consoleRowNumberStyle}>{o.workflowCount}</span>
             <span style={consoleRowRunStatusCellStyle}>
               {o.lastRun ? (
-                <span style={consolePillStyle(runStatusTone(o.lastRun.status))}>{o.lastRun.status}</span>
+                <StatusPill tone={runStatusTone(o.lastRun.status)} label={o.lastRun.status} />
               ) : (
-                <span style={consolePillStyle('neutral')}>No runs</span>
+                <StatusPill tone="neutral" label="No runs" />
               )}
             </span>
             <span style={consoleRowRunStartedCellStyle}>{o.lastRun ? formatDate(o.lastRun.startedAt) : '—'}</span>
@@ -109,11 +109,11 @@ export default function ConsoleProjectsClient({ initialPage }: { initialPage: Co
   );
 }
 
-function runStatusTone(status: string): 'ok' | 'warn' | 'bad' | 'neutral' {
-  if (status === 'succeeded') return 'ok';
-  if (status === 'failed') return 'bad';
+function runStatusTone(status: string): StatusTone {
+  if (status === 'succeeded') return 'success';
+  if (status === 'failed') return 'error';
   if (status === 'cancelled') return 'neutral';
-  return 'warn';
+  return 'running';
 }
 
 function formatDate(iso: string): string {

@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { ensureBearerToken } from '@/lib/auth/browserSession';
 import type { ConsoleAuditLogFilters, ConsoleAuditLogsPage } from '@/lib/api/consoleServer';
 import { loadAuditLogsAction } from '@/lib/console/actions';
+import StatusPill from './StatusPill';
 import {
   consoleColAccountStyle,
   consoleContentStyle,
@@ -14,7 +15,6 @@ import {
   consoleHeaderTitleColStyle,
   consoleHeaderTitleStyle,
   consoleLoadMoreRowStyle,
-  consolePillStyle,
   consoleRowStyle,
   consoleTableHeadRowStyle,
   consoleTableStyle,
@@ -267,7 +267,7 @@ export default function ConsoleAuditLogsClient({ initialPage }: { initialPage: C
         {items.map((item) => (
           <div key={`${item.source}-${item.id}`} style={consoleRowStyle}>
             <span style={{ flex: '0 1 70px', minWidth: 60 }}>
-              <span style={consolePillStyle(item.source === 'staff' ? 'warn' : 'neutral')}>{item.source}</span>
+              <StatusPill tone={item.source === 'staff' ? 'warning' : 'neutral'} label={item.source} />
             </span>
             <span style={{ flex: '0 1 150px', minWidth: 130 }}>{formatDateTime(item.createdAt)}</span>
             <span style={consoleColAccountStyle}>{item.action}</span>

@@ -154,7 +154,7 @@ export default function ConsoleModelPricesClient({ initialPage }: { initialPage:
 
         {items.map((price) => (
           <div key={price.id} style={consoleRowStyle}>
-            <span style={{ flex: '1 1 140px', minWidth: 120, fontSize: 13, color: 'var(--nx-ink)' }}>{price.model}</span>
+            <span style={{ flex: '1 1 140px', minWidth: 120, fontSize: 13, color: 'var(--c-text)' }}>{price.model}</span>
             <span style={consoleRowNumberStyle}>{price.inputPricePer1m}</span>
             <span style={consoleRowNumberStyle}>{price.outputPricePer1m}</span>
             <span style={consoleRowNumberStyle}>{price.cachedPricePer1m ?? '\u2014'}</span>

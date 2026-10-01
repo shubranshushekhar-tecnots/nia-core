@@ -66,8 +66,8 @@ function Gridlines({ ticks, formatTick }: { ticks: number[]; formatTick: (v: num
         const y = Y0 + PLOT_H - (PLOT_H * t) / (ticks[0] || 1);
         return (
           <g key={t}>
-            <line x1={X0} x2={X0 + PLOT_W} y1={y} y2={y} stroke="var(--nx-line)" strokeOpacity={i === ticks.length - 1 ? 1 : 0.5} />
-            <text x={X0 - 8} y={y + 4} textAnchor="end" fontSize={11} fontFamily="var(--font-data)" fill="var(--nx-ink-3)">
+            <line x1={X0} x2={X0 + PLOT_W} y1={y} y2={y} stroke="var(--c-line)" strokeOpacity={i === ticks.length - 1 ? 1 : 0.5} />
+            <text x={X0 - 8} y={y + 4} textAnchor="end" fontSize={11} fontFamily="var(--c-font-mono)" fill="var(--c-text-3)">
               {formatTick(t)}
             </text>
           </g>
@@ -116,11 +116,11 @@ function TokensChart({ points }: { points: ConsoleUsageTimeseriesPoint[] }) {
         </div>
         <div style={consoleUsageChartLegendStyle}>
           <span style={consoleUsageChartLegendItemStyle}>
-            <span style={consoleUsageChartLegendSwatchStyle('var(--nx-staff-accent)')} />
+            <span style={consoleUsageChartLegendSwatchStyle('var(--c-accent-text)')} />
             Input
           </span>
           <span style={consoleUsageChartLegendItemStyle}>
-            <span style={consoleUsageChartLegendSwatchStyle('var(--nx-success)')} />
+            <span style={consoleUsageChartLegendSwatchStyle('#60A5FA')} />
             Output
           </span>
         </div>
@@ -129,26 +129,26 @@ function TokensChart({ points }: { points: ConsoleUsageTimeseriesPoint[] }) {
         <svg width="100%" height={150} viewBox={`0 0 ${VB_W} 150`} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }}>
           <Gridlines ticks={ticks} formatTick={(v) => (v === 0 ? '0' : formatCompactNumber(Math.round(v)))} />
           {inputLines.map((d, i) => (
-            <path key={`in-${i}`} d={d} fill="none" stroke="var(--nx-staff-accent)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            <path key={`in-${i}`} d={d} fill="none" stroke="var(--c-accent-text)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           ))}
           {outputLines.map((d, i) => (
             <path
               key={`out-${i}`}
               d={d}
               fill="none"
-              stroke="var(--nx-success)"
+              stroke="#60A5FA"
               strokeWidth={2}
               strokeLinejoin="round"
               strokeLinecap="round"
             />
           ))}
           {hover && hoverPoint && (
-            <line x1={hoverPoint.x} x2={hoverPoint.x} y1={Y0} y2={Y0 + PLOT_H} stroke="var(--nx-ink-3)" strokeDasharray="2 3" />
+            <line x1={hoverPoint.x} x2={hoverPoint.x} y1={Y0} y2={Y0 + PLOT_H} stroke="var(--c-text-3)" strokeDasharray="2 3" />
           )}
-          <text x={X0} y={164} fontSize={11} fontFamily="var(--font-data)" fill="var(--nx-ink-3)">
+          <text x={X0} y={164} fontSize={11} fontFamily="var(--c-font-mono)" fill="var(--c-text-3)">
             {dayLabel(points[0]?.date ?? '')}
           </text>
-          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fontFamily="var(--font-data)" fill="var(--nx-ink-3)">
+          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fontFamily="var(--c-font-mono)" fill="var(--c-text-3)">
             {dayLabel(points[points.length - 1]?.date ?? '')}
           </text>
         </svg>
@@ -214,26 +214,26 @@ function CostChart({ points }: { points: ConsoleUsageTimeseriesPoint[] }) {
         <svg width="100%" height={150} viewBox={`0 0 ${VB_W} 150`} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }}>
           <Gridlines ticks={ticks} formatTick={(v) => (v === 0 ? '$0' : usdFormatterCompact.format(v))} />
           {areas.map((d, i) => (
-            <path key={i} d={d} fill="var(--nx-staff-accent)" fillOpacity={0.1} />
+            <path key={i} d={d} fill="var(--c-accent-text)" fillOpacity={0.1} />
           ))}
           {lines.map((d, i) => (
-            <path key={i} d={d} fill="none" stroke="var(--nx-staff-accent)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            <path key={i} d={d} fill="none" stroke="var(--c-accent-text)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           ))}
           {endPoint && (
-            <text x={X0 + PLOT_W - 12} y={endPoint.y - 8} textAnchor="end" fontSize={11.5} fontWeight={700} fill="var(--nx-ink)">
+            <text x={X0 + PLOT_W - 12} y={endPoint.y - 8} textAnchor="end" fontSize={11.5} fontWeight={600} fill="var(--c-text)">
               {formatUsd(lastValue)}
             </text>
           )}
           {hover && hoverPoint && (
             <>
-              <line x1={hoverPoint.x} x2={hoverPoint.x} y1={Y0} y2={Y0 + PLOT_H} stroke="var(--nx-ink-3)" strokeDasharray="2 3" />
-              <circle cx={hoverPoint.x} cy={hoverPoint.y} r={4.5} fill="var(--nx-staff-accent)" stroke="var(--nx-surface)" strokeWidth={2} />
+              <line x1={hoverPoint.x} x2={hoverPoint.x} y1={Y0} y2={Y0 + PLOT_H} stroke="var(--c-text-3)" strokeDasharray="2 3" />
+              <circle cx={hoverPoint.x} cy={hoverPoint.y} r={4.5} fill="var(--c-accent-text)" stroke="var(--c-surface)" strokeWidth={2} />
             </>
           )}
-          <text x={X0} y={164} fontSize={11} fontFamily="var(--font-data)" fill="var(--nx-ink-3)">
+          <text x={X0} y={164} fontSize={11} fontFamily="var(--c-font-mono)" fill="var(--c-text-3)">
             {dayLabel(points[0]?.date ?? '')}
           </text>
-          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fontFamily="var(--font-data)" fill="var(--nx-ink-3)">
+          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fontFamily="var(--c-font-mono)" fill="var(--c-text-3)">
             {dayLabel(points[points.length - 1]?.date ?? '')}
           </text>
         </svg>

@@ -13,6 +13,7 @@ import type {
 import { removeMemberAction, suspendOrgAction, unsuspendOrgAction, updateOrgPlanAction } from '@/lib/console/actions';
 import { formatLowerLimitWarning } from '@/lib/console/planLimitWarning';
 import ConsoleUsageCharts, { formatUsd } from './ConsoleUsageCharts';
+import StatusPill, { type StatusTone } from './StatusPill';
 import {
   consoleBreadcrumbCurrentStyle,
   consoleBreadcrumbLinkStyle,
@@ -42,7 +43,6 @@ import {
   consoleHeaderTitleStyle,
   consoleLoadMoreErrorStyle,
   consoleMonoStyle,
-  consolePillStyle,
   consolePlanFieldLabelStyle,
   consolePlanFieldStyle,
   consolePlanFormActionsStyle,
@@ -740,7 +740,7 @@ export default function ConsoleOrgDetailClient({
               {runs.map((r) => (
                 <div key={r.id} style={consoleRowStyle}>
                   <span style={consoleRowRunStatusCellStyle}>
-                    <span style={consolePillStyle(runStatusTone(r.status))}>{r.status}</span>
+                    <StatusPill tone={runStatusTone(r.status)} label={r.status} />
                   </span>
                   <span style={consoleRowRunStartedCellStyle}>{formatDate(r.startedAt)}</span>
                   <span style={consoleRowRunDurationCellStyle}>{formatDuration(r.durationMs)}</span>
@@ -773,9 +773,7 @@ export default function ConsoleOrgDetailClient({
                 <span style={consoleRowConnectorTypeCellStyle}>{c.connectorId}</span>
                 <span style={consoleRowConnectorNameCellStyle}>{c.displayName}</span>
                 <span style={consoleRowConnectorHealthCellStyle}>
-                  <span style={consolePillStyle(connectorHealthTone(c.lastTestStatus))}>
-                    {c.lastTestStatus ?? 'Untested'}
-                  </span>
+                  <StatusPill tone={connectorHealthTone(c.lastTestStatus)} label={c.lastTestStatus ?? 'Untested'} />
                   {c.lastTestLatencyMs !== null && (
                     <span style={consoleRowConnectorHealthLatencyStyle}>{c.lastTestLatencyMs}ms</span>
                   )}
@@ -816,17 +814,17 @@ export default function ConsoleOrgDetailClient({
   );
 }
 
-function connectorHealthTone(status: 'ok' | 'error' | null): 'ok' | 'bad' | 'neutral' {
-  if (status === 'ok') return 'ok';
-  if (status === 'error') return 'bad';
+function connectorHealthTone(status: 'ok' | 'error' | null): StatusTone {
+  if (status === 'ok') return 'success';
+  if (status === 'error') return 'error';
   return 'neutral';
 }
 
-function runStatusTone(status: string): 'ok' | 'warn' | 'bad' | 'neutral' {
-  if (status === 'succeeded') return 'ok';
-  if (status === 'failed') return 'bad';
+function runStatusTone(status: string): StatusTone {
+  if (status === 'succeeded') return 'success';
+  if (status === 'failed') return 'error';
   if (status === 'cancelled') return 'neutral';
-  return 'warn';
+  return 'running';
 }
 
 function formatDuration(ms: number | null): string {

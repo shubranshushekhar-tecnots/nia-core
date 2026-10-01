@@ -43,8 +43,8 @@ function Gridlines({ ticks }: { ticks: number[] }) {
         const y = Y0 + PLOT_H - (PLOT_H * t) / (ticks[0] || 1);
         return (
           <g key={t}>
-            <line x1={X0} x2={X0 + PLOT_W} y1={y} y2={y} stroke="var(--nx-line)" strokeOpacity={i === ticks.length - 1 ? 1 : 0.5} />
-            <text x={X0 - 8} y={y + 4} textAnchor="end" fontSize={11} fontFamily="var(--font-data)" fill="var(--nx-ink-3)">
+            <line x1={X0} x2={X0 + PLOT_W} y1={y} y2={y} stroke="var(--c-line)" strokeOpacity={i === ticks.length - 1 ? 1 : 0.5} />
+            <text x={X0 - 8} y={y + 4} textAnchor="end" fontSize={11} fontFamily="var(--c-font-mono)" fill="var(--c-text-3)">
               {t === 0 ? '0' : formatCompactNumber(Math.round(t))}
             </text>
           </g>
@@ -96,15 +96,15 @@ export function RunsPerDayChart({ points }: { points: ConsoleRunsPerDayPoint[] }
         </div>
         <div style={consoleDashboardChartLegendStyle}>
           <span style={consoleDashboardChartLegendItemStyle}>
-            <span style={consoleDashboardChartLegendSwatchStyle('var(--nx-success)')} />
+            <span style={consoleDashboardChartLegendSwatchStyle('var(--c-accent-text)')} />
             Succeeded
           </span>
           <span style={consoleDashboardChartLegendItemStyle}>
-            <span style={consoleDashboardChartLegendSwatchStyle('var(--nx-danger-text)')} />
+            <span style={consoleDashboardChartLegendSwatchStyle('#60A5FA')} />
             Failed
           </span>
           <span style={consoleDashboardChartLegendItemStyle}>
-            <span style={consoleDashboardChartLegendSwatchStyle('var(--nx-ink-3)')} />
+            <span style={consoleDashboardChartLegendSwatchStyle('#FBBF24')} />
             Running
           </span>
         </div>
@@ -113,21 +113,21 @@ export function RunsPerDayChart({ points }: { points: ConsoleRunsPerDayPoint[] }
         <svg width="100%" height={150} viewBox={`0 0 ${VB_W} 150`} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }}>
           <Gridlines ticks={ticks} />
           {succeededLines.map((d, i) => (
-            <path key={`ok-${i}`} d={d} fill="none" stroke="var(--nx-success)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            <path key={`ok-${i}`} d={d} fill="none" stroke="var(--c-accent-text)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           ))}
           {failedLines.map((d, i) => (
-            <path key={`bad-${i}`} d={d} fill="none" stroke="var(--nx-danger-text)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            <path key={`bad-${i}`} d={d} fill="none" stroke="#60A5FA" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           ))}
           {runningLines.map((d, i) => (
-            <path key={`run-${i}`} d={d} fill="none" stroke="var(--nx-ink-3)" strokeWidth={2} strokeDasharray="3 3" strokeLinejoin="round" strokeLinecap="round" />
+            <path key={`run-${i}`} d={d} fill="none" stroke="#FBBF24" strokeWidth={2} strokeDasharray="3 3" strokeLinejoin="round" strokeLinecap="round" />
           ))}
           {hover && hoverPoint && (
-            <line x1={hoverPoint.x} x2={hoverPoint.x} y1={Y0} y2={Y0 + PLOT_H} stroke="var(--nx-ink-3)" strokeDasharray="2 3" />
+            <line x1={hoverPoint.x} x2={hoverPoint.x} y1={Y0} y2={Y0 + PLOT_H} stroke="var(--c-text-3)" strokeDasharray="2 3" />
           )}
-          <text x={X0} y={164} fontSize={11} fontFamily="var(--font-data)" fill="var(--nx-ink-3)">
+          <text x={X0} y={164} fontSize={11} fontFamily="var(--c-font-mono)" fill="var(--c-text-3)">
             {dayLabel(points[0]?.date ?? '')}
           </text>
-          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fontFamily="var(--font-data)" fill="var(--nx-ink-3)">
+          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fontFamily="var(--c-font-mono)" fill="var(--c-text-3)">
             {dayLabel(points[points.length - 1]?.date ?? '')}
           </text>
         </svg>
@@ -191,18 +191,18 @@ export function RowsPerDayChart({ points }: { points: ConsoleRunsPerDayPoint[] }
         <svg width="100%" height={150} viewBox={`0 0 ${VB_W} 150`} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible' }}>
           <Gridlines ticks={ticks} />
           {lines.map((d, i) => (
-            <path key={i} d={d} fill="none" stroke="var(--nx-staff-accent)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            <path key={i} d={d} fill="none" stroke="var(--c-accent-text)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           ))}
           {hover && hoverPoint && (
             <>
-              <line x1={hoverPoint.x} x2={hoverPoint.x} y1={Y0} y2={Y0 + PLOT_H} stroke="var(--nx-ink-3)" strokeDasharray="2 3" />
-              <circle cx={hoverPoint.x} cy={hoverPoint.y} r={4.5} fill="var(--nx-staff-accent)" stroke="var(--nx-surface)" strokeWidth={2} />
+              <line x1={hoverPoint.x} x2={hoverPoint.x} y1={Y0} y2={Y0 + PLOT_H} stroke="var(--c-text-3)" strokeDasharray="2 3" />
+              <circle cx={hoverPoint.x} cy={hoverPoint.y} r={4.5} fill="var(--c-accent-text)" stroke="var(--c-surface)" strokeWidth={2} />
             </>
           )}
-          <text x={X0} y={164} fontSize={11} fontFamily="var(--font-data)" fill="var(--nx-ink-3)">
+          <text x={X0} y={164} fontSize={11} fontFamily="var(--c-font-mono)" fill="var(--c-text-3)">
             {dayLabel(points[0]?.date ?? '')}
           </text>
-          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fontFamily="var(--font-data)" fill="var(--nx-ink-3)">
+          <text x={X0 + PLOT_W} y={164} textAnchor="end" fontSize={11} fontFamily="var(--c-font-mono)" fill="var(--c-text-3)">
             {dayLabel(points[points.length - 1]?.date ?? '')}
           </text>
         </svg>

@@ -8,6 +8,7 @@ import {
   endAnnouncementAction,
   loadAnnouncementsAction,
 } from '@/lib/console/actions';
+import StatusPill, { type StatusTone } from './StatusPill';
 import {
   consoleAnnouncementFieldsRowStyle,
   consoleAnnouncementFormStyle,
@@ -35,7 +36,6 @@ import {
   consoleHeaderTitleStyle,
   consoleLoadMoreErrorStyle,
   consoleLoadMoreRowStyle,
-  consolePillStyle,
   consolePlanFieldLabelStyle,
   consolePlanFieldStyle,
   consolePlanFormActionsStyle,
@@ -51,10 +51,10 @@ type Severity = 'info' | 'warning' | 'critical';
 type Audience = 'all' | 'org' | 'project';
 type OrgRole = 'member' | 'admin' | 'owner' | 'viewer';
 
-const SEVERITY_TONE: Record<Severity, 'neutral' | 'warn' | 'bad'> = {
+const SEVERITY_TONE: Record<Severity, StatusTone> = {
   info: 'neutral',
-  warning: 'warn',
-  critical: 'bad',
+  warning: 'warning',
+  critical: 'error',
 };
 
 const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -439,7 +439,7 @@ export default function ConsoleAnnouncementsClient({ initialPage }: { initialPag
           <div key={a.id} style={consoleAnnouncementRowStyle}>
             <div style={consoleAnnouncementRowHeaderStyle}>
               <div style={consoleAnnouncementRowTitleGroupStyle}>
-                <span style={consolePillStyle(SEVERITY_TONE[a.severity])}>{a.severity}</span>
+                <StatusPill tone={SEVERITY_TONE[a.severity]} label={a.severity} />
                 <span style={consoleAnnouncementRowTitleStyle}>{a.title}</span>
               </div>
               {activeTab !== 'ended' && (

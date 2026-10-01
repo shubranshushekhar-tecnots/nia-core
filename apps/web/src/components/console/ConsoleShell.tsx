@@ -5,13 +5,13 @@ import {
   consoleBodyRowStyle,
   consoleBrandMarkStyle,
   consoleBrandTextStyle,
+  consoleEnvLabelStyle,
   consoleGhostBtnStyle,
   consoleIdentityAvatarStyle,
   consoleIdentityColStyle,
   consoleIdentityNameStyle,
   consoleIdentitySubStyle,
   consoleIdentityWrapStyle,
-  consoleInternalBadgeStyle,
   consoleMainColStyle,
   consoleNavGroupLabelStyle,
   consoleNavIconStyle,
@@ -26,7 +26,35 @@ import {
   consoleTopBarSpacerStyle,
   consoleTopBarStyle,
 } from './styles';
-import { buildNavGroups } from './navGroups';
+import { buildNavGroups, type NavIconKey } from './navGroups';
+import {
+  AuditLogsIcon,
+  AnnouncementsIcon,
+  ModelPricesIcon,
+  OrganizationsIcon,
+  OverviewIcon,
+  PlansIcon,
+  PlatformStaffIcon,
+  ProjectsWorkflowsIcon,
+  SystemHealthIcon,
+  TokenAnalyticsIcon,
+  UsersIcon,
+  type IconComponent,
+} from './icons';
+
+const NAV_ICON: Record<NavIconKey, IconComponent> = {
+  overview: OverviewIcon,
+  'token-analytics': TokenAnalyticsIcon,
+  'system-health': SystemHealthIcon,
+  users: UsersIcon,
+  organizations: OrganizationsIcon,
+  'platform-staff': PlatformStaffIcon,
+  'projects-workflows': ProjectsWorkflowsIcon,
+  plans: PlansIcon,
+  'audit-logs': AuditLogsIcon,
+  announcements: AnnouncementsIcon,
+  'model-prices': ModelPricesIcon,
+};
 
 export default function ConsoleShell({
   activeNavId,
@@ -41,21 +69,23 @@ export default function ConsoleShell({
 }) {
   const groups = buildNavGroups(paymentsEnabled);
   const initials = email.slice(0, 2).toUpperCase();
+  const env = process.env.NODE_ENV === 'production' ? 'PROD' : 'LOCAL';
 
   return (
-    <div data-app-theme="" data-om-theme="light" style={consoleShellRootStyle}>
+    <div data-theme="console" className="console-theme" style={consoleShellRootStyle}>
       <div style={consoleStaffBarStyle} />
       <header style={consoleTopBarStyle}>
-        <span style={consoleBrandMarkStyle}>N</span>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/splash-icon.png" alt="Nia" style={consoleBrandMarkStyle} />
         <span style={consoleBrandTextStyle}>Nia Console</span>
-        <span style={consoleStaffBadgeStyle}>STAFF CONSOLE</span>
-        <span style={consoleInternalBadgeStyle}>INTERNAL</span>
+        <span style={consoleStaffBadgeStyle}>ADMIN</span>
         <span style={consoleTopBarSpacerStyle} />
+        <span style={consoleEnvLabelStyle(env)}>{env}</span>
         <div style={consoleIdentityWrapStyle}>
           <span style={consoleIdentityAvatarStyle}>{initials}</span>
           <div style={consoleIdentityColStyle}>
             <span style={consoleIdentityNameStyle}>{email}</span>
-            <span style={consoleIdentitySubStyle}>Nia staff</span>
+            <span style={consoleIdentitySubStyle}>Nia admin</span>
           </div>
         </div>
         <form action={logout}>
@@ -75,9 +105,12 @@ export default function ConsoleShell({
                 {group.items.map((n) => {
                   const active = n.id === activeNavId;
                   const enabled = Boolean(n.href);
+                  const Icon = NAV_ICON[n.icon];
                   const content = (
                     <>
-                      <span style={consoleNavIconStyle(active)}>{n.icon}</span>
+                      <span style={consoleNavIconStyle(active)}>
+                        <Icon size={16} />
+                      </span>
                       <span style={{ flex: 1, textAlign: 'left', fontSize: 13 }}>{n.label}</span>
                     </>
                   );

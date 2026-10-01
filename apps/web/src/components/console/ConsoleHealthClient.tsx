@@ -1,4 +1,5 @@
 import type { ConsoleSystemHealth } from '@/lib/api/consoleServer';
+import StatusPill from './StatusPill';
 import {
   consoleContentStyle,
   consoleEmptyStyle,
@@ -6,7 +7,6 @@ import {
   consoleHeaderSubStyle,
   consoleHeaderTitleColStyle,
   consoleHeaderTitleStyle,
-  consolePillStyle,
   consoleSectionTitleStyle,
   consoleStatCardStyle,
   consoleStatLabelStyle,
@@ -51,13 +51,14 @@ export default function ConsoleHealthClient({ data }: { data: ConsoleSystemHealt
       <div style={consoleStatsRowStyle}>
         <div style={consoleStatCardStyle}>
           <span style={consoleStatLabelStyle}>API</span>
-          <span style={consolePillStyle(api === 'ok' ? 'ok' : 'bad')}>{api === 'ok' ? 'Healthy' : 'Down'}</span>
+          <StatusPill tone={api === 'ok' ? 'success' : 'error'} label={api === 'ok' ? 'Healthy' : 'Down'} />
         </div>
         <div style={consoleStatCardStyle}>
           <span style={consoleStatLabelStyle}>Worker</span>
-          <span style={consolePillStyle(worker.status === 'healthy' ? 'ok' : 'bad')}>
-            {worker.status === 'healthy' ? `Healthy (${worker.count})` : 'No workers'}
-          </span>
+          <StatusPill
+            tone={worker.status === 'healthy' ? 'success' : 'error'}
+            label={worker.status === 'healthy' ? `Healthy (${worker.count})` : 'No workers'}
+          />
         </div>
         <div style={consoleStatCardStyle}>
           <span style={consoleStatLabelStyle}>Failed runs (24h)</span>
@@ -65,9 +66,10 @@ export default function ConsoleHealthClient({ data }: { data: ConsoleSystemHealt
         </div>
         <div style={consoleStatCardStyle}>
           <span style={consoleStatLabelStyle}>Connectors</span>
-          <span style={consolePillStyle(connectors.error > 0 ? 'bad' : 'ok')}>
-            {connectors.ok} ok / {connectors.error} error / {connectors.untested} untested
-          </span>
+          <StatusPill
+            tone={connectors.error > 0 ? 'error' : 'success'}
+            label={`${connectors.ok} ok / ${connectors.error} error / ${connectors.untested} untested`}
+          />
         </div>
       </div>
 

@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import type { ConsoleOrg, ConsoleOrgsPage } from '@/lib/api/consoleServer';
 import { loadMoreOrgsAction } from '@/lib/console/actions';
+import StatusPill from './StatusPill';
 import {
   consoleColAccountStyle,
   consoleColMembersStyle,
@@ -20,7 +21,6 @@ import {
   consoleLoadMoreErrorStyle,
   consoleLoadMoreRowStyle,
   consoleMonoStyle,
-  consolePillStyle,
   consoleRowAccountCellStyle,
   consoleRowKindStyle,
   consoleRowLinkStyle,
@@ -145,7 +145,7 @@ export default function ConsoleDirectoryClient({ initialPage }: { initialPage: C
               <span style={consoleRowNumberStyle}>{o.memberCount}</span>
               <span style={consoleRowNumberStyle}>{o.runs30d}</span>
               <span style={consoleColStatusStyle}>
-                <span style={consolePillStyle(o.status === 'Active' ? 'ok' : 'neutral')}>{o.status}</span>
+                <StatusPill tone={o.status === 'Active' ? 'success' : 'neutral'} label={o.status} />
               </span>
             </div>
           </Link>

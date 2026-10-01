@@ -19,16 +19,16 @@ export const consoleHealthQueueRowStyle: CSSProperties = {
   alignItems: 'center',
   gap: 16,
   padding: '12px 16px',
-  borderRadius: 12,
-  background: 'var(--nx-surface)',
-  border: '1px solid var(--nx-line)',
+  borderRadius: 0,
+  background: 'var(--c-surface)',
+  border: '1px solid var(--c-line)',
 };
 
 export const consoleHealthQueueNameStyle: CSSProperties = {
   flex: '1 1 140px',
   fontSize: 13,
-  fontWeight: 700,
-  color: 'var(--nx-ink)',
+  fontWeight: 600,
+  color: 'var(--c-text)',
 };
 
 export const consoleHealthQueueStatStyle: CSSProperties = {
@@ -43,14 +43,15 @@ export const consoleHealthQueueStatLabelStyle: CSSProperties = {
   fontWeight: 600,
   letterSpacing: '.05em',
   textTransform: 'uppercase',
-  color: 'var(--nx-ink-3)',
+  color: 'var(--c-text-3)',
 };
 
 export const consoleHealthQueueStatValueStyle: CSSProperties = {
-  fontFamily: 'var(--font-data)',
+  fontFamily: 'var(--c-font-mono)',
   fontSize: 14,
-  fontWeight: 700,
-  color: 'var(--nx-ink)',
+  fontWeight: 600,
+  color: 'var(--c-text)',
+  fontVariantNumeric: 'tabular-nums',
 };
 
 export const consoleHealthMigrationRowStyle: CSSProperties = {
@@ -58,7 +59,7 @@ export const consoleHealthMigrationRowStyle: CSSProperties = {
   alignItems: 'center',
   gap: 10,
   fontSize: 13,
-  color: 'var(--nx-ink-2)',
+  color: 'var(--c-text-2)',
 };
 
 export const consoleHealthSectionStyle: CSSProperties = {
