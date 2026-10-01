@@ -46,9 +46,14 @@ Copy-Item -Path (Join-Path $ScriptDir "nia-agent-service.xml") -Destination $Ins
 Copy-Item -Path (Join-Path $ScriptDir "LICENSE-WinSW.txt") -Destination $InstallDir
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $DataDir "logs") | Out-Null
-# Restrict to SYSTEM (the service runs as LocalSystem by WinSW default)
-# and local Administrators — matches the Linux install's 0700 data dir.
+# Restrict to SYSTEM (the service runs as LocalSystem by WinSW default) and
+# local Administrators only, removing inherited permissions — matches the
+# Linux install's 0700 data dir. POSIX file modes (0o700/0o600) have no
+# effect on Windows, so this ACL is the only thing protecting config,
+# secrets, the master keyfile, and spool chunk files containing customer
+# row data. Must run BEFORE any subdirectory (e.g. "logs") is created below,
+# so that subdirectory inherits this locked-down ACL instead of
+# %ProgramData%'s default (which grants Users/Authenticated Users access).
 $acl = Get-Acl $DataDir
 $acl.SetAccessRuleProtection($true, $false)
 foreach ($identity in @("NT AUTHORITY\SYSTEM", "BUILTIN\Administrators")) {
@@ -56,6 +61,7 @@ foreach ($identity in @("NT AUTHORITY\SYSTEM", "BUILTIN\Administrators")) {
     $acl.AddAccessRule($rule)
 }
 Set-Acl $DataDir $acl
+New-Item -ItemType Directory -Force -Path (Join-Path $DataDir "logs") | Out-Null
 
 & $ServiceExe install
 

@@ -275,6 +275,15 @@ spool before WinSW force-kills it). Re-run `install.ps1` with a newer
 zip at any time to upgrade in place — it never touches
 `%ProgramData%\NiaAgent`.
 
+POSIX file modes (0600/0700, used on Linux) have no effect on Windows —
+`install.ps1`'s ACL (SYSTEM + local Administrators only, inherited
+permissions removed) is what actually protects config, secrets, the
+master keyfile, and spool files. `nia-agent doctor` checks this on every
+run and prints a `[WARN]` if any of those paths grant access to an
+unexpected identity (e.g. a restore or a manual `icacls` loosened it) —
+re-run `install.ps1`, or apply the `icacls` command the warning prints,
+to re-lock it.
+
 Run steps 3-5 above before starting the service for the first time:
 ```
 & "$env:ProgramFiles\NiaAgent\nia-agent.exe" connection add ...

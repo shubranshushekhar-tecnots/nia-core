@@ -1,8 +1,9 @@
-import { defaultHomeDir, defaultSpoolDir } from "../config/paths.js";
+import { defaultHomeDir, defaultLogDir, defaultSpoolDir, keyFilePath } from "../config/paths.js";
 import { findConnection, loadConfig } from "../config/store.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { checkAgentKeyAccepted, checkCancelVisibility, checkDiskSpace, checkLoginPermissions, probePlanometry, probeSqlServer, type CheckResult } from "./doctorChecks.js";
+import { checkPathPermissions } from "./permissionChecks.js";
 
 export interface ConnectionDoctorReport {
   connectionId: string;
@@ -43,6 +44,14 @@ export async function runDoctor(connectionId: string | undefined, dir = defaultH
     }
 
     checks.push(await checkDiskSpace(defaultSpoolDir(dir)));
+    checks.push(
+      ...(await Promise.all([
+        checkPathPermissions("agent data directory", dir),
+        checkPathPermissions("secrets keyfile", keyFilePath(dir)),
+        checkPathPermissions("spool directory", defaultSpoolDir(dir)),
+        checkPathPermissions("log directory", defaultLogDir(dir)),
+      ])),
+    );
 
     const { reachable: planometryReachable, clockSkew } = await probePlanometry(entry.planometry.baseUrl);
     checks.push(planometryReachable, clockSkew);
