@@ -4399,6 +4399,76 @@ exception when others then
 end $$;
 
 -- =========================================================================
+-- Probe 126 — 0068_llm_usage.sql: llm_usage has zero policies and no grant
+-- to authenticated/anon at all — confirm both SELECT and INSERT hard-fail
+-- with permission denied for an ordinary authenticated user, same posture
+-- as platform_staff, Probe 51.
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  select_denied boolean := false;
+  insert_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_outsider);
+  begin
+    perform 1 from public.llm_usage limit 1;
+  exception when insufficient_privilege then
+    select_denied := true;
+  end;
+  begin
+    insert into public.llm_usage (owner_user_id, feature, model, latency_ms, status)
+    values (v_outsider, 'chat_generate_query', 'test-model', 1, 'ok');
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  reset role;
+
+  if select_denied and insert_denied then
+    insert into probe_results values (126, 'llm_usage: authenticated has no grant at all — SELECT and INSERT both raise permission denied, not just an RLS-empty result', true);
+  else
+    insert into probe_results values (126, 'llm_usage: authenticated has no grant at all — SELECT and INSERT both raise permission denied, not just an RLS-empty result', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (126, 'llm_usage RLS probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
+-- Probe 127 — 0068_llm_usage.sql: model_prices has zero policies and no
+-- grant to authenticated/anon at all — same posture as llm_usage, Probe 126.
+-- =========================================================================
+do $$
+declare
+  v_outsider uuid := (select id from test_ids where key = 'outsider');
+  select_denied boolean := false;
+  insert_denied boolean := false;
+begin
+  perform pg_temp.act_as(v_outsider);
+  begin
+    perform 1 from public.model_prices limit 1;
+  exception when insufficient_privilege then
+    select_denied := true;
+  end;
+  begin
+    insert into public.model_prices (model, input_price_per_1m, output_price_per_1m)
+    values ('test-model', 1, 1);
+  exception when insufficient_privilege then
+    insert_denied := true;
+  end;
+  reset role;
+
+  if select_denied and insert_denied then
+    insert into probe_results values (127, 'model_prices: authenticated has no grant at all — SELECT and INSERT both raise permission denied, not just an RLS-empty result', true);
+  else
+    insert into probe_results values (127, 'model_prices: authenticated has no grant at all — SELECT and INSERT both raise permission denied, not just an RLS-empty result', false);
+  end if;
+exception when others then
+  reset role;
+  insert into probe_results values (127, 'model_prices RLS probe (errored: ' || sqlerrm || ')', false);
+end $$;
+
+-- =========================================================================
 -- Report
 -- =========================================================================
 do $$
