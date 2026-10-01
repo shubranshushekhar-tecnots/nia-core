@@ -36,6 +36,8 @@ export class FakePlanometryServer {
   private readonly runs = new Map<string, RunRecord>();
   private readonly runFaults = new Map<string, RunFaultConfig>();
   private pollAfterSeconds = 1;
+  /** Unset by default (no auth enforced, matching every existing test's behavior). Set via `requireAgentKey()` to make the server reject requests whose `Authorization` header doesn't match, for doctor's "agent key accepted" check. */
+  private requiredAgentKey?: string;
 
   private constructor(server: Server) {
     this.server = server;
@@ -66,6 +68,11 @@ export class FakePlanometryServer {
     this.pollAfterSeconds = seconds;
   }
 
+  /** Opt-in: once set, every request must carry `Authorization: Bearer <key>` or gets a 401 — used by doctor's "agent key accepted" integration test. */
+  requireAgentKey(key: string): void {
+    this.requiredAgentKey = key;
+  }
+
   setRunFaults(runId: string, faults: RunFaultConfig): void {
     this.runFaults.set(runId, faults);
   }
@@ -87,6 +94,11 @@ export class FakePlanometryServer {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.requiredAgentKey !== undefined && req.headers.authorization !== `Bearer ${this.requiredAgentKey}`) {
+      sendJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
     const url = new URL(req.url ?? "/", "http://localhost");
     const chunkMatch = /^\/v1\/runs\/([^/]+)\/chunks$/.exec(url.pathname);
     const heartbeatMatch = /^\/v1\/runs\/([^/]+)\/heartbeat$/.exec(url.pathname);

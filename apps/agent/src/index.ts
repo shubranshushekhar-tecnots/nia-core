@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { addConnection, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
 import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
+import { runDoctor } from "./cli/doctorCommand.js";
 import { getStatus } from "./ops/state.js";
 
 async function main(argv: string[]): Promise<void> {
@@ -128,7 +129,28 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  console.error("usage: nia-agent connection <add|test|list|remove> ... | nia-agent sql readonly ... | nia-agent status");
+  if (command === "doctor") {
+    const connectionId = subcommand;
+    const reports = await runDoctor(connectionId);
+    if (reports.length === 0) {
+      console.log("no connections configured");
+      return;
+    }
+    let anyFailed = false;
+    for (const report of reports) {
+      console.log(`${report.connectionId} (${report.label}):`);
+      for (const check of report.checks) {
+        if (!check.pass) anyFailed = true;
+        const status = check.pass ? "[PASS]" : "[FAIL]";
+        const fix = check.fix ? ` (fix: ${check.fix})` : "";
+        console.log(`  ${status} ${check.name} — ${check.detail}${fix}`);
+      }
+    }
+    if (anyFailed) process.exitCode = 1;
+    return;
+  }
+
+  console.error("usage: nia-agent connection <add|test|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status");
   process.exitCode = 1;
 }
 
