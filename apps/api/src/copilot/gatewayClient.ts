@@ -72,29 +72,41 @@ export async function completeWithTools(messages: ChatMessage[], tools: ToolSpec
       ...(tools.length > 0 ? { tools, tool_choice: "auto" as const } : {}),
     });
   } catch (err) {
+    try {
+      await recordLlmUsage(dbPool, {
+        scope: context.scope,
+        userId: context.userId,
+        feature: "copilot_agent",
+        model: env.NIA_GATEWAY_MODEL,
+        latencyMs: Date.now() - startTime,
+        status: "error",
+        errorCode: errorCodeOf(err),
+      });
+    } catch {
+      // recordLlmUsage already swallows its own errors; this is defense-in-
+      // depth in case that contract ever changes — a recorder failure must
+      // never mask the underlying LLM call's own error.
+    }
+    throw err;
+  }
+  const message = res.choices[0]?.message;
+  try {
     await recordLlmUsage(dbPool, {
       scope: context.scope,
       userId: context.userId,
       feature: "copilot_agent",
       model: env.NIA_GATEWAY_MODEL,
       latencyMs: Date.now() - startTime,
-      status: "error",
-      errorCode: errorCodeOf(err),
+      status: "ok",
+      usage: res.usage
+        ? { inputTokens: res.usage.prompt_tokens, outputTokens: res.usage.completion_tokens, totalTokens: res.usage.total_tokens }
+        : undefined,
     });
-    throw err;
+  } catch {
+    // recordLlmUsage already swallows its own errors; this is defense-in-
+    // depth in case that contract ever changes — a recorder failure must
+    // never break a successful LLM call.
   }
-  const message = res.choices[0]?.message;
-  await recordLlmUsage(dbPool, {
-    scope: context.scope,
-    userId: context.userId,
-    feature: "copilot_agent",
-    model: env.NIA_GATEWAY_MODEL,
-    latencyMs: Date.now() - startTime,
-    status: "ok",
-    usage: res.usage
-      ? { inputTokens: res.usage.prompt_tokens, outputTokens: res.usage.completion_tokens, totalTokens: res.usage.total_tokens }
-      : undefined,
-  });
   return {
     content: message?.content ?? null,
     toolCalls: message?.tool_calls ?? [],

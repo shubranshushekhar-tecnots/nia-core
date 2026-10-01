@@ -72,17 +72,23 @@ export async function complete(messages: ChatMessage[], context: LlmCallContext)
       ...(context.reasoning ? ({ reasoning: context.reasoning } as any) : {}),
     });
   } catch (err) {
-    await recordLlmUsage(dbPool, {
-      scope: context.scope,
-      userId: context.userId,
-      workflowId: context.workflowId,
-      runId: context.jobId,
-      feature: context.feature,
-      model,
-      latencyMs: Date.now() - startTime.getTime(),
-      status: "error",
-      errorCode: errorCodeOf(err),
-    });
+    try {
+      await recordLlmUsage(dbPool, {
+        scope: context.scope,
+        userId: context.userId,
+        workflowId: context.workflowId,
+        runId: context.jobId,
+        feature: context.feature,
+        model,
+        latencyMs: Date.now() - startTime.getTime(),
+        status: "error",
+        errorCode: errorCodeOf(err),
+      });
+    } catch {
+      // recordLlmUsage already swallows its own errors; this is defense-in-
+      // depth in case that contract ever changes — a recorder failure must
+      // never mask the underlying LLM call's own error.
+    }
     throw err;
   }
   const output = res.choices[0]?.message?.content ?? "";
@@ -98,19 +104,25 @@ export async function complete(messages: ChatMessage[], context: LlmCallContext)
     startTime,
     endTime,
   });
-  await recordLlmUsage(dbPool, {
-    scope: context.scope,
-    userId: context.userId,
-    workflowId: context.workflowId,
-    runId: context.jobId,
-    feature: context.feature,
-    model,
-    latencyMs: endTime.getTime() - startTime.getTime(),
-    status: "ok",
-    usage: res.usage
-      ? { inputTokens: res.usage.prompt_tokens, outputTokens: res.usage.completion_tokens, totalTokens: res.usage.total_tokens }
-      : undefined,
-  });
+  try {
+    await recordLlmUsage(dbPool, {
+      scope: context.scope,
+      userId: context.userId,
+      workflowId: context.workflowId,
+      runId: context.jobId,
+      feature: context.feature,
+      model,
+      latencyMs: endTime.getTime() - startTime.getTime(),
+      status: "ok",
+      usage: res.usage
+        ? { inputTokens: res.usage.prompt_tokens, outputTokens: res.usage.completion_tokens, totalTokens: res.usage.total_tokens }
+        : undefined,
+    });
+  } catch {
+    // recordLlmUsage already swallows its own errors; this is defense-in-
+    // depth in case that contract ever changes — a recorder failure must
+    // never break a successful LLM call.
+  }
   return output;
 }
 
@@ -168,18 +180,24 @@ export async function streamComplete(
     startTime,
     endTime,
   });
-  await recordLlmUsage(dbPool, {
-    scope: context.scope,
-    userId: context.userId,
-    workflowId: context.workflowId,
-    runId: context.jobId,
-    feature: context.feature,
-    model,
-    latencyMs: endTime.getTime() - startTime.getTime(),
-    status: aborted ? "aborted" : "ok",
-    usage: usage && !aborted ? { inputTokens: usage.input, outputTokens: usage.output, totalTokens: usage.total } : undefined,
-    errorCode: aborted ? errorCodeOf(thrown) : undefined,
-  });
+  try {
+    await recordLlmUsage(dbPool, {
+      scope: context.scope,
+      userId: context.userId,
+      workflowId: context.workflowId,
+      runId: context.jobId,
+      feature: context.feature,
+      model,
+      latencyMs: endTime.getTime() - startTime.getTime(),
+      status: aborted ? "aborted" : "ok",
+      usage: usage && !aborted ? { inputTokens: usage.input, outputTokens: usage.output, totalTokens: usage.total } : undefined,
+      errorCode: aborted ? errorCodeOf(thrown) : undefined,
+    });
+  } catch {
+    // recordLlmUsage already swallows its own errors; this is defense-in-
+    // depth in case that contract ever changes — a recorder failure must
+    // never mask the stream's own result/error.
+  }
   if (thrown) throw thrown;
   return full;
 }

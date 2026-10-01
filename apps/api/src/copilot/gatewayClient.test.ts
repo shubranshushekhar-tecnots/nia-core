@@ -76,10 +76,10 @@ describe("completeWithTools", () => {
     expect((record.errorCode as string)).toContain("gateway unreachable");
   });
 
-  it("a recorder failure never masks a successful LLM response's own call-site propagation", async () => {
+  it("a recorder failure never breaks the underlying LLM call", async () => {
     createMock.mockResolvedValueOnce({ choices: [{ message: { content: "ok", tool_calls: [] } }], usage: undefined });
     recordLlmUsageMock.mockRejectedValueOnce(new Error("ledger write failed"));
 
-    await expect(completeWithTools(messages, [], context)).rejects.toThrow("ledger write failed");
+    await expect(completeWithTools(messages, [], context)).resolves.toEqual({ content: "ok", toolCalls: [] });
   });
 });

@@ -70,7 +70,7 @@ describe("complete", () => {
     createMock.mockResolvedValueOnce({ choices: [{ message: { content: "ok" } }], usage: undefined });
     recordLlmUsageMock.mockRejectedValueOnce(new Error("ledger write failed"));
 
-    await expect(complete(messages, { node: "test", feature: "plan_generation", scope })).rejects.toThrow("ledger write failed");
+    await expect(complete(messages, { node: "test", feature: "plan_generation", scope })).resolves.toBe("ok");
   });
 
   it("each retry attempt from completeJson records its own row", async () => {
@@ -126,5 +126,18 @@ describe("streamComplete", () => {
     expect(record.status).toBe("aborted");
     expect(record.usage).toBeUndefined();
     expect((record.errorCode as string)).toContain("connection dropped");
+  });
+
+  it("a recorder failure never masks the stream's own thrown error", async () => {
+    async function* brokenStream() {
+      yield { choices: [{ delta: { content: "partial" } }], usage: undefined };
+      throw new Error("connection dropped");
+    }
+    createMock.mockResolvedValueOnce(brokenStream());
+    recordLlmUsageMock.mockRejectedValueOnce(new Error("ledger write failed"));
+
+    await expect(
+      streamComplete(messages, vi.fn(), { node: "test", feature: "chat_build_answer_multi", scope }),
+    ).rejects.toThrow("connection dropped");
   });
 });
