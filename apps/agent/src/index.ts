@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { addConnection, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
+import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
 import { getStatus } from "./ops/state.js";
 
 async function main(argv: string[]): Promise<void> {
@@ -107,7 +108,27 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  console.error("usage: nia-agent connection <add|test|list|remove> ... | nia-agent status");
+  if (command === "sql" && subcommand === "readonly") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        login: { type: "string" },
+        databases: { type: "string" },
+        out: { type: "string" },
+      },
+    });
+    try {
+      const script = runSqlReadonly({ login: values.login as string | undefined, databases: values.databases as string | undefined, out: values.out as string | undefined });
+      if (!values.out) console.log(script);
+      else console.log(`wrote readonly setup script to ${values.out}`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  console.error("usage: nia-agent connection <add|test|list|remove> ... | nia-agent sql readonly ... | nia-agent status");
   process.exitCode = 1;
 }
 
