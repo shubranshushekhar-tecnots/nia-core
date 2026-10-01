@@ -13,6 +13,7 @@ import { consoleUsageRouter } from "./consoleUsage.js";
 import { consoleDashboardRouter } from "./consoleDashboard.js";
 import { consoleHealthRouter } from "./consoleHealth.js";
 import { consoleStaffRouter } from "./consoleStaff.js";
+import { consoleProjectsRouter } from "./consoleProjects.js";
 
 /**
  * Console v1 (docs/plans/console-plan.md, build order step 4). Mounted at
@@ -62,6 +63,11 @@ consoleRouter.use(consoleHealthRouter);
 // platform_staff listing). Same separate-router convention as the routers
 // mounted above.
 consoleRouter.use(consoleStaffRouter);
+
+// Console redesign plan's Slice 6 — Projects & Workflows page API (per-org
+// project/workflow rollup + most recent run). Same separate-router
+// convention as the routers mounted above.
+consoleRouter.use(consoleProjectsRouter);
 
 /**
  * Build order step 5 / Slice 1 (console-plan.md §3, §5). List/search orgs

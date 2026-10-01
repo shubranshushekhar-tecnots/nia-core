@@ -2276,3 +2276,76 @@ describe("GET /console/staff", () => {
     expect(auditCall?.[1]).toEqual(["staff-1", "staff.list", null, null, JSON.stringify({ limit: 50, offset: 0, count: 1 })]);
   });
 });
+
+describe("GET /console/projects", () => {
+  function mockProjectsQuery() {
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("count(*) as count from public.organizations")) {
+        return { rows: [{ count: "1" }], rowCount: 1 };
+      }
+      if (sql.includes("from public.organizations o")) {
+        return {
+          rows: [
+            {
+              org_id: "org-1",
+              org_name: "Acme",
+              project_count: "2",
+              workflow_count: "5",
+              last_run_status: "succeeded",
+              last_run_started_at: "2026-01-02T00:00:00.000Z",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`mockProjectsQuery: unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+    return query;
+  }
+
+  it("returns 403 for a non-staff session", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/projects`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("returns the per-org rollup, never a definition/workflow-content key, and writes one staff_audit_log row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockProjectsQuery();
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/projects`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.orgs).toEqual([
+      {
+        orgId: "org-1",
+        orgName: "Acme",
+        projectCount: 2,
+        workflowCount: 5,
+        lastRun: { status: "succeeded", startedAt: "2026-01-02T00:00:00.000Z" },
+      },
+    ]);
+    expect(body.total).toBe(1);
+    expect(JSON.stringify(body)).not.toMatch(/definition/i);
+
+    const auditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(auditCall?.[1]).toEqual(["staff-1", "projects.list", null, null, JSON.stringify({ limit: 50, offset: 0, count: 1 })]);
+  });
+});

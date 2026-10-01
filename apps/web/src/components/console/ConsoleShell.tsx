@@ -59,7 +59,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Content',
     items: [
-      { id: 'projects', label: 'Projects & Workflows', icon: '\u25A6' }, // Slice 6
+      { id: 'projects', label: 'Projects & Workflows', icon: '\u25A6', href: '/console/projects' },
     ],
   },
   {

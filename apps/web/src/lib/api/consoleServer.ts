@@ -543,3 +543,36 @@ export async function getConsoleStaff(params?: { offset?: number }): Promise<Con
   const qs = query.toString();
   return apiFetchServer<ConsoleStaffPage>(`/console/staff${qs ? `?${qs}` : ''}`);
 }
+
+/**
+ * Console redesign plan's Slice 6 — types + wrapper for the Projects &
+ * Workflows screen (apps/api/src/routes/consoleProjects.ts, mirrored
+ * exactly). Per-org rollup only — no workflow content or row data.
+ */
+export type ConsoleProjectsLastRun = {
+  status: string;
+  startedAt: string;
+} | null;
+
+export type ConsoleProjectsOrgRollup = {
+  orgId: string;
+  orgName: string;
+  projectCount: number;
+  workflowCount: number;
+  lastRun: ConsoleProjectsLastRun;
+};
+
+export type ConsoleProjectsPage = {
+  orgs: ConsoleProjectsOrgRollup[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+export async function getConsoleProjects(params?: { offset?: number }): Promise<ConsoleProjectsPage> {
+  const query = new URLSearchParams();
+  if (params?.offset) query.set('offset', String(params.offset));
+  const qs = query.toString();
+  return apiFetchServer<ConsoleProjectsPage>(`/console/projects${qs ? `?${qs}` : ''}`);
+}
