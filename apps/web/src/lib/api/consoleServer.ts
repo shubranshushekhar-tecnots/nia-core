@@ -601,3 +601,57 @@ export async function getConsoleProjects(params?: { offset?: number }): Promise<
   const qs = query.toString();
   return apiFetchServer<ConsoleProjectsPage>(`/console/projects${qs ? `?${qs}` : ''}`);
 }
+
+/**
+ * Console redesign plan's Slice 8 — types + wrapper for the Audit Logs
+ * screen (apps/api/src/routes/consoleAuditLogs.ts, mirrored exactly). Each
+ * row is tagged with its source table ('staff' for staff_audit_log, 'org'
+ * for audit_log) since the two feeds are unioned server-side.
+ */
+export type ConsoleAuditLogFilters = {
+  dateFrom?: string;
+  dateTo?: string;
+  orgId?: string;
+  staffUserId?: string;
+  action?: string;
+};
+
+export type ConsoleAuditLogEntry = {
+  source: 'staff' | 'org';
+  id: string;
+  createdAt: string;
+  action: string;
+  orgId: string | null;
+  orgName: string | null;
+  actorId: string | null;
+  actorName: string | null;
+  detail: unknown;
+};
+
+export type ConsoleAuditLogsPage = {
+  items: ConsoleAuditLogEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+function auditLogFiltersQuery(filters: ConsoleAuditLogFilters): URLSearchParams {
+  const query = new URLSearchParams();
+  if (filters.dateFrom) query.set('dateFrom', filters.dateFrom);
+  if (filters.dateTo) query.set('dateTo', filters.dateTo);
+  if (filters.orgId) query.set('orgId', filters.orgId);
+  if (filters.staffUserId) query.set('staffUserId', filters.staffUserId);
+  if (filters.action) query.set('action', filters.action);
+  return query;
+}
+
+export async function getConsoleAuditLogs(
+  filters: ConsoleAuditLogFilters = {},
+  offset?: number,
+): Promise<ConsoleAuditLogsPage> {
+  const query = auditLogFiltersQuery(filters);
+  if (offset) query.set('offset', String(offset));
+  const qs = query.toString();
+  return apiFetchServer<ConsoleAuditLogsPage>(`/console/audit-logs${qs ? `?${qs}` : ''}`);
+}

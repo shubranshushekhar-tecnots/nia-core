@@ -2462,3 +2462,150 @@ describe("PATCH /console/plans/:planId", () => {
     ]);
   });
 });
+
+describe("GET /console/audit-logs", () => {
+  function mockAuditLogQuery() {
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("count(*) as count from (")) return { rows: [{ count: "1" }], rowCount: 1 };
+      if (sql.includes("select * from (")) {
+        return {
+          rows: [
+            {
+              source: "org",
+              id: "audit-1",
+              created_at: "2026-01-02T00:00:00.000Z",
+              action: "org.suspend",
+              org_id: "11111111-1111-1111-1111-111111111111",
+              org_name: "Acme",
+              actor_id: "staff-1",
+              actor_name: "Staff One",
+              detail: { reason: "abuse" },
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`mockAuditLogQuery: unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+    return query;
+  }
+
+  it("returns 403 for a non-staff session", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/audit-logs`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("returns the unioned feed filtered by org/action and writes one staff_audit_log row with the filters used", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockAuditLogQuery();
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const orgId = "11111111-1111-1111-1111-111111111111";
+    const res = await fetch(`${started.baseUrl}/console/audit-logs?orgId=${orgId}&action=suspend`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.items).toEqual([
+      {
+        source: "org",
+        id: "audit-1",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        action: "org.suspend",
+        orgId,
+        orgName: "Acme",
+        actorId: "staff-1",
+        actorName: "Staff One",
+        detail: { reason: "abuse" },
+      },
+    ]);
+    expect(body.total).toBe(1);
+
+    const auditCall = query.mock.calls.find((c) => (c[0] as string).includes("private.log_staff_action"));
+    expect(auditCall![1]).toEqual([
+      STAFF_SESSION.user.id,
+      "audit_logs.read",
+      null,
+      null,
+      JSON.stringify({ orgId, action: "suspend", limit: 50, offset: 0 }),
+    ]);
+  });
+});
+
+describe("GET /console/audit-logs/export", () => {
+  it("returns 403 for a non-staff session", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/audit-logs/export`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("returns a CSV with the correct headers and writes a separate audit_logs.export staff_audit_log row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("select * from (")) {
+        return {
+          rows: [
+            {
+              source: "staff",
+              id: "audit-2",
+              created_at: "2026-01-03T00:00:00.000Z",
+              action: "projects.list",
+              org_id: null,
+              org_name: null,
+              actor_id: "staff-1",
+              actor_name: "Staff One",
+              detail: {},
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/audit-logs/export`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    expect(res.headers.get("content-disposition")).toContain('attachment; filename="audit-logs.csv"');
+    const csv = await res.text();
+    expect(csv.split("\n")[0]).toBe("source,id,createdAt,action,orgId,orgName,actorId,actorName,detail");
+    expect(csv).toContain("audit-2");
+
+    const auditCall = query.mock.calls.find(
+      (c) => (c[0] as string).includes("private.log_staff_action") && (c[1] as unknown[])[1] === "audit_logs.export",
+    );
+    expect(auditCall).toBeTruthy();
+  });
+});

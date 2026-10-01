@@ -2,9 +2,12 @@
 
 import { apiFetchServer, ApiError } from '@/lib/api/server';
 import {
+  getConsoleAuditLogs,
   getConsoleUsageData,
   type ConsoleAnnouncement,
   type ConsoleAnnouncementsPage,
+  type ConsoleAuditLogFilters,
+  type ConsoleAuditLogsPage,
   type ConsoleOrgsPage,
   type ConsolePlanUpdateResult,
   type ConsoleProjectsPage,
@@ -334,4 +337,19 @@ export async function archiveAnnouncementAction(
  */
 export async function loadUsageDataAction(filters: ConsoleUsageFilters): Promise<ConsoleUsageData> {
   return getConsoleUsageData(filters);
+}
+
+/**
+ * Console redesign plan's Slice 8: ConsoleAuditLogsClient.tsx's filter bar
+ * ("Apply"/"Reset") and "Load more" button both call this — plain
+ * data-fetching Server Action, same non-mutation shape as
+ * loadUsageDataAction above, delegating to consoleServer.ts's
+ * getConsoleAuditLogs so the initial server-rendered page and every reload/
+ * pagination call share one request-building path.
+ */
+export async function loadAuditLogsAction(
+  filters: ConsoleAuditLogFilters,
+  offset?: number,
+): Promise<ConsoleAuditLogsPage> {
+  return getConsoleAuditLogs(filters, offset);
 }

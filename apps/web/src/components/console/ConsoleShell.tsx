@@ -66,7 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Platform',
     items: [
       { id: 'plans', label: 'Plans', icon: '\u25C8', href: '/console/plans' },
-      { id: 'audit-logs', label: 'Audit Logs', icon: '\u2637' }, // Slice 8
+      { id: 'audit-logs', label: 'Audit Logs', icon: '\u2637', href: '/console/audit-logs' },
       { id: 'notify', label: 'Announcements', icon: '\u25CD', href: '/console/announcements' },
     ],
   },
