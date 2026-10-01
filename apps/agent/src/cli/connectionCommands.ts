@@ -19,6 +19,7 @@ export interface AddConnectionInput {
   planometryBaseUrl: string;
   agentKey: string;
   heartbeatPath?: string;
+  pingPath?: string;
 }
 
 /** `nia-agent connection add`: stores credentials in the local secret store, non-secret shape in agent.config.json. Does not validate connectivity — use `connection test` for that. */
@@ -40,6 +41,7 @@ export function addConnection(input: AddConnectionInput, dir = defaultHomeDir())
   const planometry: PlanometryConnectionConfig = {
     baseUrl: input.planometryBaseUrl,
     heartbeatPath: input.heartbeatPath,
+    pingPath: input.pingPath,
   };
   const entry: ConnectionEntry = { id: input.id, label: input.label, sqlserver, planometry, credentialRef, agentKeyRef };
 

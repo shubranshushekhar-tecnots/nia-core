@@ -18,6 +18,8 @@ export interface CheckResult {
   pass: boolean;
   detail: string;
   fix?: string;
+  /** Only meaningful when `pass` is false: "warning" means a non-blocking, opt-in capability is missing (doesn't fail `agent doctor`'s exit code); omitted/"fail" means a hard failure. */
+  severity?: "fail" | "warning";
 }
 
 export interface SqlCredentials {
@@ -133,7 +135,7 @@ export async function checkLoginPermissions(pool: ConnectionPool): Promise<Check
   return results;
 }
 
-/** VIEW SERVER STATE visibility — required for cancel-confirmation (sys.dm_exec_requests), same DMV the extract module's integration tests use. */
+/** VIEW SERVER STATE visibility — required for cancel-confirmation (sys.dm_exec_requests), same DMV the extract module's integration tests use. Opt-in on the grant side (`nia-agent sql readonly --with-cancel-visibility`), so a missing grant is a WARNING here, not a hard failure. */
 export async function checkCancelVisibility(pool: ConnectionPool): Promise<CheckResult> {
   try {
     await pool.request().query("SELECT COUNT(*) AS c FROM sys.dm_exec_requests");
@@ -142,8 +144,9 @@ export async function checkCancelVisibility(pool: ConnectionPool): Promise<Check
     return {
       name: "sys.dm_exec_requests visible (cancel confirmation)",
       pass: false,
+      severity: "warning",
       detail: err instanceof Error ? err.message : String(err),
-      fix: "GRANT VIEW SERVER STATE to this login (see `nia-agent sql readonly`)",
+      fix: "GRANT VIEW SERVER STATE to this login (see `nia-agent sql readonly --with-cancel-visibility`) — optional, only needed for cancel confirmation",
     };
   }
 }
@@ -204,11 +207,11 @@ export async function probePlanometry(baseUrl: string, caBundlePem?: string): Pr
   }
 }
 
-/** Calls the lightweight work-poll endpoint purely to prove the agent key is accepted — never pulls/acts on the returned work item. */
-export async function checkAgentKeyAccepted(connectionId: string, planometryBaseUrl: string, agentKey: string): Promise<CheckResult> {
+/** Calls a lightweight, non-claiming ping endpoint purely to prove the agent key is accepted — deliberately never calls pollWork, since that would claim/dequeue a real work item from Planometry's queue. `pingPath` is config-overridable (see planning doc's Open questions). */
+export async function checkAgentKeyAccepted(planometryBaseUrl: string, agentKey: string, pingPath?: string): Promise<CheckResult> {
   const client = new PlanometryClient({ baseUrl: planometryBaseUrl, agentKey, agentVersion: DOCTOR_AGENT_VERSION });
   try {
-    await client.pollWork(connectionId);
+    await client.ping(pingPath);
     return { name: "agent key accepted", pass: true, detail: "Planometry accepted the agent key" };
   } catch (err) {
     if (err instanceof PlanometryHttpError) {

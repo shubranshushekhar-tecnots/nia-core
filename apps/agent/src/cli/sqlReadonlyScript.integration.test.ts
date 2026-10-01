@@ -23,17 +23,24 @@ const TEST_LOGIN = "nia_readonly_itest";
 // end of this suite — not a real secret.
 const TEST_PASSWORD = "N!aReadonlyItest_2026";
 
+const SCHEMA_TEST_LOGIN = "nia_readonly_schema_itest";
+const SCHEMA_TEST_PASSWORD = "N!aReadonlySchemaItest_2026";
+
 type Pool = Awaited<ReturnType<typeof connect>>;
 
-async function dropTestLogin(pool: Pool): Promise<void> {
+async function dropLogin(pool: Pool, loginName: string): Promise<void> {
   await pool.request().batch(`
     USE ${sqlBracket(DATABASE)};
-    IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'${TEST_LOGIN}')
-      DROP USER ${sqlBracket(TEST_LOGIN)};
+    IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'${loginName}')
+      DROP USER ${sqlBracket(loginName)};
     USE [master];
-    IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'${TEST_LOGIN}')
-      DROP LOGIN ${sqlBracket(TEST_LOGIN)};
+    IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'${loginName}')
+      DROP LOGIN ${sqlBracket(loginName)};
   `);
+}
+
+async function dropTestLogin(pool: Pool): Promise<void> {
+  await dropLogin(pool, TEST_LOGIN);
 }
 
 function sqlBracket(name: string): string {
@@ -45,16 +52,19 @@ describe("buildReadonlySetupScript against a real SQL Server", () => {
 
   beforeAll(async () => {
     saPool = await connect({ server: HOST, port: PORT, database: DATABASE, user: SA_USER, password: SA_PASSWORD, encrypt: false });
-    await dropTestLogin(saPool); // clean slate in case a previous run left the login behind
+    // clean slate in case a previous run left either login behind
+    await dropTestLogin(saPool);
+    await dropLogin(saPool, SCHEMA_TEST_LOGIN);
   });
 
   afterAll(async () => {
     await dropTestLogin(saPool);
+    await dropLogin(saPool, SCHEMA_TEST_LOGIN);
     await saPool.close();
   });
 
   it("creates a login that can read, see the catalog, use sys.dm_exec_requests, and cannot write", async () => {
-    const script = buildReadonlySetupScript({ loginName: TEST_LOGIN, databases: [DATABASE] }).replace("<CHANGE_ME_STRONG_PASSWORD>", TEST_PASSWORD);
+    const script = buildReadonlySetupScript({ loginName: TEST_LOGIN, databases: [DATABASE], withCancelVisibility: true }).replace("<CHANGE_ME_STRONG_PASSWORD>", TEST_PASSWORD);
     await saPool.request().batch(script);
 
     const userPool = await connect({ server: HOST, port: PORT, database: DATABASE, user: TEST_LOGIN, password: TEST_PASSWORD, encrypt: false });
@@ -73,6 +83,26 @@ describe("buildReadonlySetupScript against a real SQL Server", () => {
 
       // Cannot write: creating a new table is rejected too.
       await expect(userPool.request().query("CREATE TABLE dbo.nia_readonly_itest_probe (id INT)")).rejects.toThrow(/permission|denied/i);
+    } finally {
+      await userPool.close();
+    }
+  });
+
+  it("with --schema dbo, can read a table inside dbo but cannot read a table in another schema (reporting)", async () => {
+    const script = buildReadonlySetupScript({ loginName: SCHEMA_TEST_LOGIN, databases: [DATABASE], schema: "dbo" }).replace(
+      "<CHANGE_ME_STRONG_PASSWORD>",
+      SCHEMA_TEST_PASSWORD,
+    );
+    await saPool.request().batch(script);
+
+    const userPool = await connect({ server: HOST, port: PORT, database: DATABASE, user: SCHEMA_TEST_LOGIN, password: SCHEMA_TEST_PASSWORD, encrypt: false });
+    try {
+      // Can read a table inside the granted schema (dbo).
+      const widgets = await userPool.request().query<{ c: number }>("SELECT COUNT(*) AS c FROM dbo.widgets");
+      expect(widgets.recordset[0]?.c).toBeGreaterThanOrEqual(0);
+
+      // Cannot read a table outside the granted schema (reporting).
+      await expect(userPool.request().query("SELECT COUNT(*) AS c FROM reporting.sales")).rejects.toThrow(/permission|denied/i);
     } finally {
       await userPool.close();
     }

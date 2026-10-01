@@ -45,12 +45,13 @@ async function main(argv: string[]): Promise<void> {
         "planometry-url": { type: "string" },
         "agent-key": { type: "string" },
         "heartbeat-path": { type: "string" },
+        "ping-path": { type: "string" },
       },
     });
     const planometryUrl = values["planometry-url"] as string | undefined;
     const agentKey = values["agent-key"] as string | undefined;
     if (!values.id || !values.label || !values.host || !values.database || !values.user || !values.password || !planometryUrl || !agentKey) {
-      console.error("usage: nia-agent connection add --id <id> --label <label> --host <host> --database <db> --user <user> --password <password> --planometry-url <url> --agent-key <key> [--port <n>] [--encrypt true|false] [--allow-legacy-tls true|false] [--trust-server-certificate true|false] [--heartbeat-path <path>]");
+      console.error("usage: nia-agent connection add --id <id> --label <label> --host <host> --database <db> --user <user> --password <password> --planometry-url <url> --agent-key <key> [--port <n>] [--encrypt true|false] [--allow-legacy-tls true|false] [--trust-server-certificate true|false] [--heartbeat-path <path>] [--ping-path <path>]");
       process.exitCode = 1;
       return;
     }
@@ -68,6 +69,7 @@ async function main(argv: string[]): Promise<void> {
       planometryBaseUrl: planometryUrl,
       agentKey,
       heartbeatPath: values["heartbeat-path"] as string | undefined,
+      pingPath: values["ping-path"] as string | undefined,
     });
     console.log(`added connection ${entry.id} (${entry.label})`);
     return;
@@ -115,11 +117,19 @@ async function main(argv: string[]): Promise<void> {
       options: {
         login: { type: "string" },
         databases: { type: "string" },
+        schema: { type: "string" },
+        "with-cancel-visibility": { type: "string" },
         out: { type: "string" },
       },
     });
     try {
-      const script = runSqlReadonly({ login: values.login as string | undefined, databases: values.databases as string | undefined, out: values.out as string | undefined });
+      const script = runSqlReadonly({
+        login: values.login as string | undefined,
+        databases: values.databases as string | undefined,
+        schema: values.schema as string | undefined,
+        withCancelVisibility: toOptionalBool(values["with-cancel-visibility"] as string | undefined),
+        out: values.out as string | undefined,
+      });
       if (!values.out) console.log(script);
       else console.log(`wrote readonly setup script to ${values.out}`);
     } catch (err) {
@@ -140,8 +150,9 @@ async function main(argv: string[]): Promise<void> {
     for (const report of reports) {
       console.log(`${report.connectionId} (${report.label}):`);
       for (const check of report.checks) {
-        if (!check.pass) anyFailed = true;
-        const status = check.pass ? "[PASS]" : "[FAIL]";
+        const isWarning = !check.pass && check.severity === "warning";
+        if (!check.pass && !isWarning) anyFailed = true;
+        const status = check.pass ? "[PASS]" : isWarning ? "[WARN]" : "[FAIL]";
         const fix = check.fix ? ` (fix: ${check.fix})` : "";
         console.log(`  ${status} ${check.name} — ${check.detail}${fix}`);
       }

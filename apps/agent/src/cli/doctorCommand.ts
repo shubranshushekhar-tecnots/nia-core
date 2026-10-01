@@ -50,7 +50,7 @@ export async function runDoctor(connectionId: string | undefined, dir = defaultH
       if (!agentKey) {
         checks.push({ name: "agent key accepted", pass: false, detail: "agent key is missing from the local secret store" });
       } else {
-        checks.push(await checkAgentKeyAccepted(entry.id, entry.planometry.baseUrl, agentKey.agentKey));
+        checks.push(await checkAgentKeyAccepted(entry.planometry.baseUrl, agentKey.agentKey, entry.planometry.pingPath));
       }
     }
 

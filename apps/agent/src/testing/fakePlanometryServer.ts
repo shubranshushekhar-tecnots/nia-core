@@ -64,6 +64,11 @@ export class FakePlanometryServer {
     this.workQueues.set(connectionId, queue);
   }
 
+  /** Test introspection only — lets a test prove a call did (or didn't) claim/dequeue work, without going through a real poll. */
+  queueLength(connectionId: string): number {
+    return (this.workQueues.get(connectionId) ?? []).length;
+  }
+
   setPollAfterSeconds(seconds: number): void {
     this.pollAfterSeconds = seconds;
   }
@@ -109,6 +114,11 @@ export class FakePlanometryServer {
       if (req.method === "POST" && url.pathname === "/v1/catalog") {
         const body = await readJsonBody<CatalogPushRequest>(req);
         this.catalogPushes.set(body.connectionId, body);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/v1/ping") {
         sendJson(res, 200, { ok: true });
         return;
       }

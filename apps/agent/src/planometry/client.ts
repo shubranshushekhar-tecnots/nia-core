@@ -54,6 +54,11 @@ export class PlanometryClient {
     return this.jsonRequest<WorkResponse>("GET", `/v1/work?connectionId=${encodeURIComponent(connectionId)}`);
   }
 
+  /** Lightweight, non-claiming auth check — never touches the work queue (unlike pollWork). Path is config-overridable until Planometry confirms the real one (see planning doc's Open questions). */
+  async ping(path?: string): Promise<void> {
+    await this.jsonRequest("GET", path ?? "/v1/ping");
+  }
+
   async pushChunk(runId: string, seq: number, rows: number, gzippedBody: Buffer): Promise<void> {
     const res = await request(this.url(`/v1/runs/${encodeURIComponent(runId)}/chunks`), {
       method: "POST",

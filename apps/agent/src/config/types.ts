@@ -17,6 +17,8 @@ export interface PlanometryConnectionConfig {
   baseUrl: string;
   /** Config-overridable until Planometry confirms the real path — see planning doc §4. */
   heartbeatPath?: string;
+  /** Config-overridable until Planometry confirms the real path — see planning doc's Open questions. Used only by `agent doctor`'s non-claiming "agent key accepted" check (PlanometryClient.ping). */
+  pingPath?: string;
 }
 
 export interface ConnectionEntry {

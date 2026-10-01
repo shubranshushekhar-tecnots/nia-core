@@ -139,12 +139,13 @@ describe("checkCancelVisibility", () => {
     expect(result.pass).toBe(true);
   });
 
-  it("fails with a VIEW SERVER STATE fix on error", async () => {
+  it("fails with a VIEW SERVER STATE fix on error, as a WARNING (not a hard failure — it's opt-in)", async () => {
     const pool = fakePool(async () => {
       throw new Error("permission denied");
     });
     const result = await checkCancelVisibility(pool);
     expect(result.pass).toBe(false);
+    expect(result.severity).toBe("warning");
     expect(result.fix).toMatch(/VIEW SERVER STATE/);
   });
 });
@@ -227,10 +228,44 @@ describe("checkAgentKeyAccepted", () => {
   it("passes against a server that accepts the key", async () => {
     const fake = await FakePlanometryServer.start();
     try {
-      const result = await checkAgentKeyAccepted("conn-1", fake.baseUrl, CANARY_AGENT_KEY);
+      const result = await checkAgentKeyAccepted(fake.baseUrl, CANARY_AGENT_KEY);
       expect(result.pass).toBe(true);
     } finally {
       await fake.close();
+    }
+  });
+
+  it("never claims/dequeues work — a connection's queued work item is still there afterwards", async () => {
+    const fake = await FakePlanometryServer.start();
+    try {
+      fake.enqueueWork("conn-1", { runId: "run-1", request: { table: "t", columns: ["a"], filter: [] } });
+      expect(fake.queueLength("conn-1")).toBe(1);
+      const result = await checkAgentKeyAccepted(fake.baseUrl, CANARY_AGENT_KEY);
+      expect(result.pass).toBe(true);
+      expect(fake.queueLength("conn-1")).toBe(1); // untouched — proves this never called pollWork
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it("uses a configurable ping path, verified on the first poll against a real listening URL", async () => {
+    let requestCount = 0;
+    let requestedPath: string | undefined;
+    const server = createServer((req, res) => {
+      requestCount += 1;
+      requestedPath = req.url;
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+    try {
+      const result = await checkAgentKeyAccepted(baseUrl, CANARY_AGENT_KEY, "/custom/ping");
+      expect(result.pass).toBe(true);
+      expect(requestedPath).toBe("/custom/ping");
+      expect(requestCount).toBe(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 
@@ -240,7 +275,7 @@ describe("checkAgentKeyAccepted", () => {
     const address = server.address();
     const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
     try {
-      const result = await checkAgentKeyAccepted("conn-1", baseUrl, CANARY_AGENT_KEY);
+      const result = await checkAgentKeyAccepted(baseUrl, CANARY_AGENT_KEY);
       expect(result.pass).toBe(false);
       expect(result.fix).toMatch(/regenerate|update/);
       expect(result.detail).not.toContain(CANARY_AGENT_KEY);
@@ -255,7 +290,7 @@ describe("checkAgentKeyAccepted", () => {
     const address = server.address();
     const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
     try {
-      const result = await checkAgentKeyAccepted("conn-1", baseUrl, CANARY_AGENT_KEY);
+      const result = await checkAgentKeyAccepted(baseUrl, CANARY_AGENT_KEY);
       expect(result.pass).toBe(false);
       expect(result.detail).not.toContain(CANARY_AGENT_KEY);
       expect(result.detail).not.toMatch(/leaked/);

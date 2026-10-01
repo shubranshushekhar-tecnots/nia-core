@@ -28,9 +28,18 @@ describe("buildReadonlySetupScript", () => {
     expect(() => buildReadonlySetupScript({ loginName: "nia_reader", databases: [] })).toThrow();
   });
 
-  it("emits exactly one CREATE LOGIN and one GRANT VIEW SERVER STATE", () => {
+  it("emits exactly one CREATE LOGIN", () => {
     const sql = buildReadonlySetupScript({ loginName: "nia_reader", databases: ["SummitERP_1", "SummitERP_2"] });
     expect(countOccurrences(sql, /CREATE LOGIN/g)).toBe(1);
+  });
+
+  it("omits GRANT VIEW SERVER STATE by default (opt-in only)", () => {
+    const sql = buildReadonlySetupScript({ loginName: "nia_reader", databases: ["SummitERP_1"] });
+    expect(countOccurrences(sql, /GRANT VIEW SERVER STATE/g)).toBe(0);
+  });
+
+  it("emits exactly one GRANT VIEW SERVER STATE when withCancelVisibility is true", () => {
+    const sql = buildReadonlySetupScript({ loginName: "nia_reader", databases: ["SummitERP_1"], withCancelVisibility: true });
     expect(countOccurrences(sql, /GRANT VIEW SERVER STATE/g)).toBe(1);
   });
 
@@ -72,6 +81,23 @@ describe("buildReadonlySetupScript", () => {
     // or break for a plain valid identifier.
     const sql = buildReadonlySetupScript({ loginName: "nia_reader", databases: ["db1"] });
     expect(sql).toContain("N'nia_reader'");
+  });
+
+  it("rejects a hostile schema name", () => {
+    expect(() => buildReadonlySetupScript({ loginName: "nia_reader", databases: ["db1"], schema: "dbo]; DROP TABLE x --" })).toThrow(InvalidIdentifierError);
+  });
+
+  it("without a schema, grants db-wide db_datareader + VIEW DEFINITION (no SCHEMA:: grants)", () => {
+    const sql = buildReadonlySetupScript({ loginName: "nia_reader", databases: ["db1"] });
+    expect(sql).toContain("sp_addrolemember N'db_datareader'");
+    expect(sql).not.toContain("SCHEMA::");
+  });
+
+  it("with a schema, grants SELECT + VIEW DEFINITION scoped to that schema only (no db_datareader)", () => {
+    const sql = buildReadonlySetupScript({ loginName: "nia_reader", databases: ["db1"], schema: "reporting" });
+    expect(sql).toContain("GRANT SELECT ON SCHEMA::[reporting] TO [nia_reader]");
+    expect(sql).toContain("GRANT VIEW DEFINITION ON SCHEMA::[reporting] TO [nia_reader]");
+    expect(sql).not.toContain("sp_addrolemember");
   });
 });
 

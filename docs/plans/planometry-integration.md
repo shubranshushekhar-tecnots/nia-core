@@ -378,6 +378,12 @@ sandbox DB). 10-line report, then stop.
 ### Open questions (remaining — for Planometry/GMS, not blocking the build)
 - Planometry: exact heartbeat endpoint path/method/body (we're guessing
   one, config-overridable).
+- Planometry: exact lightweight, non-claiming auth-check endpoint for
+  `agent doctor`'s "agent key accepted" check (we're guessing `GET
+  /v1/ping`, config-overridable via `pingPath`). This check must never
+  call the real work-poll endpoint (`GET /v1/work`), since that claims/
+  dequeues an actual queued work item — confirmed by a dedicated test
+  (`doctorChecks.test.ts`, "never claims/dequeues work").
 - Planometry: `pollAfterSeconds` bounds/defaults, and whether our jitter
   is welcome or would confuse their rate-limiting.
 - Planometry: does a duplicate ack for an already-committed chunk seq

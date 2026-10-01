@@ -54,7 +54,10 @@ describe("runDoctor against a real SQL Server + fake Planometry", () => {
   beforeAll(async () => {
     saPool = await connect({ server: HOST, port: PORT, database: DATABASE, user: SA_USER, password: SA_PASSWORD, encrypt: false });
     await dropTestLogin(saPool); // clean slate in case a previous run left the login behind
-    const script = buildReadonlySetupScript({ loginName: TEST_LOGIN, databases: [DATABASE] }).replace("<CHANGE_ME_STRONG_PASSWORD>", TEST_PASSWORD);
+    const script = buildReadonlySetupScript({ loginName: TEST_LOGIN, databases: [DATABASE], withCancelVisibility: true }).replace(
+      "<CHANGE_ME_STRONG_PASSWORD>",
+      TEST_PASSWORD,
+    );
     await saPool.request().batch(script);
   });
 
