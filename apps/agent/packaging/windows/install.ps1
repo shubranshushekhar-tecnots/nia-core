@@ -24,6 +24,10 @@ $InstallDir = "$env:ProgramFiles\NiaAgent"
 $DataDir = "$env:ProgramData\NiaAgent"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ServiceExe = Join-Path $InstallDir "nia-agent-service.exe"
+# Matches nia-agent-service.xml's <serviceaccount> (domain NT SERVICE, user
+# nia-agent) and permissionChecks.ts's WINDOWS_ALLOWED_IDENTITIES — keep all
+# three in sync if the service id ever changes.
+$ServiceAccount = "NT SERVICE\nia-agent"
 
 $serviceWasRunning = $false
 $existing = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue
@@ -46,17 +50,24 @@ Copy-Item -Path (Join-Path $ScriptDir "nia-agent-service.xml") -Destination $Ins
 Copy-Item -Path (Join-Path $ScriptDir "LICENSE-WinSW.txt") -Destination $InstallDir
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
-# Restrict to SYSTEM (the service runs as LocalSystem by WinSW default) and
-# local Administrators only, removing inherited permissions — matches the
-# Linux install's 0700 data dir. POSIX file modes (0o700/0o600) have no
-# effect on Windows, so this ACL is the only thing protecting config,
-# secrets, the master keyfile, and spool chunk files containing customer
-# row data. Must run BEFORE any subdirectory (e.g. "logs") is created below,
-# so that subdirectory inherits this locked-down ACL instead of
-# %ProgramData%'s default (which grants Users/Authenticated Users access).
+# Restrict to the agent's own virtual service account (least privilege — the
+# service runs as $ServiceAccount, not LocalSystem/SYSTEM) and local
+# Administrators only, removing inherited permissions — matches the Linux
+# install's 0700 data dir. POSIX file modes (0o700/0o600) have no effect on
+# Windows, so this ACL is the only thing protecting config, secrets, the
+# master keyfile, and spool chunk files containing customer row data. Must
+# run BEFORE any subdirectory (e.g. "logs") is created below, so that
+# subdirectory inherits this locked-down ACL instead of %ProgramData%'s
+# default (which grants Users/Authenticated Users access).
+# UNVERIFIED ON A REAL WINDOWS HOST: that a virtual service account's SID is
+# resolvable via Get-Acl/New-Object FileSystemAccessRule before the service
+# has ever been installed (Microsoft docs say virtual-account SIDs are
+# deterministic and don't require prior provisioning, but this hasn't been
+# exercised against a live SCM here). If Set-Acl below throws "account could
+# not be translated", move this ACL block to after `& $ServiceExe install`.
 $acl = Get-Acl $DataDir
 $acl.SetAccessRuleProtection($true, $false)
-foreach ($identity in @("NT AUTHORITY\SYSTEM", "BUILTIN\Administrators")) {
+foreach ($identity in @($ServiceAccount, "BUILTIN\Administrators")) {
     $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
     $acl.AddAccessRule($rule)
 }

@@ -2,7 +2,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checkPathPermissions, parseIcaclsIdentities } from "./permissionChecks.js";
+import { checkPathPermissions, findUnexpectedWindowsIdentities, parseIcaclsIdentities } from "./permissionChecks.js";
 
 describe("checkPathPermissions", () => {
   let dir: string;
@@ -57,26 +57,46 @@ describe("checkPathPermissions", () => {
 });
 
 describe("parseIcaclsIdentities", () => {
-  it("extracts identities from a locked-down ACL (SYSTEM + Administrators only)", () => {
+  it("extracts identities from a locked-down ACL (virtual service account + Administrators only)", () => {
     const targetPath = "C:\\ProgramData\\NiaAgent";
     const stdout = [
-      `${targetPath} NT AUTHORITY\\SYSTEM:(OI)(CI)F`,
+      `${targetPath} NT SERVICE\\nia-agent:(OI)(CI)F`,
       "                 BUILTIN\\Administrators:(OI)(CI)F",
       "",
       "Successfully processed 1 files; Failed processing 0 files",
     ].join("\r\n");
-    expect(parseIcaclsIdentities(stdout, targetPath)).toEqual(["NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators"]);
+    expect(parseIcaclsIdentities(stdout, targetPath)).toEqual(["NT SERVICE\\nia-agent", "BUILTIN\\Administrators"]);
   });
 
   it("surfaces an unexpected identity (e.g. a widened ACL) alongside the allowed ones", () => {
     const targetPath = "C:\\ProgramData\\NiaAgent";
     const stdout = [
-      `${targetPath} NT AUTHORITY\\SYSTEM:(OI)(CI)F`,
+      `${targetPath} NT SERVICE\\nia-agent:(OI)(CI)F`,
       "                 BUILTIN\\Administrators:(OI)(CI)F",
       "                 BUILTIN\\Users:(OI)(CI)R",
       "",
       "Successfully processed 1 files; Failed processing 0 files",
     ].join("\r\n");
-    expect(parseIcaclsIdentities(stdout, targetPath)).toEqual(["NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators", "BUILTIN\\Users"]);
+    expect(parseIcaclsIdentities(stdout, targetPath)).toEqual(["NT SERVICE\\nia-agent", "BUILTIN\\Administrators", "BUILTIN\\Users"]);
+  });
+});
+
+describe("findUnexpectedWindowsIdentities", () => {
+  it("allows the virtual service account and local Administrators", () => {
+    expect(findUnexpectedWindowsIdentities(["NT SERVICE\\nia-agent", "BUILTIN\\Administrators"])).toEqual([]);
+  });
+
+  it("is case-insensitive", () => {
+    expect(findUnexpectedWindowsIdentities(["nt service\\nia-agent", "builtin\\administrators"])).toEqual([]);
+  });
+
+  it("flags NT AUTHORITY\\SYSTEM as unexpected — regression guard for the service silently reverting to LocalSystem", () => {
+    expect(findUnexpectedWindowsIdentities(["NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators"])).toEqual(["NT AUTHORITY\\SYSTEM"]);
+  });
+
+  it("flags any other widened identity (e.g. BUILTIN\\Users)", () => {
+    expect(findUnexpectedWindowsIdentities(["NT SERVICE\\nia-agent", "BUILTIN\\Administrators", "BUILTIN\\Users"])).toEqual([
+      "BUILTIN\\Users",
+    ]);
   });
 });

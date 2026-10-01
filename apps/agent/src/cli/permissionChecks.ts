@@ -9,15 +9,17 @@ const execFileAsync = promisify(execFile);
  * `agent doctor`'s permission check: POSIX file modes (0o700/0o600, set by
  * config/store.ts, secrets/keyfile.ts, sync/spoolWriter.ts, ops/logger.ts)
  * have no effect on Windows — NTFS access is governed entirely by ACLs, set
- * once at install time by packaging/windows/install.ps1 (SYSTEM + local
- * Administrators only, inherited permissions removed). This is a read-only
- * diagnostic for both platforms: it never changes permissions, only warns
- * when a data directory/file is readable by more than the agent's own
- * account, so a widened ACL (e.g. someone running `icacls` by hand, or a
- * restore that reset permissions) gets caught by a routine `doctor` run
+ * once at install time by packaging/windows/install.ps1 (the agent's own
+ * virtual service account, "NT SERVICE\nia-agent", + local Administrators
+ * only — not LocalSystem, per least privilege; inherited permissions
+ * removed). This is a read-only diagnostic for both platforms: it never
+ * changes permissions, only warns when a data directory/file is readable by
+ * more than the agent's own account, so a widened ACL (e.g. someone running
+ * `icacls` by hand, a restore that reset permissions, or the service
+ * silently reverting to LocalSystem) gets caught by a routine `doctor` run
  * instead of silently exposing customer data.
  */
-const WINDOWS_ALLOWED_IDENTITIES = [/^NT AUTHORITY\\SYSTEM$/i, /^BUILTIN\\ADMINISTRATORS$/i];
+const WINDOWS_ALLOWED_IDENTITIES = [/^NT SERVICE\\NIA-AGENT$/i, /^BUILTIN\\ADMINISTRATORS$/i];
 
 export async function checkPathPermissions(label: string, targetPath: string): Promise<CheckResult> {
   const name = `${label} permissions`;
@@ -52,11 +54,11 @@ function checkPosixMode(name: string, targetPath: string, mode: number, isDirect
 }
 
 async function checkWindowsAcl(name: string, targetPath: string): Promise<CheckResult> {
-  const fix = `icacls "${targetPath}" /inheritance:r /grant:r "NT AUTHORITY\\SYSTEM:(OI)(CI)F" "BUILTIN\\Administrators:(OI)(CI)F"`;
+  const fix = `icacls "${targetPath}" /inheritance:r /grant:r "NT SERVICE\\nia-agent:(OI)(CI)F" "BUILTIN\\Administrators:(OI)(CI)F"`;
   try {
     const { stdout } = await execFileAsync("icacls", [targetPath]);
     const identities = parseIcaclsIdentities(stdout, targetPath);
-    const unexpected = identities.filter((id) => !WINDOWS_ALLOWED_IDENTITIES.some((re) => re.test(id)));
+    const unexpected = findUnexpectedWindowsIdentities(identities);
     return {
       name,
       pass: unexpected.length === 0,
@@ -70,6 +72,11 @@ async function checkWindowsAcl(name: string, targetPath: string): Promise<CheckR
   } catch (err) {
     return { name, pass: false, severity: "warning", detail: err instanceof Error ? err.message : String(err), fix };
   }
+}
+
+/** Exported for unit testing without a Windows host — e.g. asserts that a service account reverting to NT AUTHORITY\SYSTEM or LocalSystem gets flagged, not silently allowed. */
+export function findUnexpectedWindowsIdentities(identities: string[]): string[] {
+  return identities.filter((id) => !WINDOWS_ALLOWED_IDENTITIES.some((re) => re.test(id)));
 }
 
 /** Exported for unit testing without a Windows host. icacls prints the path followed by the first ACE on one line, then one indented "identity:(flags)perm" line per further ACE, ending in a blank line + a "Successfully processed..." summary. */

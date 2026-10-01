@@ -266,23 +266,45 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 This installs to `%ProgramFiles%\NiaAgent`, creates
 `%ProgramData%\NiaAgent` (the agent's app-data directory — config,
-encrypted secrets, spool, logs, status — ACL'd to SYSTEM and local
-Administrators only), and registers the `nia-agent` Windows service
-(restart-on-failure with a 5s delay, 60s graceful-stop timeout — WinSW
-sends the process a close signal that Node surfaces as `SIGINT`, which
+encrypted secrets, spool, logs, status — ACL'd to the agent's own
+virtual service account, `NT SERVICE\nia-agent`, and local
+Administrators only), and registers the `nia-agent` Windows service to
+run as that virtual account rather than LocalSystem (restart-on-failure
+with a 5s delay, 60s graceful-stop timeout — WinSW sends the process a
+close signal that Node surfaces as `SIGINT`, which
 `installGracefulShutdown` uses to abort in-flight work and clean up the
-spool before WinSW force-kills it). Re-run `install.ps1` with a newer
-zip at any time to upgrade in place — it never touches
-`%ProgramData%\NiaAgent`.
+spool before WinSW force-kills it). A virtual service account needs no
+password, is managed entirely by Windows, and gets no local-machine
+access beyond what this install explicitly grants it — unlike
+LocalSystem, which has broad access to the whole machine. Re-run
+`install.ps1` with a newer zip at any time to upgrade in place — it
+never touches `%ProgramData%\NiaAgent`.
 
 POSIX file modes (0600/0700, used on Linux) have no effect on Windows —
-`install.ps1`'s ACL (SYSTEM + local Administrators only, inherited
-permissions removed) is what actually protects config, secrets, the
-master keyfile, and spool files. `nia-agent doctor` checks this on every
-run and prints a `[WARN]` if any of those paths grant access to an
-unexpected identity (e.g. a restore or a manual `icacls` loosened it) —
-re-run `install.ps1`, or apply the `icacls` command the warning prints,
-to re-lock it.
+`install.ps1`'s ACL (`NT SERVICE\nia-agent` + local Administrators only,
+inherited permissions removed) is what actually protects config,
+secrets, the master keyfile, and spool files. `nia-agent doctor` checks
+this on every run and prints a `[WARN]` if any of those paths grant
+access to an unexpected identity — including `NT AUTHORITY\SYSTEM` or
+`LocalSystem`, in case the service is ever reconfigured to run with
+broader privileges than intended — (e.g. a restore or a manual `icacls`
+loosened it) — re-run `install.ps1`, or apply the `icacls` command the
+warning prints, to re-lock it.
+
+**Verify on a real Windows host** (could not be exercised on the build
+machine used to make this change): that WinSW v2.12.0 accepts the
+`<serviceaccount>` block's `<domain>NT SERVICE</domain>` /
+`<user>nia-agent</user>` shape and installs the service non-interactively
+without a password prompt; that the virtual account's SID resolves via
+PowerShell's `Get-Acl`/`New-Object FileSystemAccessRule` *before* the
+service has ever been installed (if `Set-Acl` throws "account could not
+be translated", the ACL step in `install.ps1` needs to move to after
+`& $ServiceExe install`); that the service actually starts and stays
+running under `NT SERVICE\nia-agent` (check with `Get-Service nia-agent`
+and Task Manager's "Users" column); and that outbound HTTPS to
+Planometry still works under this account, including through any
+authenticated corporate proxy GMS may have in front of outbound
+internet traffic.
 
 Run steps 3-5 above before starting the service for the first time:
 ```
