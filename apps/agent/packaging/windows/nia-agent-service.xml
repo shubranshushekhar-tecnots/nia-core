@@ -1,0 +1,37 @@
+<!--
+  WinSW v2 service descriptor for the Nia Agent. Lives alongside
+  nia-agent-service.exe (the renamed, pinned+checksum-verified WinSW
+  binary — see build-bundle.mjs) in the install directory.
+
+  Graceful shutdown: WinSW's default stop behavior for a console
+  subprocess it spawns directly (no <stopexecutable>/<stopargument>
+  configured) is to send it a Ctrl+C-equivalent close signal, which Node
+  on Windows surfaces as a 'SIGINT' event — exactly what
+  apps/agent/src/ops/shutdown.ts's installGracefulShutdown() listens for.
+  <stoptimeout> gives the in-flight sync time to abort and spool-cleanup
+  before WinSW force-kills the process tree.
+-->
+<service>
+  <id>nia-agent</id>
+  <name>Nia Agent</name>
+  <description>Nia on-premise agent — polls Planometry and syncs SQL Server data.</description>
+  <executable>%BASE%\nia-agent.exe</executable>
+  <arguments>start</arguments>
+
+  <!-- Same directory the agent's own rotating logger writes to
+       (config/paths.ts's defaultLogDir(), under NIA_AGENT_HOME below) —
+       this captures WinSW's own wrapper/stdout/stderr log files
+       (nia-agent.wrapper.log / .out.log / .err.log) next to the agent's
+       own agent.log, satisfying "logs in agent log dir". -->
+  <log mode="roll-by-size">
+    <logpath>%PROGRAMDATA%\NiaAgent\logs</logpath>
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+
+  <onfailure action="restart" delay="5 sec"/>
+  <resetfailure>1 hour</resetfailure>
+  <stoptimeout>60sec</stoptimeout>
+
+  <env name="NIA_AGENT_HOME" value="%PROGRAMDATA%\NiaAgent"/>
+</service>

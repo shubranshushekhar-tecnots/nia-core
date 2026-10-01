@@ -229,8 +229,83 @@ sudo ./apps/agent/packaging/linux/uninstall.sh [--purge]
 
 ### Option C: Windows service
 
-Not yet available — tracked in `docs/plans/planometry-integration.md` §9.
-This section will be filled in once that packaging slice lands.
+The agent ships as a single `nia-agent.exe` (a Node.js Single Executable
+Application — no separate Node.js install needed on the target host),
+wrapped as a Windows service by [WinSW](https://github.com/winsw/winsw)
+v2.12.0 (MIT licensed, bundled in the install zip as
+`LICENSE-WinSW.txt`).
+
+**Prerequisite:** .NET Framework 4.6.1 or later (required by WinSW;
+already present by default on Windows 10 / Server 2016 and later —
+confirm on older hosts before installing).
+
+Build the bundle once (from the repo, on any machine — macOS, Linux, or
+Windows; cross-building a Windows executable from a non-Windows machine
+is supported since the build only patches a downloaded `node.exe`
+binary, it never executes it):
+```
+pnpm -r --filter @nia/extract --filter @nia/agent build
+node apps/agent/packaging/windows/build-sea.mjs
+node apps/agent/packaging/windows/build-bundle.mjs
+```
+This produces `apps/agent/packaging/windows/dist/nia-agent-windows-<version>.zip`
+— a self-contained bundle (agent executable, the pinned+checksum-verified
+WinSW binary renamed `nia-agent-service.exe`, the service descriptor, the
+WinSW license, and install/uninstall scripts). No downloads happen on the
+target host — everything is fetched and SHA-256-verified at build time:
+the Node.js runtime used to build `nia-agent.exe` is checked against
+nodejs.org's own published `SHASUMS256.txt`, and WinSW is checked against
+a checksum obtained by downloading that exact release asset directly
+from GitHub and hashing it independently (not copied from a third
+party) — see the comments in `build-sea.mjs`/`build-bundle.mjs` for the
+exact pinned versions and hashes.
+
+Copy the zip to the agent host, unzip it, then run as Administrator:
+```
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+This installs to `%ProgramFiles%\NiaAgent`, creates
+`%ProgramData%\NiaAgent` (the agent's app-data directory — config,
+encrypted secrets, spool, logs, status — ACL'd to SYSTEM and local
+Administrators only), and registers the `nia-agent` Windows service
+(restart-on-failure with a 5s delay, 60s graceful-stop timeout — WinSW
+sends the process a close signal that Node surfaces as `SIGINT`, which
+`installGracefulShutdown` uses to abort in-flight work and clean up the
+spool before WinSW force-kills it). Re-run `install.ps1` with a newer
+zip at any time to upgrade in place — it never touches
+`%ProgramData%\NiaAgent`.
+
+Run steps 3-5 above before starting the service for the first time:
+```
+& "$env:ProgramFiles\NiaAgent\nia-agent.exe" connection add ...
+& "$env:ProgramFiles\NiaAgent\nia-agent.exe" doctor
+```
+Then start it:
+```
+& "$env:ProgramFiles\NiaAgent\nia-agent-service.exe" start
+Get-Service nia-agent
+```
+
+To uninstall (leaves `%ProgramData%\NiaAgent` in place unless `-Purge` is
+given):
+```
+powershell -ExecutionPolicy Bypass -File uninstall.ps1 [-Purge]
+```
+
+**Antivirus / SmartScreen note:** `nia-agent.exe` is built by patching a
+genuine `node.exe` binary with the bundled agent code (Node's own
+"Single Executable Application" mechanism) and is not code-signed by
+Nia. This is expected to trigger Windows SmartScreen and may be flagged
+by endpoint AV on first run, the same way any unsigned internal tool
+would be. Verify the zip's SHA-256 (printed at the end of
+`build-bundle.mjs`'s output) matches what GMS IT received before
+installing, and allow/scan `nia-agent.exe` and `nia-agent-service.exe`
+per GMS's normal unsigned-internal-tool process. If GMS requires
+code-signed executables, sign `nia-agent.exe` with GMS's own
+Authenticode certificate after the build (re-signing after postject
+injection is normal — the build step's injection step prints a
+"signature seems corrupted" warning for Node's own original signature,
+which is expected and is overwritten by a subsequent real signing step).
 
 ---
 
