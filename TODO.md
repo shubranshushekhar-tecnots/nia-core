@@ -917,3 +917,8 @@
 - Payments disabled via PAYMENTS_ENABLED=false. To enable: add Razorpay
   keys + plan IDs, register webhook, run one real test purchase, decide
   GST-inclusive pricing with CA, then set true.
+- supabase/seed.sql predates the plan-limit migrations (0049–0053):
+  inserting the demo org's projects/workflows exceeds Free-plan limits.
+  Fix seed.sql to set the seeded orgs' plan (e.g. legacy/pro via
+  org_plan) BEFORE inserting projects/workflows, so it runs cleanly on a
+  fresh DB without disabling triggers.
