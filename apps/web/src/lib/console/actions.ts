@@ -6,6 +6,7 @@ import {
   type ConsoleAnnouncement,
   type ConsoleAnnouncementsPage,
   type ConsoleOrgsPage,
+  type ConsolePlanUpdateResult,
   type ConsoleProjectsPage,
   type ConsoleStaffPage,
   type ConsoleUsageData,
@@ -34,6 +35,35 @@ export async function loadMoreStaffAction(offset: number): Promise<ConsoleStaffP
 /** Console redesign plan's Slice 6 — same "Load more" pattern as loadMoreOrgsAction above. */
 export async function loadMoreProjectsAction(offset: number): Promise<ConsoleProjectsPage> {
   return apiFetchServer<ConsoleProjectsPage>(`/console/projects?offset=${offset}`);
+}
+
+/**
+ * Console redesign plan's Slice 7: submits ConsolePlansClient's inline
+ * per-plan edit form to PATCH /console/plans/:planId — same
+ * useTransition-driven, ok/error mutation shape as updateOrgPlanAction
+ * above. Unlike that action, a successful result here carries a
+ * `warnings` array (orgs whose current usage already meets/exceeds a
+ * lowered limit) that the write still applies — plan.md's "warn, don't
+ * block" instruction — so the caller must render `warnings` on success,
+ * not treat it as an error.
+ */
+export async function updatePlanAction(
+  planId: string,
+  projectLimit: number | null,
+  workflowLimit: number | null,
+  rowsPerMonth: number | null,
+  copilotActionsPerMonth: number | null,
+): Promise<({ ok: true } & ConsolePlanUpdateResult) | { ok: false; error: string }> {
+  try {
+    const result = await apiFetchServer<ConsolePlanUpdateResult>(`/console/plans/${encodeURIComponent(planId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ projectLimit, workflowLimit, rowsPerMonth, copilotActionsPerMonth }),
+    });
+    return { ok: true, ...result };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't update the plan. Try again." };
+  }
 }
 
 /**

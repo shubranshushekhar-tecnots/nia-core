@@ -643,6 +643,23 @@ export const consolePlanFormWarningStyle: CSSProperties = {
   color: 'var(--nx-warn)',
 };
 
+// Console redesign plan's Slice 7 (Plans page): the warnings list a
+// successful PATCH can return (plan.md's "warn, don't block" — these
+// render alongside the already-saved row, not as a blocking error). The
+// per-row "Edit" button column reuses the existing consoleColActionsStyle
+// further below rather than redeclaring it.
+export const consoleWarningsListStyle: CSSProperties = {
+  flex: '1 1 100%',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+};
+
+export const consoleWarningItemStyle: CSSProperties = {
+  fontSize: 12.5,
+  color: 'var(--nx-warn)',
+};
+
 export const consoleSectionTitleStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 600,

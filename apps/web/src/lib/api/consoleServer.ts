@@ -116,11 +116,36 @@ export type ConsolePlan = {
   name: string;
   projectLimit: number | null;
   workflowLimit: number | null;
+  rowsPerMonth: number | null;
+  copilotActionsPerMonth: number | null;
 };
 
 export async function getConsolePlans(): Promise<{ plans: ConsolePlan[] }> {
   return apiFetchServer<{ plans: ConsolePlan[] }>('/console/plans');
 }
+
+/**
+ * Console redesign plan's Slice 7 — types + wrapper for
+ * PATCH /console/plans/:planId (apps/api/src/routes/console.ts, mirrored
+ * exactly). Platform-wide catalog edit, not org-scoped — "warn, don't
+ * block": `warnings` can be non-empty even though the write still
+ * succeeded.
+ */
+export type ConsolePlanUpdateWarning = {
+  orgId: string;
+  orgName: string;
+  limit: string;
+  currentUsage: number;
+  newLimit: number;
+};
+
+export type ConsolePlanUpdateResult = {
+  projectLimit: number | null;
+  workflowLimit: number | null;
+  rowsPerMonth: number | null;
+  copilotActionsPerMonth: number | null;
+  warnings: ConsolePlanUpdateWarning[];
+};
 
 /**
  * GET /console/orgs/:orgId/runs's response shape (Slice 3c, console-plan.md

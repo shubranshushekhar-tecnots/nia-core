@@ -537,8 +537,15 @@ consoleRouter.get(
     if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
 
     const result = await withServiceRole(dbPool, async (db) =>
-      db.query<{ id: string; name: string; project_limit: number | null; workflow_limit: number | null }>(
-        `select id, name, project_limit, workflow_limit
+      db.query<{
+        id: string;
+        name: string;
+        project_limit: number | null;
+        workflow_limit: number | null;
+        rows_per_month: number | null;
+        copilot_actions_per_month: number | null;
+      }>(
+        `select id, name, project_limit, workflow_limit, rows_per_month, copilot_actions_per_month
          from public.plans
          order by case id
            when 'free' then 1
@@ -557,7 +564,181 @@ consoleRouter.get(
         name: p.name,
         projectLimit: p.project_limit,
         workflowLimit: p.workflow_limit,
+        rowsPerMonth: p.rows_per_month,
+        copilotActionsPerMonth: p.copilot_actions_per_month,
       })),
+    });
+  }),
+);
+
+/**
+ * Console redesign plan's Slice 7 — `PATCH /console/plans/:planId` edits the
+ * plan catalog itself (public.plans), not a single org's override. This is
+ * a platform-wide change, so unlike org-scoped mutations elsewhere in this
+ * file, it writes only one `staff_audit_log` row (`action: 'plan.update'`,
+ * before/after in detail) and deliberately does NOT call
+ * `private.log_org_audit` for any org — there is no single affected org.
+ *
+ * "Warn, don't block" (plan's own instruction): before responding, for
+ * every limit that was lowered (see isLowered below — null means
+ * unlimited, so going from a number to null is never a "lowering", and
+ * going from null to any number always is), find every org currently on
+ * this plan whose usage already meets or exceeds the new cap and return
+ * them as `warnings` — the write always succeeds regardless.
+ *
+ * workflow_limit/project_limit have a per-org override flag
+ * (org_plan.workflow_limit_set/project_limit_set, 0050_org_plan_overrides.sql)
+ * — an org with the override set is unaffected by the plan's own limit
+ * changing, so those two checks are scoped to `*_limit_set = false`.
+ * rows_per_month/copilot_actions_per_month have no such override column
+ * (confirmed: those two columns exist only on plans, never org_plan), so
+ * every org on this plan is in scope for those two checks.
+ */
+const planIdParamsSchema = z.object({ planId: z.string().trim().min(1).max(40) });
+
+const patchPlanBodySchema = z.object({
+  projectLimit: z.number().int().positive().nullable(),
+  workflowLimit: z.number().int().positive().nullable(),
+  rowsPerMonth: z.number().int().positive().nullable(),
+  copilotActionsPerMonth: z.number().int().positive().nullable(),
+});
+
+function isLowered(before: number | null, after: number | null): boolean {
+  if (after === null) return false;
+  if (before === null) return true;
+  return after < before;
+}
+
+consoleRouter.patch(
+  "/plans/:planId",
+  validate({ params: planIdParamsSchema, body: patchPlanBodySchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { planId } = req.params as unknown as { planId: string };
+    const { projectLimit, workflowLimit, rowsPerMonth, copilotActionsPerMonth } = req.body as unknown as {
+      projectLimit: number | null;
+      workflowLimit: number | null;
+      rowsPerMonth: number | null;
+      copilotActionsPerMonth: number | null;
+    };
+
+    type PlanLimits = {
+      project_limit: number | null;
+      workflow_limit: number | null;
+      rows_per_month: number | null;
+      copilot_actions_per_month: number | null;
+    };
+
+    const result = await withServiceRole(dbPool, async (db) => {
+      const beforeResult = await db.query<PlanLimits>(
+        `select project_limit, workflow_limit, rows_per_month, copilot_actions_per_month
+         from public.plans where id = $1`,
+        [planId],
+      );
+      const before = beforeResult.rows[0];
+      if (!before) return null;
+
+      const updateResult = await db.query<PlanLimits>(
+        `update public.plans
+         set project_limit = $2, workflow_limit = $3, rows_per_month = $4, copilot_actions_per_month = $5
+         where id = $1
+         returning project_limit, workflow_limit, rows_per_month, copilot_actions_per_month`,
+        [planId, projectLimit, workflowLimit, rowsPerMonth, copilotActionsPerMonth],
+      );
+      const after = updateResult.rows[0]!;
+
+      const warnings: Array<{ orgId: string; orgName: string; limit: string; currentUsage: number; newLimit: number }> = [];
+
+      if (isLowered(before.workflow_limit, after.workflow_limit)) {
+        const affected = await db.query<{ id: string; name: string; used: number }>(
+          `select o.id, o.name, w.used
+           from public.organizations o
+           join public.org_plan op on op.org_id = o.id
+           join (select org_id, count(*)::int as used from public.workflows group by org_id) w on w.org_id = o.id
+           where op.plan_id = $1 and op.workflow_limit_set = false and w.used >= $2`,
+          [planId, after.workflow_limit],
+        );
+        for (const row of affected.rows) {
+          warnings.push({ orgId: row.id, orgName: row.name, limit: "workflow_limit", currentUsage: row.used, newLimit: after.workflow_limit! });
+        }
+      }
+
+      if (isLowered(before.project_limit, after.project_limit)) {
+        const affected = await db.query<{ id: string; name: string; used: number }>(
+          `select o.id, o.name, p.used
+           from public.organizations o
+           join public.org_plan op on op.org_id = o.id
+           join (select org_id, count(*)::int as used from public.projects group by org_id) p on p.org_id = o.id
+           where op.plan_id = $1 and op.project_limit_set = false and p.used >= $2`,
+          [planId, after.project_limit],
+        );
+        for (const row of affected.rows) {
+          warnings.push({ orgId: row.id, orgName: row.name, limit: "project_limit", currentUsage: row.used, newLimit: after.project_limit! });
+        }
+      }
+
+      if (isLowered(before.rows_per_month, after.rows_per_month)) {
+        const affected = await db.query<{ id: string; name: string; used: string | null }>(
+          `select o.id, o.name, sum(ue.quantity)::bigint as used
+           from public.organizations o
+           join public.org_plan op on op.org_id = o.id
+           join public.usage_events ue
+             on ue.org_id = o.id and ue.kind = 'rows_moved' and ue.occurred_at >= date_trunc('month', now())
+           where op.plan_id = $1
+           group by o.id, o.name
+           having sum(ue.quantity) >= $2`,
+          [planId, after.rows_per_month],
+        );
+        for (const row of affected.rows) {
+          warnings.push({
+            orgId: row.id,
+            orgName: row.name,
+            limit: "rows_per_month",
+            currentUsage: Number(row.used ?? 0),
+            newLimit: after.rows_per_month!,
+          });
+        }
+      }
+
+      if (isLowered(before.copilot_actions_per_month, after.copilot_actions_per_month)) {
+        const affected = await db.query<{ id: string; name: string; used: string | null }>(
+          `select o.id, o.name, sum(ue.quantity)::bigint as used
+           from public.organizations o
+           join public.org_plan op on op.org_id = o.id
+           join public.usage_events ue
+             on ue.org_id = o.id and ue.kind = 'copilot_action' and ue.occurred_at >= date_trunc('month', now())
+           where op.plan_id = $1
+           group by o.id, o.name
+           having sum(ue.quantity) >= $2`,
+          [planId, after.copilot_actions_per_month],
+        );
+        for (const row of affected.rows) {
+          warnings.push({
+            orgId: row.id,
+            orgName: row.name,
+            limit: "copilot_actions_per_month",
+            currentUsage: Number(row.used ?? 0),
+            newLimit: after.copilot_actions_per_month!,
+          });
+        }
+      }
+
+      const detail = JSON.stringify({ before, after });
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [authUser.id, "plan.update", null, null, detail]);
+
+      return { after, warnings };
+    });
+
+    if (!result) throw new AppError(404, "NOT_FOUND", "Plan not found.");
+
+    res.json({
+      projectLimit: result.after.project_limit,
+      workflowLimit: result.after.workflow_limit,
+      rowsPerMonth: result.after.rows_per_month,
+      copilotActionsPerMonth: result.after.copilot_actions_per_month,
+      warnings: result.warnings,
     });
   }),
 );

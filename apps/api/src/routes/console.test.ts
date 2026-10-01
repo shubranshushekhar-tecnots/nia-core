@@ -2349,3 +2349,116 @@ describe("GET /console/projects", () => {
     expect(auditCall?.[1]).toEqual(["staff-1", "projects.list", null, null, JSON.stringify({ limit: 50, offset: 0, count: 1 })]);
   });
 });
+
+describe("PATCH /console/plans/:planId", () => {
+  it("returns 403 for a non-staff session", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/plans/pro`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ projectLimit: 10, workflowLimit: null, rowsPerMonth: 2000000, copilotActionsPerMonth: 500 }),
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("updates the plan and writes one staff_audit_log row with before/after detail", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from public.plans where id = $1")) {
+        return {
+          rows: [{ project_limit: 5, workflow_limit: null, rows_per_month: 2000000, copilot_actions_per_month: 500 }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("update public.plans")) {
+        return {
+          rows: [{ project_limit: 10, workflow_limit: null, rows_per_month: 2000000, copilot_actions_per_month: 500 }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/plans/pro`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ projectLimit: 10, workflowLimit: null, rowsPerMonth: 2000000, copilotActionsPerMonth: 500 }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({
+      projectLimit: 10,
+      workflowLimit: null,
+      rowsPerMonth: 2000000,
+      copilotActionsPerMonth: 500,
+      warnings: [],
+    });
+
+    const auditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(auditCall?.[1]).toEqual([
+      "staff-1",
+      "plan.update",
+      null,
+      null,
+      JSON.stringify({
+        before: { project_limit: 5, workflow_limit: null, rows_per_month: 2000000, copilot_actions_per_month: 500 },
+        after: { project_limit: 10, workflow_limit: null, rows_per_month: 2000000, copilot_actions_per_month: 500 },
+      }),
+    ]);
+  });
+
+  it("returns a warnings entry (without rejecting the write) when a limit is lowered below an org's current usage", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from public.plans where id = $1")) {
+        return {
+          rows: [{ project_limit: 5, workflow_limit: null, rows_per_month: 2000000, copilot_actions_per_month: 500 }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("update public.plans")) {
+        return {
+          rows: [{ project_limit: 5, workflow_limit: 3, rows_per_month: 2000000, copilot_actions_per_month: 500 }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("from public.workflows group by org_id")) {
+        return { rows: [{ id: "org-1", name: "Acme", used: 5 }], rowCount: 1 };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/plans/pro`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ projectLimit: 5, workflowLimit: 3, rowsPerMonth: 2000000, copilotActionsPerMonth: 500 }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.workflowLimit).toBe(3);
+    expect(body.warnings).toEqual([
+      { orgId: "org-1", orgName: "Acme", limit: "workflow_limit", currentUsage: 5, newLimit: 3 },
+    ]);
+  });
+});
