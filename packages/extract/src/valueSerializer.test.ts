@@ -45,4 +45,12 @@ describe("serializeValue", () => {
   it("datetime rejects an invalid value", () => {
     expect(() => serializeValue("datetime", "not-a-date", "UTC")).toThrow(ValueSerializationError);
   });
+
+  it("datetime preserves sub-millisecond fractional-second digits exactly (e.g. datetime2(7)'s 100ns precision), never rounding them through a millisecond-only Date", () => {
+    expect(serializeValue("datetime", "2024-03-01T10:30:00.1234567", "UTC")).toBe("2024-03-01T10:30:00.1234567Z");
+  });
+
+  it("datetime preserves full fractional precision through an explicit-offset conversion too", () => {
+    expect(serializeValue("datetime", "2024-03-01T10:30:00.1234567+05:30", "UTC")).toBe("2024-03-01T05:00:00.1234567Z");
+  });
 });

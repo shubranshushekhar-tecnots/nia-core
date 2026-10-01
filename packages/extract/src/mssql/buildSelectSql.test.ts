@@ -34,6 +34,14 @@ describe("buildSelectSql", () => {
     }
   });
 
+  it("converts money/smallmoney with style 2, never a plain CAST (which silently rounds to 2 decimal places and loses money's real 4-digit precision)", () => {
+    for (const t of ["money", "smallmoney"]) {
+      const nativeTypes = new Map([["cash", t]]);
+      const { sql } = buildSelectSql(table, nativeTypes, ["cash"], []);
+      expect(sql).toBe(`SELECT CONVERT(VARCHAR(MAX), [cash], 2) AS [cash] FROM [dbo].[orders]`);
+    }
+  });
+
   it("casts datetimeoffset with a plain CAST, preserving its own UTC offset in the text", () => {
     const nativeTypes = new Map([["created_at", "datetimeoffset"]]);
     const { sql } = buildSelectSql(table, nativeTypes, ["created_at"], []);

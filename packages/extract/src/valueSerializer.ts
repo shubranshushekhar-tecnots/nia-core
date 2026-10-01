@@ -93,18 +93,26 @@ export function serializeValue(type: ExtractType, raw: unknown, sourceTimeZone: 
       const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?\s*(Z|[+-]\d{2}:?\d{2})?$/.exec(s);
       if (!m) throw new ValueSerializationError(`invalid datetime value: ${s}`);
       const [, y, mo, d, h, mi, se, frac, offset] = m as unknown as [string, string, string, string, string, string, string, string | undefined, string | undefined];
-      const ms = frac ? Math.round(Number(`0.${frac}`) * 1000) : 0;
+      // Resolve only the integer Y/M/D/H/Mi/S fields through Date math
+      // (ms fixed at 0 — no rounding carry into the seconds digit). A
+      // timezone/offset shift is always a whole number of minutes, so it
+      // can never touch the fractional-second digits — those are carried
+      // through verbatim below, never rounded through a millisecond-only
+      // `Date`/`toISOString()` (which would silently truncate
+      // datetime2(7)'s 100ns precision down to 3 digits).
       let utc: Date;
       if (!offset) {
         // No zone info: a naive wall-clock reading, interpreted in sourceTimeZone.
-        utc = zonedWallClockToUtc(Number(y), Number(mo), Number(d), Number(h), Number(mi), Number(se), ms, sourceTimeZone);
+        utc = zonedWallClockToUtc(Number(y), Number(mo), Number(d), Number(h), Number(mi), Number(se), 0, sourceTimeZone);
       } else {
         // Carries its own offset (or "Z") already — converted directly, sourceTimeZone ignored.
         const offsetMinutes = offset === "Z" ? 0 : parseOffsetMinutes(offset);
-        utc = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se), ms) - offsetMinutes * 60_000);
+        utc = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se), 0) - offsetMinutes * 60_000);
       }
       if (Number.isNaN(utc.getTime())) throw new ValueSerializationError(`invalid datetime value: ${s}`);
-      return utc.toISOString();
+      const datePart = `${pad(utc.getUTCFullYear(), 4)}-${pad(utc.getUTCMonth() + 1, 2)}-${pad(utc.getUTCDate(), 2)}`;
+      const timePart = `${pad(utc.getUTCHours(), 2)}:${pad(utc.getUTCMinutes(), 2)}:${pad(utc.getUTCSeconds(), 2)}`;
+      return `${datePart}T${timePart}.${frac ?? "000"}Z`;
     }
     default: {
       const exhaustive: never = type;

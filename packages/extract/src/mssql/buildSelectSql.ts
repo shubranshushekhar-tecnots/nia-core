@@ -33,7 +33,15 @@ function selectExpr(columnName: string, nativeType: string): string {
     // CAST's default text form keeps the real UTC offset verbatim (e.g. "2024-03-01 10:30:00.1234567 +02:00"), which valueSerializer.ts parses explicitly.
     return `CAST(${quoted} AS VARCHAR(MAX))`;
   }
-  // decimal/numeric/money/smallmoney/bigint/time: default text conversion preserves exact digits.
+  if (t === "money" || t === "smallmoney") {
+    // Plain CAST(money AS VARCHAR(MAX)) silently rounds to 2 decimal
+    // places (SQL Server's implicit money->varchar conversion defaults to
+    // style 0) even though money's real precision is 4 decimal digits —
+    // e.g. 0.0001 would come back as "0.00", losing data. CONVERT's
+    // explicit style 2 keeps all 4 digits, no thousands separator.
+    return `CONVERT(VARCHAR(MAX), ${quoted}, 2)`;
+  }
+  // decimal/numeric/bigint/time: default text conversion preserves exact digits.
   return `CAST(${quoted} AS VARCHAR(MAX))`;
 }
 
