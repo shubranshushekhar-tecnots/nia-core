@@ -1,0 +1,12 @@
+#!/bin/sh
+# Rejects commit messages containing AI-attribution trailers/lines.
+# Enabled via: git config core.hooksPath scripts/git-hooks
+msg_file="$1"
+
+if grep -qiE 'Co-Authored-By:.*anthropic\.com|Generated with \[?Claude|Generated with Claude|🤖 Generated with|noreply@anthropic\.com' "$msg_file"; then
+  echo "ERROR: commit message contains a forbidden AI-attribution line (Co-Authored-By/Claude/Anthropic/Generated with)." >&2
+  echo "Remove it and try again." >&2
+  exit 1
+fi
+
+exit 0

@@ -138,6 +138,13 @@ a throwaway one, wiping all local dev data.
   actions.ts`'s `createProject()`). This only matters for real
   RLS-enforced connections — service_role/superuser inserts (table owner,
   bypasses RLS entirely) are unaffected and may use RETURNING freely.
+- No AI attribution in commits. Commit messages must never contain
+  `Co-Authored-By: ... anthropic.com`, `Generated with Claude`, or any
+  other Claude/Anthropic mention — every commit uses the author's own git
+  identity. Enforced by `.claude/settings.json`'s `includeCoAuthoredBy:
+  false` plus a tracked `commit-msg` hook (`scripts/git-hooks/commit-msg`,
+  enabled via `git config core.hooksPath scripts/git-hooks`) that rejects
+  any matching message.
 
 ## Known Supabase-client exceptions
 One place still genuinely uses `@supabase/supabase-js` against a running
