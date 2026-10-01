@@ -1,0 +1,2 @@
+# Intentionally empty — see packages/extract/.npmignore for why this file
+# must exist (even empty) for `pnpm deploy` to include dist/ output.

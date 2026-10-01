@@ -8,9 +8,10 @@ Planometry.
 
 ## 1. Prerequisites
 
-- **Node.js 20 or later** on the host that will run the agent. This host
-  must have network access to the SQL Server instance (same LAN or a
-  routed network) and outbound HTTPS access to Planometry's endpoint.
+- **Node.js 20 or later** (unless running under Docker — see §6 Option A)
+  on the host that will run the agent. This host must have network access
+  to the SQL Server instance (same LAN or a routed network) and outbound
+  HTTPS access to Planometry's endpoint.
 - A SQL Server login for the agent to use — created in step 3 below. The
   agent is never given `sa` or any administrative login.
 - Local disk space for the spool directory (used to stage rows briefly
@@ -18,16 +19,11 @@ Planometry.
   spool design). A few hundred MB free is enough for typical chunk sizes;
   `agent doctor` (step 6) checks this.
 
-> **Windows-specific — confirm with GMS IT**: how the agent process should
-> run long-term (Windows service vs. scheduled task) is not yet decided —
-> see `TODO.md`/`docs/plans/planometry-integration.md` §9 (packaging is
-> deferred until GMS confirms host OS). For the pilot, running the agent
-> as a long-lived console process under a dedicated service account is
-> enough; a proper Windows service install is follow-up work.
-
-> **Linux-specific — confirm with GMS IT**: same packaging gap. For the
-> pilot, a systemd unit or just a `nohup`'d process under a dedicated
-> service account is enough.
+> **Which long-term process option to use — confirm with GMS IT**: three
+> are available (§6 below): Docker (works on any OS with Docker already
+> installed), a Linux systemd service, or a Windows service. Pick whichever
+> matches GMS's existing operational tooling — see
+> `docs/plans/planometry-integration.md` §9.
 
 ## 2. Install the agent
 
@@ -154,19 +150,57 @@ passing (`[PASS]`) before starting the agent for the pilot** — see
 
 ## 6. Start the agent
 
-> **Placeholder — confirm with GMS IT once host OS and long-term process
-> management are decided (see §1 and `docs/plans/planometry-integration.md`
-> §9).** For the pilot, running the built agent as a long-lived process
-> under a dedicated, restricted service account (not an administrator) is
-> sufficient:
-> ```
-> node dist/index.js start
-> ```
-> *(the sync-runner entry point is still being wired up as part of this
-> phase's build order — this command is a placeholder until that lands.)*
+Pick whichever of the three options below matches how GMS IT wants to run
+long-lived processes. All three run the exact same `nia-agent start`
+entry point and the exact same on-disk state/config directory shape — the
+`connection add`/`doctor`/`status` steps above are identical no matter
+which one you choose.
 
-Once running, `node dist/index.js status` reports uptime and the last
-sync time/row count/error per connection.
+### Option A: Docker (most portable, needs Docker already installed)
+
+Build the image once (from the repo, on any machine — doesn't need to be
+the agent host):
+```
+docker build -f apps/agent/Dockerfile -t nia/agent .
+```
+
+Run it on the agent host, with a named volume for `/data` (the agent's
+app-data directory inside the container — config, encrypted secrets,
+spool, logs, status) so state survives restarts/upgrades:
+```
+docker volume create nia-agent-data
+docker run -d --name nia-agent --restart unless-stopped \
+  -v nia-agent-data:/data \
+  nia/agent
+```
+
+Every CLI command from steps 3-5 above works identically inside the
+container, e.g.:
+```
+docker exec nia-agent node dist/index.js status
+docker exec nia-agent node dist/index.js connection add ...
+docker exec nia-agent node dist/index.js doctor
+```
+The image's `HEALTHCHECK` runs `nia-agent healthcheck` every 30s (visible
+in `docker ps`'s STATUS column) — unhealthy means the agent hasn't
+recorded a start, or hasn't polled a connection in over 10 minutes (a
+stuck/crashed loop), not a transient issue.
+
+### Option B: Linux systemd service
+
+Not yet available — tracked in `docs/plans/planometry-integration.md` §9.
+This section will be filled in once that packaging slice lands.
+
+### Option C: Windows service
+
+Not yet available — tracked in `docs/plans/planometry-integration.md` §9.
+This section will be filled in once that packaging slice lands.
+
+---
+
+Once running, `node dist/index.js status` (or, under Docker, `docker exec
+nia-agent node dist/index.js status`) reports uptime and the last sync
+time/row count/error per connection.
 
 ## See also
 - `docs/pilot/gms-pilot-runbook.md` — pilot-day sequence and success
