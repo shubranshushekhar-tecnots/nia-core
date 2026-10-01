@@ -1,0 +1,31 @@
+[Unit]
+Description=Nia Agent (on-premise Planometry sync)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nia-agent
+Group=nia-agent
+# Must match config/paths.ts's defaultHomeDir() for linux (/etc/nia-agent)
+# so CLI commands run interactively (connection add, doctor, status) and
+# the service itself agree on where state lives without any env override.
+ExecStart=/usr/bin/node /opt/nia-agent/dist/index.js start
+Restart=on-failure
+RestartSec=5s
+# Generous: installGracefulShutdown (ops/shutdown.ts) translates SIGTERM
+# into the AbortSignal threaded through an in-flight extract/chunk-upload;
+# give it real time to finish reporting the run failed and clean up its
+# spool before systemd escalates to SIGKILL.
+TimeoutStopSec=60s
+
+# Hardening baseline for a long-lived, outbound-only daemon that never
+# listens on a socket.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/nia-agent
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -188,8 +188,44 @@ stuck/crashed loop), not a transient issue.
 
 ### Option B: Linux systemd service
 
-Not yet available — tracked in `docs/plans/planometry-integration.md` §9.
-This section will be filled in once that packaging slice lands.
+Build the bundle once (from the repo, on any Linux or macOS machine —
+doesn't need to be the agent host):
+```
+./apps/agent/packaging/linux/build-bundle.sh
+```
+This produces `apps/agent/packaging/linux/dist/nia-agent-linux-<version>.tar.gz`
+— a self-contained tarball (built output + production `node_modules`, no
+separate `pnpm install` needed on the target host).
+
+Copy that tarball to the agent host, then install it as root:
+```
+sudo ./apps/agent/packaging/linux/install.sh nia-agent-linux-<version>.tar.gz
+```
+This creates a dedicated, unprivileged `nia-agent` system account, unpacks
+the bundle to `/opt/nia-agent`, creates `/etc/nia-agent` (the agent's
+app-data directory — config, encrypted secrets, spool, logs, status,
+owned by `nia-agent`, mode 700), and installs+enables the
+`nia-agent.service` systemd unit (restart-on-failure, 60s graceful-stop
+timeout, hardened with `ProtectSystem=strict`/`NoNewPrivileges`). Re-run
+`install.sh` with a newer tarball at any time to upgrade in place — it
+never touches `/etc/nia-agent`.
+
+Run steps 3-5 above as the `nia-agent` user, before starting the service
+for the first time:
+```
+sudo -u nia-agent node /opt/nia-agent/dist/index.js connection add ...
+sudo -u nia-agent node /opt/nia-agent/dist/index.js doctor
+```
+Then start it:
+```
+sudo systemctl start nia-agent
+sudo systemctl status nia-agent
+```
+
+To uninstall (leaves `/etc/nia-agent` in place unless `--purge` is given):
+```
+sudo ./apps/agent/packaging/linux/uninstall.sh [--purge]
+```
 
 ### Option C: Windows service
 
