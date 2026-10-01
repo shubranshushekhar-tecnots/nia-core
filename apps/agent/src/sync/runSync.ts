@@ -28,12 +28,23 @@ export interface RunSyncOptions {
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
 
 /**
+ * Outcome summary for the caller (ops/state.ts's recordSyncComplete/
+ * recordSyncFailed) — runSync already reports complete/failed to
+ * Planometry itself internally, this is purely for local state/logging.
+ */
+export type RunSyncResult =
+  | { outcome: "complete"; totalRows: number }
+  | { outcome: "failed"; error: string }
+  /** Planometry rejected a chunk with 409 (run superseded) — not a local failure worth recording as one. */
+  | { outcome: "superseded" };
+
+/**
  * Runs one sync end to end (Phase 2 §4/§11 slice d): extract -> spool to
  * disk -> close the DB query -> upload spooled chunks -> report complete
  * or failed -> clean up the spool. One sync at a time per connection,
  * plus a per-host:port semaphore, per Phase 2 §5.
  */
-export async function runSync(options: RunSyncOptions): Promise<void> {
+export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
   const { client, work, catalog, sqlConfig, connectionId, connectionSemaphore, hostSemaphore } = options;
   const runSpoolDir = path.join(options.spoolDir, work.runId);
   const hostKey = `${sqlConfig.server}:${sqlConfig.port ?? 1433}`;
@@ -70,7 +81,7 @@ export async function runSync(options: RunSyncOptions): Promise<void> {
     if (!result.ok) {
       await client.reportFailed(work.runId, { error: result.error });
       await cleanupSpool(runSpoolDir);
-      return;
+      return { outcome: "failed", error: result.error };
     }
 
     try {
@@ -79,15 +90,17 @@ export async function runSync(options: RunSyncOptions): Promise<void> {
       if (err instanceof ChunkRejectedError) {
         // Superseded run: Planometry rejected the chunk itself, nothing further to report.
         await cleanupSpool(runSpoolDir);
-        return;
+        return { outcome: "superseded" };
       }
-      await client.reportFailed(work.runId, { error: err instanceof Error ? err.message : String(err) });
+      const error = err instanceof Error ? err.message : String(err);
+      await client.reportFailed(work.runId, { error });
       await cleanupSpool(runSpoolDir);
-      return;
+      return { outcome: "failed", error };
     }
 
     await client.reportComplete(work.runId, { totalRows: result.totalRows, totalChunks: files.length });
     await cleanupSpool(runSpoolDir);
+    return { outcome: "complete", totalRows: result.totalRows };
   } finally {
     heartbeat.stop();
     releaseHost();

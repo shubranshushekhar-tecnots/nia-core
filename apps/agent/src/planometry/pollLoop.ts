@@ -5,6 +5,8 @@ export interface PollLoopOptions {
   client: PlanometryClient;
   connectionId: string;
   onWork: (work: WorkItem) => Promise<void>;
+  /** Called after every poll, whether or not it returned work (Phase 3b §3: "agent status" per-connection "last poll" state). */
+  onPoll?: () => void;
   /** +/- fraction of `pollAfterSeconds` applied as jitter, so GMS's several connections don't poll in lockstep (Phase 2 §4). */
   jitterFraction?: number;
   signal: AbortSignal;
@@ -15,6 +17,7 @@ export async function runPollLoop(options: PollLoopOptions): Promise<void> {
   const jitterFraction = options.jitterFraction ?? 0.2;
   while (!options.signal.aborted) {
     const response = await options.client.pollWork(options.connectionId);
+    options.onPoll?.();
     if (response.work) {
       await options.onWork(response.work);
       continue;

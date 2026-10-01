@@ -3,11 +3,15 @@ import { parseArgs } from "node:util";
 import { addConnection, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
 import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
 import { runDoctor } from "./cli/doctorCommand.js";
+import { runHealthcheck } from "./cli/healthcheckCommand.js";
 import { getStatus } from "./ops/state.js";
 import { getSpoolUsage } from "./ops/spoolUsage.js";
+import { installGracefulShutdown } from "./ops/shutdown.js";
 import { versionString } from "./cli/versionCommand.js";
 import { loadConfig } from "./config/store.js";
 import { defaultSpoolDir } from "./config/paths.js";
+import { runAgentLoop } from "./agentLoop.js";
+import { AGENT_VERSION } from "./generated/version.js";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -189,7 +193,31 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  console.error("usage: nia-agent connection <add|test|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status | nia-agent version");
+  if (command === "healthcheck") {
+    const result = runHealthcheck();
+    if (result.healthy) {
+      console.log("healthy");
+    } else {
+      console.error(`unhealthy: ${result.reason}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (command === "start") {
+    const controller = new AbortController();
+    const uninstall = installGracefulShutdown(controller);
+    try {
+      await runAgentLoop({ agentVersion: AGENT_VERSION, signal: controller.signal });
+    } finally {
+      uninstall();
+    }
+    return;
+  }
+
+  console.error(
+    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
+  );
   process.exitCode = 1;
 }
 

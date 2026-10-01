@@ -48,4 +48,27 @@ describe("runPollLoop", () => {
     await loop;
     expect(seen).toEqual(["run-1", "run-2"]);
   });
+
+  it("invokes onPoll after every poll, including empty ones", async () => {
+    server.enqueueWork("conn-1", { runId: "run-1", request: { table: "t", columns: ["a"], filter: [] } });
+
+    let pollCount = 0;
+    const controller = new AbortController();
+
+    const loop = runPollLoop({
+      client,
+      connectionId: "conn-1",
+      signal: controller.signal,
+      // Aborts after the 2nd poll: the 1st poll returns the queued work item,
+      // the 2nd finds the queue empty — proving onPoll fires in both cases.
+      onPoll: () => {
+        pollCount += 1;
+        if (pollCount >= 2) controller.abort();
+      },
+      onWork: async () => {},
+    });
+
+    await loop;
+    expect(pollCount).toBe(2);
+  });
 });
