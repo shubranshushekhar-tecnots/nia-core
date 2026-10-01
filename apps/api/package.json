@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "seed:fixtures": "tsx src/scripts/seedFixtureUsers.ts",
+    "seed:manual-test-profiles": "tsx src/scripts/seedManualTestProfiles.ts",
     "set-password": "tsx src/scripts/setUserPassword.ts",
     "staff:grant": "tsx src/scripts/manageStaff.ts grant",
     "staff:revoke": "tsx src/scripts/manageStaff.ts revoke",

@@ -17,7 +17,12 @@ interface ColumnRow {
   ordinal_position: number;
 }
 
-const TABLES_SQL = `
+// INFORMATION_SCHEMA.TABLES/COLUMNS are available unchanged since SQL
+// Server 2000 — no sys.* catalog views, no version-gated columns — so
+// these two queries already work as-is on SQL Server 2008 (GMS's
+// version). Exported (not just module-private) so sql2008DenyList.test.ts
+// can scan them for 2012+ features without a live connection.
+export const TABLES_SQL = `
   SELECT TABLE_SCHEMA AS schema_name, TABLE_NAME AS table_name,
          CASE WHEN TABLE_TYPE = 'VIEW' THEN 'view' ELSE 'table' END AS kind
   FROM INFORMATION_SCHEMA.TABLES
@@ -25,7 +30,7 @@ const TABLES_SQL = `
   ORDER BY TABLE_SCHEMA, TABLE_NAME
 `;
 
-const COLUMNS_SQL = `
+export const COLUMNS_SQL = `
   SELECT TABLE_SCHEMA AS schema_name, TABLE_NAME AS table_name,
          COLUMN_NAME AS column_name, DATA_TYPE AS data_type,
          IS_NULLABLE AS is_nullable, ORDINAL_POSITION AS ordinal_position

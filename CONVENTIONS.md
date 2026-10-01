@@ -105,6 +105,14 @@ throwaway Postgres, etc.):
 - Always tear everything down (containers, throwaway images, networks)
   when the test is done.
 
+## Fresh-Postgres from-zero runs
+Fresh-Postgres from-zero runs ALWAYS use a separate throwaway container on
+its own port and volume, torn down afterwards. Never drop, reset or
+recreate the dev sandbox database or its volume without explicit OK — a
+prior run of this mistakenly reused the dev sandbox's own `postgres`
+service/volume (docker-compose's `postgres` service, port 5434) instead of
+a throwaway one, wiping all local dev data.
+
 ## Conventions
 - Server-side RLS is the only trust boundary. `can()`/`assertCan()` in
   `can.ts` is a UI/DX convenience, never the last line of defense.
