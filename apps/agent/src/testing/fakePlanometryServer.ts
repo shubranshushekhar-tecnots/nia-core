@@ -28,6 +28,13 @@ interface RunRecord {
   failed?: FailedRunRequest;
 }
 
+export interface FakePlanometryServerOptions {
+  /** Defaults to 0 (ephemeral) — unchanged behavior for every existing test. Set to a fixed port for the foreground manual-testing server. */
+  port?: number;
+  /** Defaults to false. When true, logs one readable line per request to the console (catalog push, ping, work poll, chunk receipt, heartbeat, complete, failed). */
+  verbose?: boolean;
+}
+
 export class FakePlanometryServer {
   baseUrl = "";
   private readonly server: Server;
@@ -38,20 +45,26 @@ export class FakePlanometryServer {
   private pollAfterSeconds = 1;
   /** Unset by default (no auth enforced, matching every existing test's behavior). Set via `requireAgentKey()` to make the server reject requests whose `Authorization` header doesn't match, for doctor's "agent key accepted" check. */
   private requiredAgentKey?: string;
+  private readonly verbose: boolean;
 
-  private constructor(server: Server) {
+  private constructor(server: Server, verbose: boolean) {
     this.server = server;
+    this.verbose = verbose;
   }
 
-  static async start(): Promise<FakePlanometryServer> {
+  static async start(options: FakePlanometryServerOptions = {}): Promise<FakePlanometryServer> {
     const server = createServer();
-    const instance = new FakePlanometryServer(server);
+    const instance = new FakePlanometryServer(server, options.verbose ?? false);
     server.on("request", (req, res) => instance.handle(req, res));
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => server.listen(options.port ?? 0, "127.0.0.1", resolve));
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
     instance.baseUrl = `http://127.0.0.1:${port}`;
     return instance;
+  }
+
+  private log(line: string): void {
+    if (this.verbose) console.log(`[fake-planometry] ${line}`);
   }
 
   async close(): Promise<void> {
@@ -80,6 +93,11 @@ export class FakePlanometryServer {
 
   setRunFaults(runId: string, faults: RunFaultConfig): void {
     this.runFaults.set(runId, faults);
+  }
+
+  /** Read accessor so a caller (e.g. the manual-testing control server) can merge a new fault into any existing one instead of clobbering it via `setRunFaults`. */
+  getRunFaults(runId: string): RunFaultConfig | undefined {
+    return this.runFaults.get(runId);
   }
 
   getCatalogPush(connectionId: string): CatalogPushRequest | undefined {
@@ -114,11 +132,13 @@ export class FakePlanometryServer {
       if (req.method === "POST" && url.pathname === "/v1/catalog") {
         const body = await readJsonBody<CatalogPushRequest>(req);
         this.catalogPushes.set(body.connectionId, body);
+        this.log(`catalog push: connection=${body.connectionId} fingerprint=${body.fingerprint} tables=${body.catalog.tables.length}`);
         sendJson(res, 200, { ok: true });
         return;
       }
 
       if (req.method === "GET" && url.pathname === "/v1/ping") {
+        this.log("ping");
         sendJson(res, 200, { ok: true });
         return;
       }
@@ -128,6 +148,7 @@ export class FakePlanometryServer {
         const queue = this.workQueues.get(connectionId) ?? [];
         const work = queue.shift() ?? null;
         if (work) this.runs.set(work.runId, this.runs.get(work.runId) ?? newRunRecord(connectionId));
+        this.log(work ? `work poll: connection=${connectionId} -> run=${work.runId} table=${work.request.table}` : `work poll: connection=${connectionId} -> empty (poll again in ${this.pollAfterSeconds}s)`);
         sendJson(res, 200, { work, pollAfterSeconds: this.pollAfterSeconds });
         return;
       }
@@ -140,6 +161,7 @@ export class FakePlanometryServer {
       if (req.method === "POST" && heartbeatMatch?.[1]) {
         const run = this.runs.get(heartbeatMatch[1]);
         if (run) run.heartbeatCount += 1;
+        this.log(`heartbeat: run=${heartbeatMatch[1]} count=${run?.heartbeatCount ?? 0}`);
         sendJson(res, 200, { ok: true });
         return;
       }
@@ -148,6 +170,7 @@ export class FakePlanometryServer {
         const body = await readJsonBody<CompleteRunRequest>(req);
         const run = this.runs.get(completeMatch[1]);
         if (run) run.complete = body;
+        this.log(`complete: run=${completeMatch[1]} rows=${body.totalRows} chunks=${body.totalChunks}`);
         sendJson(res, 200, { ok: true });
         return;
       }
@@ -156,6 +179,7 @@ export class FakePlanometryServer {
         const body = await readJsonBody<FailedRunRequest>(req);
         const run = this.runs.get(failedMatch[1]);
         if (run) run.failed = body;
+        this.log(`failed: run=${failedMatch[1]} error=${body.error}`);
         sendJson(res, 200, { ok: true });
         return;
       }
@@ -178,20 +202,24 @@ export class FakePlanometryServer {
     this.runs.set(runId, run);
 
     if (faults?.force409?.has(seq)) {
+      this.log(`chunk: run=${runId} seq=${seq} rows=${rows} -> 409 (fault)`);
       sendJson(res, 409, { error: "run superseded" });
       return;
     }
 
     if (faults?.dropOnFirstAttempt?.has(seq) && !run.attemptedSeqs.has(seq)) {
       run.attemptedSeqs.add(seq);
+      this.log(`chunk: run=${runId} seq=${seq} rows=${rows} -> dropped (fault, connection reset)`);
       req.socket.destroy();
       return;
     }
+    const wasDuplicate = run.chunks.has(seq);
     run.attemptedSeqs.add(seq);
 
     // Idempotent per (run, seq): a retried or duplicated delivery of a seq
     // already recorded is re-acked without changing the recorded row count.
-    if (!run.chunks.has(seq)) run.chunks.set(seq, rows);
+    if (!wasDuplicate) run.chunks.set(seq, rows);
+    this.log(`chunk: run=${runId} seq=${seq} rows=${rows} -> ok${wasDuplicate ? " (duplicate re-ack)" : ""}`);
     sendJson(res, 200, { ok: true });
   }
 }

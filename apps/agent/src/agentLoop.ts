@@ -144,7 +144,19 @@ async function handleWork(options: HandleWorkOptions): Promise<void> {
       recordCatalogFingerprint(entry.id, fingerprint, dir);
     }
 
-    const result = await runSync({ client, work, catalog, sqlConfig, connectionId: entry.id, spoolDir, masterKey, connectionSemaphore, hostSemaphore, signal });
+    const result = await runSync({
+      client,
+      work,
+      catalog,
+      sqlConfig,
+      connectionId: entry.id,
+      spoolDir,
+      masterKey,
+      connectionSemaphore,
+      hostSemaphore,
+      signal,
+      heartbeatIntervalMs: process.env.NIA_AGENT_HEARTBEAT_INTERVAL_MS ? Number(process.env.NIA_AGENT_HEARTBEAT_INTERVAL_MS) : undefined,
+    });
     if (result.outcome === "complete") {
       recordSyncComplete(entry.id, result.totalRows, dir);
     } else if (result.outcome === "failed") {
