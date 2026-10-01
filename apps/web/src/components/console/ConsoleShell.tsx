@@ -13,6 +13,7 @@ import {
   consoleIdentityWrapStyle,
   consoleInternalBadgeStyle,
   consoleMainColStyle,
+  consoleNavGroupLabelStyle,
   consoleNavIconStyle,
   consoleNavItemStyle,
   consoleShellRootStyle,
@@ -26,63 +27,77 @@ import {
   consoleTopBarStyle,
 } from './styles';
 
-// Ported from designs/Nia Console (superadmin).html's NAV array. Only
-// 'directory' is a real route in Slice 1 (docs/plans/console-plan.md §5a);
-// the rest render inert (matches decision 3 — the full nav is shown for
-// design fidelity — without linking anywhere that doesn't exist yet).
+type NavItem = { id: string; label: string; icon: string; href?: string };
+type NavGroup = { label: string; items: NavItem[] };
+
+// Console redesign Slice 3 (grouped sidebar). Replaces the old flat NAV
+// array. Same "no dead links" rule as before: an item with no `href` isn't
+// a route yet and renders inert/dimmed (consoleNavItemStyle's `enabled`
+// flag) rather than disappearing — this lets each later slice (4-9) flip
+// exactly one `href` live as its page ships, with no other reshuffling.
 //
-// 'users' (Slice 3e) is the one entry NOT in the design's own NAV array
-// (confirmed via `grep -o 'NAV *= *\[[^]]*\]'` against the design file —
-// it lists exactly the 7 other ids below, nothing named "users"). The
-// design's Directory screen conceptually folds org/user search into one
-// screen with a type filter (console-plan.md §1's screen-mapping table),
-// but that filter was never built — see ConsoleDirectoryClient's own doc
-// comment. Since search-by-email/name is an explicit v1 requirement
-// (step 12) with no existing destination to reach it from, a real nav
-// entry is added here (peer to 'directory', both list/search screens);
-// its detail screen (`/console/users/:userId`) intentionally gets no nav
-// entry of its own, same as Org Detail — reached only by a row/member
-// click, never the sidebar.
-//
-// 'notify' (Subscription Phase 5, Slice 3, docs/plans/subscription-model.md
-// decision 1) was the one design-ported entry still inert through Slice 3e
-// — relabeled "Announcements" and given a real href now that the screen
-// exists, same label the design's own copy uses for this concept.
-//
-// 'usage' (Console v2 Slice 5) is, like 'users' above, a real nav entry not
-// present in the original ported design — added as its own peer entry
-// (rather than folded into 'dash'/Platform, which stayed inert pending
-// Slice 6's dashboard) since the token usage page shipped before the
-// dashboard home did.
-//
-// 'dash' (Console v2 Slice 6) now gets its own real href — the platform
-// dashboard home (orgs/users/active-users, runs per day, rows moved,
-// tokens+cost, needs-attention) — rather than becoming the new `/console`
-// root: Directory (`/console`) already has that slot and an established
-// bookmark/link surface (e.g. Org Detail's breadcrumb always points at
-// `/console`), so Platform is a new, separate route like 'usage' and
-// 'users' before it, not a replacement.
-const NAV: Array<{ id: string; label: string; icon: string; href?: string }> = [
-  { id: 'dash', label: 'Platform', icon: '\u25D1', href: '/console/dashboard' },
-  { id: 'directory', label: 'Directory', icon: '\u25A4', href: '/console' },
-  { id: 'users', label: 'Users', icon: '\u25CB', href: '/console/users' },
-  { id: 'notify', label: 'Announcements', icon: '\u25CD', href: '/console/announcements' },
-  { id: 'usage', label: 'Token Usage', icon: '\u25C6', href: '/console/usage' },
-  { id: 'revenue', label: 'Revenue', icon: '\u25C8' },
-  { id: 'invoices', label: 'Invoices', icon: '\u25A6' },
-  { id: 'support', label: 'Support', icon: '\u25D4' },
-  { id: 'settings', label: 'Settings', icon: '\u2699' },
+// IDs are kept stable across the Slice 3 rename for existing pages' already-
+// shipped `activeNavId="..."` props (dash/directory/users/notify/usage) —
+// only the group structure and some labels changed, not the ids.
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: 'Dashboard',
+    items: [
+      { id: 'dash', label: 'Overview', icon: '\u25D1', href: '/console/dashboard' },
+      { id: 'usage', label: 'Token Analytics', icon: '\u25C6', href: '/console/usage' },
+      { id: 'health', label: 'System Health', icon: '\u25C9' }, // Slice 4
+    ],
+  },
+  {
+    label: 'Users & Access',
+    items: [
+      { id: 'users', label: 'Users', icon: '\u25CB', href: '/console/users' },
+      { id: 'directory', label: 'Organizations', icon: '\u25A4', href: '/console' },
+      { id: 'staff', label: 'Platform Staff', icon: '\u25D4' }, // Slice 5
+    ],
+  },
+  {
+    label: 'Content',
+    items: [
+      { id: 'projects', label: 'Projects & Workflows', icon: '\u25A6' }, // Slice 6
+    ],
+  },
+  {
+    label: 'Platform',
+    items: [
+      { id: 'plans', label: 'Plans', icon: '\u25C8' }, // Slice 7
+      { id: 'audit-logs', label: 'Audit Logs', icon: '\u2637' }, // Slice 8
+      { id: 'notify', label: 'Announcements', icon: '\u25CD', href: '/console/announcements' },
+    ],
+  },
+  {
+    label: 'Config',
+    items: [
+      { id: 'model-prices', label: 'Model Prices', icon: '\u2699' }, // Slice 9
+    ],
+  },
 ];
+
+// Payments group — scope gap flagged in the plan: the spec asks for a group
+// "shown only when payments are enabled," but no payments Console page is
+// requested in this piece of work, and a placeholder "coming soon" page
+// would itself be a dead link, which is explicitly disallowed. So the group
+// is wired up (gated on `paymentsEnabled`) but stays empty until a real
+// payments page exists — it renders nothing in either flag state today.
+const PAYMENTS_GROUP: NavGroup = { label: 'Payments', items: [] };
 
 export default function ConsoleShell({
   activeNavId,
   email,
+  paymentsEnabled = false,
   children,
 }: {
   activeNavId: string;
   email: string;
+  paymentsEnabled?: boolean;
   children: ReactNode;
 }) {
+  const groups = paymentsEnabled ? [...NAV_GROUPS, PAYMENTS_GROUP] : NAV_GROUPS;
   const initials = email.slice(0, 2).toUpperCase();
 
   return (
@@ -110,29 +125,36 @@ export default function ConsoleShell({
 
       <div style={consoleBodyRowStyle}>
         <nav style={consoleSidebarStyle}>
-          {NAV.map((n) => {
-            const active = n.id === activeNavId;
-            const enabled = Boolean(n.href);
-            const content = (
-              <>
-                <span style={consoleNavIconStyle(active)}>{n.icon}</span>
-                <span style={{ flex: 1, textAlign: 'left', fontSize: 13 }}>{n.label}</span>
-              </>
-            );
-            return enabled ? (
-              <Link key={n.id} href={n.href!} style={consoleNavItemStyle(active, true)}>
-                {content}
-              </Link>
-            ) : (
-              <span key={n.id} style={consoleNavItemStyle(active, false)}>
-                {content}
-              </span>
-            );
-          })}
+          {groups
+            .filter((g) => g.items.length > 0)
+            .map((group) => (
+              <div key={group.label}>
+                <div style={consoleNavGroupLabelStyle}>{group.label}</div>
+                {group.items.map((n) => {
+                  const active = n.id === activeNavId;
+                  const enabled = Boolean(n.href);
+                  const content = (
+                    <>
+                      <span style={consoleNavIconStyle(active)}>{n.icon}</span>
+                      <span style={{ flex: 1, textAlign: 'left', fontSize: 13 }}>{n.label}</span>
+                    </>
+                  );
+                  return enabled ? (
+                    <Link key={n.id} href={n.href!} style={consoleNavItemStyle(active, true)}>
+                      {content}
+                    </Link>
+                  ) : (
+                    <span key={n.id} style={consoleNavItemStyle(active, false)}>
+                      {content}
+                    </span>
+                  );
+                })}
+              </div>
+            ))}
           <span style={{ flex: 1 }} />
           <div style={consoleSidebarFooterStyle}>
             <span style={consoleSidebarFooterLabelStyle}>Console build</span>
-            <span style={consoleSidebarFooterValueStyle}>Slice 1</span>
+            <span style={consoleSidebarFooterValueStyle}>Slice 3</span>
           </div>
         </nav>
 

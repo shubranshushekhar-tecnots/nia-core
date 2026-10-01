@@ -388,7 +388,7 @@ export default function ConsoleOrgDetailClient({
     <div style={consoleContentStyle}>
       <div style={consoleBreadcrumbRowStyle}>
         <Link href="/console" style={consoleBreadcrumbLinkStyle}>
-          Directory
+          Organizations
         </Link>
         <span style={consoleBreadcrumbSepStyle}>/</span>
         <span style={consoleBreadcrumbCurrentStyle}>{org.name}</span>

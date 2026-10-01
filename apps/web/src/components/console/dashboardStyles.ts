@@ -20,8 +20,8 @@ export const consoleDashboardChartCardStyle: CSSProperties = {
   gap: 10,
   padding: '16px 18px',
   borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
 };
 
 export const consoleDashboardChartHeaderStyle: CSSProperties = {
@@ -36,12 +36,12 @@ export const consoleDashboardChartTitleStyle: CSSProperties = {
   fontFamily: 'var(--font-display)',
   fontSize: 14,
   fontWeight: 700,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
 };
 
 export const consoleDashboardChartSubStyle: CSSProperties = {
   fontSize: 12,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleDashboardChartLegendStyle: CSSProperties = {
@@ -57,7 +57,7 @@ export const consoleDashboardChartLegendItemStyle: CSSProperties = {
   fontSize: 11,
   letterSpacing: '.04em',
   textTransform: 'uppercase',
-  color: 'var(--ink2)',
+  color: 'var(--nx-ink-2)',
 };
 
 export function consoleDashboardChartLegendSwatchStyle(color: string): CSSProperties {
@@ -70,7 +70,7 @@ export const consoleDashboardChartEmptyStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   fontSize: 12.5,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleDashboardChartTooltipStyle: CSSProperties = {
@@ -78,8 +78,8 @@ export const consoleDashboardChartTooltipStyle: CSSProperties = {
   top: 0,
   width: 150,
   padding: '8px 10px',
-  background: 'var(--ink)',
-  color: 'var(--bg)',
+  background: 'var(--nx-ink)',
+  color: 'var(--nx-bg)',
   borderRadius: 10,
   fontFamily: 'var(--font-data)',
   fontSize: 12,
@@ -103,8 +103,8 @@ export const consoleDashboardAttentionRowStyle: CSSProperties = {
   gap: 12,
   padding: '12px 16px',
   borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
 };
 
 export const consoleDashboardAttentionOrgColStyle: CSSProperties = {
@@ -117,7 +117,7 @@ export const consoleDashboardAttentionOrgColStyle: CSSProperties = {
 export const consoleDashboardAttentionOrgNameStyle: CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -125,7 +125,7 @@ export const consoleDashboardAttentionOrgNameStyle: CSSProperties = {
 
 export const consoleDashboardAttentionDetailStyle: CSSProperties = {
   fontSize: 12,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleDashboardSectionStyle: CSSProperties = {

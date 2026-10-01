@@ -201,6 +201,18 @@ export function consoleNavIconStyle(active: boolean): CSSProperties {
   };
 }
 
+// Slice 3 — small uppercase label above each grouped nav section ("DASHBOARD",
+// "USERS & ACCESS", etc.). Sits directly in the sidebar's flex column, same
+// as a nav item, so no extra wrapper markup is needed per group.
+export const consoleNavGroupLabelStyle: CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: '.08em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
+  padding: '12px 10px 4px',
+};
+
 export const consoleSidebarFooterStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -264,7 +276,7 @@ export const consoleHeaderTitleStyle: CSSProperties = {
 
 export const consoleHeaderSubStyle: CSSProperties = {
   fontSize: 12.5,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleTabsRowStyle: CSSProperties = { display: 'flex', gap: 6 };
@@ -283,9 +295,9 @@ export function consoleTabStyle(on: boolean): CSSProperties {
     fontWeight: on ? 700 : 500,
     whiteSpace: 'nowrap',
     cursor: 'pointer',
-    background: on ? 'var(--primary-soft)' : 'transparent',
+    background: on ? 'var(--nx-staff-accent-soft)' : 'transparent',
     border: 'none',
-    color: on ? 'var(--primary)' : 'var(--secondary)',
+    color: on ? 'var(--nx-staff-accent)' : 'var(--nx-ink-2)',
   };
 }
 
@@ -304,9 +316,9 @@ export const consoleSearchStyle: CSSProperties = {
   padding: '0 12px',
   fontFamily: 'inherit',
   fontSize: 12.5,
-  color: 'var(--ink)',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 10,
   outline: 'none',
 };
@@ -318,12 +330,12 @@ export const consoleTableHeadRowStyle: CSSProperties = {
   alignItems: 'center',
   gap: 14,
   padding: '9px 0',
-  borderBottom: '1px solid var(--line2)',
+  borderBottom: '1px solid var(--nx-line)',
   fontSize: 11,
   fontWeight: 600,
   letterSpacing: '.06em',
   textTransform: 'uppercase',
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleColAccountStyle: CSSProperties = { flex: '2 1 200px', minWidth: 150 };
@@ -337,7 +349,7 @@ export const consoleRowStyle: CSSProperties = {
   alignItems: 'center',
   gap: 14,
   padding: '13px 0',
-  borderBottom: '1px solid var(--line)',
+  borderBottom: '1px solid var(--nx-line)',
 };
 
 export const consoleRowAccountCellStyle: CSSProperties = {
@@ -357,10 +369,10 @@ export const consoleMonoStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   borderRadius: 10,
-  background: 'var(--subtle)',
+  background: 'var(--nx-raised)',
   fontSize: 12,
   fontWeight: 700,
-  color: 'var(--secondary)',
+  color: 'var(--nx-ink-2)',
 };
 
 export const consoleRowNameColStyle: CSSProperties = {
@@ -373,7 +385,7 @@ export const consoleRowNameColStyle: CSSProperties = {
 export const consoleRowNameStyle: CSSProperties = {
   padding: 0,
   fontSize: 13,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   background: 'transparent',
   border: 'none',
   textAlign: 'left',
@@ -385,14 +397,14 @@ export const consoleRowNameStyle: CSSProperties = {
 export const consoleRowKindStyle: CSSProperties = {
   fontFamily: 'var(--font-data)',
   fontSize: 11,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleRowPlanStyle: CSSProperties = {
   flex: '0 1 110px',
   minWidth: 88,
   fontSize: 12.5,
-  color: 'var(--ink2)',
+  color: 'var(--nx-ink-2)',
 };
 
 export const consoleRowNumberStyle: CSSProperties = {
@@ -401,16 +413,16 @@ export const consoleRowNumberStyle: CSSProperties = {
   textAlign: 'right',
   fontFamily: 'var(--font-data)',
   fontSize: 12,
-  color: 'var(--ink2)',
+  color: 'var(--nx-ink-2)',
 };
 
 // design's `pill(tone)` helper.
 export function consolePillStyle(tone: 'ok' | 'warn' | 'bad' | 'neutral'): CSSProperties {
   const map: Record<'ok' | 'warn' | 'bad' | 'neutral', [string, string]> = {
-    ok: ['var(--success-deep)', 'rgba(16,185,129,.12)'],
-    warn: ['var(--warning-deep)', 'rgba(245,158,11,.14)'],
-    bad: ['var(--error-deep)', 'rgba(239,68,68,.12)'],
-    neutral: ['var(--secondary)', 'var(--subtle)'],
+    ok: ['var(--nx-success)', 'rgba(16,185,129,.12)'],
+    warn: ['var(--nx-warn)', 'rgba(245,158,11,.14)'],
+    bad: ['var(--nx-danger-text)', 'rgba(239,68,68,.12)'],
+    neutral: ['var(--nx-ink-2)', 'var(--nx-raised)'],
   };
   const [color, background] = map[tone];
   return {
@@ -431,7 +443,7 @@ export function consolePillStyle(tone: 'ok' | 'warn' | 'bad' | 'neutral'): CSSPr
 export const consoleEmptyStyle: CSSProperties = {
   padding: '13px 0',
   fontSize: 12.5,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 // Slice 1 review fix (console-plan.md decision 10) — "Load more" row below
@@ -447,7 +459,7 @@ export const consoleLoadMoreRowStyle: CSSProperties = {
 
 export const consoleLoadMoreErrorStyle: CSSProperties = {
   fontSize: 12.5,
-  color: 'var(--error-deep)',
+  color: 'var(--nx-danger-text)',
 };
 
 // Small fixes (2026-09-29): the Runs tab's "Showing the latest 50 runs"
@@ -456,7 +468,7 @@ export const consoleLoadMoreErrorStyle: CSSProperties = {
 // style rather than reusing consoleEmptyStyle's row padding.
 export const consoleRunsCaptionStyle: CSSProperties = {
   fontSize: 12.5,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
   paddingBottom: 8,
 };
 
@@ -476,16 +488,16 @@ export const consoleBreadcrumbRowStyle: CSSProperties = {
 export const consoleBreadcrumbLinkStyle: CSSProperties = {
   padding: 0,
   fontSize: 13,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
   background: 'transparent',
   border: 'none',
   textDecoration: 'none',
   cursor: 'pointer',
 };
 
-export const consoleBreadcrumbSepStyle: CSSProperties = { color: 'var(--ink4)' };
+export const consoleBreadcrumbSepStyle: CSSProperties = { color: 'var(--nx-ink-3)' };
 
-export const consoleBreadcrumbCurrentStyle: CSSProperties = { color: 'var(--ink2)' };
+export const consoleBreadcrumbCurrentStyle: CSSProperties = { color: 'var(--nx-ink-2)' };
 
 export const consoleDetailHeaderTitleColStyle: CSSProperties = {
   display: 'flex',
@@ -513,8 +525,8 @@ export const consoleStatCardStyle: CSSProperties = {
   gap: 6,
   padding: '14px 16px',
   borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
 };
 
 export const consoleStatLabelStyle: CSSProperties = {
@@ -522,14 +534,14 @@ export const consoleStatLabelStyle: CSSProperties = {
   fontWeight: 600,
   letterSpacing: '.06em',
   textTransform: 'uppercase',
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleStatValueStyle: CSSProperties = {
   fontFamily: 'var(--font-data)',
   fontSize: 18,
   fontWeight: 700,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
 };
 
 // Slice 3a (docs/plans/console-plan.md): inline plan-edit control on the
@@ -546,8 +558,8 @@ export const consolePlanFormStyle: CSSProperties = {
   gap: 12,
   padding: '14px 16px',
   borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
 };
 
 export const consolePlanFieldStyle: CSSProperties = {
@@ -561,7 +573,7 @@ export const consolePlanFieldLabelStyle: CSSProperties = {
   fontWeight: 600,
   letterSpacing: '.06em',
   textTransform: 'uppercase',
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consolePlanInputStyle: CSSProperties = {
@@ -571,9 +583,9 @@ export const consolePlanInputStyle: CSSProperties = {
   padding: '0 10px',
   fontFamily: 'inherit',
   fontSize: 12.5,
-  color: 'var(--ink)',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 8,
   outline: 'none',
 };
@@ -597,7 +609,7 @@ export const consolePlanOverrideRowStyle: CSSProperties = {
 
 export const consolePlanOverrideLabelStyle: CSSProperties = {
   fontSize: 11.5,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
   cursor: 'pointer',
 };
 
@@ -613,8 +625,8 @@ export const consolePrimaryBtnStyle: CSSProperties = {
   fontWeight: 600,
   whiteSpace: 'nowrap',
   borderRadius: 8,
-  background: 'var(--primary)',
-  border: '1px solid var(--primary)',
+  background: 'var(--nx-staff-accent)',
+  border: '1px solid var(--nx-staff-accent)',
   color: '#FFFFFF',
   cursor: 'pointer',
 };
@@ -622,13 +634,13 @@ export const consolePrimaryBtnStyle: CSSProperties = {
 export const consolePlanFormErrorStyle: CSSProperties = {
   flex: '1 1 100%',
   fontSize: 12.5,
-  color: 'var(--error-deep)',
+  color: 'var(--nx-danger-text)',
 };
 
 export const consolePlanFormWarningStyle: CSSProperties = {
   flex: '1 1 100%',
   fontSize: 12.5,
-  color: 'var(--warning-deep)',
+  color: 'var(--nx-warn)',
 };
 
 export const consoleSectionTitleStyle: CSSProperties = {
@@ -636,7 +648,7 @@ export const consoleSectionTitleStyle: CSSProperties = {
   fontWeight: 600,
   letterSpacing: '.06em',
   textTransform: 'uppercase',
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 // Slice 3b (docs/plans/console-plan.md, decisions 1-2, additions 3-6):
@@ -663,8 +675,8 @@ export const consoleDangerBtnStyle: CSSProperties = {
   fontWeight: 600,
   whiteSpace: 'nowrap',
   borderRadius: 8,
-  background: 'var(--error)',
-  border: '1px solid var(--error)',
+  background: 'var(--nx-danger)',
+  border: '1px solid var(--nx-danger)',
   color: '#FFFFFF',
   cursor: 'pointer',
 };
@@ -681,9 +693,9 @@ export const consoleSuspendedBadgeStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
   letterSpacing: '.02em',
-  background: 'var(--bad-bg)',
-  border: '1px solid var(--bad-bd)',
-  color: 'var(--bad)',
+  background: 'var(--nx-danger-tint)',
+  border: '1px solid var(--nx-danger)',
+  color: 'var(--nx-danger)',
 };
 
 // Suspend/unsuspend inline forms — same card treatment as
@@ -696,8 +708,8 @@ export const consoleSuspendFormStyle: CSSProperties = {
   gap: 10,
   padding: '14px 16px',
   borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--bad-bd)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-danger)',
 };
 
 export const consoleSuspendTextareaStyle: CSSProperties = {
@@ -707,9 +719,9 @@ export const consoleSuspendTextareaStyle: CSSProperties = {
   padding: '8px 10px',
   fontFamily: 'inherit',
   fontSize: 12.5,
-  color: 'var(--ink)',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 8,
   outline: 'none',
   resize: 'vertical',
@@ -717,7 +729,7 @@ export const consoleSuspendTextareaStyle: CSSProperties = {
 
 export const consoleSuspendMetaStyle: CSSProperties = {
   fontSize: 12,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 // Members table column widths ported from the design's Member/Email/Role
@@ -745,7 +757,7 @@ export const consoleRowEmailCellStyle: CSSProperties = {
   minWidth: 120,
   fontFamily: 'var(--font-data)',
   fontSize: 11.5,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -755,7 +767,7 @@ export const consoleRowRoleCellStyle: CSSProperties = {
   flex: '0 1 100px',
   minWidth: 82,
   fontSize: 12.5,
-  color: 'var(--ink2)',
+  color: 'var(--nx-ink-2)',
 };
 
 export const consoleRowJoinedCellStyle: CSSProperties = {
@@ -764,7 +776,7 @@ export const consoleRowJoinedCellStyle: CSSProperties = {
   textAlign: 'right',
   fontFamily: 'var(--font-data)',
   fontSize: 11.5,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-3)',
 };
 
 // Directory row → Org Detail link (Slice 2 addition; the design's row-level
@@ -807,8 +819,8 @@ export const consoleRowRemoveBtnStyle: CSSProperties = {
   whiteSpace: 'nowrap',
   borderRadius: 7,
   background: 'transparent',
-  border: '1px solid var(--bad-bd)',
-  color: 'var(--bad)',
+  border: '1px solid var(--nx-danger)',
+  color: 'var(--nx-danger)',
   cursor: 'pointer',
 };
 
@@ -828,7 +840,7 @@ export const consoleRowRunStartedCellStyle: CSSProperties = {
   minWidth: 130,
   fontFamily: 'var(--font-data)',
   fontSize: 11.5,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 export const consoleRowRunDurationCellStyle: CSSProperties = {
   flex: '0 1 90px',
@@ -836,13 +848,13 @@ export const consoleRowRunDurationCellStyle: CSSProperties = {
   textAlign: 'right',
   fontFamily: 'var(--font-data)',
   fontSize: 12,
-  color: 'var(--ink2)',
+  color: 'var(--nx-ink-2)',
 };
 export const consoleRowRunErrorCellStyle: CSSProperties = {
   flex: '2 1 240px',
   minWidth: 160,
   fontSize: 12,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -867,13 +879,13 @@ export const consoleRowConnectorTypeCellStyle: CSSProperties = {
   minWidth: 90,
   fontFamily: 'var(--font-data)',
   fontSize: 11.5,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 export const consoleRowConnectorNameCellStyle: CSSProperties = {
   flex: '2 1 200px',
   minWidth: 150,
   fontSize: 13,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -888,7 +900,7 @@ export const consoleRowConnectorHealthCellStyle: CSSProperties = {
 export const consoleRowConnectorHealthLatencyStyle: CSSProperties = {
   fontFamily: 'var(--font-data)',
   fontSize: 11,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-3)',
 };
 export const consoleRowConnectorCreatedCellStyle: CSSProperties = {
   flex: '0 1 130px',
@@ -896,7 +908,7 @@ export const consoleRowConnectorCreatedCellStyle: CSSProperties = {
   textAlign: 'right',
   fontFamily: 'var(--font-data)',
   fontSize: 11.5,
-  color: 'var(--ink4)',
+  color: 'var(--nx-ink-3)',
 };
 
 // Announcements screen (Subscription Phase 5, Slice 3,
@@ -914,8 +926,8 @@ export const consoleAnnouncementFormStyle: CSSProperties = {
   gap: 14,
   padding: '16px 18px',
   borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
 };
 
 export const consoleAnnouncementFieldsRowStyle: CSSProperties = {
@@ -933,9 +945,9 @@ export const consoleAnnouncementInputStyle: CSSProperties = {
   padding: '0 10px',
   fontFamily: 'inherit',
   fontSize: 12.5,
-  color: 'var(--ink)',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 8,
   outline: 'none',
 };
@@ -952,7 +964,7 @@ export const consoleAnnouncementRoleLabelStyle: CSSProperties = {
   alignItems: 'center',
   gap: 6,
   fontSize: 12.5,
-  color: 'var(--ink2)',
+  color: 'var(--nx-ink-2)',
   cursor: 'pointer',
 };
 
@@ -967,9 +979,9 @@ export const consoleAnnouncementPreviewWrapStyle: CSSProperties = {
 
 export function consoleAnnouncementPreviewStyle(severity: 'info' | 'warning' | 'critical'): CSSProperties {
   const map: Record<'info' | 'warning' | 'critical', [string, string, string]> = {
-    info: ['var(--ink)', 'var(--subtle)', 'var(--line)'],
-    warning: ['var(--warning-deep)', 'rgba(245,158,11,.1)', 'rgba(245,158,11,.4)'],
-    critical: ['var(--error-deep)', 'rgba(239,68,68,.1)', 'rgba(239,68,68,.4)'],
+    info: ['var(--nx-ink)', 'var(--nx-raised)', 'var(--nx-line)'],
+    warning: ['var(--nx-warn)', 'rgba(245,158,11,.1)', 'rgba(245,158,11,.4)'],
+    critical: ['var(--nx-danger-text)', 'rgba(239,68,68,.1)', 'rgba(239,68,68,.4)'],
   };
   const [color, background, border] = map[severity];
   return {
@@ -1006,8 +1018,8 @@ export const consoleAnnouncementRowStyle: CSSProperties = {
   gap: 8,
   padding: '14px 16px',
   borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
 };
 
 export const consoleAnnouncementRowHeaderStyle: CSSProperties = {
@@ -1028,17 +1040,17 @@ export const consoleAnnouncementRowTitleGroupStyle: CSSProperties = {
 export const consoleAnnouncementRowTitleStyle: CSSProperties = {
   fontSize: 13.5,
   fontWeight: 700,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
 };
 
 export const consoleAnnouncementRowMetaStyle: CSSProperties = {
   fontSize: 11.5,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleAnnouncementRowBodyStyle: CSSProperties = {
   fontSize: 12.5,
-  color: 'var(--ink2)',
+  color: 'var(--nx-ink-2)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   display: '-webkit-box',

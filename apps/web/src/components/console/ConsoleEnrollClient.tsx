@@ -185,7 +185,7 @@ export default function ConsoleEnrollClient() {
               gap: '6px 16px',
               fontFamily: 'var(--font-data)',
               fontSize: 13,
-              color: 'var(--text-2)',
+              color: 'var(--nx-ink-2)',
             }}
           >
             {enableState.backupCodes.map((code) => (

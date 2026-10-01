@@ -16,8 +16,8 @@ export const consoleUsageFilterBarStyle: CSSProperties = {
   gap: 12,
   padding: '14px 16px',
   borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
 };
 
 export const consoleUsageFilterFieldStyle: CSSProperties = {
@@ -31,7 +31,7 @@ export const consoleUsageFilterLabelStyle: CSSProperties = {
   fontWeight: 600,
   letterSpacing: '.06em',
   textTransform: 'uppercase',
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleUsageFilterInputStyle: CSSProperties = {
@@ -41,9 +41,9 @@ export const consoleUsageFilterInputStyle: CSSProperties = {
   padding: '0 10px',
   fontFamily: 'inherit',
   fontSize: 12.5,
-  color: 'var(--ink)',
-  background: 'var(--surface2)',
-  border: '1px solid var(--line)',
+  color: 'var(--nx-ink)',
+  background: 'var(--nx-raised)',
+  border: '1px solid var(--nx-line)',
   borderRadius: 8,
   outline: 'none',
 };
@@ -58,7 +58,7 @@ export const consoleUsageFilterActionsStyle: CSSProperties = {
 export const consoleUsageFilterErrorStyle: CSSProperties = {
   flex: '1 1 100%',
   fontSize: 12.5,
-  color: 'var(--error-deep)',
+  color: 'var(--nx-danger-text)',
 };
 
 // Chart cards (TokensChart/CostChart in ConsoleUsageCharts.tsx) — same
@@ -70,8 +70,8 @@ export const consoleUsageChartCardStyle: CSSProperties = {
   gap: 10,
   padding: '16px 18px',
   borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
 };
 
 export const consoleUsageChartHeaderStyle: CSSProperties = {
@@ -86,12 +86,12 @@ export const consoleUsageChartTitleStyle: CSSProperties = {
   fontFamily: 'var(--font-display)',
   fontSize: 14,
   fontWeight: 700,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
 };
 
 export const consoleUsageChartSubStyle: CSSProperties = {
   fontSize: 12,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleUsageChartLegendStyle: CSSProperties = {
@@ -107,7 +107,7 @@ export const consoleUsageChartLegendItemStyle: CSSProperties = {
   fontSize: 11,
   letterSpacing: '.04em',
   textTransform: 'uppercase',
-  color: 'var(--ink2)',
+  color: 'var(--nx-ink-2)',
 };
 
 export function consoleUsageChartLegendSwatchStyle(color: string): CSSProperties {
@@ -120,7 +120,7 @@ export const consoleUsageChartEmptyStyle: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   fontSize: 12.5,
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleUsageChartTooltipStyle: CSSProperties = {
@@ -128,8 +128,8 @@ export const consoleUsageChartTooltipStyle: CSSProperties = {
   top: 0,
   width: 140,
   padding: '8px 10px',
-  background: 'var(--ink)',
-  color: 'var(--bg)',
+  background: 'var(--nx-ink)',
+  color: 'var(--nx-bg)',
   borderRadius: 10,
   fontFamily: 'var(--font-data)',
   fontSize: 12,
@@ -155,8 +155,8 @@ export const consoleUsageSectionsRowStyle: CSSProperties = {
 
 export const consoleUsageTableWrapStyle: CSSProperties = {
   borderRadius: 12,
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
+  background: 'var(--nx-surface)',
+  border: '1px solid var(--nx-line)',
   padding: '4px 16px',
 };
 
@@ -165,12 +165,12 @@ export const consoleUsageTableHeadRowStyle: CSSProperties = {
   alignItems: 'center',
   gap: 10,
   padding: '9px 0',
-  borderBottom: '1px solid var(--line2)',
+  borderBottom: '1px solid var(--nx-line)',
   fontSize: 10.5,
   fontWeight: 600,
   letterSpacing: '.06em',
   textTransform: 'uppercase',
-  color: 'var(--ink3)',
+  color: 'var(--nx-ink-3)',
 };
 
 export const consoleUsageRowStyle: CSSProperties = {
@@ -178,14 +178,14 @@ export const consoleUsageRowStyle: CSSProperties = {
   alignItems: 'center',
   gap: 10,
   padding: '10px 0',
-  borderBottom: '1px solid var(--line)',
+  borderBottom: '1px solid var(--nx-line)',
 };
 
 export const consoleUsageColLabelStyle: CSSProperties = {
   flex: '2 1 120px',
   minWidth: 90,
   fontSize: 12.5,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -197,7 +197,7 @@ export const consoleUsageColNumberStyle: CSSProperties = {
   textAlign: 'right',
   fontFamily: 'var(--font-data)',
   fontSize: 11.5,
-  color: 'var(--ink2)',
+  color: 'var(--nx-ink-2)',
 };
 
 export const consoleUsageColCostStyle: CSSProperties = {
@@ -207,5 +207,5 @@ export const consoleUsageColCostStyle: CSSProperties = {
   fontFamily: 'var(--font-data)',
   fontSize: 12,
   fontWeight: 700,
-  color: 'var(--ink)',
+  color: 'var(--nx-ink)',
 };

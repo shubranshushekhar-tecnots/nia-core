@@ -103,7 +103,7 @@ export default function ConsoleDirectoryClient({ initialPage }: { initialPage: C
     <div style={consoleContentStyle}>
       <div style={consoleHeaderRowStyle}>
         <div style={consoleHeaderTitleColStyle}>
-          <span style={consoleHeaderTitleStyle}>Directory</span>
+          <span style={consoleHeaderTitleStyle}>Organizations</span>
           <span style={consoleHeaderSubStyle}>
             Showing {orgs.length} of {total} organizations
           </span>
