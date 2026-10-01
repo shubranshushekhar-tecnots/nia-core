@@ -351,6 +351,55 @@ export async function listModelPrices(db: Queryable, model?: string): Promise<Mo
   return result.rows.map(toModelPrice);
 }
 
+export type ModelPricesPage = {
+  items: ModelPrice[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+/**
+ * `public.model_prices` is append-only (a "correction" is a new row with a
+ * later `effective_from`, never an update) — so "current" price catalog is
+ * the latest `effective_from` row per `model`, not every historical row.
+ * `distinct on (model) ... order by model, effective_from desc` picks
+ * exactly that one row per model, paginated by distinct model count.
+ */
+export async function listLatestModelPrices(db: Queryable, limit = 50, offset = 0): Promise<ModelPricesPage> {
+  const countResult = await db.query<{ count: string }>(`select count(distinct model) as count from public.model_prices`);
+  const total = Number(countResult.rows[0]?.count ?? 0);
+
+  const result = await db.query<{
+    id: string;
+    model: string;
+    input_price_per_1m: string;
+    output_price_per_1m: string;
+    cached_price_per_1m: string | null;
+    currency: string;
+    effective_from: string;
+    created_by: string | null;
+    created_at: string;
+  }>(
+    `select * from (
+       select distinct on (model) id, model, input_price_per_1m, output_price_per_1m, cached_price_per_1m, currency, effective_from, created_by, created_at
+       from public.model_prices
+       order by model, effective_from desc
+     ) latest
+     order by model
+     limit $1 offset $2`,
+    [limit, offset],
+  );
+
+  return {
+    items: result.rows.map(toModelPrice),
+    total,
+    limit,
+    offset,
+    hasMore: offset + result.rows.length < total,
+  };
+}
+
 export type CreateModelPriceInput = {
   model: string;
   inputPricePer1m: number;

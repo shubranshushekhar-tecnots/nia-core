@@ -2609,3 +2609,195 @@ describe("GET /console/audit-logs/export", () => {
     expect(auditCall).toBeTruthy();
   });
 });
+
+describe("GET /console/model-prices", () => {
+  it("returns 403 for a non-staff session", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/model-prices`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("returns the latest price row per model by default (not every historical row) and writes a model_prices.list audit row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("count(distinct model)")) return { rows: [{ count: "1" }], rowCount: 1 };
+      if (sql.includes("distinct on (model)")) {
+        return {
+          rows: [
+            {
+              id: "price-2",
+              model: "gpt-5",
+              input_price_per_1m: "5",
+              output_price_per_1m: "15",
+              cached_price_per_1m: null,
+              currency: "USD",
+              effective_from: "2026-02-01T00:00:00.000Z",
+              created_by: "staff-1",
+              created_at: "2026-02-01T00:00:00.000Z",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/model-prices`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.items).toEqual([
+      {
+        id: "price-2",
+        model: "gpt-5",
+        inputPricePer1m: 5,
+        outputPricePer1m: 15,
+        cachedPricePer1m: null,
+        currency: "USD",
+        effectiveFrom: "2026-02-01T00:00:00.000Z",
+        createdBy: "staff-1",
+        createdAt: "2026-02-01T00:00:00.000Z",
+      },
+    ]);
+    expect(body.total).toBe(1);
+
+    const auditCall = query.mock.calls.find((c) => (c[0] as string).includes("private.log_staff_action"));
+    expect(auditCall![1]).toEqual([
+      STAFF_SESSION.user.id,
+      "model_prices.list",
+      null,
+      null,
+      JSON.stringify({ history: null, limit: 50, offset: 0, count: 1 }),
+    ]);
+  });
+
+  it("returns a model's full price history when ?history= is given, instead of just its latest row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("where ($1::text is null or model = $1)")) {
+        return {
+          rows: [
+            {
+              id: "price-2",
+              model: "gpt-5",
+              input_price_per_1m: "5",
+              output_price_per_1m: "15",
+              cached_price_per_1m: null,
+              currency: "USD",
+              effective_from: "2026-02-01T00:00:00.000Z",
+              created_by: "staff-1",
+              created_at: "2026-02-01T00:00:00.000Z",
+            },
+            {
+              id: "price-1",
+              model: "gpt-5",
+              input_price_per_1m: "4",
+              output_price_per_1m: "12",
+              cached_price_per_1m: null,
+              currency: "USD",
+              effective_from: "2026-01-01T00:00:00.000Z",
+              created_by: "staff-1",
+              created_at: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+          rowCount: 2,
+        };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/model-prices?history=gpt-5`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.items).toHaveLength(2);
+    expect(body.items.map((p: { id: string }) => p.id)).toEqual(["price-2", "price-1"]);
+
+    const auditCall = query.mock.calls.find((c) => (c[0] as string).includes("private.log_staff_action"));
+    expect(auditCall![1]).toEqual([
+      STAFF_SESSION.user.id,
+      "model_prices.list",
+      null,
+      null,
+      JSON.stringify({ history: "gpt-5", count: 2 }),
+    ]);
+  });
+});
+
+describe("POST /console/model-prices", () => {
+  it("creates a new price row and writes a model_price.create audit row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("insert into public.model_prices")) {
+        return {
+          rows: [
+            {
+              id: "price-3",
+              model: "gpt-5",
+              input_price_per_1m: "6",
+              output_price_per_1m: "18",
+              cached_price_per_1m: null,
+              currency: "USD",
+              effective_from: "2026-03-01T00:00:00.000Z",
+              created_by: STAFF_SESSION.user.id,
+              created_at: "2026-03-01T00:00:00.000Z",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/model-prices`, {
+      method: "POST",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-5", inputPricePer1m: 6, outputPricePer1m: 18 }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.id).toBe("price-3");
+
+    const auditCall = query.mock.calls.find((c) => (c[0] as string).includes("private.log_staff_action"));
+    expect(auditCall![1]).toEqual([
+      STAFF_SESSION.user.id,
+      "model_price.create",
+      null,
+      null,
+      JSON.stringify({ id: "price-3", model: "gpt-5", effectiveFrom: "2026-03-01T00:00:00.000Z" }),
+    ]);
+  });
+});

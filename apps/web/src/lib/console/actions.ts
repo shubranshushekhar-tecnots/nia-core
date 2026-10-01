@@ -3,11 +3,15 @@
 import { apiFetchServer, ApiError } from '@/lib/api/server';
 import {
   getConsoleAuditLogs,
+  getConsoleModelPrices,
   getConsoleUsageData,
   type ConsoleAnnouncement,
   type ConsoleAnnouncementsPage,
   type ConsoleAuditLogFilters,
   type ConsoleAuditLogsPage,
+  type ConsoleCreateModelPriceInput,
+  type ConsoleModelPrice,
+  type ConsoleModelPricesPage,
   type ConsoleOrgsPage,
   type ConsolePlanUpdateResult,
   type ConsoleProjectsPage,
@@ -352,4 +356,41 @@ export async function loadAuditLogsAction(
   offset?: number,
 ): Promise<ConsoleAuditLogsPage> {
   return getConsoleAuditLogs(filters, offset);
+}
+
+/**
+ * Console redesign plan's Slice 9: ConsoleModelPricesClient.tsx's "Load
+ * more" button and its per-model "View history" toggle both call this —
+ * plain data-fetching Server Action, same non-mutation shape as
+ * loadAuditLogsAction above, delegating to consoleServer.ts's
+ * getConsoleModelPrices so the initial server-rendered page and every
+ * reload/pagination/history call share one request-building path.
+ */
+export async function loadModelPricesAction(params?: {
+  history?: string;
+  offset?: number;
+}): Promise<ConsoleModelPricesPage> {
+  return getConsoleModelPrices(params);
+}
+
+/**
+ * Console redesign plan's Slice 9: submits ConsoleModelPricesClient's
+ * "Add price" form to POST /console/model-prices — same useTransition-
+ * driven, ok/error mutation shape as updatePlanAction above. `model_prices`
+ * is append-only, so this always inserts a new row (a "correction" is just
+ * a new row with a later effectiveFrom), never an update.
+ */
+export async function createModelPriceAction(
+  input: ConsoleCreateModelPriceInput,
+): Promise<{ ok: true; price: ConsoleModelPrice } | { ok: false; error: string }> {
+  try {
+    const price = await apiFetchServer<ConsoleModelPrice>('/console/model-prices', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    return { ok: true, price };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't add the price. Try again." };
+  }
 }

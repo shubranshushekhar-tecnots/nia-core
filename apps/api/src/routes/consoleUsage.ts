@@ -11,6 +11,7 @@ import {
   getUsageBreakdown,
   getTopConsumers,
   listModelPrices,
+  listLatestModelPrices,
   createModelPrice,
   toCsv,
   type UsageFilters,
@@ -201,28 +202,56 @@ consoleUsageRouter.get(
   }),
 );
 
-/** GET /console/model-prices?model= — full price history, optionally filtered to one model. */
+const modelPricesQuerySchema = z.object({
+  history: z.string().trim().min(1).optional(),
+  limit: z.coerce.number().int().positive().max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
+/**
+ * GET /console/model-prices — Console redesign plan's Slice 9. Default:
+ * paginated catalog of the latest row per model (the table is append-only,
+ * so "current price" = latest `effective_from`, never every historical
+ * row). `?history=<model>` switches to that one model's full price history
+ * instead (unpaginated — a single model's history is small).
+ */
 consoleUsageRouter.get(
   "/model-prices",
-  validate({ query: z.object({ model: z.string().trim().min(1).optional() }) }),
+  validate({ query: modelPricesQuerySchema }),
   asyncHandler(async (req, res) => {
     const authUser = req.authUser;
     if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const { model } = req.query as unknown as { model?: string };
+    const { history, limit = 50, offset = 0 } = req.query as unknown as {
+      history?: string;
+      limit?: number;
+      offset?: number;
+    };
 
-    const prices = await withServiceRole(dbPool, async (db) => {
-      const result = await listModelPrices(db, model);
+    const body = await withServiceRole(dbPool, async (db) => {
+      if (history) {
+        const items = await listModelPrices(db, history);
+        await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+          authUser.id,
+          "model_prices.list",
+          null,
+          null,
+          JSON.stringify({ history, count: items.length }),
+        ]);
+        return { items, total: items.length, limit: items.length, offset: 0, hasMore: false };
+      }
+
+      const page = await listLatestModelPrices(db, limit, offset);
       await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
         authUser.id,
-        "model_price.list",
+        "model_prices.list",
         null,
         null,
-        JSON.stringify({ model: model ?? null, count: result.length }),
+        JSON.stringify({ history: null, limit, offset, count: page.items.length }),
       ]);
-      return result;
+      return page;
     });
 
-    res.json({ prices });
+    res.json(body);
   }),
 );
 

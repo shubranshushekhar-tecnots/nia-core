@@ -655,3 +655,50 @@ export async function getConsoleAuditLogs(
   const qs = query.toString();
   return apiFetchServer<ConsoleAuditLogsPage>(`/console/audit-logs${qs ? `?${qs}` : ''}`);
 }
+
+/**
+ * Console redesign plan's Slice 9 — types + wrapper for the Model Prices
+ * screen (apps/api/src/services/usage.ts's ModelPrice/ModelPricesPage,
+ * mirrored exactly). `public.model_prices` is append-only — GET's default
+ * page is the latest row per model; `?history=<model>` returns that one
+ * model's full price history instead (see getConsoleModelPrices below).
+ */
+export type ConsoleModelPrice = {
+  id: string;
+  model: string;
+  inputPricePer1m: number;
+  outputPricePer1m: number;
+  cachedPricePer1m: number | null;
+  currency: string;
+  effectiveFrom: string;
+  createdBy: string | null;
+  createdAt: string;
+};
+
+export type ConsoleModelPricesPage = {
+  items: ConsoleModelPrice[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+export async function getConsoleModelPrices(params?: {
+  history?: string;
+  offset?: number;
+}): Promise<ConsoleModelPricesPage> {
+  const query = new URLSearchParams();
+  if (params?.history) query.set('history', params.history);
+  if (params?.offset) query.set('offset', String(params.offset));
+  const qs = query.toString();
+  return apiFetchServer<ConsoleModelPricesPage>(`/console/model-prices${qs ? `?${qs}` : ''}`);
+}
+
+export type ConsoleCreateModelPriceInput = {
+  model: string;
+  inputPricePer1m: number;
+  outputPricePer1m: number;
+  cachedPricePer1m?: number;
+  currency?: string;
+  effectiveFrom?: string;
+};

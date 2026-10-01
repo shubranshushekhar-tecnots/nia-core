@@ -73,7 +73,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Config',
     items: [
-      { id: 'model-prices', label: 'Model Prices', icon: '\u2699' }, // Slice 9
+      { id: 'model-prices', label: 'Model Prices', icon: '\u2699', href: '/console/model-prices' },
     ],
   },
 ];
