@@ -46,11 +46,18 @@ import {
 // decision 1) was the one design-ported entry still inert through Slice 3e
 // — relabeled "Announcements" and given a real href now that the screen
 // exists, same label the design's own copy uses for this concept.
+//
+// 'usage' (Console v2 Slice 5) is, like 'users' above, a real nav entry not
+// present in the original ported design — added as its own peer entry
+// (rather than folded into 'dash'/Platform, which stays inert pending
+// Slice 6's dashboard) since the token usage page ships before the
+// dashboard home does.
 const NAV: Array<{ id: string; label: string; icon: string; href?: string }> = [
   { id: 'dash', label: 'Platform', icon: '\u25D1' },
   { id: 'directory', label: 'Directory', icon: '\u25A4', href: '/console' },
   { id: 'users', label: 'Users', icon: '\u25CB', href: '/console/users' },
   { id: 'notify', label: 'Announcements', icon: '\u25CD', href: '/console/announcements' },
+  { id: 'usage', label: 'Token Usage', icon: '\u25C6', href: '/console/usage' },
   { id: 'revenue', label: 'Revenue', icon: '\u25C8' },
   { id: 'invoices', label: 'Invoices', icon: '\u25A6' },
   { id: 'support', label: 'Support', icon: '\u25D4' },

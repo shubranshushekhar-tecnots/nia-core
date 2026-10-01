@@ -1,7 +1,15 @@
 'use server';
 
 import { apiFetchServer, ApiError } from '@/lib/api/server';
-import type { ConsoleAnnouncement, ConsoleAnnouncementsPage, ConsoleOrgsPage, ConsoleUsersPage } from '@/lib/api/consoleServer';
+import {
+  getConsoleUsageData,
+  type ConsoleAnnouncement,
+  type ConsoleAnnouncementsPage,
+  type ConsoleOrgsPage,
+  type ConsoleUsageData,
+  type ConsoleUsageFilters,
+  type ConsoleUsersPage,
+} from '@/lib/api/consoleServer';
 
 /**
  * Console v1 Slice 1 review fix (docs/plans/console-plan.md decision 10).
@@ -272,4 +280,16 @@ export async function archiveAnnouncementAction(
     if (err instanceof ApiError) return { ok: false, error: err.message };
     return { ok: false, error: "Couldn't archive the announcement. Try again." };
   }
+}
+
+/**
+ * Console v2 Slice 5: ConsoleUsageClient.tsx's "Apply filters" button calls
+ * this to re-fetch all five usage views (summary/timeseries/byModel/
+ * byFeature/topConsumers) for a new filter set — plain data-fetching Server
+ * Action, same non-mutation shape as loadMoreOrgsAction/loadAnnouncementsAction
+ * above, delegating to consoleServer.ts's getConsoleUsageData so page.tsx's
+ * initial load and this reload path can never drift apart.
+ */
+export async function loadUsageDataAction(filters: ConsoleUsageFilters): Promise<ConsoleUsageData> {
+  return getConsoleUsageData(filters);
 }

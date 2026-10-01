@@ -272,3 +272,125 @@ export async function getConsoleAnnouncements(params?: {
   const qs = query.toString();
   return apiFetchServer<ConsoleAnnouncementsPage>(`/console/announcements${qs ? `?${qs}` : ''}`);
 }
+
+/**
+ * Console v2 Slice 5 (docs for Slice 4's apps/api/src/services/usage.ts):
+ * types + wrappers mirroring that file's own types exactly, for the token
+ * usage page's filters/summary/charts/breakdowns/top-consumers. `dateFrom`/
+ * `dateTo` are ISO datetime strings (the route validates with
+ * z.string().datetime({ offset: true })).
+ */
+export type ConsoleUsageFilters = {
+  dateFrom?: string;
+  dateTo?: string;
+  orgId?: string;
+  model?: string;
+  feature?: string;
+};
+
+export type ConsoleUsagePeriodStats = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  callCount: number;
+  cost: number;
+};
+
+export type ConsoleUsageSummary = {
+  today: ConsoleUsagePeriodStats;
+  month: ConsoleUsagePeriodStats;
+};
+
+export type ConsoleUsageTimeseriesPoint = {
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cost: number;
+};
+
+export type ConsoleUsageBreakdownDimension = 'org' | 'user' | 'model' | 'feature';
+
+export type ConsoleUsageBreakdownRow = {
+  key: string;
+  label: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  callCount: number;
+  cost: number;
+};
+
+export type ConsoleUsageTopConsumers = {
+  topOrgs: ConsoleUsageBreakdownRow[];
+  topUsers: ConsoleUsageBreakdownRow[];
+};
+
+function usageFiltersQuery(filters: ConsoleUsageFilters): URLSearchParams {
+  const query = new URLSearchParams();
+  if (filters.dateFrom) query.set('dateFrom', filters.dateFrom);
+  if (filters.dateTo) query.set('dateTo', filters.dateTo);
+  if (filters.orgId) query.set('orgId', filters.orgId);
+  if (filters.model) query.set('model', filters.model);
+  if (filters.feature) query.set('feature', filters.feature);
+  return query;
+}
+
+export async function getConsoleUsageSummary(orgId?: string): Promise<ConsoleUsageSummary> {
+  const qs = orgId ? `?orgId=${encodeURIComponent(orgId)}` : '';
+  return apiFetchServer<ConsoleUsageSummary>(`/console/usage/summary${qs}`);
+}
+
+export async function getConsoleUsageTimeseries(filters: ConsoleUsageFilters = {}): Promise<ConsoleUsageTimeseriesPoint[]> {
+  const qs = usageFiltersQuery(filters).toString();
+  const { points } = await apiFetchServer<{ points: ConsoleUsageTimeseriesPoint[] }>(
+    `/console/usage/timeseries${qs ? `?${qs}` : ''}`,
+  );
+  return points;
+}
+
+export async function getConsoleUsageBreakdown(
+  by: ConsoleUsageBreakdownDimension,
+  filters: ConsoleUsageFilters = {},
+  limit?: number,
+): Promise<ConsoleUsageBreakdownRow[]> {
+  const query = usageFiltersQuery(filters);
+  query.set('by', by);
+  if (limit) query.set('limit', String(limit));
+  const { rows } = await apiFetchServer<{ rows: ConsoleUsageBreakdownRow[] }>(`/console/usage/breakdown?${query.toString()}`);
+  return rows;
+}
+
+export async function getConsoleUsageTopConsumers(
+  filters: ConsoleUsageFilters = {},
+  limit?: number,
+): Promise<ConsoleUsageTopConsumers> {
+  const query = usageFiltersQuery(filters);
+  if (limit) query.set('limit', String(limit));
+  const qs = query.toString();
+  return apiFetchServer<ConsoleUsageTopConsumers>(`/console/usage/top-consumers${qs ? `?${qs}` : ''}`);
+}
+
+export type ConsoleUsageData = {
+  summary: ConsoleUsageSummary;
+  timeseries: ConsoleUsageTimeseriesPoint[];
+  byModel: ConsoleUsageBreakdownRow[];
+  byFeature: ConsoleUsageBreakdownRow[];
+  topConsumers: ConsoleUsageTopConsumers;
+};
+
+/**
+ * Combined fetch backing both usage/page.tsx's initial load and
+ * loadUsageDataAction's filter-change reload (lib/console/actions.ts) — one
+ * place for this 5-endpoint composition so the two callers can't drift.
+ */
+export async function getConsoleUsageData(filters: ConsoleUsageFilters): Promise<ConsoleUsageData> {
+  const [summary, timeseries, byModel, byFeature, topConsumers] = await Promise.all([
+    getConsoleUsageSummary(filters.orgId),
+    getConsoleUsageTimeseries(filters),
+    getConsoleUsageBreakdown('model', filters, 50),
+    getConsoleUsageBreakdown('feature', filters, 50),
+    getConsoleUsageTopConsumers(filters, 10),
+  ]);
+  return { summary, timeseries, byModel, byFeature, topConsumers };
+}
