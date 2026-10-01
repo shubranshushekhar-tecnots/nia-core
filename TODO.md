@@ -934,3 +934,5 @@
   fresh DB without disabling triggers.
 - connector-mysql and connector-supabase tests time out intermittently
   under full parallel load (pass in isolation) — investigate.
+- apps/agent runSync.integration.test.ts has a millisecond-timing
+  assertion that fails intermittently — make it tolerance-based.
