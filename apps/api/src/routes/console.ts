@@ -12,6 +12,7 @@ import { sanitizeRunError } from "../lib/sanitizeRunError.js";
 import { consoleUsageRouter } from "./consoleUsage.js";
 import { consoleDashboardRouter } from "./consoleDashboard.js";
 import { consoleHealthRouter } from "./consoleHealth.js";
+import { consoleStaffRouter } from "./consoleStaff.js";
 
 /**
  * Console v1 (docs/plans/console-plan.md, build order step 4). Mounted at
@@ -56,6 +57,11 @@ consoleRouter.use(consoleDashboardRouter);
 // failed-runs/connector/migration status). Same separate-router convention
 // as consoleUsageRouter/consoleDashboardRouter above.
 consoleRouter.use(consoleHealthRouter);
+
+// Console redesign plan's Slice 5 — Platform Staff page API (read-only
+// platform_staff listing). Same separate-router convention as the routers
+// mounted above.
+consoleRouter.use(consoleStaffRouter);
 
 /**
  * Build order step 5 / Slice 1 (console-plan.md §3, §5). List/search orgs

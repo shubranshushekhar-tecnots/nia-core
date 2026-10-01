@@ -2200,3 +2200,79 @@ describe("GET /console/health", () => {
     expect(body.worker).toEqual({ status: "no_workers", count: 0 });
   });
 });
+
+describe("GET /console/staff", () => {
+  function mockStaffQuery() {
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("count(*) as count from public.platform_staff")) {
+        return { rows: [{ count: "1" }], rowCount: 1 };
+      }
+      if (sql.includes("from public.platform_staff ps")) {
+        return {
+          rows: [
+            {
+              user_id: "staff-1",
+              name: "Staff One",
+              email: "staff1@nia.dev",
+              two_factor_enabled: true,
+              granted_by_name: "Staff Zero",
+              granted_by_email: "staff0@nia.dev",
+              granted_at: "2026-01-01T00:00:00.000Z",
+              last_sign_in_at: "2026-01-02T00:00:00.000Z",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      throw new Error(`mockStaffQuery: unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+    return query;
+  }
+
+  it("returns 403 for a non-staff session", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/staff`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("returns the staff list and writes one staff_audit_log row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockStaffQuery();
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/staff`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.staff).toEqual([
+      {
+        userId: "staff-1",
+        name: "Staff One",
+        email: "staff1@nia.dev",
+        twoFactorEnabled: true,
+        grantedBy: { name: "Staff Zero", email: "staff0@nia.dev" },
+        grantedAt: "2026-01-01T00:00:00.000Z",
+        lastSignInAt: "2026-01-02T00:00:00.000Z",
+      },
+    ]);
+    expect(body.total).toBe(1);
+
+    const auditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(auditCall?.[1]).toEqual(["staff-1", "staff.list", null, null, JSON.stringify({ limit: 50, offset: 0, count: 1 })]);
+  });
+});

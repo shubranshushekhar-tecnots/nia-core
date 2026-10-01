@@ -6,6 +6,7 @@ import {
   type ConsoleAnnouncement,
   type ConsoleAnnouncementsPage,
   type ConsoleOrgsPage,
+  type ConsoleStaffPage,
   type ConsoleUsageData,
   type ConsoleUsageFilters,
   type ConsoleUsersPage,
@@ -22,6 +23,11 @@ import {
  */
 export async function loadMoreOrgsAction(offset: number): Promise<ConsoleOrgsPage> {
   return apiFetchServer<ConsoleOrgsPage>(`/console/orgs?offset=${offset}`);
+}
+
+/** Console redesign plan's Slice 5 — same "Load more" pattern as loadMoreOrgsAction above. */
+export async function loadMoreStaffAction(offset: number): Promise<ConsoleStaffPage> {
+  return apiFetchServer<ConsoleStaffPage>(`/console/staff?offset=${offset}`);
 }
 
 /**

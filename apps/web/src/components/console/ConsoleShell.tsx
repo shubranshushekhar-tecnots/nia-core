@@ -53,7 +53,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'users', label: 'Users', icon: '\u25CB', href: '/console/users' },
       { id: 'directory', label: 'Organizations', icon: '\u25A4', href: '/console' },
-      { id: 'staff', label: 'Platform Staff', icon: '\u25D4' }, // Slice 5
+      { id: 'staff', label: 'Platform Staff', icon: '\u25D4', href: '/console/staff' },
     ],
   },
   {

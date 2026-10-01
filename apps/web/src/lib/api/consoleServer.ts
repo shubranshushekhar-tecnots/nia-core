@@ -513,3 +513,33 @@ export type ConsoleSystemHealth = {
 export async function getConsoleHealth(): Promise<ConsoleSystemHealth> {
   return apiFetchServer<ConsoleSystemHealth>('/console/health');
 }
+
+/**
+ * Console redesign plan's Slice 5 — types + wrapper for the Platform Staff
+ * screen (apps/api/src/routes/consoleStaff.ts, mirrored exactly). Read-only:
+ * staff are granted/revoked via the manageStaff.ts CLI only.
+ */
+export type ConsoleStaffMember = {
+  userId: string;
+  name: string;
+  email: string;
+  twoFactorEnabled: boolean;
+  grantedBy: { name: string; email: string };
+  grantedAt: string;
+  lastSignInAt: string | null;
+};
+
+export type ConsoleStaffPage = {
+  staff: ConsoleStaffMember[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+export async function getConsoleStaff(params?: { offset?: number }): Promise<ConsoleStaffPage> {
+  const query = new URLSearchParams();
+  if (params?.offset) query.set('offset', String(params.offset));
+  const qs = query.toString();
+  return apiFetchServer<ConsoleStaffPage>(`/console/staff${qs ? `?${qs}` : ''}`);
+}
