@@ -11,6 +11,7 @@ import { dbPool } from "../lib/dbPool.js";
 import { sanitizeRunError } from "../lib/sanitizeRunError.js";
 import { consoleUsageRouter } from "./consoleUsage.js";
 import { consoleDashboardRouter } from "./consoleDashboard.js";
+import { consoleHealthRouter } from "./consoleHealth.js";
 
 /**
  * Console v1 (docs/plans/console-plan.md, build order step 4). Mounted at
@@ -50,6 +51,11 @@ consoleRouter.use(consoleUsageRouter);
 // convention as consoleUsageRouter above, mounted immediately after it so it
 // inherits the same auth chain.
 consoleRouter.use(consoleDashboardRouter);
+
+// Console redesign plan's Slice 4 — System Health page API (worker/queue/
+// failed-runs/connector/migration status). Same separate-router convention
+// as consoleUsageRouter/consoleDashboardRouter above.
+consoleRouter.use(consoleHealthRouter);
 
 /**
  * Build order step 5 / Slice 1 (console-plan.md §3, §5). List/search orgs

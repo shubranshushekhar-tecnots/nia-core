@@ -43,6 +43,21 @@ const withServiceRole = vi.fn();
 // to build the process pool.
 vi.mock("@nia/db", () => ({ withServiceRole, withActingUser: vi.fn(), createDbPool: vi.fn() }));
 
+// consoleHealth.ts (System Health page, Slice 4) opens a real ioredis
+// connection + two BullMQ Queue instances at module load time to back
+// GET /console/health's worker/queue-backlog checks. Both are mocked at the
+// module boundary here, same reasoning as "@nia/db" above: this suite never
+// wants a real Redis connection, and the health route's own tests control
+// getWorkers()/getJobCounts() directly rather than hitting a live queue.
+const queueGetWorkers = vi.fn();
+const queueGetJobCounts = vi.fn();
+vi.mock("bullmq", () => ({
+  Queue: vi.fn().mockImplementation(function Queue() {
+    return { getWorkers: queueGetWorkers, getJobCounts: queueGetJobCounts };
+  }),
+}));
+vi.mock("ioredis", () => ({ Redis: vi.fn().mockImplementation(function Redis() {}) }));
+
 const { consoleRouter } = await import("./console.js");
 
 function buildApp(options: { mountConsole: boolean }): Express {
@@ -69,6 +84,8 @@ let server: Server | undefined;
 afterEach(async () => {
   getSession.mockReset();
   withServiceRole.mockReset();
+  queueGetWorkers.mockReset();
+  queueGetJobCounts.mockReset();
   if (server) {
     await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = undefined;
@@ -2090,5 +2107,96 @@ describe("GET /console/usage/summary — consoleUsageRouter inherits the auth ch
 
     expect(res.status).toBe(401);
     expect(withServiceRole).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Console redesign plan's Slice 4 — GET /console/health. Lean per-route
+ * coverage (403 + audit row), same shape as every other consoleXRouter
+ * describe block above. queueGetWorkers/queueGetJobCounts back BOTH the
+ * interactive and heavy Queue instances consoleHealth.ts constructs (see
+ * its own header comment), so a single mockResolvedValue covers both calls.
+ */
+describe("GET /console/health", () => {
+  function mockHealthQuery() {
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("workflow_runs")) return { rows: [{ count: "2" }], rowCount: 1 };
+      if (sql.includes("public.connections")) {
+        return {
+          rows: [
+            { last_test_status: "ok", count: "3" },
+            { last_test_status: "error", count: "1" },
+          ],
+          rowCount: 2,
+        };
+      }
+      if (sql.includes("_migrations")) {
+        return {
+          rows: [{ version: "0068", name: "llm_usage", finished_at: "2026-01-01T00:00:00.000Z" }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`mockHealthQuery: unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+    return query;
+  }
+
+  it("returns 403 for a non-staff session without ever checking worker/queue status", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/health`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(403);
+    expect(queueGetWorkers).not.toHaveBeenCalled();
+  });
+
+  it("returns health data and writes one staff_audit_log row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    queueGetWorkers.mockResolvedValue([{ name: "interactive", addr: "127.0.0.1:1" }]);
+    queueGetJobCounts.mockResolvedValue({ waiting: 0, active: 1, delayed: 0, failed: 0 });
+    const query = mockHealthQuery();
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/health`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.worker).toEqual({ status: "healthy", count: 1 });
+    expect(body.failedRuns24h).toBe(2);
+    expect(body.connectors).toEqual({ ok: 3, error: 1, untested: 0 });
+    expect(body.latestMigration).toEqual({ version: "0068", name: "llm_usage", finishedAt: "2026-01-01T00:00:00.000Z" });
+
+    const auditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(auditCall?.[1]).toEqual(["staff-1", "health.read", null, null, JSON.stringify({})]);
+  });
+
+  it("reports no_workers when getWorkers() returns an empty list", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    queueGetWorkers.mockResolvedValue([]);
+    queueGetJobCounts.mockResolvedValue({ waiting: 0, active: 0, delayed: 0, failed: 0 });
+    mockHealthQuery();
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/health`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.worker).toEqual({ status: "no_workers", count: 0 });
   });
 });

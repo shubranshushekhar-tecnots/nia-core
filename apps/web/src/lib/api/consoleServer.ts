@@ -471,3 +471,45 @@ export async function getConsoleDashboardData(): Promise<ConsoleDashboardData> {
   ]);
   return { overview, runsPerDay, rowsMoved, needsAttention, usageSummary, usageTimeseries };
 }
+
+/**
+ * Console redesign plan's Slice 4 — types + wrapper for the System Health
+ * screen (apps/api/src/services/consoleHealth.ts, mirrored exactly).
+ */
+export type ConsoleWorkerStatus = {
+  status: 'healthy' | 'no_workers';
+  count: number;
+};
+
+export type ConsoleQueueBacklog = {
+  name: string;
+  waiting: number;
+  active: number;
+  delayed: number;
+  failed: number;
+};
+
+export type ConsoleConnectorHealthSummary = {
+  ok: number;
+  error: number;
+  untested: number;
+};
+
+export type ConsoleLatestMigration = {
+  version: string;
+  name: string;
+  finishedAt: string;
+} | null;
+
+export type ConsoleSystemHealth = {
+  api: 'ok';
+  worker: ConsoleWorkerStatus;
+  queues: ConsoleQueueBacklog[];
+  failedRuns24h: number;
+  connectors: ConsoleConnectorHealthSummary;
+  latestMigration: ConsoleLatestMigration;
+};
+
+export async function getConsoleHealth(): Promise<ConsoleSystemHealth> {
+  return apiFetchServer<ConsoleSystemHealth>('/console/health');
+}

@@ -45,7 +45,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'dash', label: 'Overview', icon: '\u25D1', href: '/console/dashboard' },
       { id: 'usage', label: 'Token Analytics', icon: '\u25C6', href: '/console/usage' },
-      { id: 'health', label: 'System Health', icon: '\u25C9' }, // Slice 4
+      { id: 'health', label: 'System Health', icon: '\u25C9', href: '/console/health' },
     ],
   },
   {
