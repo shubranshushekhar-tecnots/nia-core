@@ -23,20 +23,30 @@ export class NdjsonWriter {
   private lastActivity = Date.now();
   private keepAliveTimer: ReturnType<typeof setInterval> | undefined;
 
+  /**
+   * `write` mirrors Node's `Writable.write()` contract: return `false` to
+   * signal the sink is backed up (e.g. a socket's internal buffer is
+   * full) so the caller can pause pulling more rows — streamExtract.ts
+   * uses this to drive `request.pause()`/`request.resume()` so a slow
+   * consumer never forces unbounded buffering. Returning `true` (or
+   * `void`, for a sink that never backs up, e.g. an in-memory test
+   * buffer) means "keep going".
+   */
   constructor(
-    private readonly write: (chunk: string) => void,
+    private readonly write: (chunk: string) => boolean | void,
     private readonly keepAliveIntervalMs = 30_000,
   ) {}
 
-  writeColumns(columns: NdjsonColumn[]): void {
+  writeColumns(columns: NdjsonColumn[]): boolean {
     this.assertOpen();
-    this.emit(JSON.stringify({ columns }));
+    return this.emit(JSON.stringify({ columns }));
   }
 
-  writeRow(values: unknown[]): void {
+  writeRow(values: unknown[]): boolean {
     this.assertOpen();
-    this.emit(JSON.stringify(values));
+    const ok = this.emit(JSON.stringify(values));
     this.rowCount += 1;
+    return ok;
   }
 
   writeEnd(): void {
@@ -68,9 +78,10 @@ export class NdjsonWriter {
     this.keepAliveTimer = undefined;
   }
 
-  private emit(line: string): void {
-    this.write(line + "\n");
+  private emit(line: string): boolean {
+    const ok = this.write(line + "\n");
     this.lastActivity = Date.now();
+    return ok !== false;
   }
 
   private close(): void {

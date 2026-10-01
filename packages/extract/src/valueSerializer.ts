@@ -11,6 +11,15 @@ function pad(n: number, width: number): string {
   return String(n).padStart(width, "0");
 }
 
+/** Parses "+02:00" / "-0500" style offsets (sign + 2-digit hour + optional colon + 2-digit minute) into signed minutes. */
+function parseOffsetMinutes(offset: string): number {
+  const sign = offset[0] === "-" ? -1 : 1;
+  const digits = offset.slice(1).replace(":", "");
+  const oh = Number(digits.slice(0, 2));
+  const om = Number(digits.slice(2, 4));
+  return sign * (oh * 60 + om);
+}
+
 /**
  * Converts a wall-clock "no timezone" datetime (as read verbatim off the
  * wire from the driver, e.g. "2024-03-01T10:30:00.000") into a real UTC
@@ -70,23 +79,31 @@ export function serializeValue(type: ExtractType, raw: unknown, sourceTimeZone: 
       return `${pad(d.getUTCFullYear(), 4)}-${pad(d.getUTCMonth() + 1, 2)}-${pad(d.getUTCDate(), 2)}`;
     }
     case "datetime": {
-      let utc: Date;
       if (raw instanceof Date) {
-        utc = raw;
-      } else {
-        const s = String(raw);
-        const hasZone = /Z$|[+-]\d{2}:?\d{2}$/.test(s);
-        if (hasZone) {
-          utc = new Date(s);
-        } else {
-          const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?/.exec(s);
-          if (!m) throw new ValueSerializationError(`invalid datetime value: ${s}`);
-          const [, y, mo, d, h, mi, se, frac] = m as unknown as [string, string, string, string, string, string, string, string | undefined];
-          const ms = frac ? Math.round(Number(`0.${frac}`) * 1000) : 0;
-          utc = zonedWallClockToUtc(Number(y), Number(mo), Number(d), Number(h), Number(mi), Number(se), ms, sourceTimeZone);
-        }
+        if (Number.isNaN(raw.getTime())) throw new ValueSerializationError(`invalid datetime value: ${String(raw)}`);
+        return raw.toISOString();
       }
-      if (Number.isNaN(utc.getTime())) throw new ValueSerializationError(`invalid datetime value: ${String(raw)}`);
+      // Deliberately never delegates to `new Date(arbitrary string)`:
+      // engines vary in how leniently they parse non-standard fractional
+      // precision (driver text can carry up to 7 digits) and
+      // space-before-offset forms, which would be an unacceptable source
+      // of nondeterminism for exactness-tested values. Always parsed by
+      // hand instead.
+      const s = String(raw);
+      const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?\s*(Z|[+-]\d{2}:?\d{2})?$/.exec(s);
+      if (!m) throw new ValueSerializationError(`invalid datetime value: ${s}`);
+      const [, y, mo, d, h, mi, se, frac, offset] = m as unknown as [string, string, string, string, string, string, string, string | undefined, string | undefined];
+      const ms = frac ? Math.round(Number(`0.${frac}`) * 1000) : 0;
+      let utc: Date;
+      if (!offset) {
+        // No zone info: a naive wall-clock reading, interpreted in sourceTimeZone.
+        utc = zonedWallClockToUtc(Number(y), Number(mo), Number(d), Number(h), Number(mi), Number(se), ms, sourceTimeZone);
+      } else {
+        // Carries its own offset (or "Z") already — converted directly, sourceTimeZone ignored.
+        const offsetMinutes = offset === "Z" ? 0 : parseOffsetMinutes(offset);
+        utc = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se), ms) - offsetMinutes * 60_000);
+      }
+      if (Number.isNaN(utc.getTime())) throw new ValueSerializationError(`invalid datetime value: ${s}`);
       return utc.toISOString();
     }
     default: {
