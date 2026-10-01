@@ -51,8 +51,10 @@ export async function runAgentTurn(
   const messages: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }, ...history];
   const toolCalls: AgentToolCallLog[] = [];
 
+  const llmContext = { scope: user.scope, userId: user.userId };
+
   for (let i = 0; i < MAX_TOOL_CALLS; i++) {
-    const result = await completeWithTools(messages, tools);
+    const result = await completeWithTools(messages, tools, llmContext);
 
     if (result.toolCalls.length === 0) {
       return { reply: result.content ?? "", toolCalls };
@@ -85,6 +87,6 @@ export async function runAgentTurn(
   }
 
   // Hit the cap — ask the model for a final summary with no further tools.
-  const final = await completeWithTools(messages, []);
+  const final = await completeWithTools(messages, [], llmContext);
   return { reply: final.content ?? "", toolCalls };
 }
