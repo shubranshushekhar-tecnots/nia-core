@@ -8,12 +8,15 @@ import { defineConfig } from "vitest/config";
 // time/non-UTC sourceTimeZone) against a real server's wire format — none
 // of which a mock can meaningfully stand in for. Needs the throwaway
 // harness running first: `packages/extract/scripts/harness/start.sh`.
+// legacyTls.integration.test.ts similarly proves allowLegacyTls against a
+// real TLS 1.0-only server; needs its own separate harness instead:
+// `packages/extract/scripts/harness/start-legacy-tls.sh`.
 // Kept out of the default `pnpm test` (vitest.config.ts) run so a failing
 // unit suite always means a real regression, not "the harness wasn't up."
 // Run explicitly with `pnpm test:integration`.
 export default defineConfig({
   test: {
-    include: ["src/mssql/mssql.integration.test.ts"],
+    include: ["src/mssql/mssql.integration.test.ts", "src/mssql/legacyTls.integration.test.ts"],
     // dbo.vw_slow's ~4M-row CPU-bound aggregation and dbo.big_table's
     // 1.2M-row streaming pass can both be slow under the throwaway
     // container's QEMU amd64 emulation (this is an arm64 host) — generous
