@@ -40,6 +40,12 @@ export default function LoginForm() {
   const hasError = Boolean(activeState?.error);
   const stepTwoNext = loginState?.next ?? next;
 
+  // Console redesign Slice 2: `next=/console...` means this sign-in is for
+  // the staff Console, not the customer app — show a red staff header
+  // instead of the normal one so it's visually distinct before any
+  // session/role check happens.
+  const isStaffLogin = next.startsWith('/console');
+
   // Better Auth's session cookie is httpOnly (the actions can't redirect
   // themselves and hand back a token in the same breath) — store the
   // bearer token for Client Component API calls (lib/auth/browserSession.ts),
@@ -60,8 +66,8 @@ export default function LoginForm() {
 
   return (
     <AuthShell
-      kicker={twoFactorRequired ? 'ACCOUNT / TWO-FACTOR' : 'ACCOUNT / SIGN IN'}
-      heading={twoFactorRequired ? 'Enter your code' : 'Sign in'}
+      kicker={twoFactorRequired ? 'ACCOUNT / TWO-FACTOR' : isStaffLogin ? 'STAFF / SIGN IN' : 'ACCOUNT / SIGN IN'}
+      heading={twoFactorRequired ? 'Enter your code' : isStaffLogin ? 'Staff console sign-in' : 'Sign in'}
       subtitle={
         twoFactorRequired
           ? useBackupCode
@@ -72,6 +78,7 @@ export default function LoginForm() {
       footerQuestion="New to Nia Core?"
       footerLinkText="Create an account"
       footerHref={next ? `/signup?next=${encodeURIComponent(next)}` : '/signup'}
+      staffMode={isStaffLogin}
     >
       {!twoFactorRequired ? (
         <form action={loginAction} className="nx-auth-form-pad" style={nxAuthFormStyle}>

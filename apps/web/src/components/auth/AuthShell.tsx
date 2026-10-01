@@ -46,6 +46,7 @@ export default function AuthShell({
   footerQuestion,
   footerLinkText,
   footerHref,
+  staffMode = false,
   children,
 }: {
   kicker: string;
@@ -54,6 +55,11 @@ export default function AuthShell({
   footerQuestion?: string;
   footerLinkText?: string;
   footerHref?: string;
+  // Console redesign Slice 2: LoginForm sets this when `next=/console...`,
+  // tinting the kicker/heading with the staff red accent so a staff
+  // sign-in is visually distinct before any session/role check happens.
+  // Customer sign-in (staffMode=false, the default) is unaffected.
+  staffMode?: boolean;
   children: ReactNode;
 }) {
   const { resolvedTheme, setTheme } = useTheme();
@@ -89,8 +95,15 @@ export default function AuthShell({
 
       <div className="nx-auth-body">
         <div className="nx-auth-hero nx-halftone" style={nxAuthHeroStyle}>
-          <span style={nxAuthKickerStyle}>{kicker}</span>
-          <h1 className="nx-auth-heading" style={nxAuthHeadingStyle}>{heading}</h1>
+          <span style={staffMode ? { ...nxAuthKickerStyle, color: 'var(--nx-staff-accent)' } : nxAuthKickerStyle}>
+            {kicker}
+          </span>
+          <h1
+            className="nx-auth-heading"
+            style={staffMode ? { ...nxAuthHeadingStyle, color: 'var(--nx-staff-accent)' } : nxAuthHeadingStyle}
+          >
+            {heading}
+          </h1>
           <p style={nxAuthSubtitleStyle}>{subtitle}</p>
         </div>
 
