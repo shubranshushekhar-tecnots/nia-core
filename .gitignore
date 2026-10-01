@@ -17,6 +17,9 @@ dist/
 # generated eval run artifacts
 apps/worker/eval-reports/
 
+# generated at build/test time (apps/agent/scripts/generate-version.mjs)
+apps/agent/src/generated/
+
 # env
 .env
 .env.local

@@ -4,9 +4,15 @@ import { addConnection, listConnections, removeConnection, testConnection } from
 import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
 import { runDoctor } from "./cli/doctorCommand.js";
 import { getStatus } from "./ops/state.js";
+import { versionString } from "./cli/versionCommand.js";
 
 async function main(argv: string[]): Promise<void> {
   const [command, subcommand, ...rest] = argv;
+
+  if (command === "version" || command === "--version" || command === "-v") {
+    console.log(versionString());
+    return;
+  }
 
   if (command === "status") {
     const status = getStatus();
@@ -161,7 +167,7 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  console.error("usage: nia-agent connection <add|test|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status");
+  console.error("usage: nia-agent connection <add|test|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status | nia-agent version");
   process.exitCode = 1;
 }
 
