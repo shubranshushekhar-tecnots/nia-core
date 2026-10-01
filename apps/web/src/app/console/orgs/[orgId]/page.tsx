@@ -5,9 +5,13 @@ import {
   getConsoleOrgConnectors,
   getConsoleOrgRuns,
   getConsolePlans,
+  getConsoleUsageSummary,
+  getConsoleUsageTimeseries,
   type ConsoleConnector,
   type ConsolePlan,
   type ConsoleRun,
+  type ConsoleUsageSummary,
+  type ConsoleUsageTimeseriesPoint,
 } from '@/lib/api/consoleServer';
 import { ApiError } from '@/lib/api/server';
 import ConsoleShell from '@/components/console/ConsoleShell';
@@ -29,7 +33,7 @@ import ConsoleOrgDetailClient from '@/components/console/ConsoleOrgDetailClient'
 export default async function ConsoleOrgDetailPage({ params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params;
 
-  const [user, org, plans, runs, connectors] = await Promise.all([
+  const [user, org, plans, runs, connectors, usageSummary, usageTimeseries] = await Promise.all([
     getSessionUser(),
     getConsoleOrg(orgId).catch((err) => {
       if (err instanceof ApiError) {
@@ -73,11 +77,29 @@ export default async function ConsoleOrgDetailPage({ params }: { params: Promise
         console.error('[console] GET /console/orgs/:orgId/connectors failed', err);
         return null;
       }),
+    // Slice 6: token/cost section for this org, same degrade-to-null-on-
+    // failure pattern as Runs/Connectors above — reuses Slice 5's usage
+    // summary/timeseries endpoints scoped to this orgId, no new backend.
+    getConsoleUsageSummary(orgId).catch((err): ConsoleUsageSummary | null => {
+      console.error('[console] GET /console/usage/summary failed', err);
+      return null;
+    }),
+    getConsoleUsageTimeseries({ orgId }).catch((err): ConsoleUsageTimeseriesPoint[] | null => {
+      console.error('[console] GET /console/usage/timeseries failed', err);
+      return null;
+    }),
   ]);
 
   return (
     <ConsoleShell activeNavId="directory" email={user?.email ?? ''}>
-      <ConsoleOrgDetailClient org={org} plans={plans} runs={runs} connectors={connectors} />
+      <ConsoleOrgDetailClient
+        org={org}
+        plans={plans}
+        runs={runs}
+        connectors={connectors}
+        usageSummary={usageSummary}
+        usageTimeseries={usageTimeseries}
+      />
     </ConsoleShell>
   );
 }

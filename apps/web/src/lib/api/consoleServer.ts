@@ -394,3 +394,80 @@ export async function getConsoleUsageData(filters: ConsoleUsageFilters): Promise
   ]);
   return { summary, timeseries, byModel, byFeature, topConsumers };
 }
+
+/**
+ * Console v2 Slice 6 — types + wrappers for the platform dashboard home
+ * screen (apps/api/src/services/consoleDashboard.ts, mirrored exactly).
+ * Tokens + cost reuse Slice 5's existing ConsoleUsageSummary/
+ * ConsoleUsageTimeseriesPoint directly (no new type needed) — see
+ * getConsoleDashboardData below.
+ */
+export type ConsoleDashboardOverview = {
+  totalOrgs: number;
+  totalUsers: number;
+  activeUsers30d: number;
+};
+
+export async function getConsoleDashboardOverview(): Promise<ConsoleDashboardOverview> {
+  return apiFetchServer<ConsoleDashboardOverview>('/console/dashboard/overview');
+}
+
+export type ConsoleRunsPerDayPoint = {
+  date: string;
+  succeeded: number;
+  failed: number;
+  running: number;
+  rowsProcessed: number;
+};
+
+export async function getConsoleRunsPerDay(days?: number): Promise<ConsoleRunsPerDayPoint[]> {
+  const qs = days ? `?days=${encodeURIComponent(String(days))}` : '';
+  const { points } = await apiFetchServer<{ points: ConsoleRunsPerDayPoint[] }>(`/console/dashboard/runs-per-day${qs}`);
+  return points;
+}
+
+export type ConsoleRowsMovedTotals = {
+  allTime: number;
+  last30d: number;
+};
+
+export async function getConsoleRowsMoved(): Promise<ConsoleRowsMovedTotals> {
+  return apiFetchServer<ConsoleRowsMovedTotals>('/console/dashboard/rows-moved');
+}
+
+export type ConsoleNeedsAttentionReason = 'suspended' | 'near_limit' | 'failing_runs';
+
+export type ConsoleNeedsAttentionItem = {
+  orgId: string;
+  orgName: string;
+  reason: ConsoleNeedsAttentionReason;
+  detail: string;
+};
+
+export async function getConsoleNeedsAttention(limit?: number): Promise<ConsoleNeedsAttentionItem[]> {
+  const qs = limit ? `?limit=${encodeURIComponent(String(limit))}` : '';
+  const { items } = await apiFetchServer<{ items: ConsoleNeedsAttentionItem[] }>(`/console/dashboard/needs-attention${qs}`);
+  return items;
+}
+
+export type ConsoleDashboardData = {
+  overview: ConsoleDashboardOverview;
+  runsPerDay: ConsoleRunsPerDayPoint[];
+  rowsMoved: ConsoleRowsMovedTotals;
+  needsAttention: ConsoleNeedsAttentionItem[];
+  usageSummary: ConsoleUsageSummary;
+  usageTimeseries: ConsoleUsageTimeseriesPoint[];
+};
+
+/** Combined fetch backing dashboard/page.tsx's initial load — one place for this 6-endpoint composition. */
+export async function getConsoleDashboardData(): Promise<ConsoleDashboardData> {
+  const [overview, runsPerDay, rowsMoved, needsAttention, usageSummary, usageTimeseries] = await Promise.all([
+    getConsoleDashboardOverview(),
+    getConsoleRunsPerDay(30),
+    getConsoleRowsMoved(),
+    getConsoleNeedsAttention(10),
+    getConsoleUsageSummary(),
+    getConsoleUsageTimeseries(),
+  ]);
+  return { overview, runsPerDay, rowsMoved, needsAttention, usageSummary, usageTimeseries };
+}

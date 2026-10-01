@@ -49,11 +49,19 @@ import {
 //
 // 'usage' (Console v2 Slice 5) is, like 'users' above, a real nav entry not
 // present in the original ported design — added as its own peer entry
-// (rather than folded into 'dash'/Platform, which stays inert pending
-// Slice 6's dashboard) since the token usage page ships before the
-// dashboard home does.
+// (rather than folded into 'dash'/Platform, which stayed inert pending
+// Slice 6's dashboard) since the token usage page shipped before the
+// dashboard home did.
+//
+// 'dash' (Console v2 Slice 6) now gets its own real href — the platform
+// dashboard home (orgs/users/active-users, runs per day, rows moved,
+// tokens+cost, needs-attention) — rather than becoming the new `/console`
+// root: Directory (`/console`) already has that slot and an established
+// bookmark/link surface (e.g. Org Detail's breadcrumb always points at
+// `/console`), so Platform is a new, separate route like 'usage' and
+// 'users' before it, not a replacement.
 const NAV: Array<{ id: string; label: string; icon: string; href?: string }> = [
-  { id: 'dash', label: 'Platform', icon: '\u25D1' },
+  { id: 'dash', label: 'Platform', icon: '\u25D1', href: '/console/dashboard' },
   { id: 'directory', label: 'Directory', icon: '\u25A4', href: '/console' },
   { id: 'users', label: 'Users', icon: '\u25CB', href: '/console/users' },
   { id: 'notify', label: 'Announcements', icon: '\u25CD', href: '/console/announcements' },

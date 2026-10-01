@@ -2,9 +2,17 @@
 
 import { useState, useTransition } from 'react';
 import Link from 'next/link';
-import type { ConsoleConnector, ConsoleOrgDetail, ConsolePlan, ConsoleRun } from '@/lib/api/consoleServer';
+import type {
+  ConsoleConnector,
+  ConsoleOrgDetail,
+  ConsolePlan,
+  ConsoleRun,
+  ConsoleUsageSummary,
+  ConsoleUsageTimeseriesPoint,
+} from '@/lib/api/consoleServer';
 import { removeMemberAction, suspendOrgAction, unsuspendOrgAction, updateOrgPlanAction } from '@/lib/console/actions';
 import { formatLowerLimitWarning } from '@/lib/console/planLimitWarning';
+import ConsoleUsageCharts, { formatUsd } from './ConsoleUsageCharts';
 import {
   consoleBreadcrumbCurrentStyle,
   consoleBreadcrumbLinkStyle,
@@ -156,14 +164,18 @@ export default function ConsoleOrgDetailClient({
   plans,
   runs,
   connectors,
+  usageSummary,
+  usageTimeseries,
 }: {
   org: ConsoleOrgDetail;
   plans: ConsolePlan[];
   runs: ConsoleRun[] | null;
   connectors: ConsoleConnector[] | null;
+  usageSummary: ConsoleUsageSummary | null;
+  usageTimeseries: ConsoleUsageTimeseriesPoint[] | null;
 }) {
   const [org, setOrg] = useState(initialOrg);
-  const [activeTab, setActiveTab] = useState<'members' | 'runs' | 'connectors'>('members');
+  const [activeTab, setActiveTab] = useState<'members' | 'runs' | 'connectors' | 'tokens'>('members');
   const [isEditing, setIsEditing] = useState(false);
   const [planId, setPlanId] = useState(org.planId);
   const [workflowLimitOverrideSet, setWorkflowLimitOverrideSet] = useState(org.workflowLimitOverrideSet);
@@ -625,6 +637,9 @@ export default function ConsoleOrgDetailClient({
         >
           Connectors
         </button>
+        <button type="button" onClick={() => setActiveTab('tokens')} style={consoleTabStyle(activeTab === 'tokens')}>
+          Tokens
+        </button>
       </div>
 
       {activeTab === 'members' && (
@@ -769,6 +784,33 @@ export default function ConsoleOrgDetailClient({
               </div>
             ))}
           </div>
+        ))}
+
+      {activeTab === 'tokens' &&
+        (usageSummary === null || usageTimeseries === null ? (
+          <div style={consoleLoadMoreErrorStyle}>Couldn&apos;t load token usage.</div>
+        ) : (
+          <>
+            <div style={consoleStatsRowStyle}>
+              <div style={consoleStatCardStyle}>
+                <span style={consoleStatLabelStyle}>Today — tokens</span>
+                <span style={consoleStatValueStyle}>{usageSummary.today.totalTokens.toLocaleString()}</span>
+              </div>
+              <div style={consoleStatCardStyle}>
+                <span style={consoleStatLabelStyle}>Today — cost</span>
+                <span style={consoleStatValueStyle}>{formatUsd(usageSummary.today.cost)}</span>
+              </div>
+              <div style={consoleStatCardStyle}>
+                <span style={consoleStatLabelStyle}>This month — tokens</span>
+                <span style={consoleStatValueStyle}>{usageSummary.month.totalTokens.toLocaleString()}</span>
+              </div>
+              <div style={consoleStatCardStyle}>
+                <span style={consoleStatLabelStyle}>This month — cost</span>
+                <span style={consoleStatValueStyle}>{formatUsd(usageSummary.month.cost)}</span>
+              </div>
+            </div>
+            <ConsoleUsageCharts timeseries={usageTimeseries} />
+          </>
         ))}
     </div>
   );

@@ -10,6 +10,7 @@ import { AppError } from "../lib/appError.js";
 import { dbPool } from "../lib/dbPool.js";
 import { sanitizeRunError } from "../lib/sanitizeRunError.js";
 import { consoleUsageRouter } from "./consoleUsage.js";
+import { consoleDashboardRouter } from "./consoleDashboard.js";
 
 /**
  * Console v1 (docs/plans/console-plan.md, build order step 4). Mounted at
@@ -43,6 +44,12 @@ consoleRouter.get("/ping", (_req, res) => {
 // route in it inherits requireAuth -> attachDb -> requireStaff exactly like
 // every route defined directly in this file.
 consoleRouter.use(consoleUsageRouter);
+
+// Console v2 Slice 6 — platform dashboard API (orgs/users/active-users
+// overview, runs-per-day, rows-moved, needs-attention). Same separate-router
+// convention as consoleUsageRouter above, mounted immediately after it so it
+// inherits the same auth chain.
+consoleRouter.use(consoleDashboardRouter);
 
 /**
  * Build order step 5 / Slice 1 (console-plan.md §3, §5). List/search orgs
