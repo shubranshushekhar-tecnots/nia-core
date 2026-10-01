@@ -1,5 +1,15 @@
 # TODO
 
+- `apps/agent` (Phase 2 on-premise Nia Agent, `docs/plans/
+  planometry-integration.md`): the local secret-store master key is kept
+  in a plain keyfile locked down with OS file permissions only (v1,
+  accepted limitation — anyone with filesystem read access as the
+  service account, or root/Administrator, can read it). Upgrade to an
+  OS-native secret store later: Windows DPAPI (`CryptProtectData`, needs
+  a native binding or a small C# helper invoked via `child_process`) on
+  Windows, the Secret Service API via `libsecret`/`keyring` on Linux.
+  Not built now to avoid native-module/prebuilt-binary complexity across
+  Windows Server 2016+ and arbitrary Linux distros.
 - Wire the org switcher (TopBar orgs/activeOrgId) on the Connections page
   once the redesign is committed.
 - Wire an org switcher into the Canvas page (workflows/[id]) too — it
