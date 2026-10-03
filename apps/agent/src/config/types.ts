@@ -6,6 +6,7 @@
  * inlined here.
  */
 import type { ColumnType } from "../planometry/types.js";
+import type { JobFilterCondition } from "../planometry/parameters.js";
 
 export interface SqlServerConnectionConfig {
   host: string;
@@ -69,6 +70,10 @@ export interface SyncJobEntry {
   onNullKey: OnNullKey;
   /** §7: a zero-row replace is refused unless this is true. Default false. */
   allowEmptyReplace: boolean;
+  /** AND-joined; may reference `params` by name (§2, §10 slice B1). Filter columns need not be in `mapping`. */
+  filter: JobFilterCondition[];
+  /** Saved named-parameter values (always raw strings, including relative-date tokens stored as literal token text — resolved only at validation/run time). Overridable per-run via `job run --param`, which never mutates this. */
+  params: Record<string, string>;
 }
 
 /**

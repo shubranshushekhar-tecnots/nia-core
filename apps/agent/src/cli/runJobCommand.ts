@@ -1,4 +1,4 @@
-import type { ExtractType } from "@nia/extract";
+import type { ExtractType, FilterScalar } from "@nia/extract";
 import { NdjsonWriter } from "@nia/extract";
 import { connect, introspectCatalog, streamExtract } from "@nia/extract/mssql";
 import { defaultHomeDir, defaultLogDir } from "../config/paths.js";
@@ -6,6 +6,7 @@ import { findConnection, findJob, loadConfig } from "../config/store.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { Logger } from "../ops/logger.js";
+import { resolveJobFilter } from "../planometry/parameters.js";
 import { KeyedSemaphore } from "../sync/concurrency.js";
 import { runSync, type RunSyncResult } from "../sync/runSync.js";
 
@@ -16,6 +17,8 @@ export interface RunJobOptions {
   /** Accepted for clarity at the call site — the job's only strategy is already "replace" (docs/plans/planometry-v4-migration.md §10 slice A4, item 1). */
   replace?: boolean;
   signal?: AbortSignal;
+  /** `job run --param`: overrides the job's saved params for this run only, never persisted. */
+  paramOverrides?: Record<string, string>;
 }
 
 export interface RunJobOutcome {
@@ -77,6 +80,18 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
 
     const mappedSources = job.mapping.map((m) => m.source);
 
+    // Filter columns need not be mapped, so type-check against every catalog column, not just mappedSources.
+    const catalogColumnTypes: Record<string, ExtractType> = Object.fromEntries(table.columns.map((c) => [c.name, c.type]));
+    let resolvedFilter: ReturnType<typeof resolveJobFilter>;
+    try {
+      resolvedFilter = resolveJobFilter(job.filter, catalogColumnTypes, job.params, options.paramOverrides, connection.sourceTimeZone);
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    if (Object.keys(resolvedFilter.resolvedParams).length > 0) {
+      logger.info("job_run_params", { jobId: job.id, resolvedParams: JSON.stringify(resolvedFilter.resolvedParams) });
+    }
+
     const readSourceRows = async (onRow: (row: Record<string, unknown>) => void, signal: AbortSignal): Promise<void> => {
       let columns: { name: string; type: ExtractType }[] = [];
       let streamError: string | undefined;
@@ -105,7 +120,7 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
         return true; // the {"end":true,...} trailer — nothing to do
       });
 
-      await streamExtract(pool, catalog, { table: job.sourceTable, columns: mappedSources, filter: [] }, writer, { signal });
+      await streamExtract(pool, catalog, { table: job.sourceTable, columns: mappedSources, filter: resolvedFilter.filter }, writer, { signal });
       if (streamError) throw new Error(streamError);
     };
 
@@ -122,17 +137,18 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
       readSourceRows,
     });
 
-    return outcomeFromResult(result);
+    return outcomeFromResult(result, resolvedFilter.resolvedParams);
   } finally {
     await pool.close();
   }
 }
 
-function outcomeFromResult(result: RunSyncResult): RunJobOutcome {
+function outcomeFromResult(result: RunSyncResult, resolvedParams: Record<string, FilterScalar>): RunJobOutcome {
+  const paramsSuffix = Object.keys(resolvedParams).length > 0 ? ` — params: ${JSON.stringify(resolvedParams)}` : "";
   if (result.outcome === "completed") {
     return {
       ok: true,
-      summary: `sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms — Planometry rowCount ${result.rowCount}, version ${result.version}`,
+      summary: `sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms — Planometry rowCount ${result.rowCount}, version ${result.version}${paramsSuffix}`,
     };
   }
   return { ok: false, error: result.error, consoleMessage: result.consoleMessage };

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
 import { addJob, listJobs, removeJob, testJob, updateJob } from "./cli/jobCommands.js";
 import { runJob } from "./cli/runJobCommand.js";
 import { parseMapOverrides } from "./cli/jobMapping.js";
+import { parseParamOverrides, type JobFilterCondition } from "./planometry/parameters.js";
 import { readSecretFromStdin } from "./cli/securePrompt.js";
 import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
 import { runDoctor } from "./cli/doctorCommand.js";
@@ -214,19 +216,38 @@ async function main(argv: string[]): Promise<void> {
         yes: { type: "boolean" },
         "on-null-key": { type: "string" },
         "allow-empty-replace": { type: "boolean" },
+        filter: { type: "string" },
+        "filter-file": { type: "string" },
+        param: { type: "string", multiple: true },
       },
     });
     const connectionId = values.connection as string | undefined;
     const table = values.table as string | undefined;
     const targetUrl = values["target-url"] as string | undefined;
     if (!connectionId || !table || !targetUrl) {
-      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--yes]");
+      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--yes]");
       process.exitCode = 1;
       return;
     }
     const onNullKey = parseOnNullKey(values["on-null-key"] as string | undefined);
     if (onNullKey === undefined && values["on-null-key"] !== undefined) {
       console.error(`--on-null-key must be "stop" or "skip", got ${JSON.stringify(values["on-null-key"])}`);
+      process.exitCode = 1;
+      return;
+    }
+    let filter: JobFilterCondition[] | undefined;
+    try {
+      filter = parseFilterArg(values.filter as string | undefined, values["filter-file"] as string | undefined);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+      return;
+    }
+    let params: Record<string, string> | undefined;
+    try {
+      params = parseParamOverrides((values.param as string[] | undefined) ?? []);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 1;
       return;
     }
@@ -240,6 +261,8 @@ async function main(argv: string[]): Promise<void> {
       mapOverrides: parseMapOverrides((values.map as string[] | undefined) ?? []),
       onNullKey,
       allowEmptyReplace: values["allow-empty-replace"] as boolean | undefined,
+      filter,
+      params,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -271,6 +294,7 @@ async function main(argv: string[]): Promise<void> {
     const result = await testJob(id);
     if (result.ok) {
       console.log("ok");
+      if (result.job) printFilterAndParams(result.job.filter, result.job.params);
     } else {
       for (const error of result.errors) console.error(`error: ${error}`);
       process.exitCode = 1;
@@ -281,6 +305,7 @@ async function main(argv: string[]): Promise<void> {
   if (command === "job" && subcommand === "list") {
     for (const job of listJobs()) {
       console.log(`${job.id}\t${job.name}\t${job.connectionId}\t${job.sourceTable}\t${job.targetUrl}`);
+      printFilterAndParams(job.filter, job.params);
     }
     return;
   }
@@ -309,16 +334,36 @@ async function main(argv: string[]): Promise<void> {
         unmap: { type: "string", multiple: true },
         "on-null-key": { type: "string" },
         "allow-empty-replace": { type: "boolean" },
+        filter: { type: "string" },
+        "filter-file": { type: "string" },
+        param: { type: "string", multiple: true },
       },
     });
     if (!id) {
-      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace]");
+      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...]");
       process.exitCode = 1;
       return;
     }
     const onNullKey = parseOnNullKey(values["on-null-key"] as string | undefined);
     if (onNullKey === undefined && values["on-null-key"] !== undefined) {
       console.error(`--on-null-key must be "stop" or "skip", got ${JSON.stringify(values["on-null-key"])}`);
+      process.exitCode = 1;
+      return;
+    }
+    let filter: JobFilterCondition[] | undefined;
+    try {
+      filter = parseFilterArg(values.filter as string | undefined, values["filter-file"] as string | undefined);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+      return;
+    }
+    const paramEntries = (values.param as string[] | undefined) ?? [];
+    let params: Record<string, string> | undefined;
+    try {
+      params = paramEntries.length > 0 ? parseParamOverrides(paramEntries) : undefined;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 1;
       return;
     }
@@ -331,6 +376,8 @@ async function main(argv: string[]): Promise<void> {
       unmapTargets: (values.unmap as string[] | undefined) ?? [],
       onNullKey,
       allowEmptyReplace: values["allow-empty-replace"] as boolean | undefined,
+      filter,
+      params,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -353,17 +400,27 @@ async function main(argv: string[]): Promise<void> {
       args: rest.slice(1),
       options: {
         replace: { type: "boolean" },
+        param: { type: "string", multiple: true },
       },
     });
     if (!id) {
-      console.error("usage: nia-agent job run <id> [--replace]");
+      console.error("usage: nia-agent job run <id> [--replace] [--param name=value ...]");
+      process.exitCode = 1;
+      return;
+    }
+    let paramOverrides: Record<string, string> | undefined;
+    try {
+      const paramEntries = (values.param as string[] | undefined) ?? [];
+      paramOverrides = paramEntries.length > 0 ? parseParamOverrides(paramEntries) : undefined;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 1;
       return;
     }
     const controller = new AbortController();
     const uninstall = installGracefulShutdown(controller);
     try {
-      const result = await runJob(id, { replace: values.replace as boolean | undefined, signal: controller.signal });
+      const result = await runJob(id, { replace: values.replace as boolean | undefined, signal: controller.signal, paramOverrides });
       if (result.ok) {
         console.log(result.summary);
       } else {
@@ -413,6 +470,19 @@ function toOptionalBool(value: string | undefined): boolean | undefined {
 function parseOnNullKey(value: string | undefined): "stop" | "skip" | undefined {
   if (value === "stop" || value === "skip") return value;
   return undefined;
+}
+
+/** `--filter <json>` / `--filter-file <path>` (the file form is for Windows shells) — same JSON either way. */
+function parseFilterArg(filterJson: string | undefined, filterFile: string | undefined): JobFilterCondition[] | undefined {
+  if (filterJson && filterFile) throw new Error("--filter and --filter-file are mutually exclusive");
+  const text = filterFile ? readFileSync(filterFile, "utf8") : filterJson;
+  if (text === undefined) return undefined;
+  return JSON.parse(text) as JobFilterCondition[];
+}
+
+function printFilterAndParams(filter: JobFilterCondition[], params: Record<string, string>): void {
+  if (filter.length > 0) console.log(`  filter: ${JSON.stringify(filter)}`);
+  if (Object.keys(params).length > 0) console.log(`  params: ${JSON.stringify(params)}`);
 }
 
 main(process.argv.slice(2)).catch((err) => {

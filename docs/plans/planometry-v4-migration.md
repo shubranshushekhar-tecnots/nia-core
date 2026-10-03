@@ -746,9 +746,6 @@ Date, `boolean` → Number) as a type-compatibility failure.
   - `nia-agent job pause <id>` / `nia-agent job resume <id>` — new;
     manually set or clear the paused state (§6/§8); `job resume` also
     clears a pause that was set automatically.
-  - `nia-agent job params set <id> name=value` — new; saves a named
-    parameter's persistent value on the job (relative-date tokens are
-    saved as the literal token string, §2).
   - `nia-agent sql readonly [--allow-change-tracking]` — extends the
     existing command (§1.5).
   - `nia-agent doctor` — extends the existing command with

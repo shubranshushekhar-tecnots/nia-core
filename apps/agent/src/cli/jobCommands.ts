@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CatalogTable } from "@nia/extract";
+import type { CatalogTable, ExtractType } from "@nia/extract";
 import { connect, introspectCatalog } from "@nia/extract/mssql";
 import { defaultHomeDir } from "../config/paths.js";
 import {
@@ -14,8 +14,14 @@ import type { ConnectionEntry, JobMappingColumn, OnNullKey, SyncJobEntry, Target
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { PlanometryClient } from "../planometry/client.js";
+import { resolveJobFilter, type JobFilterCondition } from "../planometry/parameters.js";
 import type { TableSchema } from "../planometry/types.js";
 import { buildMapping, type RawMappingPair } from "./jobMapping.js";
+
+/** `{ column name -> source ExtractType }`, for filter type-checking — filter columns need not be in the job's mapping. */
+function columnTypesOf(table: CatalogTable): Record<string, ExtractType> {
+  return Object.fromEntries(table.columns.map((c) => [c.name, c.type]));
+}
 
 /** Printable preview of a job's mapping, shown before `job add`/`job update` save. */
 export interface JobMappingPreview {
@@ -49,6 +55,10 @@ export interface AddJobInput {
   onNullKey?: OnNullKey;
   /** §7: default false. */
   allowEmptyReplace?: boolean;
+  /** AND-joined; default none. */
+  filter?: JobFilterCondition[];
+  /** Saved named-parameter values; default none. */
+  params?: Record<string, string>;
 }
 
 /**
@@ -80,6 +90,14 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
   const plan = buildMapping(catalogResult.table, schema.columns, schema.keyColumns, input.mapOverrides, connection.sourceTimeZone);
   if (plan.errors.length > 0) return { ok: false, errors: plan.errors };
 
+  const filter = input.filter ?? [];
+  const params = input.params ?? {};
+  try {
+    resolveJobFilter(filter, columnTypesOf(catalogResult.table), params, undefined, connection.sourceTimeZone);
+  } catch (err) {
+    return { ok: false, errors: [describeError(err)] };
+  }
+
   const pairs: JobMappingColumn[] = plan.pairs;
   const preview: JobMappingPreview = { pairs, sentAsNull: plan.sentAsNull };
   options.onPlan?.(preview);
@@ -102,6 +120,8 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     targetSchemaSnapshot: buildTargetSchemaSnapshot(schema, pairs),
     onNullKey: input.onNullKey ?? "stop",
     allowEmptyReplace: input.allowEmptyReplace ?? false,
+    filter,
+    params,
   };
 
   saveConfig(upsertJob(config, job), dir);
@@ -111,6 +131,8 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
 export interface TestJobResult {
   ok: boolean;
   errors: string[];
+  /** Present whenever the job itself was found, even on failure — the CLI uses this to print the job's filter/params. */
+  job?: SyncJobEntry;
 }
 
 /**
@@ -169,6 +191,12 @@ export async function testJob(id: string, dir = defaultHomeDir()): Promise<TestJ
       if (!sourceNames.has(pair.source)) errors.push(`source column "${pair.source}" no longer exists in the catalog`);
     }
 
+    try {
+      resolveJobFilter(job.filter, columnTypesOf(catalogResult.table), job.params, undefined, connection.sourceTimeZone);
+    } catch (err) {
+      errors.push(describeError(err));
+    }
+
     if (liveSchema && !connection.sourceTimeZone) {
       const sourceByName = new Map(catalogResult.table.columns.map((c) => [c.name, c]));
       const targetByName = new Map(liveSchema.columns.map((c) => [c.name, c]));
@@ -184,7 +212,7 @@ export async function testJob(id: string, dir = defaultHomeDir()): Promise<TestJ
     }
   }
 
-  return { ok: errors.length === 0, errors };
+  return { ok: errors.length === 0, errors, job };
 }
 
 /** `nia-agent job list`: non-secret summary only — never the push key. */
@@ -214,6 +242,10 @@ export interface UpdateJobInput {
   unmapTargets?: string[];
   onNullKey?: OnNullKey;
   allowEmptyReplace?: boolean;
+  /** Replaces the job's whole filter (it's "a list of conditions joined with AND", treated as one unit) — undefined leaves it unchanged. */
+  filter?: JobFilterCondition[];
+  /** Merged into the job's existing saved params (overwriting by key) — undefined leaves them unchanged. */
+  params?: Record<string, string>;
 }
 
 /**
@@ -263,6 +295,14 @@ export async function updateJob(
   const plan = buildMapping(catalogResult.table, schema.columns, schema.keyColumns, overrides, connection.sourceTimeZone);
   if (plan.errors.length > 0) return { ok: false, errors: plan.errors };
 
+  const filter = input.filter ?? job.filter;
+  const params = input.params ? { ...job.params, ...input.params } : job.params;
+  try {
+    resolveJobFilter(filter, columnTypesOf(catalogResult.table), params, undefined, connection.sourceTimeZone);
+  } catch (err) {
+    return { ok: false, errors: [describeError(err)] };
+  }
+
   const preview: JobMappingPreview = { pairs: plan.pairs, sentAsNull: plan.sentAsNull };
   options.onPlan?.(preview);
   const confirmed = await (options.confirm?.(preview) ?? true);
@@ -279,6 +319,8 @@ export async function updateJob(
     targetSchemaSnapshot: buildTargetSchemaSnapshot(schema, plan.pairs),
     onNullKey: input.onNullKey ?? job.onNullKey,
     allowEmptyReplace: input.allowEmptyReplace ?? job.allowEmptyReplace,
+    filter,
+    params,
   };
 
   saveConfig(upsertJob(config, updated), dir);
