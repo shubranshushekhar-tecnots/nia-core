@@ -38,6 +38,8 @@ export interface ReplaceLoadOptions {
   logger: Logger;
   /** Injectable clock, for the 55-minute idle-limit test. */
   now?: () => Date;
+  /** Injectable sleep, for the last-part recovery wait's 30s-x3 test — must run in milliseconds. */
+  sleep?: (ms: number) => Promise<void>;
   signal?: AbortSignal;
 }
 
@@ -83,6 +85,7 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
   function delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
+  const sleep = options.sleep ?? delay;
 
   function isAborted(): boolean {
     return options.signal?.aborted === true;
@@ -133,7 +136,7 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
 
   async function recoverLastPart(part: RequestPart, partCount: number): Promise<ReplaceLoadResult> {
     for (let i = 0; i <= LAST_PART_SCHEMA_EXTRA_READS; i++) {
-      if (i > 0) await delay(LAST_PART_SCHEMA_WAIT_MS);
+      if (i > 0) await sleep(LAST_PART_SCHEMA_WAIT_MS);
       let schema: TableSchema;
       try {
         schema = await defaultClient.getSchema();

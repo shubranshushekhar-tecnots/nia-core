@@ -32,6 +32,8 @@ export interface FakeTableDefinition {
   maxRowsPerRequest?: number;
   /** Defaults to a random key. */
   pushKey?: string;
+  /** Defaults to all of SUPPORTED_MODES — overridable in tests for schema-drift scenarios (e.g. "replace" no longer supported). */
+  supportedModes?: PushMode[];
 }
 
 export interface FakeTableHandle {
@@ -67,6 +69,7 @@ interface FakeTable {
   columns: SchemaColumn[];
   keyColumns: string[];
   maxRowsPerRequest: number;
+  supportedModes: PushMode[];
   rows: Map<string, PlanometryRow>;
   version: number;
   rowsUpdatedAt: string | null;
@@ -122,6 +125,7 @@ export class FakePlanometryServer {
       columns: def.columns,
       keyColumns,
       maxRowsPerRequest: def.maxRowsPerRequest ?? DEFAULT_MAX_ROWS,
+      supportedModes: def.supportedModes ?? SUPPORTED_MODES,
       rows: new Map(),
       version: 0,
       rowsUpdatedAt: null,
@@ -205,7 +209,7 @@ export class FakePlanometryServer {
             dataSourceName: table.name,
             columns: table.columns,
             keyColumns: table.keyColumns,
-            supportedModes: SUPPORTED_MODES,
+            supportedModes: table.supportedModes,
             maxRowsPerRequest: table.maxRowsPerRequest,
             rowCount: table.rows.size,
             rowsUpdatedAt: table.rowsUpdatedAt,
@@ -282,7 +286,7 @@ class PushValidationError extends Error {}
 
 function applyPush(table: FakeTable, body: PushRequestBody, now: () => Date) {
   const mode = body.mode;
-  if (!SUPPORTED_MODES.includes(mode)) throw new PushValidationError(`mode not supported by this table: ${String(mode)}`);
+  if (!table.supportedModes.includes(mode)) throw new PushValidationError(`mode not supported by this table: ${String(mode)}`);
 
   const rows = body.rows ?? [];
   const deleted = body.deleted ?? [];

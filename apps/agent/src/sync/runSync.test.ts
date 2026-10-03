@@ -112,6 +112,39 @@ describe("runSync", () => {
     expect(server.getRows(handle.tableId)).toEqual([]);
   });
 
+  it("replace not in supportedModes stops before extraction", async () => {
+    const handle = server.createTable({ columns: baseColumns, supportedModes: ["upsert"] });
+    let extracted = false;
+    const result = await runSync(
+      baseOptions(baseJob(handle), handle.pushKey, {
+        readSourceRows: async () => {
+          extracted = true;
+        },
+      }),
+    );
+    expect(result.outcome).toBe("failed");
+    if (result.outcome === "failed") expect(result.error).toContain("replace");
+    expect(extracted).toBe(false);
+    expect(server.getRows(handle.tableId)).toEqual([]);
+  });
+
+  it("a run is refused when free space is below the threshold", async () => {
+    const handle = server.createTable({ columns: baseColumns });
+    let extracted = false;
+    const result = await runSync(
+      baseOptions(baseJob(handle), handle.pushKey, {
+        minFreeBytes: Number.MAX_SAFE_INTEGER,
+        readSourceRows: async () => {
+          extracted = true;
+        },
+      }),
+    );
+    expect(result.outcome).toBe("failed");
+    if (result.outcome === "failed") expect(result.error).toContain("insufficient free disk space");
+    expect(extracted).toBe(false);
+    expect(server.getRows(handle.tableId)).toEqual([]);
+  });
+
   it("retyped stops", async () => {
     const handle = server.createTable({ columns: baseColumns });
     server.updateTableSchema(handle.tableId, {

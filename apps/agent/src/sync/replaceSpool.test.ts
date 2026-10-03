@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -82,6 +82,37 @@ describe("ReplaceSpoolWriter / readReplaceSpool", () => {
 
   it("removeReplaceSpool is a no-op when nothing was ever written", async () => {
     await expect(removeReplaceSpool(dir, "never-written")).resolves.toBeUndefined();
+  });
+
+  it("a chunk file on disk does not contain a known row value in plaintext", async () => {
+    const secret = "super-secret-row-value-42";
+    const spool = new ReplaceSpoolWriter(dir, "run-plain", masterKey);
+    await spool.prepare();
+    spool.write({ id: 1, secret });
+    await spool.finish();
+
+    const files = await readdir(dir);
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const raw = await readFile(path.join(dir, file));
+      expect(raw.toString("latin1")).not.toContain(secret);
+    }
+  });
+
+  it("a tampered chunk fails to read", async () => {
+    const spool = new ReplaceSpoolWriter(dir, "run-tamper", masterKey);
+    await spool.prepare();
+    spool.write({ id: 1 });
+    await spool.finish();
+
+    const files = await readdir(dir);
+    const filePath = path.join(dir, files[0]!);
+    const raw = await readFile(filePath);
+    const tampered = Buffer.from(raw);
+    tampered[tampered.length - 1] = tampered[tampered.length - 1]! ^ 0xff;
+    await writeFile(filePath, tampered);
+
+    await expect(collect("run-tamper")).rejects.toThrow();
   });
 
   it("different runIds in the same directory do not collide", async () => {

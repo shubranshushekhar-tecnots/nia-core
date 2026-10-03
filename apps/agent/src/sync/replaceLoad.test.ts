@@ -292,13 +292,66 @@ describe("replaceLoad", () => {
       totalRows: source.length,
       schemaAtStart,
       logger: silentLogger(),
+      sleep: async () => {},
     });
 
     expect(result.outcome).toBe("completed");
     // One push call that failed (dropBefore) plus one resend.
     expect(pushSpy.mock.calls).toHaveLength(2);
     expect(server.getRows(table.tableId)).toEqual(source);
-  }, 150_000);
+  });
+
+  it("a 400 on the resent last part restarts once with a new loadId", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const schemaAtStart = await schemaFor(server, table);
+    // 1) the initial last-part push: dropped before apply -> PlanometryTransientError -> recoverLastPart.
+    server.injectFault(table.tableId, "dropBefore");
+    // 2) recoverLastPart's 4 schema polls: pass through unfaulted (never match completion).
+    server.injectFault(table.tableId, { type: "delay", ms: 0 }, 4);
+    // 3) the resend push: rejected -> triggerRestart with a new loadId.
+    server.injectFault(table.tableId, "400");
+    const pushSpy = vi.spyOn(PlanometryClient.prototype, "push");
+
+    const source = [{ id: 1, qty: 10 }];
+    const result = await replaceLoad({
+      tableUrl: table.tableUrl,
+      pushKey: table.pushKey,
+      openRows: rowsOf(source),
+      totalRows: source.length,
+      schemaAtStart,
+      logger: silentLogger(),
+      sleep: async () => {},
+    });
+
+    expect(result.outcome).toBe("completed");
+    const bodies = pushBodies(pushSpy);
+    expect(bodies).toHaveLength(3);
+    const loadIds = new Set(bodies.map((b) => b.loadId).filter((id) => id !== undefined));
+    expect(loadIds.size).toBe(1);
+    expect(server.getRows(table.tableId)).toEqual(source);
+  });
+
+  it("completed with rowCount not equal to totalRows fails the run", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const schemaAtStart = await schemaFor(server, table);
+
+    const source = [{ id: 1, qty: 10 }];
+    const result = await replaceLoad({
+      tableUrl: table.tableUrl,
+      pushKey: table.pushKey,
+      openRows: rowsOf(source),
+      totalRows: source.length + 1,
+      schemaAtStart,
+      logger: silentLogger(),
+    });
+
+    expect(result.outcome).toBe("failed");
+    if (result.outcome === "failed") {
+      expect(result.error).toContain("rowCount");
+    }
+  });
 
   it("400 mid-load stops with no retry and live rows unchanged", async () => {
     server = await FakePlanometryServer.start();

@@ -7,6 +7,7 @@ import { buildWireRow, createFormatter, type MappedColumnFormatter } from "../pl
 import { PlanometryClient, PlanometryConfigError, PlanometryRejectedError, PlanometryTransientError } from "../planometry/client.js";
 import type { TableSchema } from "../planometry/types.js";
 import type { KeyedSemaphore } from "./concurrency.js";
+import { assertDiskSpace, InsufficientDiskSpaceError } from "./diskSpace.js";
 import { acquireReplaceLock, ReplaceLockTakenError } from "./replaceLock.js";
 import { replaceLoad } from "./replaceLoad.js";
 import { readReplaceSpool, removeReplaceSpool, ReplaceSpoolWriter } from "./replaceSpool.js";
@@ -37,6 +38,8 @@ export interface RunSyncOptions {
   now?: () => Date;
   lastPartTimeoutMs?: number;
   runId?: string;
+  /** Pre-flight threshold for the spool directory's free disk space (sync/diskSpace.ts). Defaults to DEFAULT_MIN_FREE_BYTES; override only for tests. */
+  minFreeBytes?: number;
   /**
    * Push-style extraction: calls `onRow` once per already-driver-typed
    * source row, synchronously or asynchronously, and resolves once
@@ -191,6 +194,17 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     const keyTargets = job.targetSchemaSnapshot.keyColumns;
     const spool = new ReplaceSpoolWriter(spoolDir, runId, options.masterKey);
     await spool.prepare();
+
+    // Step (c.0): free-disk-space pre-flight, before any row is read.
+    try {
+      await assertDiskSpace(spoolDir, options.minFreeBytes);
+    } catch (err) {
+      if (err instanceof InsufficientDiskSpaceError) {
+        await removeReplaceSpool(spoolDir, runId);
+        return { outcome: "failed", error: err.message };
+      }
+      throw err;
+    }
 
     const internalController = new AbortController();
     const combinedSignal = combineSignals(options.signal, internalController.signal);
