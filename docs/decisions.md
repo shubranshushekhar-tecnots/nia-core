@@ -6431,3 +6431,37 @@ by file, one reason per file unless a file mixed concerns.
   checks"; the other two tests kept, with their "agent key accepted"
   assertions deleted) — exercised `runDoctor`'s now-removed agent-key
   check end to end.
+
+## Date-shift fix (commit 4a778b6): assertions removed/changed in `packages/extract/src/valueSerializer.test.ts`
+
+Fixing the date-shift bug (no-offset datetimes must pass through extract
+as wall-clock text, never UTC-converted — conversion happens once, in
+`formatForTarget.ts`) required deleting the two tests that asserted the
+old, now-wrong behavior, and changing the expected value of a third.
+
+- "datetime with no zone info is interpreted using sourceTimeZone"
+  (removed) — asserted `serializeValue("datetime", "2024-03-01T10:30:00.000",
+  "America/Chicago")` equals `"2024-03-01T16:30:00.000Z"`, i.e. eager
+  UTC conversion using the source timezone. That conversion is exactly
+  the bug; no-offset datetimes no longer take a timezone argument or
+  convert at all in `serializeValue`.
+- "datetime with no zone info respects DST in sourceTimeZone" (removed)
+  — same reasoning, asserted the DST-adjusted UTC conversion
+  (`"2024-07-01T10:30:00.000"`, `America/Chicago` → `"2024-07-01T15:30:00.000Z"`).
+  Removed for the same reason; both are replaced by a single new test,
+  "datetime with no zone info passes through as wall-clock text,
+  unconverted (no-offset family: datetime/smalldatetime/datetime2)".
+- "datetime preserves sub-millisecond fractional-second digits exactly
+  (e.g. datetime2(7)'s 100ns precision), never rounding them through a
+  millisecond-only Date" (assertion value changed, test kept under a
+  reworded name) — expected value changed from
+  `"2024-03-01T10:30:00.1234567Z"` to `"2024-03-01T10:30:00.1234567"`
+  (no trailing `Z`), since the no-offset passthrough no longer appends a
+  zone marker. Fractional-precision preservation itself is still
+  asserted, just without the now-wrong `Z` suffix.
+
+Kept unchanged in meaning (only the now-dropped `sourceTimeZone`
+3rd-argument removed from the call): null/undefined, boolean, text,
+number (both tests), date, the explicit-offset datetime test (renamed
+for clarity, same assertion), the invalid-value rejection, and the
+explicit-offset fractional-precision test.
