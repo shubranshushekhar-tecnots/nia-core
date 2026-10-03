@@ -120,7 +120,11 @@ function buildFormatters(
     return {
       source: m.source,
       target: m.target,
-      format: createFormatter({ sourceType, targetType: targetCol.type, sourceTimeZone }),
+      // Every extracted "datetime" value reaching this call site came from the no-offset
+      // family (datetime/smalldatetime/datetime2) as a wall-clock-text passthrough from
+      // packages/extract — see valueSerializer.ts. noOffsetSource lets createFormatter
+      // guard against one ever arriving here already carrying a zone marker.
+      format: createFormatter({ sourceType, targetType: targetCol.type, sourceTimeZone, noOffsetSource: true }),
     };
   });
 }

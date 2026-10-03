@@ -189,6 +189,25 @@ function plainNumericString(raw: unknown): string {
   throw new FormatForTargetError(`unsupported raw value for a Number target: ${typeof raw}`);
 }
 
+/**
+ * Guards against a pipeline error: a value for a column declared
+ * `noOffsetSource` (datetime/smalldatetime/datetime2 — never carries a
+ * zone marker as stored) arriving here already carrying "Z" or a numeric
+ * offset anyway. That can only mean something upstream (re-)introduced a
+ * zone conversion before this, the single place conversion is meant to
+ * happen — never a value to interpret or pass through.
+ */
+function assertNoOffset(raw: unknown): void {
+  if (raw instanceof Date) return; // no textual offset marker to inspect
+  const s = String(raw);
+  const m = DATETIME_RE.exec(s);
+  if (m?.[8]) {
+    throw new FormatForTargetError(
+      `datetime value "${s}" is declared as a no-offset source column but already carries a UTC offset — this is a pipeline error, not a value to convert`,
+    );
+  }
+}
+
 function formatText(sourceType: ExtractType, raw: unknown): string {
   switch (sourceType) {
     case "text":
@@ -220,6 +239,15 @@ export interface FormatColumnSpec {
   sourceType: ExtractType;
   targetType: ColumnType;
   sourceTimeZone?: string;
+  /**
+   * True when the source column is known to be from the no-offset
+   * datetime family (datetime/smalldatetime/datetime2 — never
+   * datetimeoffset). Enables `assertNoOffset`'s pipeline-error guard for
+   * this column. Left unset (the default) preserves the pre-existing,
+   * offset-shape-driven dispatch for any caller that doesn't know (or
+   * doesn't need) this distinction.
+   */
+  noOffsetSource?: boolean;
 }
 
 /**
@@ -232,7 +260,7 @@ export interface FormatColumnSpec {
  * planometry-v4-migration.md §3: "No default timezone").
  */
 export function createFormatter(spec: FormatColumnSpec): ColumnFormatter {
-  const { sourceType, targetType, sourceTimeZone } = spec;
+  const { sourceType, targetType, sourceTimeZone, noOffsetSource } = spec;
   if (!isTypeCompatible(sourceType, targetType)) {
     throw new FormatForTargetError(`source type "${sourceType}" cannot be mapped to target type "${targetType}"`);
   }
@@ -241,6 +269,7 @@ export function createFormatter(spec: FormatColumnSpec): ColumnFormatter {
 
   return (raw: unknown): WireValue => {
     if (raw === null || raw === undefined) return null;
+    if (noOffsetSource && sourceType === "datetime") assertNoOffset(raw);
     switch (targetType) {
       case "Text":
         return formatText(sourceType, raw);

@@ -1,3 +1,4 @@
+import { serializeValue } from "@nia/extract";
 import { describe, expect, it } from "vitest";
 import {
   FormatForTargetError,
@@ -115,6 +116,35 @@ describe("createFormatter: null", () => {
 describe("createFormatter: disallowed pairs", () => {
   it("throws for a type pair not in the compatibility table", () => {
     expect(() => createFormatter({ sourceType: "text", targetType: "Number" })).toThrow(FormatForTargetError);
+  });
+});
+
+describe("createFormatter: noOffsetSource guard (agent sync path)", () => {
+  it("Allowed: a real driver-shaped datetime of 00:30 on 2 January, through serializeValue then createFormatter with a timezone ahead of UTC — Date keeps 2 January, DateTime resolves to the correct earlier UTC instant", () => {
+    // SQL Server's driver returns a space-separated, no-offset datetime exactly like this
+    // (CONVERT(..., 121) in buildSelectSql.ts) — run it through the real extract serializer first.
+    const serialized = serializeValue("datetime", "2024-01-02 00:30:00.000");
+    expect(serialized).toBe("2024-01-02T00:30:00.000");
+
+    const toDate = createFormatter({ sourceType: "datetime", targetType: "Date", sourceTimeZone: "Asia/Tokyo", noOffsetSource: true });
+    expect(toDate(serialized)).toBe("2024-01-02");
+
+    // 00:30 JST (UTC+9) on 2 January is 15:30 UTC on 1 January — the correct earlier instant.
+    const toDateTime = createFormatter({
+      sourceType: "datetime",
+      targetType: "DateTime",
+      sourceTimeZone: "Asia/Tokyo",
+      noOffsetSource: true,
+    });
+    expect(toDateTime(serialized)).toBe("2024-01-01T15:30:00.000Z");
+  });
+
+  it("Refused: throws if a noOffsetSource column's value already carries a UTC offset", () => {
+    const toDate = createFormatter({ sourceType: "datetime", targetType: "Date", noOffsetSource: true });
+    expect(() => toDate("2024-01-02T00:30:00.000Z")).toThrow(FormatForTargetError);
+
+    const toDateTime = createFormatter({ sourceType: "datetime", targetType: "DateTime", noOffsetSource: true });
+    expect(() => toDateTime("2024-01-02T00:30:00.000+05:30")).toThrow(FormatForTargetError);
   });
 });
 

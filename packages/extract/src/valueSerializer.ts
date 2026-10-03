@@ -21,42 +21,17 @@ function parseOffsetMinutes(offset: string): number {
 }
 
 /**
- * Converts a wall-clock "no timezone" datetime (as read verbatim off the
- * wire from the driver, e.g. "2024-03-01T10:30:00.000") into a real UTC
- * instant, interpreting it as having occurred in `sourceTimeZone` (an IANA
- * name, e.g. "America/Chicago"). Uses only built-in `Intl` (no new
- * dependency): formats a UTC guess through the target zone, measures the
- * offset between the guess and what that zone displays, and corrects —
- * correct across DST because the offset is read for the guessed instant
- * itself, not a fixed table.
- */
-function zonedWallClockToUtc(y: number, mo: number, d: number, h: number, mi: number, s: number, ms: number, timeZone: string): Date {
-  const guess = Date.UTC(y, mo - 1, d, h, mi, s, ms);
-  const dtf = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  const parts = Object.fromEntries(dtf.formatToParts(new Date(guess)).map((p) => [p.type, p.value]));
-  const hour24 = parts.hour === "24" ? 0 : Number(parts.hour);
-  const asIfUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), hour24, Number(parts.minute), Number(parts.second), ms);
-  const offsetMs = asIfUtc - guess;
-  return new Date(guess - offsetMs);
-}
-
-/**
  * Serializes a single raw driver value into the exact wire format the
  * Planometry contract requires (docs/plans/planometry-integration.md).
- * `sourceTimeZone` only matters for a `datetime` value that arrives with
- * no zone info (a naive wall-clock reading); a value that already carries
- * an offset (`datetimeoffset`) is converted to UTC directly, ignoring it.
+ * Time-zone interpretation of a no-offset `datetime` value is NOT done
+ * here — see the "datetime" case below — it happens exactly once, in
+ * apps/agent/src/planometry/formatForTarget.ts, which is target-type
+ * aware (a Date target must never be zone-shifted; a DateTime target
+ * must be). A value that already carries its own offset (`datetimeoffset`)
+ * is still converted to UTC directly here, unchanged — that's plain
+ * arithmetic on an unambiguous instant, not a zone interpretation.
  */
-export function serializeValue(type: ExtractType, raw: unknown, sourceTimeZone: string): string | number | boolean | null {
+export function serializeValue(type: ExtractType, raw: unknown): string | number | boolean | null {
   if (raw === null || raw === undefined) return null;
   switch (type) {
     case "boolean":
@@ -93,22 +68,20 @@ export function serializeValue(type: ExtractType, raw: unknown, sourceTimeZone: 
       const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?\s*(Z|[+-]\d{2}:?\d{2})?$/.exec(s);
       if (!m) throw new ValueSerializationError(`invalid datetime value: ${s}`);
       const [, y, mo, d, h, mi, se, frac, offset] = m as unknown as [string, string, string, string, string, string, string, string | undefined, string | undefined];
-      // Resolve only the integer Y/M/D/H/Mi/S fields through Date math
-      // (ms fixed at 0 — no rounding carry into the seconds digit). A
-      // timezone/offset shift is always a whole number of minutes, so it
-      // can never touch the fractional-second digits — those are carried
-      // through verbatim below, never rounded through a millisecond-only
-      // `Date`/`toISOString()` (which would silently truncate
-      // datetime2(7)'s 100ns precision down to 3 digits).
-      let utc: Date;
       if (!offset) {
-        // No zone info: a naive wall-clock reading, interpreted in sourceTimeZone.
-        utc = zonedWallClockToUtc(Number(y), Number(mo), Number(d), Number(h), Number(mi), Number(se), 0, sourceTimeZone);
-      } else {
-        // Carries its own offset (or "Z") already — converted directly, sourceTimeZone ignored.
-        const offsetMinutes = offset === "Z" ? 0 : parseOffsetMinutes(offset);
-        utc = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se), 0) - offsetMinutes * 60_000);
+        // No zone info: a naive wall-clock reading (datetime/smalldatetime/
+        // datetime2) — the ONLY behaviour now: pass it through exactly as
+        // stored (reassembled from the validated digits, not re-parsed
+        // through a millisecond-only Date, so fractional precision beyond
+        // 3 digits is never touched). No zone interpretation happens here;
+        // that is formatForTarget.ts's job, once it knows the target type.
+        return `${y}-${mo}-${d}T${h}:${mi}:${se}.${frac ?? "000"}`;
       }
+      // Carries its own offset (or "Z") already (datetimeoffset) — this is
+      // an unambiguous instant, not a zone interpretation, so it's still
+      // normalized to UTC directly here, unchanged.
+      const offsetMinutes = offset === "Z" ? 0 : parseOffsetMinutes(offset);
+      const utc = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se), 0) - offsetMinutes * 60_000);
       if (Number.isNaN(utc.getTime())) throw new ValueSerializationError(`invalid datetime value: ${s}`);
       const datePart = `${pad(utc.getUTCFullYear(), 4)}-${pad(utc.getUTCMonth() + 1, 2)}-${pad(utc.getUTCDate(), 2)}`;
       const timePart = `${pad(utc.getUTCHours(), 2)}:${pad(utc.getUTCMinutes(), 2)}:${pad(utc.getUTCSeconds(), 2)}`;

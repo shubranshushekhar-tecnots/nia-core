@@ -79,7 +79,7 @@ export async function streamExtract(pool: sql.ConnectionPool, catalog: Catalog, 
 
     sqlRequest.on("row", (row: Record<string, unknown>) => {
       try {
-        const values = columnTypes.map((c) => serializeValue(c.type, row[c.name], catalog.sourceTimeZone));
+        const values = columnTypes.map((c) => serializeValue(c.type, row[c.name]));
         const ok = writer.writeRow(values);
         if (!ok) {
           // Back-pressure: the sink is backed up. Pause the driver (it
