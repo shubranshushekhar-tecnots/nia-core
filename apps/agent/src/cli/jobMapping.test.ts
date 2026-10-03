@@ -140,4 +140,20 @@ describe("buildMapping", () => {
     const plan = buildMapping(source, targetColumns, ["Id"], [{ source: "Description", target: "Amount" }]);
     expect(plan.errors.some((e) => e.includes("cannot be mapped to target column"))).toBe(true);
   });
+
+  it("a DateTime mapping without sourceTimeZone is refused", () => {
+    const source = sourceTable([
+      { name: "Id", type: "number", nullable: false },
+      { name: "CreatedAt", type: "datetime", nullable: true },
+    ]);
+    const targetColumns: SchemaColumn[] = [
+      { name: "Id", type: "Number", isKey: true },
+      { name: "CreatedAt", type: "DateTime", isKey: false },
+    ];
+    const withoutZone = buildMapping(source, targetColumns, ["Id"], []);
+    expect(withoutZone.errors.some((e) => e.includes("has no sourceTimeZone set"))).toBe(true);
+
+    const withZone = buildMapping(source, targetColumns, ["Id"], [], "America/New_York");
+    expect(withZone.errors).toEqual([]);
+  });
 });

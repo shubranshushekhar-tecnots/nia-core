@@ -73,7 +73,7 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     await client.close();
   }
 
-  const plan = buildMapping(catalogResult.table, schema.columns, schema.keyColumns, input.mapOverrides);
+  const plan = buildMapping(catalogResult.table, schema.columns, schema.keyColumns, input.mapOverrides, connection.sourceTimeZone);
   if (plan.errors.length > 0) return { ok: false, errors: plan.errors };
 
   const pairs: JobMappingColumn[] = plan.pairs;
@@ -125,10 +125,12 @@ export async function testJob(id: string, dir = defaultHomeDir()): Promise<TestJ
   if (!pushKeySecret) return { ok: false, errors: [`push key for job ${id} is missing from the secret store`] };
 
   const errors: string[] = [];
+  let liveSchema: TableSchema | undefined;
   const client = new PlanometryClient({ tableUrl: job.targetUrl, pushKey: pushKeySecret.pushKey });
   try {
     await client.checkConnection();
     const schema = await client.getSchema();
+    liveSchema = schema;
 
     const columnByName = new Map(schema.columns.map((c) => [c.name, c]));
     for (const snapshotColumn of job.targetSchemaSnapshot.columns) {
@@ -159,6 +161,20 @@ export async function testJob(id: string, dir = defaultHomeDir()): Promise<TestJ
     const sourceNames = new Set(catalogResult.table.columns.map((c) => c.name));
     for (const pair of job.mapping) {
       if (!sourceNames.has(pair.source)) errors.push(`source column "${pair.source}" no longer exists in the catalog`);
+    }
+
+    if (liveSchema && !connection.sourceTimeZone) {
+      const sourceByName = new Map(catalogResult.table.columns.map((c) => [c.name, c]));
+      const targetByName = new Map(liveSchema.columns.map((c) => [c.name, c]));
+      for (const pair of job.mapping) {
+        const sourceColumn = sourceByName.get(pair.source);
+        const targetColumn = targetByName.get(pair.target);
+        if (sourceColumn?.type === "datetime" && targetColumn?.type === "DateTime") {
+          errors.push(
+            `source column "${pair.source}" maps to DateTime target column "${pair.target}", but the connection has no sourceTimeZone set`,
+          );
+        }
+      }
     }
   }
 
@@ -236,7 +252,7 @@ export async function updateJob(
   for (const o of input.mapOverrides ?? []) baseOverrides.set(o.target, o.source);
   const overrides: RawMappingPair[] = [...baseOverrides.entries()].map(([target, source]) => ({ source, target }));
 
-  const plan = buildMapping(catalogResult.table, schema.columns, schema.keyColumns, overrides);
+  const plan = buildMapping(catalogResult.table, schema.columns, schema.keyColumns, overrides, connection.sourceTimeZone);
   if (plan.errors.length > 0) return { ok: false, errors: plan.errors };
 
   const preview: JobMappingPreview = { pairs: plan.pairs, sentAsNull: plan.sentAsNull };

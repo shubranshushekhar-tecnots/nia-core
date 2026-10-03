@@ -36,14 +36,20 @@ export function parseMapOverrides(raw: string[]): RawMappingPair[] {
  * entry for that target. Refuses (via `errors`, never throws) on: two
  * sources mapped to one target, an unknown target column, a source column
  * missing from the catalog or of an excluded type, a type pair disallowed
- * by docs/plans/planometry-v4-migration.md §3, or an unmapped target key
- * column. Unmapped non-key target columns are reported in `sentAsNull`.
+ * by docs/plans/planometry-v4-migration.md §3, an unmapped target key
+ * column, or (§3 "No default timezone") a `datetime`-typed source column
+ * mapped to a `DateTime` target when `sourceTimeZone` is unset —
+ * `datetime` and `datetimeoffset` SQL types both collapse to the same
+ * `ExtractType`, so this can't be narrowed to "only no-offset columns" at
+ * mapping time; any `datetime`->`DateTime` pair conservatively requires
+ * it. Unmapped non-key target columns are reported in `sentAsNull`.
  */
 export function buildMapping(
   sourceTable: CatalogTable,
   targetColumns: SchemaColumn[],
   targetKeyColumns: string[],
   overrides: RawMappingPair[],
+  sourceTimeZone?: string,
 ): MappingPlan {
   const errors: string[] = [];
 
@@ -86,6 +92,10 @@ export function buildMapping(
     if (!isTypeCompatible(sourceColumn.type, targetColumn.type)) {
       errors.push(
         `source column "${p.source}" (${sourceColumn.type}) cannot be mapped to target column "${p.target}" (${targetColumn.type})`,
+      );
+    } else if (sourceColumn.type === "datetime" && targetColumn.type === "DateTime" && !sourceTimeZone) {
+      errors.push(
+        `source column "${p.source}" maps to DateTime target column "${p.target}", but the connection has no sourceTimeZone set`,
       );
     }
   }
