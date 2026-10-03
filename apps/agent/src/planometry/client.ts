@@ -1,110 +1,127 @@
+import { gzipSync } from "node:zlib";
 import { Agent, ProxyAgent, request, type Dispatcher } from "undici";
 import { resolveProxyUrl } from "./network.js";
-import { CHUNK_ROWS_HEADER, CHUNK_SEQ_HEADER } from "./types.js";
-import type { CatalogPushRequest, CompleteRunRequest, FailedRunRequest, WorkResponse } from "./types.js";
+import type { ConnectionCheckResult, PushRequestBody, PushResult, ResponseEnvelope, TableSchema } from "./types.js";
+
+/** No stated server-side limit (docs/planometry/connector-guide-v4.md §7 covers payload size, not latency) — this is purely the agent's own ceiling against a hung connection. */
+export const DEFAULT_TIMEOUT_MS = 300_000;
 
 export interface PlanometryClientOptions {
-  baseUrl: string;
-  agentKey: string;
-  /** PEM contents for a custom CA bundle — TLS-inspecting corporate proxies (Phase 2 §6). */
+  /** The table's push URL (guide §1), e.g. `https://app.planometry.com/api/push/<tableId>`. */
+  tableUrl: string;
+  pushKey: string;
+  /** PEM contents for a custom CA bundle — TLS-inspecting corporate proxies. */
   caBundlePem?: string;
-  /** Reported on every call via a header (Phase 2 §7: "version reported on every poll"). */
-  agentVersion: string;
+  /** Defaults to DEFAULT_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
-export class ChunkRejectedError extends Error {
-  constructor(public readonly seq: number) {
-    super(`chunk seq ${seq} rejected with 409 (run superseded)`);
+/** 401/404 (guide §6b): wrong/regenerated key, a key belonging to another table, or a deleted table. Not retryable — needs reconfiguration. */
+export class PlanometryConfigError extends Error {
+  constructor(public readonly status: 401 | 404) {
+    super(
+      status === 401
+        ? "wrong or regenerated key, or the table was deleted"
+        : "the table id in the URL does not match this key",
+    );
+    this.name = "PlanometryConfigError";
   }
 }
 
-export class PlanometryHttpError extends Error {
-  constructor(
-    public readonly status: number,
-    public readonly body: string,
-  ) {
-    super(`Planometry request failed with status ${status}: ${body}`);
+/** 400 (guide §2.3/§6b): the server rejected the request body itself — nothing was written. Not retryable as-is. */
+export class PlanometryRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PlanometryRejectedError";
+  }
+}
+
+/** Network failure, timeout, or 5xx — retryable by the caller. */
+export class PlanometryTransientError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PlanometryTransientError";
   }
 }
 
 /**
- * Thin, single-attempt wire client — deliberately no retry/backoff here.
- * Chunk retry-with-same-seq and 409-abort orchestration live in the sync
- * executor (Phase 2 §4/§11 slice d), which is what needs to coordinate
- * retries with the on-disk spool.
+ * Thin, single-attempt v4 wire client — no retries, no logging (callers own
+ * both, since only they know which modes are safe to retry). Never embeds
+ * `pushKey` in any thrown error.
  */
 export class PlanometryClient {
   private readonly dispatcher: Dispatcher;
+  private readonly timeoutMs: number;
 
   constructor(private readonly options: PlanometryClientOptions) {
-    const proxyUrl = resolveProxyUrl(options.baseUrl);
+    const proxyUrl = resolveProxyUrl(options.tableUrl);
     const requestTls = options.caBundlePem ? { ca: options.caBundlePem } : undefined;
     this.dispatcher = proxyUrl ? new ProxyAgent({ uri: proxyUrl, requestTls }) : new Agent({ connect: requestTls });
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
   async close(): Promise<void> {
     await this.dispatcher.close();
   }
 
-  async postCatalog(body: CatalogPushRequest): Promise<void> {
-    await this.jsonRequest("POST", "/v1/catalog", body);
+  async checkConnection(): Promise<ConnectionCheckResult> {
+    return this.jsonRequest<ConnectionCheckResult>("GET", this.options.tableUrl);
   }
 
-  async pollWork(connectionId: string): Promise<WorkResponse> {
-    return this.jsonRequest<WorkResponse>("GET", `/v1/work?connectionId=${encodeURIComponent(connectionId)}`);
+  async getSchema(): Promise<TableSchema> {
+    return this.jsonRequest<TableSchema>("GET", `${this.options.tableUrl}/schema`);
   }
 
-  /** Lightweight, non-claiming auth check — never touches the work queue (unlike pollWork). Path is config-overridable until Planometry confirms the real one (see planning doc's Open questions). */
-  async ping(path?: string): Promise<void> {
-    await this.jsonRequest("GET", path ?? "/v1/ping");
+  /**
+   * POST {url}. Accepts either a plain body (gzipped here) or an
+   * already-gzipped Buffer, so a future streaming request builder can
+   * encode rows directly into the gzip stream without this client
+   * re-compressing them.
+   */
+  async push(body: PushRequestBody | Buffer): Promise<PushResult> {
+    const gzipped = Buffer.isBuffer(body) ? body : gzipSync(Buffer.from(JSON.stringify(body), "utf8"));
+    return this.jsonRequest<PushResult>("POST", this.options.tableUrl, gzipped);
   }
 
-  async pushChunk(runId: string, seq: number, rows: number, gzippedBody: Buffer): Promise<void> {
-    const res = await request(this.url(`/v1/runs/${encodeURIComponent(runId)}/chunks`), {
-      method: "POST",
-      dispatcher: this.dispatcher,
-      headers: {
-        ...this.authHeaders(),
-        [CHUNK_SEQ_HEADER]: String(seq),
-        [CHUNK_ROWS_HEADER]: String(rows),
-        "content-type": "application/gzip",
-      },
-      body: gzippedBody,
-    });
+  private async jsonRequest<T>(method: string, url: string, gzippedBody?: Buffer): Promise<T> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let res: Awaited<ReturnType<typeof request>>;
+    try {
+      res = await request(url, {
+        method,
+        dispatcher: this.dispatcher,
+        signal: controller.signal,
+        headers: {
+          authorization: `Bearer ${this.options.pushKey}`,
+          "content-type": "application/json",
+          ...(gzippedBody ? { "content-encoding": "gzip" } : {}),
+        },
+        body: gzippedBody,
+      });
+    } catch (err) {
+      throw new PlanometryTransientError(err instanceof Error ? err.message : String(err));
+    } finally {
+      clearTimeout(timer);
+    }
+
     const text = await res.body.text();
-    if (res.statusCode === 409) throw new ChunkRejectedError(seq);
-    if (res.statusCode >= 300) throw new PlanometryHttpError(res.statusCode, text);
-  }
 
-  async heartbeat(runId: string, heartbeatPath?: string): Promise<void> {
-    await this.jsonRequest("POST", heartbeatPath ?? `/v1/runs/${encodeURIComponent(runId)}/heartbeat`);
-  }
+    if (res.statusCode === 401 || res.statusCode === 404) throw new PlanometryConfigError(res.statusCode);
+    if (res.statusCode >= 500) throw new PlanometryTransientError(`Planometry returned ${res.statusCode}`);
 
-  async reportComplete(runId: string, body: CompleteRunRequest): Promise<void> {
-    await this.jsonRequest("POST", `/v1/runs/${encodeURIComponent(runId)}/complete`, body);
-  }
+    let envelope: ResponseEnvelope<T>;
+    try {
+      envelope = text ? (JSON.parse(text) as ResponseEnvelope<T>) : { success: res.statusCode < 300 };
+    } catch {
+      throw new PlanometryTransientError(`Planometry returned a non-JSON response (status ${res.statusCode})`);
+    }
 
-  async reportFailed(runId: string, body: FailedRunRequest): Promise<void> {
-    await this.jsonRequest("POST", `/v1/runs/${encodeURIComponent(runId)}/failed`, body);
-  }
+    if (res.statusCode === 400 || !envelope.success) {
+      throw new PlanometryRejectedError(envelope.message ?? `Planometry rejected the request (status ${res.statusCode})`);
+    }
+    if (res.statusCode >= 300) throw new PlanometryTransientError(`Planometry returned ${res.statusCode}`);
 
-  private url(path: string): string {
-    return new URL(path, this.options.baseUrl).toString();
-  }
-
-  private authHeaders(): Record<string, string> {
-    return { authorization: `Bearer ${this.options.agentKey}`, "x-agent-version": this.options.agentVersion };
-  }
-
-  private async jsonRequest<T = void>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await request(this.url(path), {
-      method,
-      dispatcher: this.dispatcher,
-      headers: { ...this.authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await res.body.text();
-    if (res.statusCode >= 300) throw new PlanometryHttpError(res.statusCode, text);
-    return (text ? JSON.parse(text) : undefined) as T;
+    return envelope.data as T;
   }
 }

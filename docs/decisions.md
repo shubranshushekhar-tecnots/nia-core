@@ -6341,3 +6341,93 @@ assertion was changed to `toHaveBeenCalledTimes(1)` +
 which still proves the org-only checks are skipped (only one call, and it's
 the owner_plan query, not organizations/suspended_at) while accommodating
 the new, intentionally-personal-scope-inclusive check.
+
+## Planometry v4 migration slice A1: tests deleted/removed, by name and reason
+
+The v4 Internal Table push contract (docs/plans/planometry-v4-migration.md
+§10 slice A1) replaces the old work-queue wire protocol wholesale — every
+test below exercised behavior that protocol owned, and has no v4
+equivalent in this slice (later slices add v4-shaped replacements). Listed
+by file, one reason per file unless a file mixed concerns.
+
+- `apps/agent/src/planometry/pollLoop.test.ts` (file deleted, 3 tests:
+  "stays within the jitter fraction of the base delay", "invokes onWork
+  for each queued item, then stops on abort", "invokes onPoll after every
+  poll, including empty ones") — tested `pollLoop.ts`, the work-queue poll
+  loop; there is no poll loop in the v4 push model.
+- `apps/agent/src/planometry/catalogSync.test.ts` (file deleted, 3 tests:
+  "pushes at pairing (no last fingerprint)", "does not push when the
+  fingerprint is unchanged and not requested", "pushes when
+  catalogRequested is true even if unchanged") — tested `catalogSync.ts`;
+  v4 has no separate catalog-push step.
+- `apps/agent/src/planometry/catalogFingerprint.test.ts` (file deleted, 2
+  tests: "is stable across different generatedAt timestamps for the same
+  schema", "changes when a column is added") — tested
+  `catalogFingerprint.ts`, only needed to decide when to push a catalog.
+- `apps/agent/src/planometry/heartbeatScheduler.test.ts` (file deleted, 4
+  tests: "fires after the interval with no activity", "resets the window
+  on markActivity, delaying the next heartbeat", "fires repeatedly on
+  silence", "stops firing after stop()") — tested the per-run heartbeat
+  scheduler; v4's push requests are stateless, no in-flight run to keep
+  alive.
+- `apps/agent/src/planometry/client.test.ts` (rewritten; 6 old tests
+  removed: "posts a catalog", "polls work and gets null when the queue is
+  empty", "pushes a chunk successfully", "throws ChunkRejectedError on a
+  409", "sends a heartbeat", "reports complete and failed") — exercised
+  the old `PlanometryClient`'s catalog/poll/chunk/heartbeat/report methods,
+  none of which exist on the v4 client (`checkConnection`/`getSchema`/
+  `push`). Replaced by 10 new tests named in the report below.
+- `apps/agent/src/testing/fakePlanometryServer.test.ts` (rewritten; 6 old
+  tests removed: "stores a catalog push", "returns queued work then
+  null", "accepts a chunk and aggregates rows across chunks, ignoring a
+  duplicate seq", "drops the first attempt of a faulted seq, then accepts
+  the retry with the same seq", "returns 409 for a faulted seq", "counts
+  heartbeats and records complete/failed") — exercised the old fake's
+  work-queue/chunk/heartbeat surface. Replaced by 11 new tests named in
+  the report below.
+- `apps/agent/src/sync/runSync.test.ts` (file deleted, 3 tests: "reports
+  complete, closes the pool before uploading, and cleans up the spool on
+  success", "reports failed and cleans up the spool when the extract
+  itself errors", "stops and cleans up without reporting complete/failed
+  when a chunk is rejected with 409") — `runSync.ts` was cut back to
+  extract-and-spool only (item 4 of slice A1); the report/upload/409
+  behavior these tests proved no longer exists in this file.
+- `apps/agent/src/sync/runSync.integration.test.ts` (file deleted, 7
+  tests: "runs an end-to-end sync against the real SQL Server + fake
+  server with an exact row count match", "ignores a duplicate chunk ack
+  instead of double-counting it", "retries a dropped chunk with the same
+  seq against the real extract pipeline", "a 409 stops the run and cleans
+  up its spool files without reporting complete/failed", "the slow view's
+  heartbeats keep the sync alive while waiting for its first row",
+  "confirms the DB query is closed before any chunk upload begins", "a
+  shutdown mid-sync reports the run failed to Planometry and cleans up its
+  spool") — same reason as above, end to end.
+- `apps/agent/src/sync/chunkUploader.test.ts` (file deleted, 4 tests:
+  "uploads all chunks in order", "retries a dropped chunk with the same
+  seq", "throws ChunkRejectedError on a 409 without retrying", "fails
+  clearly and never uploads when a spool file has been tampered with") —
+  `chunkUploader.ts` was cut back to just `backoffDelayMs()` (kept for
+  reuse by a later slice); `uploadChunks()` and everything these tests
+  proved about it is gone.
+- `apps/agent/src/agentLoop.test.ts` (3 of 4 tests removed: "polls, syncs,
+  and records state for a successful run, stopping cleanly on abort",
+  "records a sync failure when the extract itself errors", "records a
+  sync failure when connecting to the database throws"; "stops promptly
+  on abort with no connections configured" kept) — `agentLoop.ts` no
+  longer drives any per-connection poll/sync pipeline (cut back to load
+  config, run the monitoring heartbeat, and idle until abort), so there is
+  nothing left for the removed tests to assert on.
+- `apps/agent/src/cli/doctorChecks.test.ts` (whole `describe("checkAgentKeyAccepted")`
+  block removed, 5 tests: "passes against a server that accepts the key",
+  "never claims/dequeues work — a connection's queued work item is still
+  there afterwards", "uses a configurable ping path, verified on the first
+  poll against a real listening URL", "fails with a fix on a 401, without
+  leaking the agent key", "fails without a fix on a non-auth HTTP error,
+  and never echoes the response body") — `checkAgentKeyAccepted()` called
+  the old client's `ping()`/queue, both gone; a later slice adds its v4
+  replacement (`checkTargetReachable`/`checkTargetSchema`).
+- `apps/agent/src/cli/doctorCommand.integration.test.ts` (1 test removed:
+  "fails agent-key-accepted on a wrong agent key, without affecting SQL
+  checks"; the other two tests kept, with their "agent key accepted"
+  assertions deleted) — exercised `runDoctor`'s now-removed agent-key
+  check end to end.

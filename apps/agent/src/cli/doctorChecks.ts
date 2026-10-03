@@ -2,7 +2,6 @@ import { mkdir } from "node:fs/promises";
 import { Agent, ProxyAgent, request as undiciRequest } from "undici";
 import { connect, introspectCatalog } from "@nia/extract/mssql";
 import { resolveProxyUrl } from "../planometry/network.js";
-import { PlanometryClient, PlanometryHttpError } from "../planometry/client.js";
 import { assertDiskSpace, InsufficientDiskSpaceError } from "../sync/diskSpace.js";
 import type { ConnectionEntry } from "../config/types.js";
 
@@ -30,7 +29,6 @@ export interface SqlCredentials {
 const TLS_ERROR_PATTERN = /ssl|tls|certificate|handshake|self signed/i;
 const WRITE_PERMISSIONS = new Set(["INSERT", "UPDATE", "DELETE", "ALTER", "CONTROL"]);
 const CLOCK_SKEW_FAIL_MS = 5 * 60 * 1000;
-const DOCTOR_AGENT_VERSION = "doctor-check";
 
 /** Avoids a direct dependency on the `mssql`/`@types/mssql` package from apps/agent — derived structurally from `@nia/extract/mssql`'s own `connect()` return type instead. */
 export type ConnectionPool = Awaited<ReturnType<typeof connect>>;
@@ -207,23 +205,7 @@ export async function probePlanometry(baseUrl: string, caBundlePem?: string): Pr
   }
 }
 
-/** Calls a lightweight, non-claiming ping endpoint purely to prove the agent key is accepted — deliberately never calls pollWork, since that would claim/dequeue a real work item from Planometry's queue. `pingPath` is config-overridable (see planning doc's Open questions). */
-export async function checkAgentKeyAccepted(planometryBaseUrl: string, agentKey: string, pingPath?: string): Promise<CheckResult> {
-  const client = new PlanometryClient({ baseUrl: planometryBaseUrl, agentKey, agentVersion: DOCTOR_AGENT_VERSION });
-  try {
-    await client.ping(pingPath);
-    return { name: "agent key accepted", pass: true, detail: "Planometry accepted the agent key" };
-  } catch (err) {
-    if (err instanceof PlanometryHttpError) {
-      // Never surface `err.body` here — it's server-controlled text that could
-      // reflect request headers (including the agent key) back at us.
-      if (err.status === 401 || err.status === 403) {
-        return { name: "agent key accepted", pass: false, detail: `Planometry rejected the agent key (HTTP ${err.status})`, fix: "regenerate/update the agent key for this connection" };
-      }
-      return { name: "agent key accepted", pass: false, detail: `Planometry responded with HTTP ${err.status}` };
-    }
-    return { name: "agent key accepted", pass: false, detail: err instanceof Error ? err.message : String(err) };
-  } finally {
-    await client.close();
-  }
-}
+// The old agent-key-accepted ping check (PlanometryClient.ping against the
+// work-queue protocol) was removed in the v4 migration's slice A1
+// (docs/plans/planometry-v4-migration.md §10, §982) — a later slice adds
+// its v4 replacement (checkTargetReachable/checkTargetSchema).

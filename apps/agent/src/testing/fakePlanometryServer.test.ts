@@ -1,97 +1,180 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { PlanometryClient, PlanometryRejectedError, PlanometryTransientError } from "../planometry/client.js";
 import { FakePlanometryServer } from "./fakePlanometryServer.js";
-import { CHUNK_ROWS_HEADER, CHUNK_SEQ_HEADER } from "../planometry/types.js";
+
+const columns = [
+  { name: "id", type: "Text" as const, isKey: true },
+  { name: "qty", type: "Number" as const, isKey: false },
+];
 
 describe("FakePlanometryServer", () => {
   let server: FakePlanometryServer;
-
-  beforeEach(async () => {
-    server = await FakePlanometryServer.start();
-  });
 
   afterEach(async () => {
     await server.close();
   });
 
-  it("stores a catalog push", async () => {
-    const res = await fetch(`${server.baseUrl}/v1/catalog`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ connectionId: "conn-1", fingerprint: "abc", catalog: { generatedAt: "now", sourceTimeZone: "UTC", tables: [] } }),
-    });
-    expect(res.status).toBe(200);
-    expect(server.getCatalogPush("conn-1")?.fingerprint).toBe("abc");
+  function clientFor(table: { tableUrl: string; pushKey: string }): PlanometryClient {
+    return new PlanometryClient({ tableUrl: table.tableUrl, pushKey: table.pushKey });
+  }
+
+  it("unknown column returns 400 and writes nothing", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+
+    await expect(client.push({ mode: "upsert", rows: [{ id: "a", bogus: 1 }] })).rejects.toBeInstanceOf(PlanometryRejectedError);
+    expect(server.getRows(table.tableId)).toEqual([]);
+    await client.close();
   });
 
-  it("returns queued work then null", async () => {
-    server.enqueueWork("conn-1", { runId: "run-1", request: { table: "t", columns: ["a"], filter: [] } });
+  it("null key returns 400 and writes nothing", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
 
-    const first = await (await fetch(`${server.baseUrl}/v1/work?connectionId=conn-1`)).json();
-    expect(first.work.runId).toBe("run-1");
-
-    const second = await (await fetch(`${server.baseUrl}/v1/work?connectionId=conn-1`)).json();
-    expect(second.work).toBeNull();
-    expect(second.pollAfterSeconds).toBeGreaterThan(0);
+    await expect(client.push({ mode: "upsert", rows: [{ id: null, qty: 1 }] })).rejects.toBeInstanceOf(PlanometryRejectedError);
+    expect(server.getRows(table.tableId)).toEqual([]);
+    await client.close();
   });
 
-  it("accepts a chunk and aggregates rows across chunks, ignoring a duplicate seq", async () => {
-    server.enqueueWork("conn-1", { runId: "run-1", request: { table: "t", columns: ["a"], filter: [] } });
-    await fetch(`${server.baseUrl}/v1/work?connectionId=conn-1`);
+  it("over the row limit returns 400", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns, maxRowsPerRequest: 2 });
+    const client = clientFor(table);
 
-    await pushChunk(server.baseUrl, "run-1", 0, 100);
-    await pushChunk(server.baseUrl, "run-1", 1, 50);
-    // Duplicate delivery of seq 0 (e.g. agent retried after a lost ack) must not double-count.
-    await pushChunk(server.baseUrl, "run-1", 0, 100);
-
-    expect(server.getRun("run-1")).toMatchObject({ totalRows: 150, chunkCount: 2 });
+    await expect(
+      client.push({ mode: "upsert", rows: [{ id: "a" }, { id: "b" }, { id: "c" }] }),
+    ).rejects.toBeInstanceOf(PlanometryRejectedError);
+    expect(server.getRows(table.tableId)).toEqual([]);
+    await client.close();
   });
 
-  it("drops the first attempt of a faulted seq, then accepts the retry with the same seq", async () => {
-    server.enqueueWork("conn-1", { runId: "run-1", request: { table: "t", columns: ["a"], filter: [] } });
-    await fetch(`${server.baseUrl}/v1/work?connectionId=conn-1`);
-    server.setRunFaults("run-1", { dropOnFirstAttempt: new Set([0]) });
+  it("upsert last duplicate wins", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
 
-    await expect(pushChunk(server.baseUrl, "run-1", 0, 10)).rejects.toThrow();
-    const retry = await pushChunkRaw(server.baseUrl, "run-1", 0, 10);
-    expect(retry.status).toBe(200);
-    expect(server.getRun("run-1")).toMatchObject({ totalRows: 10, chunkCount: 1 });
-  });
-
-  it("returns 409 for a faulted seq", async () => {
-    server.enqueueWork("conn-1", { runId: "run-1", request: { table: "t", columns: ["a"], filter: [] } });
-    await fetch(`${server.baseUrl}/v1/work?connectionId=conn-1`);
-    server.setRunFaults("run-1", { force409: new Set([0]) });
-
-    const res = await pushChunkRaw(server.baseUrl, "run-1", 0, 10);
-    expect(res.status).toBe(409);
-  });
-
-  it("counts heartbeats and records complete/failed", async () => {
-    server.enqueueWork("conn-1", { runId: "run-1", request: { table: "t", columns: ["a"], filter: [] } });
-    await fetch(`${server.baseUrl}/v1/work?connectionId=conn-1`);
-
-    await fetch(`${server.baseUrl}/v1/runs/run-1/heartbeat`, { method: "POST" });
-    await fetch(`${server.baseUrl}/v1/runs/run-1/heartbeat`, { method: "POST" });
-    await fetch(`${server.baseUrl}/v1/runs/run-1/complete`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ totalRows: 10, totalChunks: 1 }),
+    const result = await client.push({
+      mode: "upsert",
+      rows: [
+        { id: "a", qty: 1 },
+        { id: "a", qty: 2 },
+      ],
     });
 
-    const run = server.getRun("run-1");
-    expect(run?.heartbeatCount).toBe(2);
-    expect(run?.complete).toEqual({ totalRows: 10, totalChunks: 1 });
+    expect(result.rowsAffected).toBe(1);
+    expect(server.getRows(table.tableId)).toEqual([{ id: "a", qty: 2 }]);
+    await client.close();
+  });
+
+  it("delete by key", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+    await client.push({
+      mode: "upsert",
+      rows: [
+        { id: "a", qty: 1 },
+        { id: "b", qty: 2 },
+      ],
+    });
+
+    const result = await client.push({ mode: "delete", rows: [{ id: "a" }] });
+
+    expect(result.rowsAffected).toBe(1);
+    expect(server.getRows(table.tableId)).toEqual([{ id: "b", qty: 2 }]);
+    await client.close();
+  });
+
+  it("realtime key in both lists ends up removed", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+
+    const result = await client.push({
+      mode: "realtime",
+      rows: [{ id: "a", qty: 9 }],
+      deleted: [{ id: "a" }],
+    });
+
+    expect(result.status).toBe("completed");
+    expect(server.getRows(table.tableId)).toEqual([]);
+    await client.close();
+  });
+
+  it("replace in parts keeps live rows until the last part", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+    await client.push({ mode: "upsert", rows: [{ id: "old", qty: 1 }] });
+
+    const part1 = await client.push({ mode: "replace", loadId: "load-1", rows: [{ id: "new1", qty: 1 }] });
+    expect(part1).toMatchObject({ status: "accepted", loadId: "load-1", loadRowsReceived: 1 });
+    expect(server.getRows(table.tableId)).toEqual([{ id: "old", qty: 1 }]);
+
+    const part2 = await client.push({ mode: "replace", loadId: "load-1", rows: [{ id: "new2", qty: 2 }], last: true, totalRows: 2 });
+    expect(part2.status).toBe("completed");
+    expect(server.getRows(table.tableId).sort((a, b) => String(a.id).localeCompare(String(b.id)))).toEqual([
+      { id: "new1", qty: 1 },
+      { id: "new2", qty: 2 },
+    ]);
+    await client.close();
+  });
+
+  it("totalRows mismatch discards the load", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+
+    await client.push({ mode: "replace", loadId: "load-1", rows: [{ id: "a", qty: 1 }] });
+    await expect(
+      client.push({ mode: "replace", loadId: "load-1", rows: [{ id: "b", qty: 2 }], last: true, totalRows: 99 }),
+    ).rejects.toBeInstanceOf(PlanometryRejectedError);
+
+    expect(server.getOpenLoad(table.tableId)).toBeUndefined();
+    expect(server.getRows(table.tableId)).toEqual([]);
+    await client.close();
+  });
+
+  it("a new loadId supersedes", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+
+    await client.push({ mode: "replace", loadId: "load-1", rows: [{ id: "a", qty: 1 }] });
+    await client.push({ mode: "replace", loadId: "load-2", rows: [{ id: "b", qty: 2 }] });
+
+    const openLoad = server.getOpenLoad(table.tableId);
+    expect(openLoad?.loadId).toBe("load-2");
+    expect(openLoad?.loadRowsReceived).toBe(1);
+    await client.close();
+  });
+
+  it("60 minutes idle discards", async () => {
+    let now = new Date("2026-01-01T00:00:00Z");
+    server = await FakePlanometryServer.start({ now: () => now });
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+
+    await client.push({ mode: "replace", loadId: "load-1", rows: [{ id: "a", qty: 1 }] });
+    now = new Date(now.getTime() + 61 * 60 * 1000);
+    await client.push({ mode: "replace", loadId: "load-1", rows: [{ id: "b", qty: 2 }] });
+
+    const openLoad = server.getOpenLoad(table.tableId);
+    expect(openLoad?.loadRowsReceived).toBe(1);
+    expect(openLoad?.rows).toEqual([{ id: "b", qty: 2 }]);
+    await client.close();
+  });
+
+  it("the lost-response fault applies the request while the client sees a transient error", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+    server.injectFault(table.tableId, "dropAfter");
+
+    await expect(client.push({ mode: "upsert", rows: [{ id: "a", qty: 1 }] })).rejects.toBeInstanceOf(PlanometryTransientError);
+    expect(server.getRows(table.tableId)).toEqual([{ id: "a", qty: 1 }]);
+    await client.close();
   });
 });
-
-async function pushChunkRaw(baseUrl: string, runId: string, seq: number, rows: number): Promise<Response> {
-  return fetch(`${baseUrl}/v1/runs/${runId}/chunks`, {
-    method: "POST",
-    headers: { [CHUNK_SEQ_HEADER]: String(seq), [CHUNK_ROWS_HEADER]: String(rows) },
-    body: Buffer.from("fake-gzip-bytes"),
-  });
-}
-
-async function pushChunk(baseUrl: string, runId: string, seq: number, rows: number): Promise<void> {
-  await pushChunkRaw(baseUrl, runId, seq, rows);
-}

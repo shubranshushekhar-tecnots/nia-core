@@ -22,90 +22,77 @@ async function post(path: string, body: unknown): Promise<unknown> {
   return text ? JSON.parse(text) : undefined;
 }
 
-function splitColumns(value: string | undefined): string[] | undefined {
-  if (value === undefined) return undefined;
-  return value
-    .split(",")
-    .map((c) => c.trim())
-    .filter(Boolean);
-}
-
-function parseFilter(value: string | undefined): unknown[] | undefined {
-  if (value === undefined) return undefined;
-  const parsed = JSON.parse(value);
-  if (!Array.isArray(parsed)) throw new Error("--filter must be a JSON array");
-  return parsed;
+async function get(path: string): Promise<unknown> {
+  const res = await fetch(`${CONTROL_BASE_URL}${path}`);
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${path} failed with status ${res.status}: ${text}`);
+  return text ? JSON.parse(text) : undefined;
 }
 
 async function main(argv: string[]): Promise<void> {
   const [subcommand, ...rest] = argv;
 
-  if (subcommand === "issue-key") {
-    const result = (await post("/issue-key", {})) as { agentKey: string };
-    console.log(result.agentKey);
-    return;
-  }
-
-  if (subcommand === "queue" || subcommand === "refresh-catalog") {
+  if (subcommand === "create-table") {
     const { values } = parseArgs({
       args: rest,
-      options: {
-        "connection-id": { type: "string" },
-        "run-id": { type: "string" },
-        table: { type: "string" },
-        columns: { type: "string" },
-        filter: { type: "string" },
-        "catalog-requested": { type: "boolean" },
-      },
+      options: { id: { type: "string" }, name: { type: "string" }, columns: { type: "string" }, "max-rows": { type: "string" } },
     });
-    const connectionId = values["connection-id"] as string | undefined;
-    const runId = values["run-id"] as string | undefined;
-    const table = values.table as string | undefined;
-    if (!connectionId || !runId || !table) {
-      console.error(`usage: planometryCtl ${subcommand} --connection-id <id> --run-id <id> --table <table> [--columns a,b] [--filter '[...]']${subcommand === "queue" ? " [--catalog-requested]" : ""}`);
+    const columnsJson = values.columns as string | undefined;
+    if (!columnsJson) {
+      console.error(`usage: planometryCtl create-table --columns '[{"name":"id","type":"Text","isKey":true}]' [--id ds-1] [--name "My Table"] [--max-rows 50000]`);
       process.exitCode = 1;
       return;
     }
-    await post(subcommand === "refresh-catalog" ? "/refresh-catalog" : "/queue", {
-      connectionId,
-      runId,
-      table,
-      columns: splitColumns(values.columns as string | undefined),
-      filter: parseFilter(values.filter as string | undefined),
-      catalogRequested: subcommand === "queue" ? Boolean(values["catalog-requested"]) : undefined,
+    const result = await post("/create-table", {
+      id: values.id,
+      name: values.name,
+      columns: JSON.parse(columnsJson),
+      maxRowsPerRequest: values["max-rows"] ? Number(values["max-rows"]) : undefined,
     });
-    console.log(`queued run ${runId} for connection ${connectionId}, table ${table}`);
+    console.log(JSON.stringify(result, null, 2));
     return;
   }
 
-  if (subcommand === "fault-drop" || subcommand === "fault-409") {
-    const { values } = parseArgs({ args: rest, options: { "run-id": { type: "string" }, seq: { type: "string" } } });
-    const runId = values["run-id"] as string | undefined;
-    const seq = values.seq as string | undefined;
-    if (!runId || !seq) {
-      console.error(`usage: planometryCtl ${subcommand} --run-id <id> --seq <n>`);
+  if (subcommand === "inject-fault") {
+    const { values } = parseArgs({ args: rest, options: { "table-id": { type: "string" }, fault: { type: "string" }, times: { type: "string" } } });
+    const tableId = values["table-id"] as string | undefined;
+    const faultArg = values.fault as string | undefined;
+    if (!tableId || !faultArg) {
+      console.error(`usage: planometryCtl inject-fault --table-id <id> --fault <401|404|400|500|dropBefore|dropAfter|'{"type":"delay","ms":1000}'> [--times 1]`);
       process.exitCode = 1;
       return;
     }
-    await post(subcommand === "fault-drop" ? "/fault/drop" : "/fault/409", { runId, seq: Number(seq) });
-    console.log(`armed ${subcommand} for run ${runId} seq ${seq}`);
+    const fault = ["401", "404", "400", "500", "dropBefore", "dropAfter"].includes(faultArg) ? faultArg : JSON.parse(faultArg);
+    await post("/inject-fault", { tableId, fault, times: values.times ? Number(values.times) : undefined });
+    console.log(`armed fault ${faultArg} for table ${tableId}`);
     return;
   }
 
-  if (subcommand === "slow") {
-    const { values } = parseArgs({ args: rest, options: { "poll-after": { type: "string" } } });
-    const pollAfter = values["poll-after"] as string | undefined;
-    if (!pollAfter) {
-      console.error("usage: planometryCtl slow --poll-after <seconds>");
+  if (subcommand === "rows") {
+    const { values } = parseArgs({ args: rest, options: { "table-id": { type: "string" } } });
+    const tableId = values["table-id"] as string | undefined;
+    if (!tableId) {
+      console.error("usage: planometryCtl rows --table-id <id>");
       process.exitCode = 1;
       return;
     }
-    await post("/slow", { pollAfterSeconds: Number(pollAfter) });
-    console.log(`empty polls now wait ${pollAfter}s`);
+    console.log(JSON.stringify(await get(`/rows?tableId=${encodeURIComponent(tableId)}`), null, 2));
     return;
   }
 
-  console.error("usage: planometryCtl <issue-key|queue|refresh-catalog|fault-drop|fault-409|slow> ...");
+  if (subcommand === "open-load") {
+    const { values } = parseArgs({ args: rest, options: { "table-id": { type: "string" } } });
+    const tableId = values["table-id"] as string | undefined;
+    if (!tableId) {
+      console.error("usage: planometryCtl open-load --table-id <id>");
+      process.exitCode = 1;
+      return;
+    }
+    console.log(JSON.stringify(await get(`/open-load?tableId=${encodeURIComponent(tableId)}`), null, 2));
+    return;
+  }
+
+  console.error("usage: planometryCtl <create-table|inject-fault|rows|open-load> ...");
   process.exitCode = 1;
 }
 

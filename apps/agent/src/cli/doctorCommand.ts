@@ -2,7 +2,7 @@ import { defaultHomeDir, defaultLogDir, defaultSpoolDir, keyFilePath } from "../
 import { findConnection, loadConfig } from "../config/store.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
-import { checkAgentKeyAccepted, checkCancelVisibility, checkDiskSpace, checkLoginPermissions, probePlanometry, probeSqlServer, type CheckResult } from "./doctorChecks.js";
+import { checkCancelVisibility, checkDiskSpace, checkLoginPermissions, probePlanometry, probeSqlServer, type CheckResult } from "./doctorChecks.js";
 import { checkPathPermissions } from "./permissionChecks.js";
 
 export interface ConnectionDoctorReport {
@@ -26,7 +26,6 @@ export async function runDoctor(connectionId: string | undefined, dir = defaultH
   for (const entry of entries) {
     const checks: CheckResult[] = [];
     const credentials = secrets.get<{ user: string; password: string }>(entry.credentialRef);
-    const agentKey = secrets.get<{ agentKey: string }>(entry.agentKeyRef);
 
     if (!credentials) {
       checks.push({ name: "SQL Server reachable", pass: false, detail: "credentials are missing from the local secret store" });
@@ -55,13 +54,6 @@ export async function runDoctor(connectionId: string | undefined, dir = defaultH
 
     const { reachable: planometryReachable, clockSkew } = await probePlanometry(entry.planometry.baseUrl);
     checks.push(planometryReachable, clockSkew);
-    if (planometryReachable.pass) {
-      if (!agentKey) {
-        checks.push({ name: "agent key accepted", pass: false, detail: "agent key is missing from the local secret store" });
-      } else {
-        checks.push(await checkAgentKeyAccepted(entry.planometry.baseUrl, agentKey.agentKey, entry.planometry.pingPath));
-      }
-    }
 
     reports.push({ connectionId: entry.id, label: entry.label, checks });
   }

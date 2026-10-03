@@ -3,7 +3,6 @@ import { lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FakePlanometryServer } from "../testing/fakePlanometryServer.js";
 import type { ConnectionEntry } from "../config/types.js";
 
 const { connectMock, introspectCatalogMock } = vi.hoisted(() => ({
@@ -16,10 +15,9 @@ vi.mock("@nia/extract/mssql", () => ({
   introspectCatalog: introspectCatalogMock,
 }));
 
-const { checkAgentKeyAccepted, checkCancelVisibility, checkDiskSpace, checkLoginPermissions, probePlanometry, probeSqlServer } = await import("./doctorChecks.js");
+const { checkCancelVisibility, checkDiskSpace, checkLoginPermissions, probePlanometry, probeSqlServer } = await import("./doctorChecks.js");
 
 const CANARY_PASSWORD = "sw0rdfish-canary-secret";
-const CANARY_AGENT_KEY = "canary-agent-key-xyz";
 
 function fakeEntry(): ConnectionEntry {
   return {
@@ -221,81 +219,5 @@ describe("probePlanometry", () => {
     const result = await probePlanometry("http://127.0.0.1:1");
     expect(result.reachable.pass).toBe(false);
     expect(result.clockSkew.pass).toBe(false);
-  });
-});
-
-describe("checkAgentKeyAccepted", () => {
-  it("passes against a server that accepts the key", async () => {
-    const fake = await FakePlanometryServer.start();
-    try {
-      const result = await checkAgentKeyAccepted(fake.baseUrl, CANARY_AGENT_KEY);
-      expect(result.pass).toBe(true);
-    } finally {
-      await fake.close();
-    }
-  });
-
-  it("never claims/dequeues work — a connection's queued work item is still there afterwards", async () => {
-    const fake = await FakePlanometryServer.start();
-    try {
-      fake.enqueueWork("conn-1", { runId: "run-1", request: { table: "t", columns: ["a"], filter: [] } });
-      expect(fake.queueLength("conn-1")).toBe(1);
-      const result = await checkAgentKeyAccepted(fake.baseUrl, CANARY_AGENT_KEY);
-      expect(result.pass).toBe(true);
-      expect(fake.queueLength("conn-1")).toBe(1); // untouched — proves this never called pollWork
-    } finally {
-      await fake.close();
-    }
-  });
-
-  it("uses a configurable ping path, verified on the first poll against a real listening URL", async () => {
-    let requestCount = 0;
-    let requestedPath: string | undefined;
-    const server = createServer((req, res) => {
-      requestCount += 1;
-      requestedPath = req.url;
-      res.writeHead(200, { "content-type": "application/json" }).end("{}");
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
-    const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
-    try {
-      const result = await checkAgentKeyAccepted(baseUrl, CANARY_AGENT_KEY, "/custom/ping");
-      expect(result.pass).toBe(true);
-      expect(requestedPath).toBe("/custom/ping");
-      expect(requestCount).toBe(1);
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
-  });
-
-  it("fails with a fix on a 401, without leaking the agent key", async () => {
-    const server = createServer((req, res) => res.writeHead(401).end(`rejected: ${req.headers.authorization}`));
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
-    const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
-    try {
-      const result = await checkAgentKeyAccepted(baseUrl, CANARY_AGENT_KEY);
-      expect(result.pass).toBe(false);
-      expect(result.fix).toMatch(/regenerate|update/);
-      expect(result.detail).not.toContain(CANARY_AGENT_KEY);
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
-  });
-
-  it("fails without a fix on a non-auth HTTP error, and never echoes the response body", async () => {
-    const server = createServer((req, res) => res.writeHead(500).end(`leaked: ${req.headers.authorization}`));
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
-    const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
-    try {
-      const result = await checkAgentKeyAccepted(baseUrl, CANARY_AGENT_KEY);
-      expect(result.pass).toBe(false);
-      expect(result.detail).not.toContain(CANARY_AGENT_KEY);
-      expect(result.detail).not.toMatch(/leaked/);
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
   });
 });

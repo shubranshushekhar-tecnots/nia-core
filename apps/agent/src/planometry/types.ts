@@ -1,47 +1,70 @@
-import type { Catalog, ExtractRequest } from "@nia/extract";
-
 /**
- * Wire-protocol shapes for the (guessed, config-overridable-where-noted)
- * Planometry push API — docs/plans/planometry-integration.md Phase 2 §4.
- * Shared between the real client (planometry/client.ts) and the fake
- * server (testing/fakePlanometryServer.ts) so both sides can never drift
- * out of sync with each other, even though they may both need to change
- * once Planometry confirms the real contract.
+ * v4 Internal Table push wire types (docs/planometry/connector-guide-v4.md
+ * §2-§4; docs/plans/planometry-v4-migration.md §10 slice A1). One table =
+ * one URL + one push key; no work queue, no catalog push, no chunk/run
+ * protocol — that entire model is gone as of this slice.
  */
 
-export interface CatalogPushRequest {
-  connectionId: string;
-  fingerprint: string;
-  catalog: Catalog;
+export type PushMode = "upsert" | "replace" | "delete" | "realtime";
+
+export type ColumnType = "Text" | "Number" | "Date" | "DateTime" | "Boolean";
+
+export interface SchemaColumn {
+  name: string;
+  type: ColumnType;
+  isKey: boolean;
 }
 
-export interface WorkItem {
-  runId: string;
-  request: ExtractRequest;
-  /** Set when Planometry wants a fresh catalog push before/alongside this run. */
-  catalogRequested?: boolean;
+/** GET {url}/schema response data (guide §2.2). */
+export interface TableSchema {
+  dataSourceId: string;
+  dataSourceName: string;
+  columns: SchemaColumn[];
+  keyColumns: string[];
+  supportedModes: PushMode[];
+  maxRowsPerRequest: number;
+  rowCount: number;
+  rowsUpdatedAt: string | null;
+  version: number;
 }
 
-export interface WorkResponse {
-  work: WorkItem | null;
-  /** Client re-polls after this many seconds (plus its own small jitter). */
-  pollAfterSeconds: number;
+/** GET {url} response data (guide §2.1). */
+export interface ConnectionCheckResult {
+  status: "ok";
+  dataSourceId: string;
+  dataSourceName: string;
+  serverTime: string;
 }
 
-export interface CompleteRunRequest {
-  totalRows: number;
-  totalChunks: number;
+/** A single pushed row: column name -> value. */
+export type PlanometryRow = Record<string, unknown>;
+
+/** POST {url} request body (guide §2.3). */
+export interface PushRequestBody {
+  mode: PushMode;
+  rows?: PlanometryRow[];
+  deleted?: PlanometryRow[];
+  loadId?: string;
+  last?: boolean;
+  totalRows?: number;
 }
 
-export interface FailedRunRequest {
-  error: string;
+/** POST {url} response data (guide §2.3). */
+export interface PushResult {
+  mode: PushMode;
+  status: "accepted" | "completed";
+  rowCount?: number;
+  rowsAffected?: number;
+  rowsDeleted?: number;
+  version?: number;
+  completedAt?: string;
+  loadId?: string;
+  loadRowsReceived?: number;
 }
 
-export const CHUNK_SEQ_HEADER = "x-chunk-seq";
-/**
- * Row count for *this* chunk only. Lets the fake server (and, in principle,
- * a real backend) verify/aggregate row counts without needing to parse the
- * gzipped NDJSON body — the exact on-disk chunk format is Slice d's
- * concern, not this wire contract's.
- */
-export const CHUNK_ROWS_HEADER = "x-chunk-rows";
+/** Envelope every v4 endpoint responds with (guide §2). */
+export interface ResponseEnvelope<T> {
+  success: boolean;
+  message?: string;
+  data?: T;
+}

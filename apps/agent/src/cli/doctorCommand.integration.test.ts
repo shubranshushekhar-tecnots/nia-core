@@ -116,7 +116,6 @@ describe("runDoctor against a real SQL Server + fake Planometry", () => {
         "spool directory free disk space",
         "Planometry URL reachable",
         "clock skew",
-        "agent key accepted",
       ]),
     );
   });
@@ -150,35 +149,5 @@ describe("runDoctor against a real SQL Server + fake Planometry", () => {
     expect(byName["login can't write"]).toBeUndefined();
     expect(byName["sys.dm_exec_requests visible (cancel confirmation)"]).toBeUndefined();
     expect(byName["spool directory free disk space"]?.pass).toBe(true);
-    expect(byName["agent key accepted"]?.pass).toBe(true);
-  });
-
-  it("fails agent-key-accepted on a wrong agent key, without affecting SQL checks", async () => {
-    const dir = await newDir();
-    const fake = await newFakeServer();
-    fake.requireAgentKey("the-right-key");
-    addConnection(
-      {
-        id: "conn-bad-key",
-        label: "Bad agent key",
-        host: HOST,
-        port: PORT,
-        database: DATABASE,
-        user: TEST_LOGIN,
-        password: TEST_PASSWORD,
-        encrypt: false,
-        planometryBaseUrl: fake.baseUrl,
-        agentKey: "the-wrong-key",
-      },
-      dir,
-    );
-
-    const [report] = await runDoctor("conn-bad-key", dir);
-    const byName = Object.fromEntries(report!.checks.map((c) => [c.name, c]));
-    expect(byName["login credentials accepted"]?.pass).toBe(true);
-    expect(byName["login can't write"]?.pass).toBe(true);
-    expect(byName["agent key accepted"]?.pass).toBe(false);
-    expect(byName["agent key accepted"]?.fix).toMatch(/regenerate|update/);
-    expect(JSON.stringify(byName["agent key accepted"])).not.toContain("the-wrong-key");
   });
 });

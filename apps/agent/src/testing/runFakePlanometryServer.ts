@@ -1,16 +1,13 @@
 #!/usr/bin/env node
-import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { FakePlanometryServer } from "./fakePlanometryServer.js";
-import type { ExtractRequest } from "@nia/extract";
+import { FakePlanometryServer, type FakeTableDefinition, type InjectedFault } from "./fakePlanometryServer.js";
 
 /**
- * Foreground fake Planometry server for manual end-to-end testing
+ * Foreground fake Planometry v4 push server for manual end-to-end testing
  * (docs/manual-testing/agent.md) — wraps the test-only `FakePlanometryServer`
- * on a fixed, env-overridable port with verbose request logging, plus a
- * second tiny control HTTP server exposing JSON endpoints a human (or
- * `planometryCtl.ts`) can hit to issue an agent key, queue syncs, request a
- * catalog refresh, and inject faults — all without writing a test file.
+ * on a fixed, env-overridable port, plus a second tiny control HTTP server
+ * exposing JSON endpoints a human (or `planometryCtl.ts`) can hit to create
+ * a table and inject faults, without writing a test file.
  *
  * Not used by any automated test; `apps/agent/package.json`'s
  * `manual:planometry` script is this file's only caller.
@@ -20,7 +17,7 @@ const FAKE_PLANOMETRY_PORT = Number(process.env.NIA_AGENT_FAKE_PLANOMETRY_PORT ?
 const CONTROL_PORT = Number(process.env.NIA_AGENT_FAKE_CONTROL_PORT ?? 4456);
 
 async function main(): Promise<void> {
-  const fake = await FakePlanometryServer.start({ port: FAKE_PLANOMETRY_PORT, verbose: true });
+  const fake = await FakePlanometryServer.start({ port: FAKE_PLANOMETRY_PORT });
   const control = createControlServer(fake);
   await new Promise<void>((resolve) => control.listen(CONTROL_PORT, "127.0.0.1", resolve));
 
@@ -48,58 +45,31 @@ function createControlServer(fake: FakePlanometryServer): Server {
 async function handleControl(fake: FakePlanometryServer, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
 
-  if (req.method === "POST" && url.pathname === "/issue-key") {
-    const agentKey = randomUUID();
-    fake.requireAgentKey(agentKey);
-    console.log(`[fake-planometry] issued agent key: ${agentKey}`);
-    sendJson(res, 200, { agentKey });
+  if (req.method === "POST" && url.pathname === "/create-table") {
+    const body = await readJsonBody<FakeTableDefinition>(req);
+    const table = fake.createTable(body);
+    console.log(`[fake-planometry] created table ${table.tableId} at ${table.tableUrl}`);
+    sendJson(res, 200, table);
     return;
   }
 
-  if (req.method === "POST" && (url.pathname === "/queue" || url.pathname === "/refresh-catalog")) {
-    const body = await readJsonBody<{
-      connectionId: string;
-      runId: string;
-      table: string;
-      columns?: string[];
-      filter?: unknown[];
-      catalogRequested?: boolean;
-    }>(req);
-    const request: ExtractRequest = { table: body.table, columns: body.columns ?? [], filter: (body.filter as ExtractRequest["filter"]) ?? [] };
-    const catalogRequested = url.pathname === "/refresh-catalog" ? true : (body.catalogRequested ?? false);
-    fake.enqueueWork(body.connectionId, { runId: body.runId, request, catalogRequested });
-    console.log(`[fake-planometry] queued run=${body.runId} connection=${body.connectionId} table=${body.table}${catalogRequested ? " (catalog refresh requested)" : ""}`);
+  if (req.method === "POST" && url.pathname === "/inject-fault") {
+    const body = await readJsonBody<{ tableId: string; fault: InjectedFault; times?: number }>(req);
+    fake.injectFault(body.tableId, body.fault, body.times ?? 1);
+    console.log(`[fake-planometry] fault armed: table=${body.tableId} fault=${JSON.stringify(body.fault)} times=${body.times ?? 1}`);
     sendJson(res, 200, { ok: true });
     return;
   }
 
-  if (req.method === "POST" && url.pathname === "/fault/drop") {
-    const body = await readJsonBody<{ runId: string; seq: number }>(req);
-    const existing = fake.getRunFaults(body.runId) ?? {};
-    const dropOnFirstAttempt = new Set(existing.dropOnFirstAttempt ?? []);
-    dropOnFirstAttempt.add(body.seq);
-    fake.setRunFaults(body.runId, { ...existing, dropOnFirstAttempt });
-    console.log(`[fake-planometry] fault armed: run=${body.runId} seq=${body.seq} will be dropped on first attempt`);
-    sendJson(res, 200, { ok: true });
+  if (req.method === "GET" && url.pathname === "/rows") {
+    const tableId = url.searchParams.get("tableId") ?? "";
+    sendJson(res, 200, { rows: fake.getRows(tableId) });
     return;
   }
 
-  if (req.method === "POST" && url.pathname === "/fault/409") {
-    const body = await readJsonBody<{ runId: string; seq: number }>(req);
-    const existing = fake.getRunFaults(body.runId) ?? {};
-    const force409 = new Set(existing.force409 ?? []);
-    force409.add(body.seq);
-    fake.setRunFaults(body.runId, { ...existing, force409 });
-    console.log(`[fake-planometry] fault armed: run=${body.runId} seq=${body.seq} will always get 409`);
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/slow") {
-    const body = await readJsonBody<{ pollAfterSeconds: number }>(req);
-    fake.setPollAfterSeconds(body.pollAfterSeconds);
-    console.log(`[fake-planometry] empty polls now wait ${body.pollAfterSeconds}s before the agent re-polls`);
-    sendJson(res, 200, { ok: true });
+  if (req.method === "GET" && url.pathname === "/open-load") {
+    const tableId = url.searchParams.get("tableId") ?? "";
+    sendJson(res, 200, { openLoad: fake.getOpenLoad(tableId) ?? null });
     return;
   }
 
