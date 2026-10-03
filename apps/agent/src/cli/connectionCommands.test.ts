@@ -94,6 +94,8 @@ describe("connection commands", () => {
       strategy: "replace",
       mapping: [{ source: "Id", target: "Id" }],
       targetSchemaSnapshot: { columns: [{ name: "Id", type: "Number", isKey: true }], keyColumns: ["Id"] },
+      onNullKey: "stop",
+      allowEmptyReplace: false,
     };
     saveConfig(upsertJob(loadConfig(dir), job), dir);
 

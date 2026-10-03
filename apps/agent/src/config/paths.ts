@@ -37,3 +37,7 @@ export function stateFilePath(dir = defaultHomeDir()): string {
 export function defaultLogDir(dir = defaultHomeDir()): string {
   return path.join(dir, "logs");
 }
+
+export function defaultLocksDir(dir = defaultHomeDir()): string {
+  return path.join(dir, "locks");
+}

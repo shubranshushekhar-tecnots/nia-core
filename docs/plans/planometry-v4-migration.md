@@ -509,26 +509,18 @@ Date, `boolean` → Number) as a type-compatibility failure.
   rather than keep sending parts against a load Planometry will have
   already discarded. **[agent design, mirrors the prior draft's existing
   language.]**
-- **Duplicate keys within one part:** guide §3 states this rule for
-  `upsert` ("Duplicate keys inside one request: the last one wins"),
-  applied the same way per part for every mode including `replace`. The
-  agent also deduplicates to last-wins on its own side before sending,
-  per part — not, as a prior draft of this plan overstated, to make the
-  agent "independent of server behavior" (it still relies on the
-  server-side rule for anything it fails to catch, e.g. two keys that
-  differ only after formatting). The real reason is visibility: every
-  part's dedup count is recorded and surfaced as a warning in the run
-  summary (not an error) so an operator can see when a source or filter is
-  unexpectedly producing duplicate keys. **`totalRows` on the final part is
-  always the number of rows the agent actually sent after dedup**, not the
-  number of rows extracted before dedup — so `totalRows` and the sum of
-  `loadRowsReceived` across parts stay reconcilable.
-- **Duplicate keys across parts of one `replace` load:** unconfirmed from
-  the guide whether the same last-wins rule applies across parts, or
-  something else — kept as the open question below. The agent does not
-  attempt to dedup across parts itself (parts are streamed and sent
-  independently; doing so would require holding full-load state in
-  memory, defeating the point of splitting a load into parts).
+- **The agent does not de-duplicate (A4):** rows are sent exactly as
+  extracted, with no client-side dedup pass, within a part, across parts,
+  or for a single-request replace. `totalRows` on the final part is always
+  the number of rows actually extracted and sent, not a post-dedup count.
+  Exact client-side duplicate-key *detection* (surfacing it as a named
+  failure rather than relying solely on the server's rejection) is
+  deferred to slice D1. Until then, a source producing duplicate keys is
+  caught only by the server, per guide §3's last-wins rule for `upsert`/
+  `delete`/`realtime`, and — for `replace` — by whatever rule Planometry
+  applies at the swap (kept as the open question below; the fake server's
+  current assumption, for testing only, is a `400` at the swap with the
+  live table left unchanged).
 
 ---
 
@@ -1061,6 +1053,9 @@ scoped further here.
   (vs. only through the Planometry UI, as guide §6 describes)?
 - Timeline for Internal Tables as a mapping source (guide §5: "not offered
   as a mapping source yet").
+- Is `loadId` accepted for a load under 50,000 rows that is split by the
+  64 MB request-size limit? (§5)
+- How long can the last part of a large load take? (§5)
 
 ## Open questions, for GMS IT
 

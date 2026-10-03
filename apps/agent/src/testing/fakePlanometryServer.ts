@@ -16,10 +16,12 @@ import type { ColumnType, PlanometryRow, PushMode, PushRequestBody, SchemaColumn
  *     not something this wire-level fake enforces.
  *   - An empty-string push key is treated the same as a null/missing key:
  *     rejected (never matches a stored key).
- *   - Duplicate keys landing in different parts of the same multi-part
- *     `replace` load are only detected at the `last` part, and discard the
- *     whole load with `400` at that point (rather than failing the
- *     offending part early).
+ *   - A duplicate key anywhere in a `replace` load — repeated within one
+ *     request's `rows`, within the same part, or across different parts
+ *     of the same multi-part load — is detected but only reported at the
+ *     "swap" (the single request for a one-part load, or the `last` part
+ *     for a multi-part load): `400`, and the live table is left
+ *     unchanged (rather than failing the offending part early).
  */
 
 export interface FakeTableDefinition {
@@ -49,12 +51,12 @@ export interface FakePlanometryServerOptions {
 
 interface OpenLoad {
   loadId: string;
-  /** key -> {row, partIndex} so a cross-part duplicate key can be detected at `last`. */
+  /** key -> {row, partIndex} so a duplicate key — within a part or across parts — can be detected at `last`. */
   entries: Map<string, { row: PlanometryRow; partIndex: number }>;
   partIndex: number;
   /** Cumulative raw row count across every part seen, including resends — not deduped. */
   totalRowsReceived: number;
-  hasCrossPartDuplicate: boolean;
+  hasDuplicateKey: boolean;
   lastTouchedAtMs: number;
 }
 
@@ -392,7 +394,15 @@ function applyRealtime(table: FakeTable, rows: PlanometryRow[], deleted: Planome
 
 function applyReplaceWhole(table: FakeTable, rows: PlanometryRow[]) {
   const deduped = new Map<string, PlanometryRow>();
-  for (const row of rows) deduped.set(rowKey(table, row), row);
+  let hasDuplicateKey = false;
+  for (const row of rows) {
+    const key = rowKey(table, row);
+    if (deduped.has(key)) hasDuplicateKey = true;
+    deduped.set(key, row);
+  }
+  if (hasDuplicateKey) {
+    throw new PushValidationError("duplicate key in the replace load");
+  }
   table.rows = deduped;
   const version = bumpVersion(table);
   return { mode: "replace" as const, status: "completed" as const, rowCount: table.rows.size, rowsAffected: table.rows.size, version, completedAt: table.rowsUpdatedAt! };
@@ -404,7 +414,7 @@ function applyReplacePart(table: FakeTable, body: PushRequestBody, now: () => Da
 
   const idleExpired = table.openLoad && nowMs - table.openLoad.lastTouchedAtMs > LOAD_IDLE_TIMEOUT_MS;
   if (!table.openLoad || table.openLoad.loadId !== loadId || idleExpired) {
-    table.openLoad = { loadId, entries: new Map(), partIndex: 0, totalRowsReceived: 0, hasCrossPartDuplicate: false, lastTouchedAtMs: nowMs };
+    table.openLoad = { loadId, entries: new Map(), partIndex: 0, totalRowsReceived: 0, hasDuplicateKey: false, lastTouchedAtMs: nowMs };
   }
   const load = table.openLoad;
   load.partIndex += 1;
@@ -413,11 +423,13 @@ function applyReplacePart(table: FakeTable, body: PushRequestBody, now: () => Da
   const rows = body.rows ?? [];
   load.totalRowsReceived += rows.length;
 
-  const partDeduped = new Map<string, PlanometryRow>();
-  for (const row of rows) partDeduped.set(rowKey(table, row), row);
-  for (const [key, row] of partDeduped) {
+  const seenThisPart = new Set<string>();
+  for (const row of rows) {
+    const key = rowKey(table, row);
+    if (seenThisPart.has(key)) load.hasDuplicateKey = true;
+    seenThisPart.add(key);
     const existing = load.entries.get(key);
-    if (existing && existing.partIndex !== load.partIndex) load.hasCrossPartDuplicate = true;
+    if (existing && existing.partIndex !== load.partIndex) load.hasDuplicateKey = true;
     load.entries.set(key, { row, partIndex: load.partIndex });
   }
 
@@ -429,9 +441,9 @@ function applyReplacePart(table: FakeTable, body: PushRequestBody, now: () => Da
     table.openLoad = undefined;
     throw new PushValidationError(`totalRows mismatch: expected ${body.totalRows}, received ${load.totalRowsReceived}`);
   }
-  if (load.hasCrossPartDuplicate) {
+  if (load.hasDuplicateKey) {
     table.openLoad = undefined;
-    throw new PushValidationError("duplicate key across different parts of the same replace load");
+    throw new PushValidationError("duplicate key in the replace load");
   }
 
   table.rows = new Map([...load.entries].map(([key, e]) => [key, e.row]));

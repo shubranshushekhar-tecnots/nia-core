@@ -36,6 +36,8 @@ const job: SyncJobEntry = {
   strategy: "replace",
   mapping: [{ source: "Id", target: "Id" }],
   targetSchemaSnapshot: { columns: [{ name: "Id", type: "Number", isKey: true }], keyColumns: ["Id"] },
+  onNullKey: "stop",
+  allowEmptyReplace: false,
 };
 
 describe("config store", () => {

@@ -177,4 +177,63 @@ describe("FakePlanometryServer", () => {
     expect(server.getRows(table.tableId)).toEqual([{ id: "a", qty: 1 }]);
     await client.close();
   });
+
+  it("a duplicate key within one request of a single-part replace returns 400 and leaves the table unchanged", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+    await client.push({ mode: "upsert", rows: [{ id: "old", qty: 1 }] });
+
+    await expect(
+      client.push({
+        mode: "replace",
+        rows: [
+          { id: "a", qty: 1 },
+          { id: "a", qty: 2 },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(PlanometryRejectedError);
+
+    expect(server.getRows(table.tableId)).toEqual([{ id: "old", qty: 1 }]);
+    await client.close();
+  });
+
+  it("a duplicate key within one part of a multi-part replace returns 400 at last and leaves the table unchanged", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+    await client.push({ mode: "upsert", rows: [{ id: "old", qty: 1 }] });
+
+    await client.push({
+      mode: "replace",
+      loadId: "load-1",
+      rows: [
+        { id: "a", qty: 1 },
+        { id: "a", qty: 2 },
+      ],
+    });
+    await expect(
+      client.push({ mode: "replace", loadId: "load-1", rows: [{ id: "b", qty: 3 }], last: true, totalRows: 3 }),
+    ).rejects.toBeInstanceOf(PlanometryRejectedError);
+
+    expect(server.getOpenLoad(table.tableId)).toBeUndefined();
+    expect(server.getRows(table.tableId)).toEqual([{ id: "old", qty: 1 }]);
+    await client.close();
+  });
+
+  it("a duplicate key across different parts of a multi-part replace returns 400 at last and leaves the table unchanged", async () => {
+    server = await FakePlanometryServer.start();
+    const table = server.createTable({ columns });
+    const client = clientFor(table);
+    await client.push({ mode: "upsert", rows: [{ id: "old", qty: 1 }] });
+
+    await client.push({ mode: "replace", loadId: "load-1", rows: [{ id: "a", qty: 1 }] });
+    await expect(
+      client.push({ mode: "replace", loadId: "load-1", rows: [{ id: "a", qty: 2 }], last: true, totalRows: 2 }),
+    ).rejects.toBeInstanceOf(PlanometryRejectedError);
+
+    expect(server.getOpenLoad(table.tableId)).toBeUndefined();
+    expect(server.getRows(table.tableId)).toEqual([{ id: "old", qty: 1 }]);
+    await client.close();
+  });
 });

@@ -10,7 +10,7 @@ import {
   saveConfig,
   upsertJob,
 } from "../config/store.js";
-import type { ConnectionEntry, JobMappingColumn, SyncJobEntry, TargetSchemaSnapshot } from "../config/types.js";
+import type { ConnectionEntry, JobMappingColumn, OnNullKey, SyncJobEntry, TargetSchemaSnapshot } from "../config/types.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { PlanometryClient } from "../planometry/client.js";
@@ -45,6 +45,10 @@ export interface AddJobInput {
   targetUrl: string;
   pushKey: string;
   mapOverrides: RawMappingPair[];
+  /** §7: default "stop". */
+  onNullKey?: OnNullKey;
+  /** §7: default false. */
+  allowEmptyReplace?: boolean;
 }
 
 /**
@@ -96,6 +100,8 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     strategy: "replace",
     mapping: pairs,
     targetSchemaSnapshot: buildTargetSchemaSnapshot(schema, pairs),
+    onNullKey: input.onNullKey ?? "stop",
+    allowEmptyReplace: input.allowEmptyReplace ?? false,
   };
 
   saveConfig(upsertJob(config, job), dir);
@@ -206,6 +212,8 @@ export interface UpdateJobInput {
   rekey?: string;
   mapOverrides?: RawMappingPair[];
   unmapTargets?: string[];
+  onNullKey?: OnNullKey;
+  allowEmptyReplace?: boolean;
 }
 
 /**
@@ -269,6 +277,8 @@ export async function updateJob(
     pushKeyRef,
     mapping: plan.pairs,
     targetSchemaSnapshot: buildTargetSchemaSnapshot(schema, plan.pairs),
+    onNullKey: input.onNullKey ?? job.onNullKey,
+    allowEmptyReplace: input.allowEmptyReplace ?? job.allowEmptyReplace,
   };
 
   saveConfig(upsertJob(config, updated), dir);

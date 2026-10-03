@@ -49,6 +49,9 @@ export interface TargetSchemaSnapshot {
   keyColumns: string[];
 }
 
+/** §7 "Safety rules": a null/empty-string key value either stops the run (default) or is dropped and counted. */
+export type OnNullKey = "stop" | "skip";
+
 export interface SyncJobEntry {
   id: string;
   name: string;
@@ -62,6 +65,10 @@ export interface SyncJobEntry {
   strategy: JobStrategy;
   mapping: JobMappingColumn[];
   targetSchemaSnapshot: TargetSchemaSnapshot;
+  /** §7: default "stop". */
+  onNullKey: OnNullKey;
+  /** §7: a zero-row replace is refused unless this is true. Default false. */
+  allowEmptyReplace: boolean;
 }
 
 /**

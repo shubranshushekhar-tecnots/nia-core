@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Mini Nia Core</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#6b7280; --line:#e5e7eb; --accent:#e5533d; --ok:#15803d; --bad:#b91c1c; }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; color:var(--ink); background:var(--bg); }
+  header { padding:16px 24px; border-bottom:1px solid var(--line); background:var(--card); display:flex; align-items:baseline; gap:12px; }
+  header h1 { margin:0; font-size:18px; }
+  header span { color:var(--muted); }
+  main { display:grid; grid-template-columns: 340px 1fr; gap:16px; padding:16px 24px; max-width:1500px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
+  input[type=text], input[type=url], input[type=password], textarea, select {
+    width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); font:inherit; }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; min-height:160px; resize:vertical; }
+  button { padding:8px 12px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .targets { list-style:none; margin:0; padding:0; }
+  .targets li { padding:8px; border:1px solid var(--line); border-radius:6px; margin-bottom:6px; cursor:pointer; }
+  .targets li.active { border-color:var(--accent); }
+  .targets li small { display:block; color:var(--muted); font-family: ui-monospace, monospace; font-size:11px; word-break:break-all; }
+  .tabs { display:flex; gap:4px; margin-bottom:8px; }
+  .tabs button.on { background:var(--bg); border-color:var(--accent); }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  th, td { border-bottom:1px solid var(--line); padding:4px 8px; text-align:left; white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; }
+  .scroll { overflow:auto; max-height:240px; border:1px solid var(--line); border-radius:6px; }
+  .log { font-family: ui-monospace, monospace; font-size:12px; white-space:pre-wrap; max-height:240px; overflow:auto; background:var(--bg); border-radius:6px; padding:10px; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .muted { color:var(--muted); }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; border:1px solid var(--line); font-size:11px; }
+  .pill.ok { border-color:var(--ok); color:var(--ok); } .pill.bad { border-color:var(--bad); color:var(--bad); }
+  .hidden { display:none; }
+  .map { display:grid; grid-template-columns: 1fr 24px 1fr 36px; gap:6px 10px; align-items:center; font-size:13px; }
+  .map button { padding:4px 8px; color:var(--muted); }
+  .map .h { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .map code { background:var(--bg); padding:2px 6px; border-radius:4px; }
+  .step { display:flex; gap:10px; align-items:center; padding:8px 0; border-bottom:1px solid var(--line); }
+  .step:last-child { border-bottom:0; }
+  .step .n { width:22px; height:22px; border-radius:50%; border:1px solid var(--line); display:grid; place-items:center; font-size:12px; color:var(--muted); flex:none; }
+  .step .t { flex:1; min-width:0; }
+  .step .t small { display:block; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mini Nia Core</h1>
+  <span>reads rows from a JSON string, a file or a URL, maps them to a Planometry push table, and pushes them</span>
+</header>
+
+<main>
+  <!-- ───────────── Targets ───────────── -->
+  <section class="card">
+    <h2>Targets (Planometry push data sources)</h2>
+    <ul class="targets" id="targets"></ul>
+    <details id="targetForm" open>
+      <summary>Add a target</summary>
+      <label>Name (for this list only)</label>
+      <input type="text" id="tName" placeholder="GMS customers">
+      <label>Table URL (from the edit page in Planometry)</label>
+      <input type="url" id="tPush" placeholder="http://localhost:5271/api/datasources/internal-tables/ds-xxxxxxxxxxxxxxxx">
+      <label>Push key</label>
+      <input type="password" id="tKey" placeholder="ds-xxxx.xxxxxxxx">
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="tSave">Save target</button>
+        <button id="tRemove" class="hidden">Remove</button>
+      </div>
+    </details>
+    <p class="muted" style="font-size:11px;margin-bottom:0">Saved in this browser only (localStorage). GET the URL = connection check, GET …/schema = columns, POST the URL = push.</p>
+  </section>
+
+  <section style="display:flex;flex-direction:column;gap:16px">
+    <!-- ───────────── Workflow ───────────── -->
+    <div class="card">
+      <h2>Workflow · <span id="tgtName">no target selected</span></h2>
+
+      <div class="step">
+        <div class="n">1</div>
+        <div class="t">Connection <span id="connPill" class="pill muted">not checked</span><small id="connInfo">Is Planometry reachable and is the key accepted?</small></div>
+        <button id="btnConn">Test connection</button>
+      </div>
+
+      <div class="step">
+        <div class="n">2</div>
+        <div class="t">Schema <span id="schemaPill" class="pill muted">not loaded</span><small id="schemaInfo">The target table's columns, as they are right now.</small></div>
+        <button id="btnSchema">Load schema</button>
+      </div>
+
+      <div class="step">
+        <div class="n">3</div>
+        <div class="t">Push <small id="pushInfo">upsert (default) / delete = deltas matched on the key columns; replace = whole table; realtime = one tick of a change feed: upserts + deletes together (a source row with <code>"_deleted": true</code> is a delete).</small></div>
+        <div class="row">
+          <select id="optMode" style="width:auto">
+            <option value="upsert" selected>upsert (delta, default)</option>
+            <option value="replace">replace (full load)</option>
+            <option value="delete">delete (by key)</option>
+            <option value="realtime">realtime (change-feed tick)</option>
+          </select>
+          <button id="btnPush" class="primary" disabled>Push</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ───────────── Source ───────────── -->
+    <div class="card">
+      <h2>Source rows</h2>
+      <div class="tabs">
+        <button data-tab="json" class="on">JSON text</button>
+        <button data-tab="file">File (JSON / CSV)</button>
+        <button data-tab="url">URL (GET returning JSON)</button>
+      </div>
+      <div id="tab-json">
+        <textarea id="srcJson" placeholder='[
+  { "CustCode": "C-001", "CustName": "ACME" },
+  { "CustCode": "C-002", "CustName": "Globex" }
+]'></textarea>
+      </div>
+      <div id="tab-file" class="hidden">
+        <input type="file" id="srcFile" accept=".json,.csv">
+        <p class="muted" style="font-size:12px">JSON: an array of objects, or an object holding one (<code>{ "data": [...] }</code>). CSV: first line is the header.</p>
+      </div>
+      <div id="tab-url" class="hidden">
+        <div class="row">
+          <input type="url" id="srcUrl" placeholder="http://localhost:8090/sales" style="flex:1">
+          <button id="btnFetch">Fetch</button>
+        </div>
+        <input type="text" id="srcUrlAuth" placeholder="Authorization header value, optional" style="margin-top:6px">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnParse" class="primary">Load rows</button>
+        <span id="srcSummary" class="muted"></span>
+      </div>
+      <div class="scroll" style="margin-top:8px"><table id="preview"></table></div>
+    </div>
+
+    <!-- ───────────── Mapping ───────────── -->
+    <div class="card">
+      <h2>Column mapping · source → target</h2>
+      <div id="mapping" class="muted">Load the schema (step 2) and the rows to map columns.</div>
+    </div>
+
+    <!-- ───────────── Log ───────────── -->
+    <div class="card">
+      <h2>Log</h2>
+      <div class="log" id="log"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  // ───────────── State ─────────────
+  const LS = "mini-nia-core.targets.v3";
+  let targets = JSON.parse(localStorage.getItem(LS) || "[]");
+  let activeId = targets[0]?.id ?? null;
+  let targetColumns = null;   // from schema: [{name,type}]
+  let rows = [];              // parsed source rows (objects)
+  let mapping = [];           // [{ src: sourceColumn, tgt: targetColumn }], both user-chosen
+  let editingId = null;
+
+  const $ = (id) => document.getElementById(id);
+  const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const log = (msg, cls = "") => {
+    const el = $("log");
+    el.innerHTML += `<div class="${cls}">[${new Date().toLocaleTimeString()}] ${escapeHtml(msg)}</div>`;
+    el.scrollTop = el.scrollHeight;
+  };
+  const active = () => targets.find((t) => t.id === activeId) ?? null;
+  const setPill = (id, text, cls) => { const p = $(id); p.textContent = text; p.className = `pill ${cls}`; };
+
+  // ───────────── Targets ─────────────
+  function saveTargets() { localStorage.setItem(LS, JSON.stringify(targets)); }
+  function renderTargets() {
+    const ul = $("targets");
+    ul.innerHTML = "";
+    for (const t of targets) {
+      const li = document.createElement("li");
+      li.className = t.id === activeId ? "active" : "";
+      li.innerHTML = `<div>${escapeHtml(t.name)}</div><small>${escapeHtml(t.push)}</small>`;
+      li.onclick = () => { activeId = t.id; resetTargetState(); renderTargets(); fillTargetForm(t); };
+      ul.appendChild(li);
+    }
+    const t = active();
+    $("tgtName").textContent = t ? t.name : "no target selected";
+    $("btnConn").disabled = !t;
+    $("btnSchema").disabled = !t;
+    updatePushButton();
+  }
+  function resetTargetState() {
+    targetColumns = null; mapping = [];
+    setPill("connPill", "not checked", "muted"); $("connInfo").textContent = "Is Planometry reachable and is the key accepted?";
+    setPill("schemaPill", "not loaded", "muted"); $("schemaInfo").textContent = "The target table's columns, as they are right now.";
+    renderMapping();
+  }
+  function fillTargetForm(t) {
+    editingId = t?.id ?? null;
+    $("tName").value = t?.name ?? "";
+    $("tPush").value = t?.push ?? "";
+    $("tKey").value = t?.key ?? "";
+    $("tRemove").classList.toggle("hidden", !t);
+    $("targetForm").querySelector("summary").textContent = t ? "Edit target" : "Add a target";
+  }
+  $("tSave").onclick = () => {
+    const v = (id) => $(id).value.trim();
+    const name = v("tName"), push = v("tPush").replace(/\/+$/, ""), key = v("tKey");
+    if (!name || !push || !key) { log("Name, the table URL and the key are all required.", "bad"); return; }
+    if (editingId) Object.assign(targets.find((t) => t.id === editingId), { name, push, key });
+    else { const id = Math.random().toString(36).slice(2); targets.push({ id, name, push, key }); activeId = id; }
+    saveTargets(); resetTargetState(); renderTargets(); fillTargetForm(active());
+    log(`Target "${name}" saved.`);
+  };
+  $("tRemove").onclick = () => {
+    targets = targets.filter((t) => t.id !== editingId);
+    if (activeId === editingId) activeId = targets[0]?.id ?? null;
+    saveTargets(); resetTargetState(); renderTargets(); fillTargetForm(null);
+  };
+
+  // ───────────── Planometry calls ─────────────
+  async function call(method, url, body, extraHeaders = {}) {
+    const t = active();
+    if (!t) throw new Error("No target selected.");
+    const res = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${t.key}`, ...(body ? { "Content-Type": "application/json" } : {}), ...extraHeaders },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    let json = null;
+    try { json = await res.json(); } catch { /* no body */ }
+    if (!res.ok) throw new Error(`${res.status} ${json?.message ?? res.statusText}`);
+    return json?.data ?? json;
+  }
+  // The chunked endpoints live next to the push endpoint: …/push → …/syncs
+  const schemaUrl = () => `${active().push}/schema`;
+
+  // Step 1 — connection only: reachability + key.
+  $("btnConn").onclick = async () => {
+    try {
+      const c = await call("GET", active().push);
+      setPill("connPill", "connected", "ok");
+      $("connInfo").textContent = `Key accepted for "${c.dataSourceName}" (${c.dataSourceId}). Server time ${new Date(c.serverTime).toLocaleString()}.`;
+      log(`1. Connection OK — "${c.dataSourceName}".`, "ok");
+    } catch (e) {
+      setPill("connPill", "failed", "bad");
+      $("connInfo").textContent = e.message;
+      log(`1. Connection failed: ${e.message}`, "bad");
+    }
+  };
+
+  // Step 2 — schema only: the target's current columns.
+  $("btnSchema").onclick = async () => {
+    try {
+      const d = await call("GET", schemaUrl());
+      targetColumns = d.columns ?? [];
+      setPill("schemaPill", `${targetColumns.length} columns`, "ok");
+      const keys = d.keyColumns ?? [];
+      $("schemaInfo").innerHTML =
+        `${targetColumns.map((c) => `<code>${escapeHtml(c.name)}</code>${c.isKey ? " 🔑" : ""} <span class="muted">${c.type}</span>`).join(", ")}` +
+        ` · ${(d.rowCount ?? 0).toLocaleString()} rows in the table` +
+        (d.rowsUpdatedAt ? `, pushed ${new Date(d.rowsUpdatedAt).toLocaleString()}` : ", never pushed") +
+        ` · modes: ${(d.supportedModes ?? []).join(", ")}`;
+      for (const o of $("optMode").options) o.disabled = !(d.supportedModes ?? ["replace"]).includes(o.value);
+      if ($("optMode").selectedOptions[0]?.disabled) $("optMode").value = "upsert";
+      log(`2. Schema loaded — ${targetColumns.map((c) => `${c.name}:${c.type}${c.isKey ? " (key)" : ""}`).join(", ")}; version ${d.version}.`, "ok");
+      autoMap();
+    } catch (e) {
+      targetColumns = null;
+      setPill("schemaPill", "failed", "bad");
+      $("schemaInfo").textContent = e.message;
+      log(`2. Schema failed: ${e.message}`, "bad");
+    }
+    renderMapping(); updatePushButton();
+  };
+
+  // ───────────── Source parsing ─────────────
+  document.querySelectorAll(".tabs button").forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
+      for (const tab of ["json", "file", "url"]) $(`tab-${tab}`).classList.toggle("hidden", b.dataset.tab !== tab);
+    };
+  });
+
+  let fetchedText = null;
+  $("btnFetch").onclick = async () => {
+    const url = $("srcUrl").value.trim();
+    if (!url) return;
+    try {
+      const headers = {};
+      const auth = $("srcUrlAuth").value.trim();
+      if (auth) headers.Authorization = auth;
+      const res = await fetch(url, { headers });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      fetchedText = await res.text();
+      log(`Fetched ${(fetchedText.length / 1024).toFixed(1)} KB from ${url}. Press "Load rows".`);
+    } catch (e) { log(`Fetch failed: ${e.message}`, "bad"); }
+  };
+
+  function rowsFromJson(text) {
+    let v = JSON.parse(text);
+    if (!Array.isArray(v) && v && typeof v === "object") {
+      const key = Object.keys(v).find((k) => Array.isArray(v[k]) && (v[k].length === 0 || typeof v[k][0] === "object"));
+      if (!key) throw new Error("The JSON object holds no array of rows.");
+      v = v[key];
+    }
+    if (!Array.isArray(v)) throw new Error("JSON must be an array of objects.");
+    return v.filter((r) => r && typeof r === "object" && !Array.isArray(r))
+            .map((r) => Object.fromEntries(Object.entries(r).map(([k, val]) => [k, val && typeof val === "object" ? JSON.stringify(val) : val])));
+  }
+  function rowsFromCsv(text) {
+    const out = []; let field = "", rec = [], q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) { if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += c; }
+      else if (c === '"') q = true;
+      else if (c === ",") { rec.push(field); field = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        rec.push(field); field = "";
+        if (rec.some((f) => f.trim() !== "")) out.push(rec);
+        rec = [];
+      } else field += c;
+    }
+    if (field !== "" || rec.length) { rec.push(field); if (rec.some((f) => f.trim() !== "")) out.push(rec); }
+    if (out.length === 0) return [];
+    const header = out[0].map((h) => h.trim());
+    return out.slice(1).map((r) => Object.fromEntries(header.map((h, i) => [h, r[i] === undefined || r[i] === "" ? null : r[i]])));
+  }
+
+  $("btnParse").onclick = async () => {
+    const tab = document.querySelector(".tabs button.on").dataset.tab;
+    try {
+      if (tab === "json") rows = rowsFromJson($("srcJson").value);
+      else if (tab === "url") { if (fetchedText == null) throw new Error("Fetch the URL first."); rows = rowsFromJson(fetchedText); }
+      else {
+        const f = $("srcFile").files[0];
+        if (!f) throw new Error("Choose a file.");
+        const text = await f.text();
+        rows = f.name.toLowerCase().endsWith(".csv") ? rowsFromCsv(text) : rowsFromJson(text);
+      }
+      $("srcSummary").textContent = `${rows.length.toLocaleString()} rows, ${sourceColumns().length} columns`;
+      log(`Loaded ${rows.length.toLocaleString()} rows from ${tab}.`);
+      autoMap();
+    } catch (e) { rows = []; $("srcSummary").textContent = ""; log(`Could not read the source: ${e.message}`, "bad"); }
+    renderPreview(); renderMapping(); updatePushButton();
+  };
+
+  const sourceColumns = () => { const s = new Set(); for (const r of rows) for (const k of Object.keys(r)) s.add(k); return [...s]; };
+
+  function renderPreview() {
+    const cols = sourceColumns(), tbl = $("preview");
+    if (rows.length === 0) { tbl.innerHTML = ""; return; }
+    const head = `<tr>${cols.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}</tr>`;
+    const body = rows.slice(0, 50).map((r) => `<tr>${cols.map((c) => `<td>${escapeHtml(r[c] ?? "")}</td>`).join("")}</tr>`).join("");
+    tbl.innerHTML = head + body + (rows.length > 50 ? `<tr><td colspan="${cols.length}" class="muted">… ${(rows.length - 50).toLocaleString()} more</td></tr>` : "");
+  }
+
+  // ───────────── Mapping ─────────────
+  // The mapping is a free list of (source column → target column) pairs, both sides
+  // chosen by the user. Auto-fill proposes one pair per target column by name
+  // (ignoring case, spaces, underscores and dashes: CustCode ↔ cust_code); the
+  // user can change either side, delete pairs, or add more.
+  const norm = (s) => String(s).toLowerCase().replace(/[\s_\-]/g, "");
+  function autoMap() {
+    if (!targetColumns) return;
+    const src = sourceColumns();
+    if (mapping.length > 0 && mapping.every((p) => !p.src || src.includes(p.src))) return; // keep the user's work
+    mapping = targetColumns.map((t) => ({
+      src: src.find((s) => s === t.name) ?? src.find((s) => norm(s) === norm(t.name)) ?? "",
+      tgt: t.name,
+    }));
+  }
+  function renderMapping() {
+    const el = $("mapping");
+    if (!targetColumns) { el.innerHTML = `<span class="muted">Load the schema (step 2) and the rows to map columns.</span>`; return; }
+    const src = sourceColumns();
+    if (src.length === 0) { el.innerHTML = `<span class="muted">Load the rows to map columns.</span>`; return; }
+    const srcOpts = (sel) => `<option value="">— pick a source column —</option>` + src.map((s) =>
+      `<option value="${escapeHtml(s)}" ${s === sel ? "selected" : ""}>${escapeHtml(s)}</option>`).join("");
+    const tgtOpts = (sel) => `<option value="">— pick a target column —</option>` + targetColumns.map((t) =>
+      `<option value="${escapeHtml(t.name)}" ${t.name === sel ? "selected" : ""}>${escapeHtml(t.name)}${t.isKey ? " 🔑" : ""} · ${t.type}</option>`).join("");
+    const lines = mapping.map((p, i) => `
+      <select data-i="${i}" data-side="src">${srcOpts(p.src)}</select>
+      <span class="muted">→</span>
+      <select data-i="${i}" data-side="tgt">${tgtOpts(p.tgt)}</select>
+      <button type="button" data-remove="${i}" title="Remove this pair">✕</button>`).join("");
+    const used = new Set(mapping.filter((p) => p.src && p.tgt).map((p) => p.tgt));
+    const dupTargets = [...new Set(mapping.map((p) => p.tgt).filter((t, i, a) => t && a.indexOf(t) !== i))];
+    const unfilled = targetColumns.filter((t) => !used.has(t.name)).map((t) => t.name);
+    el.innerHTML = `<div class="map"><span class="h">source column</span><span></span><span class="h">target column</span><span></span>${lines}</div>` +
+      `<div class="row" style="margin-top:10px"><button type="button" id="btnAddPair">+ Add mapping</button></div>` +
+      (dupTargets.length ? `<p class="bad" style="font-size:12px;margin:10px 0 0">A target column can be fed by one source only: ${dupTargets.map((t) => `<code>${escapeHtml(t)}</code>`).join(", ")}</p>` : "") +
+      (unfilled.length ? `<p class="muted" style="font-size:12px;margin:10px 0 0">Target columns sent as null: ${unfilled.map((t) => `<code>${escapeHtml(t)}</code>`).join(", ")}</p>` : "");
+    el.querySelectorAll("select").forEach((sel) => {
+      sel.onchange = () => { mapping[Number(sel.dataset.i)][sel.dataset.side] = sel.value; renderMapping(); updatePushButton(); };
+    });
+    el.querySelectorAll("button[data-remove]").forEach((b) => {
+      b.onclick = () => { mapping.splice(Number(b.dataset.remove), 1); renderMapping(); updatePushButton(); };
+    });
+    $("btnAddPair").onclick = () => { mapping.push({ src: "", tgt: "" }); renderMapping(); updatePushButton(); };
+  }
+  /** Complete pairs only, one per target; last pair wins when a target is repeated. */
+  const effectivePairs = () => {
+    const byTarget = new Map();
+    for (const p of mapping) if (p.src && p.tgt) byTarget.set(p.tgt, p.src);
+    return [...byTarget.entries()]; // [target, source]
+  };
+  function updatePushButton() {
+    const dup = new Set(mapping.map((p) => p.tgt).filter((t, i, a) => t && a.indexOf(t) !== i)).size > 0;
+    $("btnPush").disabled = !(active() && targetColumns && rows.length > 0 && effectivePairs().length > 0 && !dup);
+  }
+
+  // ───────────── Push ─────────────
+  const describeResult = (r) => {
+    const what = r.mode === "Delete" ? `${(r.rowsAffected ?? 0).toLocaleString()} rows removed`
+      : r.mode === "Upsert" ? `${(r.rowsAffected ?? 0).toLocaleString()} rows inserted or updated`
+      : r.mode === "Realtime" ? `${((r.rowsAffected ?? 0) - (r.rowsDeleted ?? 0)).toLocaleString()} rows inserted or updated, ${(r.rowsDeleted ?? 0).toLocaleString()} removed`
+      : `${(r.rowsAffected ?? 0).toLocaleString()} rows loaded`;
+    log(`Done (version ${r.version}): ${what}; the table now holds ${(r.rowCount ?? 0).toLocaleString()} rows.`, "ok");
+  };
+
+  $("btnPush").onclick = async () => {
+    const mode = $("optMode").value;
+    // delete needs only the key columns; the others send every mapped column
+    const keyNames = new Set(targetColumns.filter((t) => t.isKey).map((t) => t.name));
+    const pairs = effectivePairs().filter(([tgt]) => mode !== "delete" || keyNames.has(tgt));
+    const toRow = (r) => Object.fromEntries(pairs.map(([tgt, src]) => [tgt, r[src] ?? null]));
+    const isDeleted = (r) => r._deleted === true || String(r._deleted).toLowerCase() === "true";
+    // realtime: one tick of a change feed is upserts AND deletes in one request. Here
+    // a source row flagged `_deleted` is a delete (only its key columns are sent);
+    // every other row is an upsert. A real connector derives both lists from its feed.
+    const payload = rows.filter((r) => mode !== "realtime" || !isDeleted(r)).map(toRow);
+    const deleted = mode === "realtime"
+      ? rows.filter(isDeleted).map((r) => Object.fromEntries(pairs.filter(([tgt]) => keyNames.has(tgt)).map(([tgt, src]) => [tgt, r[src] ?? null])))
+      : [];
+    const chunk = 50000; // the API's fixed per-request limit; larger feeds go as parts of one load
+    $("btnPush").disabled = true;
+    try {
+      if (mode === "realtime") {
+        log(`3. Pushing one real-time tick: ${payload.length.toLocaleString()} upserts, ${deleted.length.toLocaleString()} deletes…`);
+        describeResult(await call("POST", active().push, { mode, rows: payload, deleted }));
+      } else if (payload.length <= chunk) {
+        log(`3. Pushing ${payload.length.toLocaleString()} rows (${mode}, ${pairs.length} columns)…`);
+        describeResult(await call("POST", active().push, { mode, rows: payload }));
+      } else {
+        log(`3. Pushing ${payload.length.toLocaleString()} rows (${mode}) in parts of ${chunk.toLocaleString()}…`);
+        // upsert / delete: every part stands alone. replace: the parts share a loadId
+        // and the last one swaps the new table live.
+        const loadId = mode === "replace" ? `load-${Date.now()}` : null;
+        let part = 0;
+        for (let i = 0; i < payload.length; i += chunk) {
+          part++;
+          const isLast = i + chunk >= payload.length;
+          const body = { mode, rows: payload.slice(i, i + chunk) };
+          if (loadId) Object.assign(body, { loadId, last: isLast, ...(isLast ? { totalRows: payload.length } : {}) });
+          const r = await call("POST", active().push, body);
+          if (r.status === "accepted") log(`Part ${part}: stored (${r.loadRowsReceived.toLocaleString()} rows in load ${loadId}).`);
+          else if (isLast) describeResult(r);
+          else log(`Part ${part}: ${(r.rowsAffected ?? 0).toLocaleString()} rows applied.`);
+        }
+      }
+      $("pushInfo").textContent = `Last push ${new Date().toLocaleString()} — ${mode}, ${payload.length.toLocaleString()} rows.`;
+    } catch (e) {
+      log(`3. Push failed: ${e.message}`, "bad");
+    } finally { updatePushButton(); }
+  };
+
+  // ───────────── Init ─────────────
+  renderTargets(); fillTargetForm(active()); renderMapping();
+  log("Add a target (table URL + key from Planometry), test the connection, load the schema, load rows, map columns, push.");
+})();
+</script>
+</body>
+</html>

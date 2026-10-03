@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
 import { addJob, listJobs, removeJob, testJob, updateJob } from "./cli/jobCommands.js";
+import { runJob } from "./cli/runJobCommand.js";
 import { parseMapOverrides } from "./cli/jobMapping.js";
 import { readSecretFromStdin } from "./cli/securePrompt.js";
 import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
@@ -211,13 +212,21 @@ async function main(argv: string[]): Promise<void> {
         name: { type: "string" },
         map: { type: "string", multiple: true },
         yes: { type: "boolean" },
+        "on-null-key": { type: "string" },
+        "allow-empty-replace": { type: "boolean" },
       },
     });
     const connectionId = values.connection as string | undefined;
     const table = values.table as string | undefined;
     const targetUrl = values["target-url"] as string | undefined;
     if (!connectionId || !table || !targetUrl) {
-      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--yes]");
+      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--yes]");
+      process.exitCode = 1;
+      return;
+    }
+    const onNullKey = parseOnNullKey(values["on-null-key"] as string | undefined);
+    if (onNullKey === undefined && values["on-null-key"] !== undefined) {
+      console.error(`--on-null-key must be "stop" or "skip", got ${JSON.stringify(values["on-null-key"])}`);
       process.exitCode = 1;
       return;
     }
@@ -229,6 +238,8 @@ async function main(argv: string[]): Promise<void> {
       targetUrl,
       pushKey,
       mapOverrides: parseMapOverrides((values.map as string[] | undefined) ?? []),
+      onNullKey,
+      allowEmptyReplace: values["allow-empty-replace"] as boolean | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -296,10 +307,18 @@ async function main(argv: string[]): Promise<void> {
         rekey: { type: "boolean" },
         map: { type: "string", multiple: true },
         unmap: { type: "string", multiple: true },
+        "on-null-key": { type: "string" },
+        "allow-empty-replace": { type: "boolean" },
       },
     });
     if (!id) {
-      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...]");
+      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace]");
+      process.exitCode = 1;
+      return;
+    }
+    const onNullKey = parseOnNullKey(values["on-null-key"] as string | undefined);
+    if (onNullKey === undefined && values["on-null-key"] !== undefined) {
+      console.error(`--on-null-key must be "stop" or "skip", got ${JSON.stringify(values["on-null-key"])}`);
       process.exitCode = 1;
       return;
     }
@@ -310,6 +329,8 @@ async function main(argv: string[]): Promise<void> {
       rekey,
       mapOverrides: parseMapOverrides((values.map as string[] | undefined) ?? []),
       unmapTargets: (values.unmap as string[] | undefined) ?? [],
+      onNullKey,
+      allowEmptyReplace: values["allow-empty-replace"] as boolean | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -322,6 +343,36 @@ async function main(argv: string[]): Promise<void> {
     } else {
       for (const error of result.errors ?? []) console.error(`error: ${error}`);
       process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (command === "job" && subcommand === "run") {
+    const id = rest[0];
+    const { values } = parseArgs({
+      args: rest.slice(1),
+      options: {
+        replace: { type: "boolean" },
+      },
+    });
+    if (!id) {
+      console.error("usage: nia-agent job run <id> [--replace]");
+      process.exitCode = 1;
+      return;
+    }
+    const controller = new AbortController();
+    const uninstall = installGracefulShutdown(controller);
+    try {
+      const result = await runJob(id, { replace: values.replace as boolean | undefined, signal: controller.signal });
+      if (result.ok) {
+        console.log(result.summary);
+      } else {
+        console.error(`error: ${result.error}`);
+        if (result.consoleMessage) console.error(`Planometry says: ${result.consoleMessage}`);
+        process.exitCode = 1;
+      }
+    } finally {
+      uninstall();
     }
     return;
   }
@@ -349,7 +400,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   console.error(
-    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
+    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
   );
   process.exitCode = 1;
 }
@@ -357,6 +408,11 @@ async function main(argv: string[]): Promise<void> {
 function toOptionalBool(value: string | undefined): boolean | undefined {
   if (value === undefined) return undefined;
   return value === "true";
+}
+
+function parseOnNullKey(value: string | undefined): "stop" | "skip" | undefined {
+  if (value === "stop" || value === "skip") return value;
+  return undefined;
 }
 
 main(process.argv.slice(2)).catch((err) => {

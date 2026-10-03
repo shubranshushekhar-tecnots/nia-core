@@ -379,7 +379,61 @@ pnpm --filter @nia/agent run manual:extract check-running \
 (Optional: re-run the same `extract` command without interrupting it to
 see a clean, uncancelled run — `error` absent, `trailer row count: 1`.)
 
-## 16. Tear everything down
+## 16. `job add` / `job run` — a replace load against the fake Planometry server (v4 Internal Table)
+
+This exercises the newer `job`-based path (full-table `replace` loads against
+a v4 Internal Table), separate from the `connection`-based chunk-push path
+used in steps 8-14 above. It reuses the same terminal B fake server (still
+running) and terminal D.
+
+Create a fake Internal Table (terminal D):
+
+```bash
+pnpm --filter @nia/agent run manual:planometry:ctl create-table \
+  --id ds-widgets \
+  --columns '[{"name":"id","type":"Number","isKey":true},{"name":"name","type":"Text"},{"name":"price","type":"Number"}]'
+```
+
+**What you should see:** a JSON object with `tableId: "ds-widgets"`,
+`tableUrl: "http://127.0.0.1:4455/api/datasources/internal-tables/ds-widgets"`
+and a generated `pushKey`. Copy the `tableUrl` and `pushKey`.
+
+Add the job, pasting the `pushKey` when prompted:
+
+```bash
+pnpm --filter @nia/agent run dev job add \
+  --connection test1 --table dbo.widgets \
+  --target-url http://127.0.0.1:4455/api/datasources/internal-tables/ds-widgets \
+  --map id=id --map name=name --map price=price \
+  --yes
+```
+
+**What you should see:** the proposed mapping printed, then `added job
+<id> (dbo.widgets)`. Copy `<id>`.
+
+Run it:
+
+```bash
+pnpm --filter @nia/agent run dev job run <id>
+```
+
+**What you should see:** a one-line run summary — rows sent, rows skipped,
+parts, duration, and Planometry's returned `rowCount`/`version` — and
+terminal B logging the push. Confirm the rows landed:
+
+```bash
+pnpm --filter @nia/agent run manual:planometry:ctl rows --table-id ds-widgets
+```
+
+should list all of `dbo.widgets`'s rows. Running `job run <id>` again
+performs a second full replace (same table, new load) — rows are
+unchanged if the source hasn't changed.
+
+`job update <id> --on-null-key skip` (or `stop`, the default) and
+`--allow-empty-replace` are available the same way as on `job add`, to
+exercise the null-key and zero-row safety rules.
+
+## 17. Tear everything down
 
 - Terminal C: `Ctrl+C` if still running.
 - Terminal B: `Ctrl+C` — prints `[fake-planometry] shutting down...` and
