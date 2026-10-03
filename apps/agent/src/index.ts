@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { addConnection, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
+import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
+import { addJob, listJobs, removeJob, testJob, updateJob } from "./cli/jobCommands.js";
+import { parseMapOverrides } from "./cli/jobMapping.js";
+import { readSecretFromStdin } from "./cli/securePrompt.js";
 import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
 import { runDoctor } from "./cli/doctorCommand.js";
 import { runHealthcheck } from "./cli/healthcheckCommand.js";
@@ -74,16 +77,14 @@ async function main(argv: string[]): Promise<void> {
         encrypt: { type: "string" },
         "allow-legacy-tls": { type: "string" },
         "trust-server-certificate": { type: "string" },
-        "planometry-url": { type: "string" },
+        "source-timezone": { type: "string" },
         "agent-key": { type: "string" },
-        "heartbeat-path": { type: "string" },
-        "ping-path": { type: "string" },
       },
     });
-    const planometryUrl = values["planometry-url"] as string | undefined;
+    const sourceTimeZone = values["source-timezone"] as string | undefined;
     const agentKey = values["agent-key"] as string | undefined;
-    if (!values.id || !values.label || !values.host || !values.database || !values.user || !values.password || !planometryUrl || !agentKey) {
-      console.error("usage: nia-agent connection add --id <id> --label <label> --host <host> --database <db> --user <user> --password <password> --planometry-url <url> --agent-key <key> [--port <n>] [--encrypt true|false] [--allow-legacy-tls true|false] [--trust-server-certificate true|false] [--heartbeat-path <path>] [--ping-path <path>]");
+    if (!values.id || !values.label || !values.host || !values.database || !values.user || !values.password || !sourceTimeZone || !agentKey) {
+      console.error("usage: nia-agent connection add --id <id> --label <label> --host <host> --database <db> --user <user> --password <password> --source-timezone <iana-name> --agent-key <key> [--port <n>] [--encrypt true|false] [--allow-legacy-tls true|false] [--trust-server-certificate true|false]");
       process.exitCode = 1;
       return;
     }
@@ -98,10 +99,8 @@ async function main(argv: string[]): Promise<void> {
       encrypt: toOptionalBool(values.encrypt as string | undefined),
       allowLegacyTls: toOptionalBool(values["allow-legacy-tls"] as string | undefined),
       trustServerCertificate: toOptionalBool(values["trust-server-certificate"] as string | undefined),
-      planometryBaseUrl: planometryUrl,
+      sourceTimeZone,
       agentKey,
-      heartbeatPath: values["heartbeat-path"] as string | undefined,
-      pingPath: values["ping-path"] as string | undefined,
     });
     console.log(`added connection ${entry.id} (${entry.label})`);
     return;
@@ -121,8 +120,17 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const removed = removeConnection(id);
-    console.log(removed ? `removed connection ${id}` : `no connection with id ${id}`);
+    try {
+      const removed = removeConnection(id);
+      console.log(removed ? `removed connection ${id}` : `no connection with id ${id}`);
+    } catch (err) {
+      if (err instanceof ConnectionInUseError) {
+        console.error(`cannot remove connection ${id}: still used by job(s) ${err.jobIds.join(", ")} — remove those jobs first`);
+        process.exitCode = 1;
+        return;
+      }
+      throw err;
+    }
     return;
   }
 
@@ -193,6 +201,131 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "job" && subcommand === "add") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        connection: { type: "string" },
+        table: { type: "string" },
+        "target-url": { type: "string" },
+        name: { type: "string" },
+        map: { type: "string", multiple: true },
+        yes: { type: "boolean" },
+      },
+    });
+    const connectionId = values.connection as string | undefined;
+    const table = values.table as string | undefined;
+    const targetUrl = values["target-url"] as string | undefined;
+    if (!connectionId || !table || !targetUrl) {
+      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--yes]");
+      process.exitCode = 1;
+      return;
+    }
+    const pushKey = await readSecretFromStdin("Planometry push key: ");
+    const result = await addJob({
+      name: (values.name as string | undefined) ?? table,
+      connectionId,
+      sourceTable: table,
+      targetUrl,
+      pushKey,
+      mapOverrides: parseMapOverrides((values.map as string[] | undefined) ?? []),
+    }, {
+      onPlan: (plan) => {
+        console.log("mapping:");
+        for (const pair of plan.pairs) console.log(`  ${pair.source} -> ${pair.target}`);
+        if (plan.sentAsNull.length > 0) console.log(`target columns sent as null: ${plan.sentAsNull.join(", ")}`);
+      },
+      confirm: async (plan) => {
+        if (values.yes) return true;
+        const answer = await readSecretFromStdin(`save this job with ${plan.pairs.length} mapped column(s)? [y/N] `);
+        return answer.trim().toLowerCase() === "y";
+      },
+    });
+    if (result.ok) {
+      console.log(`added job ${result.job!.id} (${result.job!.name})`);
+    } else {
+      for (const error of result.errors ?? []) console.error(`error: ${error}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (command === "job" && subcommand === "test") {
+    const id = rest[0];
+    if (!id) {
+      console.error("usage: nia-agent job test <id>");
+      process.exitCode = 1;
+      return;
+    }
+    const result = await testJob(id);
+    if (result.ok) {
+      console.log("ok");
+    } else {
+      for (const error of result.errors) console.error(`error: ${error}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (command === "job" && subcommand === "list") {
+    for (const job of listJobs()) {
+      console.log(`${job.id}\t${job.name}\t${job.connectionId}\t${job.sourceTable}\t${job.targetUrl}`);
+    }
+    return;
+  }
+
+  if (command === "job" && subcommand === "remove") {
+    const id = rest[0];
+    if (!id) {
+      console.error("usage: nia-agent job remove <id>");
+      process.exitCode = 1;
+      return;
+    }
+    const removed = removeJob(id);
+    console.log(removed ? `removed job ${id}` : `no job with id ${id}`);
+    return;
+  }
+
+  if (command === "job" && subcommand === "update") {
+    const id = rest[0];
+    const { values } = parseArgs({
+      args: rest.slice(1),
+      options: {
+        name: { type: "string" },
+        "target-url": { type: "string" },
+        rekey: { type: "boolean" },
+        map: { type: "string", multiple: true },
+        unmap: { type: "string", multiple: true },
+      },
+    });
+    if (!id) {
+      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...]");
+      process.exitCode = 1;
+      return;
+    }
+    const rekey = values.rekey ? await readSecretFromStdin("New Planometry push key: ") : undefined;
+    const result = await updateJob(id, {
+      name: values.name as string | undefined,
+      targetUrl: values["target-url"] as string | undefined,
+      rekey,
+      mapOverrides: parseMapOverrides((values.map as string[] | undefined) ?? []),
+      unmapTargets: (values.unmap as string[] | undefined) ?? [],
+    }, {
+      onPlan: (plan) => {
+        console.log("mapping:");
+        for (const pair of plan.pairs) console.log(`  ${pair.source} -> ${pair.target}`);
+        if (plan.sentAsNull.length > 0) console.log(`target columns sent as null: ${plan.sentAsNull.join(", ")}`);
+      },
+    });
+    if (result.ok) {
+      console.log(`updated job ${result.job!.id}`);
+    } else {
+      for (const error of result.errors ?? []) console.error(`error: ${error}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (command === "healthcheck") {
     const result = runHealthcheck();
     if (result.healthy) {
@@ -216,7 +349,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   console.error(
-    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
+    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
   );
   process.exitCode = 1;
 }

@@ -6,12 +6,11 @@ import { connect } from "@nia/extract/mssql";
 import { addConnection } from "./connectionCommands.js";
 import { buildReadonlySetupScript } from "./sqlReadonlyScript.js";
 import { runDoctor } from "./doctorCommand.js";
-import { FakePlanometryServer } from "../testing/fakePlanometryServer.js";
 
 /**
  * Mandatory Phase 3 prep integration test: proves `agent doctor` actually
- * works against a real SQL Server (the readonly login from Slice 1) and a
- * real (fake) Planometry HTTP server — not just mocked unit behavior.
+ * works against a real SQL Server (the readonly login from Slice 1) — not
+ * just mocked unit behavior.
  * Requires the throwaway harness running first:
  * packages/extract/scripts/harness/start.sh
  * Excluded from `pnpm test` (vitest.config.ts); run explicitly with
@@ -46,10 +45,9 @@ async function dropTestLogin(pool: Pool): Promise<void> {
   `);
 }
 
-describe("runDoctor against a real SQL Server + fake Planometry", () => {
+describe("runDoctor against a real SQL Server", () => {
   let saPool: Pool;
   const dirs: string[] = [];
-  const servers: FakePlanometryServer[] = [];
 
   beforeAll(async () => {
     saPool = await connect({ server: HOST, port: PORT, database: DATABASE, user: SA_USER, password: SA_PASSWORD, encrypt: false });
@@ -67,7 +65,6 @@ describe("runDoctor against a real SQL Server + fake Planometry", () => {
   });
 
   afterEach(async () => {
-    await Promise.all(servers.splice(0).map((s) => s.close()));
     await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
   });
 
@@ -77,15 +74,8 @@ describe("runDoctor against a real SQL Server + fake Planometry", () => {
     return dir;
   }
 
-  async function newFakeServer(): Promise<FakePlanometryServer> {
-    const server = await FakePlanometryServer.start();
-    servers.push(server);
-    return server;
-  }
-
   it("reports all checks passing for a correctly configured connection", async () => {
     const dir = await newDir();
-    const fake = await newFakeServer();
     addConnection(
       {
         id: "conn-ok",
@@ -96,7 +86,7 @@ describe("runDoctor against a real SQL Server + fake Planometry", () => {
         user: TEST_LOGIN,
         password: TEST_PASSWORD,
         encrypt: false,
-        planometryBaseUrl: fake.baseUrl,
+        sourceTimeZone: "UTC",
         agentKey: "any-key",
       },
       dir,
@@ -114,15 +104,12 @@ describe("runDoctor against a real SQL Server + fake Planometry", () => {
         "login can't write",
         "sys.dm_exec_requests visible (cancel confirmation)",
         "spool directory free disk space",
-        "Planometry URL reachable",
-        "clock skew",
       ]),
     );
   });
 
   it("fails only the login check on a wrong password, and skips permission checks that need a pool", async () => {
     const dir = await newDir();
-    const fake = await newFakeServer();
     addConnection(
       {
         id: "conn-bad-password",
@@ -133,7 +120,7 @@ describe("runDoctor against a real SQL Server + fake Planometry", () => {
         user: TEST_LOGIN,
         password: "definitely-the-wrong-password",
         encrypt: false,
-        planometryBaseUrl: fake.baseUrl,
+        sourceTimeZone: "UTC",
         agentKey: "any-key",
       },
       dir,

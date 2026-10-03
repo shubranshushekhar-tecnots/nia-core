@@ -24,7 +24,7 @@ function fakeEntry(): ConnectionEntry {
     id: "conn-1",
     label: "Test Connection",
     sqlserver: { host: "db.example.test", port: 1433, database: "SummitERP_1" },
-    planometry: { baseUrl: "http://127.0.0.1:1" },
+    sourceTimeZone: "UTC",
     credentialRef: "cred-ref",
     agentKeyRef: "key-ref",
   };

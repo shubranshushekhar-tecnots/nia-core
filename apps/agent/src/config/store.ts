@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { type AgentConfig, type ConnectionEntry, type MonitoringConfig, CURRENT_CONFIG_VERSION, emptyConfig } from "./types.js";
+import { type AgentConfig, type ConnectionEntry, type MonitoringConfig, type SyncJobEntry, CURRENT_CONFIG_VERSION, emptyConfig } from "./types.js";
 import { configFilePath, defaultHomeDir } from "./paths.js";
 
 export class ConfigValidationError extends Error {}
@@ -26,8 +26,8 @@ export function saveConfig(config: AgentConfig, dir = defaultHomeDir()): void {
 /**
  * Shallow validation only — just enough to catch a hand-edited or
  * corrupted file before it reaches the rest of the agent. A malformed
- * individual connection entry (e.g. missing `sqlserver.host`) surfaces
- * naturally when that connection is actually used, not here.
+ * individual connection/job entry (e.g. missing `sqlserver.host`) surfaces
+ * naturally when that entry is actually used, not here.
  */
 export function validateConfig(value: unknown): AgentConfig {
   if (typeof value !== "object" || value === null) {
@@ -40,11 +40,15 @@ export function validateConfig(value: unknown): AgentConfig {
   if (!Array.isArray(v.connections)) {
     throw new ConfigValidationError("agent.config.json's connections must be an array");
   }
+  if (v.jobs !== undefined && !Array.isArray(v.jobs)) {
+    throw new ConfigValidationError("agent.config.json's jobs must be an array");
+  }
   return {
     version: CURRENT_CONFIG_VERSION,
     spoolDir: typeof v.spoolDir === "string" ? v.spoolDir : undefined,
     monitoring: validateMonitoring(v.monitoring),
     connections: v.connections as ConnectionEntry[],
+    jobs: (v.jobs as SyncJobEntry[] | undefined) ?? [],
   };
 }
 
@@ -71,4 +75,24 @@ export function upsertConnection(config: AgentConfig, entry: ConnectionEntry): A
 
 export function removeConnection(config: AgentConfig, id: string): AgentConfig {
   return { ...config, connections: config.connections.filter((c) => c.id !== id) };
+}
+
+export function findJob(config: AgentConfig, id: string): SyncJobEntry | undefined {
+  return config.jobs.find((j) => j.id === id);
+}
+
+export function jobsForConnection(config: AgentConfig, connectionId: string): SyncJobEntry[] {
+  return config.jobs.filter((j) => j.connectionId === connectionId);
+}
+
+export function upsertJob(config: AgentConfig, entry: SyncJobEntry): AgentConfig {
+  const idx = config.jobs.findIndex((j) => j.id === entry.id);
+  const jobs = [...config.jobs];
+  if (idx === -1) jobs.push(entry);
+  else jobs[idx] = entry;
+  return { ...config, jobs };
+}
+
+export function removeJob(config: AgentConfig, id: string): AgentConfig {
+  return { ...config, jobs: config.jobs.filter((j) => j.id !== id) };
 }

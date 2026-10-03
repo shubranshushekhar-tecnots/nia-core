@@ -2,8 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { addConnection, listConnections, removeConnection } from "./connectionCommands.js";
-import { loadConfig } from "../config/store.js";
+import { addConnection, ConnectionInUseError, InvalidTimeZoneError, listConnections, removeConnection } from "./connectionCommands.js";
+import { loadConfig, saveConfig, upsertJob } from "../config/store.js";
+import type { SyncJobEntry } from "../config/types.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 
@@ -27,7 +28,7 @@ describe("connection commands", () => {
         database: "SummitERP_A",
         user: "sa",
         password: "s3cret",
-        planometryBaseUrl: "https://planometry.example.com",
+        sourceTimeZone: "UTC",
         agentKey: "agent-key-value",
       },
       dir,
@@ -46,7 +47,7 @@ describe("connection commands", () => {
 
   it("lists added connections", () => {
     addConnection(
-      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", planometryBaseUrl: "https://x", agentKey: "k" },
+      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "UTC", agentKey: "k" },
       dir,
     );
     expect(listConnections(dir).map((c) => c.id)).toEqual(["conn-1"]);
@@ -54,7 +55,7 @@ describe("connection commands", () => {
 
   it("removes a connection and its secrets", () => {
     const entry = addConnection(
-      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", planometryBaseUrl: "https://x", agentKey: "k" },
+      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "UTC", agentKey: "k" },
       dir,
     );
     expect(removeConnection("conn-1", dir)).toBe(true);
@@ -67,5 +68,36 @@ describe("connection commands", () => {
 
   it("returns false removing an unknown connection", () => {
     expect(removeConnection("nope", dir)).toBe(false);
+  });
+
+  it("rejects an invalid IANA time zone", () => {
+    expect(() =>
+      addConnection(
+        { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "Not/AZone", agentKey: "k" },
+        dir,
+      ),
+    ).toThrow(InvalidTimeZoneError);
+  });
+
+  it("refuses to remove a connection while a job uses it", () => {
+    addConnection(
+      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "UTC", agentKey: "k" },
+      dir,
+    );
+    const job: SyncJobEntry = {
+      id: "job-1",
+      name: "Sales export",
+      connectionId: "conn-1",
+      sourceTable: "dbo.Sales",
+      targetUrl: "https://planometry.example.com/t/abc",
+      pushKeyRef: "push-key-ref",
+      strategy: "replace",
+      mapping: [{ source: "Id", target: "Id" }],
+      targetSchemaSnapshot: { columns: [{ name: "Id", type: "Number", isKey: true }], keyColumns: ["Id"] },
+    };
+    saveConfig(upsertJob(loadConfig(dir), job), dir);
+
+    expect(() => removeConnection("conn-1", dir)).toThrow(ConnectionInUseError);
+    expect(listConnections(dir)).toHaveLength(1);
   });
 });

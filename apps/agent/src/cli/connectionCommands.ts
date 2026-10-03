@@ -1,9 +1,43 @@
 import { connect, introspectCatalog } from "@nia/extract/mssql";
 import { defaultHomeDir } from "../config/paths.js";
-import { findConnection, loadConfig, removeConnection as removeFromConfig, saveConfig, upsertConnection } from "../config/store.js";
-import type { ConnectionEntry, PlanometryConnectionConfig, SqlServerConnectionConfig } from "../config/types.js";
+import {
+  findConnection,
+  jobsForConnection,
+  loadConfig,
+  removeConnection as removeFromConfig,
+  saveConfig,
+  upsertConnection,
+} from "../config/store.js";
+import type { ConnectionEntry, SqlServerConnectionConfig } from "../config/types.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
+
+/** Thrown by `addConnection` when `sourceTimeZone` is not a recognized IANA time zone name. */
+export class InvalidTimeZoneError extends Error {
+  constructor(public readonly timeZone: string) {
+    super(`"${timeZone}" is not a recognized IANA time zone name`);
+    this.name = "InvalidTimeZoneError";
+  }
+}
+
+/** Thrown by `removeConnection` when one or more jobs still reference the connection. */
+export class ConnectionInUseError extends Error {
+  constructor(
+    public readonly connectionId: string,
+    public readonly jobIds: string[],
+  ) {
+    super(`connection ${connectionId} is still used by job(s): ${jobIds.join(", ")}`);
+    this.name = "ConnectionInUseError";
+  }
+}
+
+function assertValidTimeZone(timeZone: string): void {
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone });
+  } catch {
+    throw new InvalidTimeZoneError(timeZone);
+  }
+}
 
 export interface AddConnectionInput {
   id: string;
@@ -16,14 +50,15 @@ export interface AddConnectionInput {
   encrypt?: boolean;
   allowLegacyTls?: boolean;
   trustServerCertificate?: boolean;
-  planometryBaseUrl: string;
+  /** IANA time zone name (e.g. "America/New_York"), validated here. */
+  sourceTimeZone: string;
   agentKey: string;
-  heartbeatPath?: string;
-  pingPath?: string;
 }
 
 /** `nia-agent connection add`: stores credentials in the local secret store, non-secret shape in agent.config.json. Does not validate connectivity — use `connection test` for that. */
 export function addConnection(input: AddConnectionInput, dir = defaultHomeDir()): ConnectionEntry {
+  assertValidTimeZone(input.sourceTimeZone);
+
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
 
@@ -38,12 +73,14 @@ export function addConnection(input: AddConnectionInput, dir = defaultHomeDir())
     allowLegacyTls: input.allowLegacyTls,
     trustServerCertificate: input.trustServerCertificate,
   };
-  const planometry: PlanometryConnectionConfig = {
-    baseUrl: input.planometryBaseUrl,
-    heartbeatPath: input.heartbeatPath,
-    pingPath: input.pingPath,
+  const entry: ConnectionEntry = {
+    id: input.id,
+    label: input.label,
+    sqlserver,
+    sourceTimeZone: input.sourceTimeZone,
+    credentialRef,
+    agentKeyRef,
   };
-  const entry: ConnectionEntry = { id: input.id, label: input.label, sqlserver, planometry, credentialRef, agentKeyRef };
 
   const config = loadConfig(dir);
   saveConfig(upsertConnection(config, entry), dir);
@@ -55,11 +92,14 @@ export function listConnections(dir = defaultHomeDir()): ConnectionEntry[] {
   return loadConfig(dir).connections;
 }
 
-/** `nia-agent connection remove <id>`: deletes the config entry and its secret-store blobs. */
+/** `nia-agent connection remove <id>`: deletes the config entry and its secret-store blobs. Refused while any job still references this connection. */
 export function removeConnection(id: string, dir = defaultHomeDir()): boolean {
   const config = loadConfig(dir);
   const entry = findConnection(config, id);
   if (!entry) return false;
+
+  const jobs = jobsForConnection(config, id);
+  if (jobs.length > 0) throw new ConnectionInUseError(id, jobs.map((j) => j.id));
 
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
@@ -99,7 +139,7 @@ export async function testConnection(id: string, dir = defaultHomeDir()): Promis
       trustServerCertificate: entry.sqlserver.trustServerCertificate,
     });
     try {
-      const catalog = await introspectCatalog(pool, "UTC");
+      const catalog = await introspectCatalog(pool, entry.sourceTimeZone);
       return { ok: true, tableCount: catalog.tables.length };
     } finally {
       await pool.close();

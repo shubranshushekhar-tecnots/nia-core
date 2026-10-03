@@ -1,0 +1,304 @@
+import { randomUUID } from "node:crypto";
+import type { CatalogTable } from "@nia/extract";
+import { connect, introspectCatalog } from "@nia/extract/mssql";
+import { defaultHomeDir } from "../config/paths.js";
+import {
+  findConnection,
+  findJob,
+  loadConfig,
+  removeJob as removeFromConfig,
+  saveConfig,
+  upsertJob,
+} from "../config/store.js";
+import type { ConnectionEntry, JobMappingColumn, SyncJobEntry, TargetSchemaSnapshot } from "../config/types.js";
+import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
+import { LocalSecretStore } from "../secrets/store.js";
+import { PlanometryClient } from "../planometry/client.js";
+import type { TableSchema } from "../planometry/types.js";
+import { buildMapping, type RawMappingPair } from "./jobMapping.js";
+
+/** Printable preview of a job's mapping, shown before `job add`/`job update` save. */
+export interface JobMappingPreview {
+  pairs: JobMappingColumn[];
+  sentAsNull: string[];
+}
+
+export interface JobCommandOptions {
+  /** Called with the built mapping before saving — the CLI uses this to print it. */
+  onPlan?: (plan: JobMappingPreview) => void;
+  /** Returning false aborts without saving (declined confirmation). Defaults to true (e.g. `--yes`). */
+  confirm?: (plan: JobMappingPreview) => boolean | Promise<boolean>;
+}
+
+export interface JobCommandResult {
+  ok: boolean;
+  job?: SyncJobEntry;
+  sentAsNull?: string[];
+  errors?: string[];
+}
+
+export interface AddJobInput {
+  id?: string;
+  name: string;
+  connectionId: string;
+  sourceTable: string;
+  targetUrl: string;
+  pushKey: string;
+  mapOverrides: RawMappingPair[];
+}
+
+/**
+ * `nia-agent job add`: reads the source catalog, checks the target via
+ * `checkConnection`/`getSchema`, builds the mapping, and only writes the
+ * push key + job entry once every validation step (and, interactively,
+ * confirmation) has passed — any failure leaves no job and no secret
+ * behind (docs/plans/planometry-v4-migration.md §10 slice A2).
+ */
+export async function addJob(input: AddJobInput, options: JobCommandOptions = {}, dir = defaultHomeDir()): Promise<JobCommandResult> {
+  const config = loadConfig(dir);
+  const connection = findConnection(config, input.connectionId);
+  if (!connection) return { ok: false, errors: [`no connection with id ${JSON.stringify(input.connectionId)}`] };
+
+  const catalogResult = await readSourceTable(connection, input.sourceTable, dir);
+  if (!catalogResult.ok) return { ok: false, errors: [catalogResult.error] };
+
+  const client = new PlanometryClient({ tableUrl: input.targetUrl, pushKey: input.pushKey });
+  let schema: TableSchema;
+  try {
+    await client.checkConnection();
+    schema = await client.getSchema();
+  } catch (err) {
+    return { ok: false, errors: [describeError(err)] };
+  } finally {
+    await client.close();
+  }
+
+  const plan = buildMapping(catalogResult.table, schema.columns, schema.keyColumns, input.mapOverrides);
+  if (plan.errors.length > 0) return { ok: false, errors: plan.errors };
+
+  const pairs: JobMappingColumn[] = plan.pairs;
+  const preview: JobMappingPreview = { pairs, sentAsNull: plan.sentAsNull };
+  options.onPlan?.(preview);
+  const confirmed = await (options.confirm?.(preview) ?? true);
+  if (!confirmed) return { ok: false, errors: ["aborted: not confirmed"] };
+
+  const masterKey = loadOrCreateMasterKey(dir);
+  const secrets = new LocalSecretStore(masterKey, dir);
+  const pushKeyRef = secrets.put({ pushKey: input.pushKey });
+
+  const job: SyncJobEntry = {
+    id: input.id ?? randomUUID(),
+    name: input.name,
+    connectionId: input.connectionId,
+    sourceTable: input.sourceTable,
+    targetUrl: input.targetUrl,
+    pushKeyRef,
+    strategy: "replace",
+    mapping: pairs,
+    targetSchemaSnapshot: buildTargetSchemaSnapshot(schema, pairs),
+  };
+
+  saveConfig(upsertJob(config, job), dir);
+  return { ok: true, job, sentAsNull: plan.sentAsNull };
+}
+
+export interface TestJobResult {
+  ok: boolean;
+  errors: string[];
+}
+
+/**
+ * `nia-agent job test <id>`: re-checks connection + schema against the
+ * saved snapshot, and confirms the mapped source columns still exist.
+ * Watermark/null-value checks land in slice C1 — out of scope here.
+ */
+export async function testJob(id: string, dir = defaultHomeDir()): Promise<TestJobResult> {
+  const config = loadConfig(dir);
+  const job = findJob(config, id);
+  if (!job) return { ok: false, errors: [`no job with id ${JSON.stringify(id)}`] };
+  const connection = findConnection(config, job.connectionId);
+  if (!connection) return { ok: false, errors: [`no connection with id ${JSON.stringify(job.connectionId)}`] };
+
+  const masterKey = loadOrCreateMasterKey(dir);
+  const secrets = new LocalSecretStore(masterKey, dir);
+  const pushKeySecret = secrets.get<{ pushKey: string }>(job.pushKeyRef);
+  if (!pushKeySecret) return { ok: false, errors: [`push key for job ${id} is missing from the secret store`] };
+
+  const errors: string[] = [];
+  const client = new PlanometryClient({ tableUrl: job.targetUrl, pushKey: pushKeySecret.pushKey });
+  try {
+    await client.checkConnection();
+    const schema = await client.getSchema();
+
+    const columnByName = new Map(schema.columns.map((c) => [c.name, c]));
+    for (const snapshotColumn of job.targetSchemaSnapshot.columns) {
+      const live = columnByName.get(snapshotColumn.name);
+      if (!live) {
+        errors.push(`target column "${snapshotColumn.name}" was removed from the target schema`);
+        continue;
+      }
+      if (live.type !== snapshotColumn.type) {
+        errors.push(`target column "${snapshotColumn.name}" was retyped from ${snapshotColumn.type} to ${live.type}`);
+      }
+    }
+
+    const sameKeys =
+      schema.keyColumns.length === job.targetSchemaSnapshot.keyColumns.length &&
+      schema.keyColumns.every((k) => job.targetSchemaSnapshot.keyColumns.includes(k));
+    if (!sameKeys) errors.push("the target table's key columns have changed since this job was added");
+  } catch (err) {
+    errors.push(describeError(err));
+  } finally {
+    await client.close();
+  }
+
+  const catalogResult = await readSourceTable(connection, job.sourceTable, dir);
+  if (!catalogResult.ok) {
+    errors.push(catalogResult.error);
+  } else {
+    const sourceNames = new Set(catalogResult.table.columns.map((c) => c.name));
+    for (const pair of job.mapping) {
+      if (!sourceNames.has(pair.source)) errors.push(`source column "${pair.source}" no longer exists in the catalog`);
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
+/** `nia-agent job list`: non-secret summary only — never the push key. */
+export function listJobs(dir = defaultHomeDir()): SyncJobEntry[] {
+  return loadConfig(dir).jobs;
+}
+
+/** `nia-agent job remove <id>`: removes the job and its push key from the secret store. */
+export function removeJob(id: string, dir = defaultHomeDir()): boolean {
+  const config = loadConfig(dir);
+  const job = findJob(config, id);
+  if (!job) return false;
+
+  const masterKey = loadOrCreateMasterKey(dir);
+  const secrets = new LocalSecretStore(masterKey, dir);
+  secrets.delete(job.pushKeyRef);
+
+  saveConfig(removeFromConfig(config, id), dir);
+  return true;
+}
+
+export interface UpdateJobInput {
+  name?: string;
+  targetUrl?: string;
+  rekey?: string;
+  mapOverrides?: RawMappingPair[];
+  unmapTargets?: string[];
+}
+
+/**
+ * `nia-agent job update <id>`: re-runs the same validation as `job add`
+ * against the (possibly new) target URL/key, merging the job's existing
+ * mapping with `--map`/`--unmap` as the override baseline. A failed
+ * validation leaves the job (and its stored push key) unchanged.
+ */
+export async function updateJob(
+  id: string,
+  input: UpdateJobInput,
+  options: JobCommandOptions = {},
+  dir = defaultHomeDir(),
+): Promise<JobCommandResult> {
+  const config = loadConfig(dir);
+  const job = findJob(config, id);
+  if (!job) return { ok: false, errors: [`no job with id ${JSON.stringify(id)}`] };
+  const connection = findConnection(config, job.connectionId);
+  if (!connection) return { ok: false, errors: [`no connection with id ${JSON.stringify(job.connectionId)}`] };
+
+  const masterKey = loadOrCreateMasterKey(dir);
+  const secrets = new LocalSecretStore(masterKey, dir);
+  const existingPushKeySecret = secrets.get<{ pushKey: string }>(job.pushKeyRef);
+  if (!existingPushKeySecret) return { ok: false, errors: [`push key for job ${id} is missing from the secret store`] };
+  const pushKey = input.rekey ?? existingPushKeySecret.pushKey;
+  const targetUrl = input.targetUrl ?? job.targetUrl;
+
+  const catalogResult = await readSourceTable(connection, job.sourceTable, dir);
+  if (!catalogResult.ok) return { ok: false, errors: [catalogResult.error] };
+
+  const client = new PlanometryClient({ tableUrl: targetUrl, pushKey });
+  let schema: TableSchema;
+  try {
+    await client.checkConnection();
+    schema = await client.getSchema();
+  } catch (err) {
+    return { ok: false, errors: [describeError(err)] };
+  } finally {
+    await client.close();
+  }
+
+  const unmapTargets = new Set(input.unmapTargets ?? []);
+  const baseOverrides = new Map(job.mapping.filter((p) => !unmapTargets.has(p.target)).map((p) => [p.target, p.source]));
+  for (const o of input.mapOverrides ?? []) baseOverrides.set(o.target, o.source);
+  const overrides: RawMappingPair[] = [...baseOverrides.entries()].map(([target, source]) => ({ source, target }));
+
+  const plan = buildMapping(catalogResult.table, schema.columns, schema.keyColumns, overrides);
+  if (plan.errors.length > 0) return { ok: false, errors: plan.errors };
+
+  const preview: JobMappingPreview = { pairs: plan.pairs, sentAsNull: plan.sentAsNull };
+  options.onPlan?.(preview);
+  const confirmed = await (options.confirm?.(preview) ?? true);
+  if (!confirmed) return { ok: false, errors: ["aborted: not confirmed"] };
+
+  const pushKeyRef = input.rekey ? secrets.put({ pushKey: input.rekey }) : job.pushKeyRef;
+
+  const updated: SyncJobEntry = {
+    ...job,
+    name: input.name ?? job.name,
+    targetUrl,
+    pushKeyRef,
+    mapping: plan.pairs,
+    targetSchemaSnapshot: buildTargetSchemaSnapshot(schema, plan.pairs),
+  };
+
+  saveConfig(upsertJob(config, updated), dir);
+  if (input.rekey) secrets.delete(job.pushKeyRef);
+  return { ok: true, job: updated, sentAsNull: plan.sentAsNull };
+}
+
+type ReadSourceTableResult = { ok: true; table: CatalogTable } | { ok: false; error: string };
+
+async function readSourceTable(connection: ConnectionEntry, sourceTable: string, dir: string): Promise<ReadSourceTableResult> {
+  const masterKey = loadOrCreateMasterKey(dir);
+  const secrets = new LocalSecretStore(masterKey, dir);
+  const credentials = secrets.get<{ user: string; password: string }>(connection.credentialRef);
+  if (!credentials) return { ok: false, error: `credentials for connection ${connection.id} are missing from the secret store` };
+
+  const pool = await connect({
+    server: connection.sqlserver.host,
+    port: connection.sqlserver.port,
+    database: connection.sqlserver.database,
+    user: credentials.user,
+    password: credentials.password,
+    encrypt: connection.sqlserver.encrypt,
+    allowLegacyTls: connection.sqlserver.allowLegacyTls,
+    trustServerCertificate: connection.sqlserver.trustServerCertificate,
+  });
+  try {
+    const catalog = await introspectCatalog(pool, connection.sourceTimeZone);
+    const table = catalog.tables.find((t) => t.name === sourceTable);
+    if (!table) return { ok: false, error: `source table/view "${sourceTable}" was not found in the catalog` };
+    return { ok: true, table };
+  } finally {
+    await pool.close();
+  }
+}
+
+function buildTargetSchemaSnapshot(schema: TableSchema, pairs: JobMappingColumn[]): TargetSchemaSnapshot {
+  const columnByName = new Map(schema.columns.map((c) => [c.name, c]));
+  return {
+    columns: pairs.map((p) => {
+      const column = columnByName.get(p.target)!;
+      return { name: p.target, type: column.type, isKey: schema.keyColumns.includes(p.target) };
+    }),
+    keyColumns: schema.keyColumns,
+  };
+}
+
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

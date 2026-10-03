@@ -1,9 +1,12 @@
 /**
- * Non-secret connection config. Matches docs/plans/planometry-integration.md
- * Phase 2 §2: one agent.config.json per install, a list of connections,
- * credentials/agent keys always referenced via the local secret store
- * (secrets/store.ts), never inlined here.
+ * Non-secret connection/job config. Matches docs/plans/planometry-
+ * v4-migration.md §9: one agent.config.json per install, a list of
+ * connections and a list of sync jobs, credentials/push keys always
+ * referenced via the local secret store (secrets/store.ts), never
+ * inlined here.
  */
+import type { ColumnType } from "../planometry/types.js";
+
 export interface SqlServerConnectionConfig {
   host: string;
   port?: number;
@@ -13,33 +16,58 @@ export interface SqlServerConnectionConfig {
   trustServerCertificate?: boolean;
 }
 
-export interface PlanometryConnectionConfig {
-  baseUrl: string;
-  /** Config-overridable until Planometry confirms the real path — see planning doc §4. */
-  heartbeatPath?: string;
-  /** Config-overridable until Planometry confirms the real path — see planning doc's Open questions. Used only by `agent doctor`'s non-claiming "agent key accepted" check (PlanometryClient.ping). */
-  pingPath?: string;
-}
-
 export interface ConnectionEntry {
   id: string;
   label: string;
   sqlserver: SqlServerConnectionConfig;
-  planometry: PlanometryConnectionConfig;
+  /** IANA time zone name (e.g. "America/New_York"), validated at `connection add`. Used for catalog introspection and (later) cron-schedule evaluation. */
+  sourceTimeZone: string;
   /** Ref into the local secret store for `{ user, password }`. */
   credentialRef: string;
   /** Ref into the local secret store for `{ agentKey }`. */
   agentKeyRef: string;
-  /** sha256 of the last catalog pushed to Planometry, for schema-change detection. */
-  lastCatalogFingerprint?: string;
+}
+
+/** One mapped source column -> target column pair. */
+export interface JobMappingColumn {
+  source: string;
+  target: string;
+}
+
+/** Only "replace" exists until slice C1 adds `upsertDelta`/other strategies behind the `--strategy` flag. */
+export type JobStrategy = "replace";
+
+export interface TargetSchemaColumnSnapshot {
+  name: string;
+  type: ColumnType;
+  isKey: boolean;
+}
+
+/** The target table's `/schema` shape as it was at `job add`/last successful `job update` time — compared against the live `/schema` by `job test`/future runs to detect drift (docs/plans/planometry-v4-migration.md §6). */
+export interface TargetSchemaSnapshot {
+  columns: TargetSchemaColumnSnapshot[];
+  keyColumns: string[];
+}
+
+export interface SyncJobEntry {
+  id: string;
+  name: string;
+  connectionId: string;
+  /** Catalog-exact source table/view name (e.g. "dbo.vw_salesdata"). */
+  sourceTable: string;
+  /** Planometry Internal Table push URL. */
+  targetUrl: string;
+  /** Ref into the local secret store for `{ pushKey }`. */
+  pushKeyRef: string;
+  strategy: JobStrategy;
+  mapping: JobMappingColumn[];
+  targetSchemaSnapshot: TargetSchemaSnapshot;
 }
 
 /**
  * Optional monitoring heartbeat (Phase 3b §3: "an optional heartbeat to a
  * configurable URL... off by default, no customer data — only agent
- * version, connection ids, last-success times, error counts"). Distinct
- * from PlanometryConnectionConfig's per-run heartbeat above, which reports
- * run liveness to Planometry itself, not agent health to Nia staff.
+ * version, connection ids, last-success times, error counts").
  */
 export interface MonitoringConfig {
   heartbeatUrl?: string;
@@ -53,10 +81,11 @@ export interface AgentConfig {
   /** Unset by default — no heartbeat is sent unless explicitly configured. */
   monitoring?: MonitoringConfig;
   connections: ConnectionEntry[];
+  jobs: SyncJobEntry[];
 }
 
 export const CURRENT_CONFIG_VERSION = 1;
 
 export function emptyConfig(): AgentConfig {
-  return { version: CURRENT_CONFIG_VERSION, connections: [] };
+  return { version: CURRENT_CONFIG_VERSION, connections: [], jobs: [] };
 }

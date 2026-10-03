@@ -2,17 +2,40 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ConfigValidationError, findConnection, loadConfig, removeConnection, saveConfig, upsertConnection } from "./store.js";
+import {
+  ConfigValidationError,
+  findConnection,
+  findJob,
+  jobsForConnection,
+  loadConfig,
+  removeConnection,
+  removeJob,
+  saveConfig,
+  upsertConnection,
+  upsertJob,
+} from "./store.js";
 import { emptyConfig } from "./types.js";
-import type { ConnectionEntry } from "./types.js";
+import type { ConnectionEntry, SyncJobEntry } from "./types.js";
 
 const entry: ConnectionEntry = {
   id: "conn-1",
   label: "SummitERP_A",
   sqlserver: { host: "localhost", database: "SummitERP_A" },
-  planometry: { baseUrl: "https://planometry.example.com" },
+  sourceTimeZone: "UTC",
   credentialRef: "cred-ref",
   agentKeyRef: "key-ref",
+};
+
+const job: SyncJobEntry = {
+  id: "job-1",
+  name: "Sales export",
+  connectionId: "conn-1",
+  sourceTable: "dbo.Sales",
+  targetUrl: "https://planometry.example.com/t/abc",
+  pushKeyRef: "push-key-ref",
+  strategy: "replace",
+  mapping: [{ source: "Id", target: "Id" }],
+  targetSchemaSnapshot: { columns: [{ name: "Id", type: "Number", isKey: true }], keyColumns: ["Id"] },
 };
 
 describe("config store", () => {
@@ -71,5 +94,20 @@ describe("config store", () => {
 
     config = removeConnection(config, "conn-1");
     expect(findConnection(config, "conn-1")).toBeUndefined();
+  });
+
+  it("upserts and removes a job", () => {
+    let config = upsertJob(emptyConfig(), job);
+    expect(findJob(config, "job-1")).toEqual(job);
+    expect(jobsForConnection(config, "conn-1")).toEqual([job]);
+
+    const updated = { ...job, name: "renamed" };
+    config = upsertJob(config, updated);
+    expect(findJob(config, "job-1")?.name).toBe("renamed");
+    expect(config.jobs).toHaveLength(1);
+
+    config = removeJob(config, "job-1");
+    expect(findJob(config, "job-1")).toBeUndefined();
+    expect(jobsForConnection(config, "conn-1")).toEqual([]);
   });
 });

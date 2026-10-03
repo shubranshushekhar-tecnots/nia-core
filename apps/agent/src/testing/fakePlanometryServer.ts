@@ -152,6 +152,14 @@ export class FakePlanometryServer {
     return this.tables.get(tableId)?.version;
   }
 
+  /** Test helper for schema-drift scenarios (`job test`, slice A2): mutates a table's `columns`/`keyColumns` in place, as if the operator had changed the target schema in Planometry after the job was added. */
+  updateTableSchema(tableId: string, update: { columns?: SchemaColumn[]; keyColumns?: string[] }): void {
+    const table = this.tables.get(tableId);
+    if (!table) throw new Error(`no fake table with id ${tableId}`);
+    if (update.columns) table.columns = update.columns;
+    if (update.keyColumns) table.keyColumns = update.keyColumns;
+  }
+
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");

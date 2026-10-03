@@ -721,17 +721,17 @@ Date, `boolean` → Number) as a type-compatibility failure.
     change-tracking|reconciliation|soft-delete|none]
     [--soft-delete-column <col>] [--schedule <cron>]
     [--replace-schedule <cron>] [--poll-interval <seconds>]
-    [--map <sourceColumn>=<targetColumn> ...] [--column <sourceColumn>
-    ...] [--on-null-key stop|skip] [--allow-empty-replace]
+    [--map <sourceColumn>=<targetColumn> ...]
+    [--on-null-key stop|skip] [--allow-empty-replace]
     [--max-delete-percent <n>] [--reconcile-interval <seconds>]` — new;
     prompts for the push key as above; runs `checkConnection` + `getSchema`,
     auto-matches columns via `norm()`, prints the proposed mapping for
     confirmation. `--map` is repeatable and overrides the `norm()` auto-
-    match for specific columns; with no `--map`/`--column` flags, every
-    source column `norm()` manages to match is selected automatically, same
-    as before. `--column` (repeatable) restricts which source columns are
-    considered at all, for a source with columns that should never be
-    pushed. `--on-null-key stop|skip` sets §7's null-key behavior (default
+    match for specific columns; with no `--map` flag, every mapped source
+    column `norm()` manages to match is selected automatically. There is
+    no flag to restrict which source columns are considered at all — the
+    extracted columns are exactly the mapped source columns. `--on-null-key
+    stop|skip` sets §7's null-key behavior (default
     `stop`). `--allow-empty-replace` sets §7's zero-row-replace opt-in.
     `--max-delete-percent` overrides §1.2's mass-delete guard threshold
     (default 20). `--reconcile-interval` overrides §1.3's realtime

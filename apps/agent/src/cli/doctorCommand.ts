@@ -2,7 +2,7 @@ import { defaultHomeDir, defaultLogDir, defaultSpoolDir, keyFilePath } from "../
 import { findConnection, loadConfig } from "../config/store.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
-import { checkCancelVisibility, checkDiskSpace, checkLoginPermissions, probePlanometry, probeSqlServer, type CheckResult } from "./doctorChecks.js";
+import { checkCancelVisibility, checkDiskSpace, checkLoginPermissions, probeSqlServer, type CheckResult } from "./doctorChecks.js";
 import { checkPathPermissions } from "./permissionChecks.js";
 
 export interface ConnectionDoctorReport {
@@ -51,9 +51,6 @@ export async function runDoctor(connectionId: string | undefined, dir = defaultH
         checkPathPermissions("log directory", defaultLogDir(dir)),
       ])),
     );
-
-    const { reachable: planometryReachable, clockSkew } = await probePlanometry(entry.planometry.baseUrl);
-    checks.push(planometryReachable, clockSkew);
 
     reports.push({ connectionId: entry.id, label: entry.label, checks });
   }
