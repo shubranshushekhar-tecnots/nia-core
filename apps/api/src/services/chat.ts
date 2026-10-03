@@ -1,4 +1,5 @@
-import { workspaceWhere } from "@nia/db";
+import type { Pool } from "pg";
+import { withServiceRole, workspaceWhere } from "@nia/db";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import type { WithUser } from "../lib/withUser.js";
 import { AppError } from "../lib/appError.js";
@@ -180,14 +181,29 @@ export async function listMessages(
  * conversation/message row behind — usage_events' unique (kind, subject_id)
  * index makes a duplicate insert for the same job a no-op.
  */
-export async function assertCopilotActionAllowed(withUser: WithUser, scope: WorkspaceScope, subjectId: string): Promise<void> {
+export async function assertCopilotActionAllowed(pool: Pool, scope: WorkspaceScope, subjectId: string): Promise<void> {
   const isPersonal = !("orgId" in scope);
   const table = isPersonal ? "owner_plan" : "org_plan";
   const scopeColumn = isPersonal ? "user_id" : "org_id";
   const scopeValue = isPersonal ? scope.ownerId : scope.orgId;
   const lockKey = isPersonal ? `owner:${scope.ownerId}` : `org:${scope.orgId}`;
 
-  await withUser(async (db) => {
+  // withServiceRole here is the same "deliberate, narrow exception" to
+  // apps/api's general never-withServiceRole rule (lib/dbPool.ts's header
+  // comment) that requireStaff.ts/billingWebhook.ts already established:
+  // usage_events has no insert/update/delete grant for `authenticated` at
+  // all (0066_usage_events.sql — written exclusively via service_role, by
+  // design), so running the advisory lock + plan/usage check + insert as
+  // `authenticated` can never succeed (the bug this fixes). It is not a
+  // general RLS bypass for ordinary application data: every query below is
+  // still explicitly filtered by `scope` (org_id/owner_id), and `scope`
+  // itself was already resolved from the verified session before this
+  // function is ever called — the org/project access check happens in
+  // middleware/actor.ts's attachActor (DB-backed organization_members
+  // lookup keyed on the authenticated user id) and
+  // lib/workspaceScope.ts's scopeFromActor, both upstream of
+  // routes/chat.ts's call to this function, never from the request body.
+  await withServiceRole(pool, async (db) => {
     await db.query("select pg_advisory_xact_lock(hashtext($1))", [lockKey]);
 
     const { rows: planRows } = await db.query<{ plan_name: string; action_limit: number | null }>(

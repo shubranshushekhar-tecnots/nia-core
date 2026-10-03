@@ -12,6 +12,7 @@ import { runSse, subscribeWithReplay } from "../lib/sse.js";
 import { enqueueChatQuery, getChatJobData } from "../lib/chatQueue.js";
 import { channelFor, replayLogKeyFor } from "../lib/chatChannel.js";
 import { scopeFromActor, type WorkspaceScope } from "../lib/workspaceScope.js";
+import { dbPool } from "../lib/dbPool.js";
 import { env } from "../env.js";
 import {
   assertCopilotActionAllowed,
@@ -89,7 +90,7 @@ chatRouter.post(
     // 6: check before a Copilot request) runs before any write — a blocked
     // request leaves no orphaned conversation/message row behind.
     const jobId = randomUUID();
-    await assertCopilotActionAllowed(req.withUser!, scope, jobId);
+    await assertCopilotActionAllowed(dbPool, scope, jobId);
 
     let resolvedConversationId = conversationId;
     if (resolvedConversationId) {

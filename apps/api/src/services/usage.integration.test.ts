@@ -1,7 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { withServiceRole } from "@nia/db";
+import { withActingUser, withServiceRole } from "@nia/db";
+import type { Queryable } from "@nia/db";
 import { dbPool } from "../lib/dbPool.js";
+import { auth } from "../lib/auth.js";
 import { getUsageSummary, getUsageTimeseries, getUsageBreakdown, listModelPrices, createModelPrice } from "./usage.js";
+import { assertCopilotActionAllowed } from "./chat.js";
 
 /**
  * Console v2 Slice 4, two of the task's mandatory tests:
@@ -9,6 +13,14 @@ import { getUsageSummary, getUsageTimeseries, getUsageBreakdown, listModelPrices
  * - "no content columns exist" (asserted against the real information_schema,
  *   not just this file's own query list, so it fails if a future migration
  *   ever adds one).
+ *
+ * Also covers the chat-500-on-usage_events fix: assertCopilotActionAllowed
+ * (apps/api/src/services/chat.ts) previously ran its advisory lock + plan/
+ * usage check + insert as `authenticated` (via withUser), which can never
+ * succeed since 0066_usage_events.sql grants `authenticated` select only —
+ * every real chat request failed with 42501. Fixed to run that whole
+ * section atomically as service_role, still explicitly scoped by the
+ * caller-supplied (session-verified) org/owner id.
  *
  * Real local Postgres only (apps/api/.env's DATABASE_URL), same convention
  * as dashboard.integration.test.ts. Run explicitly with `pnpm test:integration`.
@@ -20,15 +32,35 @@ afterAll(async () => {
 
 const insertedOrgIds: string[] = [];
 const insertedPriceIds: string[] = [];
+const insertedUserIds: string[] = [];
 
 afterEach(async () => {
   if (insertedOrgIds.length > 0) {
-    await dbPool.query("delete from public.organizations where id = any($1::uuid[])", [insertedOrgIds]);
+    const orgIds = [...insertedOrgIds];
+    await dbPool.query("delete from public.organizations where id = any($1::uuid[])", [orgIds]);
+    // usage_events.org_id references organizations(id) on delete cascade
+    // (0066_usage_events.sql), so the delete above should already have
+    // removed every usage_events row these tests created. Verify it,
+    // rather than assume it — stop loudly instead of silently leaving
+    // usage_events rows behind if cleanup ever didn't work.
+    const { rows: leftoverUsage } = await dbPool.query<{ id: string }>(
+      "select id from public.usage_events where org_id = any($1::uuid[])",
+      [orgIds],
+    );
+    if (leftoverUsage.length > 0) {
+      throw new Error(
+        `Cleanup failed: ${leftoverUsage.length} usage_events row(s) still exist for test org(s) ${orgIds.join(", ")} after deleting the organization(s) — stopping rather than leaving rows behind.`,
+      );
+    }
     insertedOrgIds.length = 0;
   }
   if (insertedPriceIds.length > 0) {
     await dbPool.query("delete from public.model_prices where id = any($1::uuid[])", [insertedPriceIds]);
     insertedPriceIds.length = 0;
+  }
+  if (insertedUserIds.length > 0) {
+    await dbPool.query('delete from public."user" where id = any($1::uuid[])', [insertedUserIds]);
+    insertedUserIds.length = 0;
   }
 });
 
@@ -43,6 +75,41 @@ async function makeFixtureOrg(): Promise<{ orgId: string; userId: string }> {
   const orgId = orgRows[0]!.id;
   insertedOrgIds.push(orgId);
   return { orgId, userId };
+}
+
+/** Same as makeFixtureOrg, but also adds the fixture user as an actual 'member' row (organization_members), for the assertCopilotActionAllowed tests below. */
+async function makeFixtureOrgWithMember(): Promise<{ orgId: string; userId: string }> {
+  const { orgId, userId } = await makeFixtureOrg();
+  await dbPool.query(
+    "insert into public.organization_members (org_id, user_id, role) values ($1, $2, 'member')",
+    [orgId, userId],
+  );
+  return { orgId, userId };
+}
+
+/** A real, freshly signed-up user who is deliberately never added to any fixture org's organization_members. */
+async function makeStrangerUser(): Promise<string> {
+  const email = `usage-copilot-stranger-${Date.now()}-${Math.random().toString(36).slice(2)}@nia.dev`;
+  const result = await auth.api.signUpEmail({ body: { email, password: "password", name: "usage copilot stranger" } });
+  insertedUserIds.push(result.user.id);
+  return result.user.id;
+}
+
+async function countUsageEvents(orgId: string): Promise<number> {
+  const { rows } = await dbPool.query<{ count: string }>(
+    "select count(*)::bigint as count from public.usage_events where org_id = $1 and kind = 'copilot_action'",
+    [orgId],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+async function fillCopilotUsage(orgId: string, count: number): Promise<void> {
+  for (let i = 0; i < count; i += 1) {
+    await dbPool.query(
+      `insert into public.usage_events (org_id, kind, quantity, subject_id) values ($1, 'copilot_action', 1, $2)`,
+      [orgId, randomUUID()],
+    );
+  }
 }
 
 async function insertUsageRow(params: {
@@ -193,5 +260,122 @@ describe("model price catalog — create/list round trip", () => {
 
     const listAfter = await withServiceRole(dbPool, (db) => listModelPrices(db, model));
     expect(listAfter).toHaveLength(2);
+  });
+});
+
+describe("assertCopilotActionAllowed — chat 500-on-usage_events fix, real Postgres grants", () => {
+  it("a member under the limit: the call succeeds and records exactly one usage_events row for the right org", async () => {
+    const { orgId } = await makeFixtureOrgWithMember();
+    const subjectId = randomUUID();
+
+    await expect(assertCopilotActionAllowed(dbPool, { orgId }, subjectId)).resolves.toBeUndefined();
+
+    const { rows } = await dbPool.query<{ org_id: string; kind: string; subject_id: string }>(
+      "select org_id, kind, subject_id from public.usage_events where subject_id = $1",
+      [subjectId],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.org_id).toBe(orgId);
+    expect(rows[0]!.kind).toBe("copilot_action");
+  });
+
+  it("never blocks an unmetered plan (copilot_actions_per_month null) but still records usage for Console visibility", async () => {
+    const { orgId } = await makeFixtureOrgWithMember();
+    await dbPool.query("update public.org_plan set plan_id = 'legacy' where org_id = $1", [orgId]);
+    await fillCopilotUsage(orgId, 999); // Far past any metered limit — must still be allowed since legacy is unmetered.
+    const subjectId = randomUUID();
+
+    await expect(assertCopilotActionAllowed(dbPool, { orgId }, subjectId)).resolves.toBeUndefined();
+
+    const { rows } = await dbPool.query<{ id: string }>(
+      "select id from public.usage_events where subject_id = $1",
+      [subjectId],
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  it("at the limit: the call is refused with COPILOT_LIMIT_EXCEEDED and no new usage_events row is recorded", async () => {
+    const { orgId } = await makeFixtureOrgWithMember();
+    // Free plan (this org's default, 0043's create trigger) = 50 copilot_actions_per_month.
+    await fillCopilotUsage(orgId, 50);
+    const subjectId = randomUUID();
+
+    await expect(assertCopilotActionAllowed(dbPool, { orgId }, subjectId)).rejects.toMatchObject({
+      statusCode: 403,
+      code: "COPILOT_LIMIT_EXCEEDED",
+    });
+
+    const { rows } = await dbPool.query<{ id: string }>(
+      "select id from public.usage_events where subject_id = $1",
+      [subjectId],
+    );
+    expect(rows).toHaveLength(0);
+    expect(await countUsageEvents(orgId)).toBe(50);
+  });
+
+  it("a direct insert into usage_events as authenticated is still denied (42501) — the root cause this fix addresses", async () => {
+    const { orgId, userId } = await makeFixtureOrgWithMember();
+    const withUser = <T>(fn: (db: Queryable) => Promise<T>): Promise<T> => withActingUser(dbPool, userId, fn);
+
+    await expect(
+      withUser((db) =>
+        db.query(
+          `insert into public.usage_events (org_id, kind, quantity, subject_id) values ($1, 'copilot_action', 1, $2)`,
+          [orgId, randomUUID()],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+
+    expect(await countUsageEvents(orgId)).toBe(0);
+  });
+
+  it("two parallel calls at one below the limit: exactly one is allowed, the other is refused, and exactly one new row is recorded", async () => {
+    const { orgId } = await makeFixtureOrgWithMember();
+    await fillCopilotUsage(orgId, 49); // Free plan limit is 50 — one slot remains.
+
+    const results = await Promise.allSettled([
+      assertCopilotActionAllowed(dbPool, { orgId }, randomUUID()),
+      assertCopilotActionAllowed(dbPool, { orgId }, randomUUID()),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ code: "COPILOT_LIMIT_EXCEEDED" });
+    expect(await countUsageEvents(orgId)).toBe(50);
+  });
+
+  it("a user who does not belong to an org cannot cause usage to be recorded against it", async () => {
+    const { orgId } = await makeFixtureOrgWithMember();
+    const strangerId = await makeStrangerUser();
+
+    // The real boundary: attachActor (middleware/actor.ts) resolves scope
+    // from organization_members rows for the authenticated user's own id —
+    // a stranger has none for this org, so scopeFromActor could never
+    // produce { orgId } for them in the first place.
+    const { rows: membershipRows } = await dbPool.query(
+      "select 1 from public.organization_members where org_id = $1 and user_id = $2",
+      [orgId, strangerId],
+    );
+    expect(membershipRows).toHaveLength(0);
+
+    // Defense in depth: even a direct attempt to write into usage_events
+    // for that org as the stranger (bypassing assertCopilotActionAllowed
+    // entirely) is denied by the same unconditional grant-level block
+    // proven above — membership is irrelevant, `authenticated` has no
+    // insert grant on usage_events at all.
+    const strangerWithUser = <T>(fn: (db: Queryable) => Promise<T>): Promise<T> =>
+      withActingUser(dbPool, strangerId, fn);
+    await expect(
+      strangerWithUser((db) =>
+        db.query(
+          `insert into public.usage_events (org_id, kind, quantity, subject_id) values ($1, 'copilot_action', 1, $2)`,
+          [orgId, randomUUID()],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+
+    expect(await countUsageEvents(orgId)).toBe(0);
   });
 });
