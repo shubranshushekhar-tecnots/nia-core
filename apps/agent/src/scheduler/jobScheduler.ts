@@ -85,12 +85,21 @@ export class JobScheduler {
     this.retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
   }
 
-  /** Loads jobs immediately (scheduling any due/missed run once), then reconciles on a timer. */
+  /**
+   * Loads jobs immediately (scheduling any due/missed run once), then
+   * reconciles on a timer. Deliberately left ref'd (not `.unref()`'d):
+   * this timer always exists, with or without jobs, and is the thing
+   * that keeps `agent start` resident — it's cleared in `stop()`, which
+   * agentLoop.ts calls once the service is told to shut down. An
+   * unref'd timer here let the whole process exit the instant there
+   * was no other pending I/O, instead of idling until the next
+   * reconcile/tick or an interrupt (found during Phase B's real-run
+   * verification — `agent start` was returning almost immediately).
+   */
   start(): void {
     this.stopped = false;
     this.reconcile();
     this.reconcileTimer = setInterval(() => this.reconcile(), this.reconcileIntervalMs);
-    this.reconcileTimer.unref?.();
   }
 
   /** Clears every timer, aborts every in-flight run, and resolves once they've all settled. */
@@ -156,7 +165,12 @@ export class JobScheduler {
     this.scheduleNext(runtime);
   }
 
-  /** Computes and persists the next future occurrence from now, and arms a timer for it. */
+  /**
+   * Computes and persists the next future occurrence from now, and arms
+   * a timer for it. Also deliberately ref'd — see `start()`'s comment —
+   * so a scheduled job's pending tick genuinely keeps the process alive
+   * until it fires, instead of letting the process exit from under it.
+   */
   private scheduleNext(runtime: JobRuntime): void {
     if (!runtime.job.schedule || this.stopped) return;
     if (runtime.timer) clearTimeout(runtime.timer);
@@ -166,7 +180,6 @@ export class JobScheduler {
     runtime.timer = setTimeout(() => {
       this.onTick(runtime).catch((err) => this.logTickError(runtime, err));
     }, delayMs);
-    runtime.timer.unref?.();
   }
 
   private logTickError(runtime: JobRuntime, err: unknown): void {

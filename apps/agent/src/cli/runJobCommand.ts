@@ -33,11 +33,16 @@ export interface RunJobOutcome {
   consoleMessage?: string;
   /**
    * Present on every failure — lets the scheduler (scheduler/jobScheduler.ts)
-   * decide pause vs. retry-with-backoff vs. wait-for-next-schedule. Pre-
-   * runSync failures (missing job/connection/secrets, missing source
-   * table/column, filter resolution) are reported as "other": they're not
-   * among the pause-triggering causes in §10(B2) item 3, and retrying them
+   * decide pause vs. retry-with-backoff vs. wait-for-next-schedule. Most
+   * pre-runSync failures (missing job/connection/secrets, filter
+   * resolution) are reported as "other": they're not among the
+   * pause-triggering causes in §10(B2) item 3, and retrying them
    * immediately can't help, so the job simply waits for its next tick.
+   * A missing source table or column is reported as "config" instead —
+   * it's a schema stop just like a Planometry-side schema mismatch, not
+   * a transient condition that retrying (or silently waiting for the
+   * next tick forever) could ever resolve on its own; it needs `job
+   * resume` after the schema problem is actually fixed.
    */
   kind?: RunSyncFailureKind;
 }
@@ -87,12 +92,12 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
   try {
     const catalog = await introspectCatalog(pool, connection.sourceTimeZone);
     const table = catalog.tables.find((t) => t.name === job.sourceTable);
-    if (!table) return { ok: false, error: `source table/view "${job.sourceTable}" was not found in the catalog`, kind: "other" };
+    if (!table) return { ok: false, error: `source table/view "${job.sourceTable}" was not found in the catalog`, kind: "config" };
 
     const sourceColumnTypes: Record<string, ExtractType> = {};
     for (const pair of job.mapping) {
       const column = table.columns.find((c) => c.name === pair.source);
-      if (!column) return { ok: false, error: `source column "${pair.source}" no longer exists in the catalog`, kind: "other" };
+      if (!column) return { ok: false, error: `source column "${pair.source}" no longer exists in the catalog`, kind: "config" };
       sourceColumnTypes[pair.source] = column.type;
     }
 

@@ -48,6 +48,19 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
 
   if (loadConfig(dir).jobs.length === 0) logger.warn("idle_no_jobs", {});
 
+  /**
+   * Explicitly holds the process open until `options.signal` aborts,
+   * with or without jobs. Without this, `agent start` returned almost
+   * immediately: an `AbortSignal` "abort" listener does not ref the
+   * Node event loop, and (before this fix) neither did the scheduler's
+   * own timers (they were `.unref()`'d — see jobScheduler.ts's
+   * `start()`/`scheduleNext()`) or the monitoring heartbeat's timer.
+   * This is the one handle `runAgentLoop` itself owns for that purpose,
+   * independent of whether the scheduler happens to have any timers of
+   * its own running — found during Phase B's real-run verification.
+   */
+  const keepAlive = setInterval(() => {}, 1 << 30);
+
   try {
     await new Promise<void>((resolve) => {
       if (options.signal.aborted) {
@@ -57,6 +70,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
       options.signal.addEventListener("abort", () => resolve(), { once: true });
     });
   } finally {
+    clearInterval(keepAlive);
     monitoring.stop();
     await scheduler.stop();
   }
