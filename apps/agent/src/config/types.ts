@@ -35,8 +35,12 @@ export interface JobMappingColumn {
   target: string;
 }
 
-/** Only "replace" exists until slice C1 adds `upsertDelta`/other strategies behind the `--strategy` flag. */
-export type JobStrategy = "replace";
+/**
+ * "replace" (full reload, every run) or "upsertDelta" (watermark-based
+ * incremental sync, slice C1 — docs/plans/planometry-v4-migration.md
+ * §1.1/§10). `realtime` and other strategies are later slices.
+ */
+export type JobStrategy = "replace" | "upsertDelta";
 
 export interface TargetSchemaColumnSnapshot {
   name: string;
@@ -74,8 +78,14 @@ export interface SyncJobEntry {
   filter: JobFilterCondition[];
   /** Saved named-parameter values (always raw strings, including relative-date tokens stored as literal token text — resolved only at validation/run time). Overridable per-run via `job run --param`, which never mutates this. */
   params: Record<string, string>;
-  /** 5-field cron expression (minute hour day-of-month month day-of-week), evaluated in the connection's `sourceTimeZone` by the scheduler (scheduler/cronSchedule.ts). Unset: the job runs only via `job run`, never on a timer. */
+  /** 5-field cron expression (minute hour day-of-month month day-of-week), evaluated in the connection's `sourceTimeZone` by the scheduler (scheduler/cronSchedule.ts). Unset: the job runs only via `job run`, never on a timer. For an `upsertDelta` job this is the delta cadence; `replaceSchedule` below is the separate periodic full-reload cadence. */
   schedule?: string;
+  /** `strategy: "upsertDelta"` only: the date-time watermark column (no-offset family — datetime/datetime2/smalldatetime), read even when not in `mapping` (§1.1). Required for `upsertDelta`, absent for `replace`. */
+  watermarkColumn?: string;
+  /** `strategy: "upsertDelta"` only: overlap window in seconds subtracted from the computed watermark (§1.1). Default 300, applied where read, not stored as a literal default here. */
+  overlapSeconds?: number;
+  /** A separate cron expression (same format/timezone as `schedule`) for a periodic full `replace`, independent of `schedule`'s delta cadence (§2, §8). Required when the job's filter uses a relative-date parameter. */
+  replaceSchedule?: string;
 }
 
 /**

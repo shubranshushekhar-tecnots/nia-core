@@ -10,15 +10,108 @@ import {
   saveConfig,
   upsertJob,
 } from "../config/store.js";
-import type { ConnectionEntry, JobMappingColumn, OnNullKey, SyncJobEntry, TargetSchemaSnapshot } from "../config/types.js";
+import type { ConnectionEntry, JobMappingColumn, JobStrategy, OnNullKey, SyncJobEntry, TargetSchemaSnapshot } from "../config/types.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { PlanometryClient } from "../planometry/client.js";
-import { resolveJobFilter, type JobFilterCondition } from "../planometry/parameters.js";
+import { isRelativeDateToken, resolveJobFilter, type FilterValueOrParam, type JobFilterCondition } from "../planometry/parameters.js";
 import type { TableSchema } from "../planometry/types.js";
-import { pauseJobState, resumeJobState } from "../ops/state.js";
+import { pauseJobState, resumeJobState, setLastWatermark } from "../ops/state.js";
 import { InvalidCronScheduleError, validateCronExpression } from "../scheduler/cronSchedule.js";
+import { checkWatermarkColumn, type WatermarkColumnReport } from "../sync/watermark.js";
 import { buildMapping, type RawMappingPair } from "./jobMapping.js";
+
+/** Opens a connection pool for `connection`, runs `fn`, and always closes it — the watermark-column check (needs a live connection, unlike the catalog-only `readSourceTable` below) is the one caller of this so far. */
+async function withConnectedPool<T>(connection: ConnectionEntry, dir: string, fn: (pool: Awaited<ReturnType<typeof connect>>) => Promise<T>): Promise<T> {
+  const masterKey = loadOrCreateMasterKey(dir);
+  const secrets = new LocalSecretStore(masterKey, dir);
+  const credentials = secrets.get<{ user: string; password: string }>(connection.credentialRef);
+  if (!credentials) throw new Error(`credentials for connection ${connection.id} are missing from the secret store`);
+  const pool = await connect({
+    server: connection.sqlserver.host,
+    port: connection.sqlserver.port,
+    database: connection.sqlserver.database,
+    user: credentials.user,
+    password: credentials.password,
+    encrypt: connection.sqlserver.encrypt,
+    allowLegacyTls: connection.sqlserver.allowLegacyTls,
+    trustServerCertificate: connection.sqlserver.trustServerCertificate,
+  });
+  try {
+    return await fn(pool);
+  } finally {
+    await pool.close();
+  }
+}
+
+/** Whether `filter` binds any parameter whose saved value (in `params`) is a relative-date token (`today`, `startOfMonth-1m`, etc.) — `upsertDelta` jobs with one of these require a `replaceSchedule` (plan §2). */
+function filterUsesRelativeDateToken(filter: JobFilterCondition[], params: Record<string, string>): boolean {
+  const isParamRef = (v: FilterValueOrParam): v is { param: string } => typeof v === "object" && v !== null && typeof (v as { param?: unknown }).param === "string";
+  const checkValue = (v: FilterValueOrParam): boolean => {
+    if (!isParamRef(v)) return false;
+    const raw = params[v.param];
+    return raw !== undefined && isRelativeDateToken(raw);
+  };
+  for (const cond of filter) {
+    switch (cond.operator) {
+      case "isNull":
+      case "isNotNull":
+        continue;
+      case "in":
+        if (cond.values.some(checkValue)) return true;
+        continue;
+      case "between":
+        if (checkValue(cond.low) || checkValue(cond.high)) return true;
+        continue;
+      default:
+        if (checkValue(cond.value)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * `strategy: "upsertDelta"` validation shared by `addJob`/`updateJob`
+ * (plan §1.1/§2/§8): the watermark column must exist in the live source
+ * catalog and be a datetime-family column; a relative-date filter
+ * parameter requires a `replaceSchedule`; a given `replaceSchedule` must
+ * itself be a valid cron expression. Returns the null-count/clock-skew
+ * report on success, for the caller to attach to its result.
+ */
+async function validateUpsertDelta(
+  connection: ConnectionEntry,
+  table: CatalogTable,
+  sourceTable: string,
+  watermarkColumn: string | undefined,
+  filter: JobFilterCondition[],
+  params: Record<string, string>,
+  replaceSchedule: string | undefined,
+  dir: string,
+): Promise<{ ok: true; report: WatermarkColumnReport } | { ok: false; error: string }> {
+  if (!watermarkColumn) return { ok: false, error: `strategy "upsertDelta" requires a watermarkColumn` };
+  const column = table.columns.find((c) => c.name === watermarkColumn);
+  if (!column) return { ok: false, error: `watermark column "${watermarkColumn}" was not found in the catalog` };
+  if (column.type !== "datetime") return { ok: false, error: `watermark column "${watermarkColumn}" is type ${column.type}, not a datetime-family column` };
+
+  if (filterUsesRelativeDateToken(filter, params) && replaceSchedule === undefined) {
+    return { ok: false, error: `a filter using a relative-date token requires a replaceSchedule (periodic full replace) for an "upsertDelta" job` };
+  }
+  if (replaceSchedule !== undefined) {
+    try {
+      validateCronExpression(replaceSchedule);
+    } catch (err) {
+      if (err instanceof InvalidCronScheduleError) return { ok: false, error: err.message };
+      throw err;
+    }
+  }
+
+  try {
+    const report = await withConnectedPool(connection, dir, (pool) => checkWatermarkColumn(pool, sourceTable, watermarkColumn));
+    return { ok: true, report };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 /** `{ column name -> source ExtractType }`, for filter type-checking — filter columns need not be in the job's mapping. */
 function columnTypesOf(table: CatalogTable): Record<string, ExtractType> {
@@ -43,6 +136,8 @@ export interface JobCommandResult {
   job?: SyncJobEntry;
   sentAsNull?: string[];
   errors?: string[];
+  /** `strategy: "upsertDelta"` only — the null-count/clock-skew report from `sync/watermark.ts`'s `checkWatermarkColumn`. */
+  watermarkReport?: WatermarkColumnReport;
 }
 
 export interface AddJobInput {
@@ -63,6 +158,14 @@ export interface AddJobInput {
   params?: Record<string, string>;
   /** 5-field cron expression, evaluated in the connection's sourceTimeZone (scheduler/cronSchedule.js). Unset = runs only via `job run`. */
   schedule?: string;
+  /** Default "replace" (§10 slice C1). */
+  strategy?: JobStrategy;
+  /** `strategy: "upsertDelta"` only — required then. */
+  watermarkColumn?: string;
+  /** `strategy: "upsertDelta"` only — default 300, applied where read. */
+  overlapSeconds?: number;
+  /** `strategy: "upsertDelta"` only — required when `filter` uses a relative-date token. */
+  replaceSchedule?: string;
 }
 
 /**
@@ -111,6 +214,23 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     }
   }
 
+  const strategy: JobStrategy = input.strategy ?? "replace";
+  let watermarkReport: WatermarkColumnReport | undefined;
+  if (strategy === "upsertDelta") {
+    const check = await validateUpsertDelta(
+      connection,
+      catalogResult.table,
+      input.sourceTable,
+      input.watermarkColumn,
+      filter,
+      params,
+      input.replaceSchedule,
+      dir,
+    );
+    if (!check.ok) return { ok: false, errors: [check.error] };
+    watermarkReport = check.report;
+  }
+
   const pairs: JobMappingColumn[] = plan.pairs;
   const preview: JobMappingPreview = { pairs, sentAsNull: plan.sentAsNull };
   options.onPlan?.(preview);
@@ -128,7 +248,7 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     sourceTable: input.sourceTable,
     targetUrl: input.targetUrl,
     pushKeyRef,
-    strategy: "replace",
+    strategy,
     mapping: pairs,
     targetSchemaSnapshot: buildTargetSchemaSnapshot(schema, pairs),
     onNullKey: input.onNullKey ?? "stop",
@@ -136,10 +256,13 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     filter,
     params,
     schedule: input.schedule,
+    watermarkColumn: strategy === "upsertDelta" ? input.watermarkColumn : undefined,
+    overlapSeconds: strategy === "upsertDelta" ? input.overlapSeconds : undefined,
+    replaceSchedule: strategy === "upsertDelta" ? input.replaceSchedule : undefined,
   };
 
   saveConfig(upsertJob(config, job), dir);
-  return { ok: true, job, sentAsNull: plan.sentAsNull };
+  return { ok: true, job, sentAsNull: plan.sentAsNull, watermarkReport };
 }
 
 export interface TestJobResult {
@@ -147,12 +270,15 @@ export interface TestJobResult {
   errors: string[];
   /** Present whenever the job itself was found, even on failure — the CLI uses this to print the job's filter/params. */
   job?: SyncJobEntry;
+  /** `strategy: "upsertDelta"` only — the null-count/clock-skew report, informational (never fails the test on its own). */
+  watermarkReport?: WatermarkColumnReport;
 }
 
 /**
  * `nia-agent job test <id>`: re-checks connection + schema against the
- * saved snapshot, and confirms the mapped source columns still exist.
- * Watermark/null-value checks land in slice C1 — out of scope here.
+ * saved snapshot, confirms the mapped source columns still exist, and
+ * (for `strategy: "upsertDelta"`) reports the watermark column's
+ * null-count/clock-skew check (plan §1.1/§8, slice C1).
  */
 export async function testJob(id: string, dir = defaultHomeDir()): Promise<TestJobResult> {
   const config = loadConfig(dir);
@@ -196,6 +322,7 @@ export async function testJob(id: string, dir = defaultHomeDir()): Promise<TestJ
     await client.close();
   }
 
+  let watermarkReport: WatermarkColumnReport | undefined;
   const catalogResult = await readSourceTable(connection, job.sourceTable, dir);
   if (!catalogResult.ok) {
     errors.push(catalogResult.error);
@@ -224,9 +351,21 @@ export async function testJob(id: string, dir = defaultHomeDir()): Promise<TestJ
         }
       }
     }
+
+    if (job.strategy === "upsertDelta" && job.watermarkColumn) {
+      if (!sourceNames.has(job.watermarkColumn)) {
+        errors.push(`watermark column "${job.watermarkColumn}" no longer exists in the catalog`);
+      } else {
+        try {
+          watermarkReport = await withConnectedPool(connection, dir, (pool) => checkWatermarkColumn(pool, job.sourceTable, job.watermarkColumn!));
+        } catch (err) {
+          errors.push(describeError(err));
+        }
+      }
+    }
   }
 
-  return { ok: errors.length === 0, errors, job };
+  return { ok: errors.length === 0, errors, job, watermarkReport };
 }
 
 /** `nia-agent job list`: non-secret summary only — never the push key. */
@@ -278,6 +417,14 @@ export interface UpdateJobInput {
   params?: Record<string, string>;
   /** 5-field cron expression, evaluated in the connection's sourceTimeZone — undefined leaves it unchanged; pass "" to clear it. */
   schedule?: string;
+  /** Undefined leaves the job's strategy unchanged. */
+  strategy?: JobStrategy;
+  /** Undefined leaves it unchanged. Required (on the effective job) when the effective strategy is "upsertDelta". Changing this clears the saved watermark. */
+  watermarkColumn?: string;
+  /** Undefined leaves it unchanged. */
+  overlapSeconds?: number;
+  /** Undefined leaves it unchanged; pass "" to clear it. */
+  replaceSchedule?: string;
 }
 
 /**
@@ -345,6 +492,18 @@ export async function updateJob(
     }
   }
 
+  const strategy: JobStrategy = input.strategy ?? job.strategy;
+  const watermarkColumn = input.watermarkColumn ?? (strategy === job.strategy ? job.watermarkColumn : undefined);
+  const overlapSeconds = input.overlapSeconds ?? job.overlapSeconds;
+  const replaceSchedule = input.replaceSchedule !== undefined ? (input.replaceSchedule === "" ? undefined : input.replaceSchedule) : job.replaceSchedule;
+
+  let watermarkReport: WatermarkColumnReport | undefined;
+  if (strategy === "upsertDelta") {
+    const check = await validateUpsertDelta(connection, catalogResult.table, job.sourceTable, watermarkColumn, filter, params, replaceSchedule, dir);
+    if (!check.ok) return { ok: false, errors: [check.error] };
+    watermarkReport = check.report;
+  }
+
   const preview: JobMappingPreview = { pairs: plan.pairs, sentAsNull: plan.sentAsNull };
   options.onPlan?.(preview);
   const confirmed = await (options.confirm?.(preview) ?? true);
@@ -364,11 +523,22 @@ export async function updateJob(
     filter,
     params,
     schedule,
+    strategy,
+    watermarkColumn: strategy === "upsertDelta" ? watermarkColumn : undefined,
+    overlapSeconds: strategy === "upsertDelta" ? overlapSeconds : undefined,
+    replaceSchedule: strategy === "upsertDelta" ? replaceSchedule : undefined,
   };
 
   saveConfig(upsertJob(config, updated), dir);
   if (input.rekey) secrets.delete(job.pushKeyRef);
-  return { ok: true, job: updated, sentAsNull: plan.sentAsNull };
+
+  // A changed filter/params/mapping/watermark column invalidates the saved watermark — the next `job run` must be a full replace (plan §1.1/§8).
+  const mappingChanged = (input.mapOverrides?.length ?? 0) > 0 || (input.unmapTargets?.length ?? 0) > 0;
+  const watermarkInvalidated =
+    input.filter !== undefined || input.params !== undefined || mappingChanged || (input.watermarkColumn !== undefined && input.watermarkColumn !== job.watermarkColumn);
+  if (watermarkInvalidated) setLastWatermark(id, undefined, dir);
+
+  return { ok: true, job: updated, sentAsNull: plan.sentAsNull, watermarkReport };
 }
 
 type ReadSourceTableResult = { ok: true; table: CatalogTable } | { ok: false; error: string };

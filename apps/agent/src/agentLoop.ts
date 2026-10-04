@@ -33,7 +33,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     dir,
     logger,
     loadJobs: () => loadSchedulerJobs(dir),
-    runJob: (job, signal) => runSchedulerJob(job, signal, dir),
+    runJob: (job, signal, forceReplace) => runSchedulerJob(job, signal, forceReplace, dir),
     maxConcurrentRuns: loadConfig(dir).maxConcurrentRuns,
   });
   scheduler.start();
@@ -83,7 +83,7 @@ function loadSchedulerJobs(dir: string): SchedulerJob[] {
   for (const job of config.jobs) {
     const connection = findConnection(config, job.connectionId);
     if (!connection) continue;
-    jobs.push({ id: job.id, name: job.name, connectionId: job.connectionId, schedule: job.schedule, timeZone: connection.sourceTimeZone });
+    jobs.push({ id: job.id, name: job.name, connectionId: job.connectionId, schedule: job.schedule, replaceSchedule: job.replaceSchedule, timeZone: connection.sourceTimeZone });
   }
   return jobs;
 }
@@ -92,8 +92,8 @@ function loadJobHeartbeatSources(dir: string): JobHeartbeatSource[] {
   return loadConfig(dir).jobs.map((job) => ({ id: job.id, name: job.name, state: readJobState(job.id, dir) }));
 }
 
-async function runSchedulerJob(job: SchedulerJob, signal: AbortSignal, dir: string): Promise<SchedulerJobOutcome> {
-  const outcome = await runJobCommand(job.id, { signal }, dir);
+async function runSchedulerJob(job: SchedulerJob, signal: AbortSignal, forceReplace: boolean, dir: string): Promise<SchedulerJobOutcome> {
+  const outcome = await runJobCommand(job.id, { signal, replace: forceReplace }, dir);
   if (outcome.ok) return { ok: true, rowsSent: outcome.rowsSent ?? 0, durationMs: outcome.durationMs ?? 0 };
   return { ok: false, kind: outcome.kind ?? "other", error: outcome.error ?? "job run failed", consoleMessage: outcome.consoleMessage };
 }

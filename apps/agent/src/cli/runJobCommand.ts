@@ -1,4 +1,4 @@
-import type { ExtractType, FilterScalar } from "@nia/extract";
+import type { ExtractType, FilterCondition, FilterScalar } from "@nia/extract";
 import { NdjsonWriter } from "@nia/extract";
 import { connect, introspectCatalog, streamExtract } from "@nia/extract/mssql";
 import { defaultHomeDir, defaultLogDir } from "../config/paths.js";
@@ -6,18 +6,34 @@ import { findConnection, findJob, loadConfig } from "../config/store.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { Logger } from "../ops/logger.js";
+import { getLastWatermark } from "../ops/state.js";
 import { resolveJobFilter } from "../planometry/parameters.js";
 import { KeyedSemaphore } from "../sync/concurrency.js";
 import { runSync, type RunSyncFailureKind, type RunSyncResult } from "../sync/runSync.js";
+import { readServerClock } from "../sync/watermark.js";
 
 /** One process-wide semaphore (per target table URL) — a second concurrent `job run` in the same process is queued, not just refused cross-process (sync/replaceLock.ts handles that). */
 const tableSemaphore = new KeyedSemaphore(1);
 
 export interface RunJobOptions {
-  /** Accepted for clarity at the call site — the job's only strategy is already "replace" (docs/plans/planometry-v4-migration.md §10 slice A4, item 1). */
+  /**
+   * `job run --replace`: for a `replace`-strategy job this is a no-op
+   * (it's already the only thing that ever happens). For an
+   * `upsertDelta` job it forces a one-off full reload — same as a
+   * first run with no saved watermark — without clearing the saved
+   * watermark itself (docs/plans/planometry-v4-migration.md §10
+   * slice C1).
+   */
   replace?: boolean;
   signal?: AbortSignal;
-  /** `job run --param`: overrides the job's saved params for this run only, never persisted. */
+  /**
+   * `job run --param`: overrides the job's saved params for this run
+   * only, never persisted. For an `upsertDelta` job this also forces
+   * an upsert-mode run scoped to the override filter that never reads
+   * or writes the saved watermark — a narrow ad-hoc query must never
+   * replace-wipe the whole target table, and its result says nothing
+   * about the job's normal delta progress.
+   */
   paramOverrides?: Record<string, string>;
 }
 
@@ -115,36 +131,85 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
       logger.info("job_run_params", { jobId: job.id, resolvedParams: JSON.stringify(resolvedFilter.resolvedParams) });
     }
 
+    // One single-pass reader, reusable for a plain `readSourceRows` call
+    // or composed into the two-pass `gte` + `isNull` delta read below —
+    // each pass needs its own `NdjsonWriter` since a writer's `columns`/
+    // `error` state is permanently closed out by `streamExtract`'s own
+    // end-of-stream handling and can't be reused across two calls.
+    const makeSinglePassReader = (
+      columns: string[],
+      filter: FilterCondition[],
+    ): ((onRow: (row: Record<string, unknown>) => void, signal: AbortSignal) => Promise<void>) => {
+      return async (onRow, signal) => {
+        let resultColumns: { name: string; type: ExtractType }[] = [];
+        let streamError: string | undefined;
+
+        const writer = new NdjsonWriter((chunk) => {
+          const text = chunk.trim();
+          if (!text) return true; // keep-alive line
+          const parsed = JSON.parse(text) as unknown;
+          if (Array.isArray(parsed)) {
+            const row: Record<string, unknown> = {};
+            resultColumns.forEach((c, i) => {
+              row[c.name] = parsed[i];
+            });
+            onRow(row);
+            return true;
+          }
+          const obj = parsed as { columns?: typeof resultColumns; error?: string };
+          if (obj.columns) {
+            resultColumns = obj.columns;
+            return true;
+          }
+          if (obj.error) {
+            streamError = obj.error;
+            return true;
+          }
+          return true; // the {"end":true,...} trailer — nothing to do
+        });
+
+        await streamExtract(pool, catalog, { table: job.sourceTable, columns, filter }, writer, { signal });
+        if (streamError) throw new Error(streamError);
+      };
+    };
+
+    const isUpsertDelta = job.strategy === "upsertDelta";
+    const isParamOverride = isUpsertDelta && options.paramOverrides !== undefined;
+
+    let passes: ((onRow: (row: Record<string, unknown>) => void, signal: AbortSignal) => Promise<void>)[];
+    let delta: Parameters<typeof runSync>[0]["delta"];
+
+    if (!isUpsertDelta) {
+      passes = [makeSinglePassReader(mappedSources, resolvedFilter.filter)];
+    } else {
+      const watermarkColumn = job.watermarkColumn;
+      if (!watermarkColumn) {
+        return { ok: false, error: `job ${id} has strategy "upsertDelta" but no watermarkColumn configured`, kind: "config" };
+      }
+      if (!table.columns.some((c) => c.name === watermarkColumn)) {
+        return { ok: false, error: `watermark column "${watermarkColumn}" no longer exists in the catalog`, kind: "config" };
+      }
+
+      const extractColumns = mappedSources.includes(watermarkColumn) ? mappedSources : [...mappedSources, watermarkColumn];
+      const forceReplace = options.replace === true;
+      const savedWatermark = isParamOverride ? undefined : getLastWatermark(job.id, dir);
+      const serverClockAtStart = await readServerClock(pool);
+
+      if (isParamOverride || forceReplace || savedWatermark === undefined) {
+        passes = [makeSinglePassReader(extractColumns, resolvedFilter.filter)];
+      } else {
+        const gteFilter: FilterCondition[] = [...resolvedFilter.filter, { column: watermarkColumn, operator: "gte", value: savedWatermark }];
+        const isNullFilter: FilterCondition[] = [...resolvedFilter.filter, { column: watermarkColumn, operator: "isNull" }];
+        passes = [makeSinglePassReader(extractColumns, gteFilter), makeSinglePassReader(extractColumns, isNullFilter)];
+      }
+
+      delta = { watermarkColumn, overlapSeconds: job.overlapSeconds ?? 300, savedWatermark, forceReplace, isParamOverride, serverClockAtStart };
+    }
+
     const readSourceRows = async (onRow: (row: Record<string, unknown>) => void, signal: AbortSignal): Promise<void> => {
-      let columns: { name: string; type: ExtractType }[] = [];
-      let streamError: string | undefined;
-
-      const writer = new NdjsonWriter((chunk) => {
-        const text = chunk.trim();
-        if (!text) return true; // keep-alive line
-        const parsed = JSON.parse(text) as unknown;
-        if (Array.isArray(parsed)) {
-          const row: Record<string, unknown> = {};
-          columns.forEach((c, i) => {
-            row[c.name] = parsed[i];
-          });
-          onRow(row);
-          return true;
-        }
-        const obj = parsed as { columns?: typeof columns; error?: string };
-        if (obj.columns) {
-          columns = obj.columns;
-          return true;
-        }
-        if (obj.error) {
-          streamError = obj.error;
-          return true;
-        }
-        return true; // the {"end":true,...} trailer — nothing to do
-      });
-
-      await streamExtract(pool, catalog, { table: job.sourceTable, columns: mappedSources, filter: resolvedFilter.filter }, writer, { signal });
-      if (streamError) throw new Error(streamError);
+      for (const pass of passes) {
+        await pass(onRow, signal);
+      }
     };
 
     const result = await runSync({
@@ -158,6 +223,7 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
       logger,
       signal: options.signal,
       readSourceRows,
+      delta,
     });
 
     return outcomeFromResult(result, resolvedFilter.resolvedParams);
@@ -169,9 +235,16 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
 function outcomeFromResult(result: RunSyncResult, resolvedParams: Record<string, FilterScalar>): RunJobOutcome {
   const paramsSuffix = Object.keys(resolvedParams).length > 0 ? ` — params: ${JSON.stringify(resolvedParams)}` : "";
   if (result.outcome === "completed") {
+    // "replace" carries a whole-table rowCount/version from Planometry's response; "upsert" doesn't (see RunSyncResult's doc comment).
+    const planometrySuffix =
+      result.rowCount !== undefined || result.version !== undefined ? ` — Planometry rowCount ${result.rowCount}, version ${result.version}` : "";
+    const watermarkSuffix =
+      result.watermarkBefore !== undefined || result.watermarkAfter !== undefined
+        ? ` — watermark ${result.watermarkBefore ?? "(none)"} -> ${result.watermarkAfter ?? "(none)"}`
+        : "";
     return {
       ok: true,
-      summary: `sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms — Planometry rowCount ${result.rowCount}, version ${result.version}${paramsSuffix}`,
+      summary: `${result.mode}: sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms${planometrySuffix}${watermarkSuffix}${paramsSuffix}`,
       rowsSent: result.rowsSent,
       durationMs: result.durationMs,
     };

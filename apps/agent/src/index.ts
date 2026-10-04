@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
 import { addJob, listJobs, pauseJob, removeJob, resumeJob, testJob, updateJob } from "./cli/jobCommands.js";
+import type { WatermarkColumnReport } from "./sync/watermark.js";
 import { runJob } from "./cli/runJobCommand.js";
 import { parseMapOverrides } from "./cli/jobMapping.js";
 import { parseParamOverrides, type JobFilterCondition } from "./planometry/parameters.js";
@@ -244,19 +245,36 @@ async function main(argv: string[]): Promise<void> {
         "filter-file": { type: "string" },
         param: { type: "string", multiple: true },
         schedule: { type: "string" },
+        strategy: { type: "string" },
+        "watermark-column": { type: "string" },
+        "overlap-seconds": { type: "string" },
+        "replace-schedule": { type: "string" },
       },
     });
     const connectionId = values.connection as string | undefined;
     const table = values.table as string | undefined;
     const targetUrl = values["target-url"] as string | undefined;
     if (!connectionId || !table || !targetUrl) {
-      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--yes]");
+      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--yes]");
       process.exitCode = 1;
       return;
     }
     const onNullKey = parseOnNullKey(values["on-null-key"] as string | undefined);
     if (onNullKey === undefined && values["on-null-key"] !== undefined) {
       console.error(`--on-null-key must be "stop" or "skip", got ${JSON.stringify(values["on-null-key"])}`);
+      process.exitCode = 1;
+      return;
+    }
+    const strategy = parseStrategy(values.strategy as string | undefined);
+    if (strategy === undefined && values.strategy !== undefined) {
+      console.error(`--strategy must be "replace" or "upsertDelta", got ${JSON.stringify(values.strategy)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const overlapSecondsRaw = values["overlap-seconds"] as string | undefined;
+    const overlapSeconds = overlapSecondsRaw !== undefined ? Number(overlapSecondsRaw) : undefined;
+    if (overlapSecondsRaw !== undefined && (overlapSeconds === undefined || Number.isNaN(overlapSeconds))) {
+      console.error(`--overlap-seconds must be a number, got ${JSON.stringify(overlapSecondsRaw)}`);
       process.exitCode = 1;
       return;
     }
@@ -289,6 +307,10 @@ async function main(argv: string[]): Promise<void> {
       filter,
       params,
       schedule: values.schedule as string | undefined,
+      strategy,
+      watermarkColumn: values["watermark-column"] as string | undefined,
+      overlapSeconds,
+      replaceSchedule: values["replace-schedule"] as string | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -303,6 +325,7 @@ async function main(argv: string[]): Promise<void> {
     });
     if (result.ok) {
       console.log(`added job ${result.job!.id} (${result.job!.name})`);
+      if (result.watermarkReport) printWatermarkReport(result.watermarkReport);
     } else {
       for (const error of result.errors ?? []) console.error(`error: ${error}`);
       process.exitCode = 1;
@@ -321,6 +344,7 @@ async function main(argv: string[]): Promise<void> {
     if (result.ok) {
       console.log("ok");
       if (result.job) printFilterAndParams(result.job.filter, result.job.params);
+      if (result.watermarkReport) printWatermarkReport(result.watermarkReport);
     } else {
       for (const error of result.errors) console.error(`error: ${error}`);
       process.exitCode = 1;
@@ -389,16 +413,33 @@ async function main(argv: string[]): Promise<void> {
         "filter-file": { type: "string" },
         param: { type: "string", multiple: true },
         schedule: { type: "string" },
+        strategy: { type: "string" },
+        "watermark-column": { type: "string" },
+        "overlap-seconds": { type: "string" },
+        "replace-schedule": { type: "string" },
       },
     });
     if (!id) {
-      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>]");
+      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>]");
       process.exitCode = 1;
       return;
     }
     const onNullKey = parseOnNullKey(values["on-null-key"] as string | undefined);
     if (onNullKey === undefined && values["on-null-key"] !== undefined) {
       console.error(`--on-null-key must be "stop" or "skip", got ${JSON.stringify(values["on-null-key"])}`);
+      process.exitCode = 1;
+      return;
+    }
+    const strategy = parseStrategy(values.strategy as string | undefined);
+    if (strategy === undefined && values.strategy !== undefined) {
+      console.error(`--strategy must be "replace" or "upsertDelta", got ${JSON.stringify(values.strategy)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const overlapSecondsRaw = values["overlap-seconds"] as string | undefined;
+    const overlapSeconds = overlapSecondsRaw !== undefined ? Number(overlapSecondsRaw) : undefined;
+    if (overlapSecondsRaw !== undefined && (overlapSeconds === undefined || Number.isNaN(overlapSeconds))) {
+      console.error(`--overlap-seconds must be a number, got ${JSON.stringify(overlapSecondsRaw)}`);
       process.exitCode = 1;
       return;
     }
@@ -431,6 +472,10 @@ async function main(argv: string[]): Promise<void> {
       filter,
       params,
       schedule: values.schedule as string | undefined,
+      strategy,
+      watermarkColumn: values["watermark-column"] as string | undefined,
+      overlapSeconds,
+      replaceSchedule: values["replace-schedule"] as string | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -440,6 +485,7 @@ async function main(argv: string[]): Promise<void> {
     });
     if (result.ok) {
       console.log(`updated job ${result.job!.id}`);
+      if (result.watermarkReport) printWatermarkReport(result.watermarkReport);
     } else {
       for (const error of result.errors ?? []) console.error(`error: ${error}`);
       process.exitCode = 1;
@@ -523,6 +569,19 @@ function toOptionalBool(value: string | undefined): boolean | undefined {
 function parseOnNullKey(value: string | undefined): "stop" | "skip" | undefined {
   if (value === "stop" || value === "skip") return value;
   return undefined;
+}
+
+function parseStrategy(value: string | undefined): "replace" | "upsertDelta" | undefined {
+  if (value === "replace" || value === "upsertDelta") return value;
+  return undefined;
+}
+
+/** `job add`/`job update`/`job test`'s `watermarkReport` — the null-count/clock-skew check (plan §1.1/§8). */
+function printWatermarkReport(report: WatermarkColumnReport): void {
+  console.log(`watermark column: ${report.nullCount} null row(s), max value ${report.maxValue ?? "(none)"}, server clock ${report.serverClock}`);
+  if (report.aheadOfServerClock) {
+    console.log("warning: the watermark column's max value is ahead of the source server's own clock — it may be populated by application-server time, not database time");
+  }
 }
 
 /** `--filter <json>` / `--filter-file <path>` (the file form is for Windows shells) — same JSON either way. */

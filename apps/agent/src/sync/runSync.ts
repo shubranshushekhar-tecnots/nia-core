@@ -3,14 +3,17 @@ import type { ExtractType } from "@nia/extract";
 import { defaultLocksDir, defaultSpoolDir } from "../config/paths.js";
 import type { SyncJobEntry } from "../config/types.js";
 import type { Logger } from "../ops/logger.js";
+import { setLastWatermark } from "../ops/state.js";
 import { buildWireRow, createFormatter, FormatForTargetError, type MappedColumnFormatter } from "../planometry/formatForTarget.js";
 import { PlanometryClient, PlanometryConfigError, PlanometryRejectedError, PlanometryTransientError } from "../planometry/client.js";
-import type { TableSchema } from "../planometry/types.js";
+import type { PushMode, TableSchema } from "../planometry/types.js";
 import type { KeyedSemaphore } from "./concurrency.js";
 import { assertDiskSpace, InsufficientDiskSpaceError } from "./diskSpace.js";
 import { acquireReplaceLock, ReplaceLockTakenError } from "./replaceLock.js";
 import { replaceLoad } from "./replaceLoad.js";
 import { readReplaceSpool, removeReplaceSpool, ReplaceSpoolWriter } from "./replaceSpool.js";
+import { upsertPush } from "./upsertPush.js";
+import { computeNextWatermark } from "./watermark.js";
 
 /**
  * Rewritten for the v4 migration's slice A4 (docs/plans/planometry-v4-
@@ -49,6 +52,29 @@ export interface RunSyncOptions {
    * anything about SQL Server.
    */
   readSourceRows: (onRow: (row: Record<string, unknown>) => void, signal: AbortSignal) => Promise<void>;
+  /**
+   * `job.strategy === "upsertDelta"` only (slice C1, §1.1/§10). Drives the
+   * replace-vs-upsert push branch in step (e) and the post-push watermark
+   * computation/persistence. Absent entirely for `strategy: "replace"` jobs
+   * (today's unchanged path). `isParamOverride` is this module's own
+   * resolution of a gap the plan doc didn't cover explicitly: a `job run
+   * --param` one-off run against an `upsertDelta` job must never replace-
+   * wipe the table (its filter is a deliberately narrow override, not the
+   * job's real one) and must never read/write the saved watermark — so it
+   * always pushes via "upsert" with `persist: false`, regardless of whether
+   * a saved watermark exists.
+   */
+  delta?: {
+    watermarkColumn: string;
+    overlapSeconds: number;
+    /** From `getLastWatermark()` — undefined means "first run, treat as replace" (unless `isParamOverride`). */
+    savedWatermark?: string;
+    /** `job run --replace` — an explicit forced full reload of an `upsertDelta` job. */
+    forceReplace: boolean;
+    isParamOverride: boolean;
+    /** Read via `readServerClock()` before extraction starts (`S` in the formula). */
+    serverClockAtStart: string;
+  };
 }
 
 /**
@@ -77,7 +103,20 @@ export type RunSyncFailureKind =
   | "other";
 
 export type RunSyncResult =
-  | { outcome: "completed"; rowsSent: number; rowsSkipped: number; parts: number; durationMs: number; rowCount: number; version: number }
+  | {
+      outcome: "completed";
+      rowsSent: number;
+      rowsSkipped: number;
+      parts: number;
+      durationMs: number;
+      /** Unset for an `upsertDelta` run (Planometry's push response for "upsert" carries no whole-table rowCount/version — only a "replace" response does). */
+      rowCount?: number;
+      version?: number;
+      mode: PushMode;
+      /** `delta`-driven runs only (slice C1) — the saved watermark before/after this run (after reflects the computed value even on the rare case it wasn't persisted — see step (e)'s "leave unchanged" comment). */
+      watermarkBefore?: string;
+      watermarkAfter?: string;
+    }
   | { outcome: "failed"; error: string; consoleMessage?: string; kind: RunSyncFailureKind };
 
 interface SchemaDriftResult {
@@ -87,7 +126,7 @@ interface SchemaDriftResult {
 }
 
 /** Run order step (b): stop before reading any rows on a breaking change; warn-only on a new, unmapped column. */
-function checkSchemaDrift(job: SyncJobEntry, live: TableSchema): SchemaDriftResult {
+function checkSchemaDrift(job: SyncJobEntry, live: TableSchema, pushMode: PushMode): SchemaDriftResult {
   const warnings: string[] = [];
   const liveByName = new Map(live.columns.map((c) => [c.name, c]));
   const mappedTargets = new Set(job.mapping.map((m) => m.target));
@@ -113,8 +152,8 @@ function checkSchemaDrift(job: SyncJobEntry, live: TableSchema): SchemaDriftResu
     return { stop: true, message: "the target table's key columns changed", warnings };
   }
 
-  if (!live.supportedModes.includes("replace")) {
-    return { stop: true, message: "replace is no longer a supported mode for this table", warnings };
+  if (!live.supportedModes.includes(pushMode)) {
+    return { stop: true, message: `${pushMode} is no longer a supported mode for this table`, warnings };
   }
 
   const knownNames = new Set(job.targetSchemaSnapshot.columns.map((c) => c.name));
@@ -184,9 +223,20 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
   const startedAt = Date.now();
   const now = options.now ?? (() => new Date());
   const runId = options.runId ?? randomUUID();
-  const { job } = options;
+  const { job, delta } = options;
   const spoolDir = defaultSpoolDir(options.dir);
   const locksDir = defaultLocksDir(options.dir);
+
+  // Three-way push-mode resolution (§6): a param-override one-off run never
+  // replace-wipes the table (its filter is a deliberately narrow override,
+  // not the job's real one); a forced replace or a first run (no saved
+  // watermark yet) for an upsertDelta job still does a full replace, driven
+  // through the unchanged replaceLoad() path below; everything else is an
+  // ongoing delta run, pushed via "upsert".
+  const pushMode: PushMode =
+    !delta || delta.isParamOverride ? (delta ? "upsert" : "replace") : delta.forceReplace || delta.savedWatermark === undefined ? "replace" : "upsert";
+  // Never persist a param-override run's watermark (§2's ops/state.ts note) — every other delta run does, including a forced-replace/first-run one (isReplace: true in the formula).
+  const persistWatermark = delta !== undefined && !delta.isParamOverride;
 
   const releaseTable = await options.tableSemaphore.acquire(job.targetUrl);
   let releaseLock: (() => void) | undefined;
@@ -211,7 +261,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
       await schemaClient.close();
     }
 
-    const drift = checkSchemaDrift(job, schemaAtStart);
+    const drift = checkSchemaDrift(job, schemaAtStart, pushMode);
     for (const warning of drift.warnings) options.logger.warn("schema_drift_warning", { message: warning });
     if (drift.stop) {
       const message = drift.message ?? "schema drift detected";
@@ -249,10 +299,22 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     let nullKeyCount = 0;
     let stopOnNullKey = false;
     let extractionError: unknown;
+    // `M` in the watermark formula — tracked from the raw (unformatted) source
+    // row, since `delta.watermarkColumn` need not be in `job.mapping`/`wireRow`.
+    // Plain string `>` is valid: packages/extract's valueSerializer.ts always
+    // emits this family as a fixed-width, zero-padded wall-clock string.
+    let maxSeenWatermark: string | undefined;
+    const extractionStartedAt = Date.now();
 
     try {
       await options.readSourceRows((sourceRow) => {
         if (internalController.signal.aborted) return;
+        if (delta) {
+          const raw = sourceRow[delta.watermarkColumn];
+          if (typeof raw === "string" && (maxSeenWatermark === undefined || raw > maxSeenWatermark)) {
+            maxSeenWatermark = raw;
+          }
+        }
         const wireRow = buildWireRow(formatters, sourceRow);
         const hasNullKey = keyTargets.some((k) => wireRow[k] === null || wireRow[k] === "");
         if (hasNullKey) {
@@ -269,6 +331,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     } catch (err) {
       extractionError = err;
     }
+    const extractionDurationMs = Date.now() - extractionStartedAt;
 
     try {
       await spool.finish();
@@ -293,7 +356,10 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
       await removeReplaceSpool(spoolDir, runId);
       return toFailure(extractionError);
     }
-    if (totalRows === 0 && !job.allowEmptyReplace) {
+    // An empty table is only refused for a replace-style push — zero changed
+    // rows on an ongoing upsert run is an expected, successful no-op (§6
+    // "Zero changed rows is a success with no request").
+    if (totalRows === 0 && pushMode !== "upsert" && !job.allowEmptyReplace) {
       await removeReplaceSpool(spoolDir, runId);
       return {
         outcome: "failed",
@@ -302,35 +368,72 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
       };
     }
 
-    // Step (e): push.
-    const result = await replaceLoad({
-      tableUrl: job.targetUrl,
-      pushKey: options.pushKey,
-      openRows: () => readReplaceSpool(spoolDir, runId, options.masterKey),
-      totalRows,
-      schemaAtStart,
-      logger: options.logger,
-      now: options.now,
-      lastPartTimeoutMs: options.lastPartTimeoutMs,
-      signal: options.signal,
-    });
+    // Step (e): push — "replace" (unchanged) or "upsert" (slice C1).
+    let result: { outcome: "completed"; parts: number; rowCount?: number; version?: number } | { outcome: "failed"; error: string; consoleMessage?: string; kind: RunSyncFailureKind };
+    if (pushMode === "upsert") {
+      if (totalRows === 0) {
+        result = { outcome: "completed", parts: 0 };
+      } else {
+        result = await upsertPush({
+          tableUrl: job.targetUrl,
+          pushKey: options.pushKey,
+          rows: readReplaceSpool(spoolDir, runId, options.masterKey),
+          schemaAtStart,
+          logger: options.logger,
+          signal: options.signal,
+        }).then((r) => (r.outcome === "completed" ? { outcome: "completed" as const, parts: r.parts } : r));
+      }
+    } else {
+      result = await replaceLoad({
+        tableUrl: job.targetUrl,
+        pushKey: options.pushKey,
+        openRows: () => readReplaceSpool(spoolDir, runId, options.masterKey),
+        totalRows,
+        schemaAtStart,
+        logger: options.logger,
+        now: options.now,
+        lastPartTimeoutMs: options.lastPartTimeoutMs,
+        signal: options.signal,
+      });
+    }
 
     // Step (f): the spool is removed on success, failure and abort alike.
     await removeReplaceSpool(spoolDir, runId);
 
     if (result.outcome === "failed") {
-      options.logger.error("replace_load_failed", { error: result.error });
+      options.logger.error("push_failed", { mode: pushMode, error: result.error });
       return result;
     }
 
+    // Watermark persistence: only after a successful push, and only for a
+    // delta run that isn't a param override. computeNextWatermark()
+    // returning undefined means "leave the saved watermark unchanged" —
+    // setLastWatermark must then be skipped entirely, never called with
+    // `undefined` (which would actively clear it instead).
+    let watermarkAfter: string | undefined = delta?.savedWatermark;
+    if (persistWatermark && delta) {
+      const next = computeNextWatermark({
+        maxSeen: maxSeenWatermark,
+        serverClockAtStart: delta.serverClockAtStart,
+        extractionDurationMs,
+        overlapSeconds: delta.overlapSeconds,
+        isReplace: pushMode === "replace",
+      });
+      if (next !== undefined) {
+        setLastWatermark(job.id, next, options.dir);
+        watermarkAfter = next;
+      }
+    }
+
     const durationMs = Date.now() - startedAt;
-    options.logger.info("replace_load_completed", {
+    options.logger.info("push_completed", {
+      mode: pushMode,
       rowsSent: totalRows,
       rowsSkipped: nullKeyCount,
       parts: result.parts,
       durationMs,
-      rowCount: result.rowCount,
-      version: result.version,
+      ...(result.rowCount !== undefined ? { rowCount: result.rowCount } : {}),
+      ...(result.version !== undefined ? { version: result.version } : {}),
     });
 
     return {
@@ -341,6 +444,9 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
       durationMs,
       rowCount: result.rowCount,
       version: result.version,
+      mode: pushMode,
+      watermarkBefore: delta?.savedWatermark,
+      watermarkAfter,
     };
   } finally {
     releaseLock?.();

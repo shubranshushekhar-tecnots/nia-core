@@ -40,6 +40,16 @@ export interface JobState {
   nextRunAt?: string;
   rowsSent?: number;
   durationMs?: number;
+  /**
+   * `upsertDelta` jobs only (sync/watermark.ts, §1.1/slice C1). Deliberately
+   * kept here, with the rest of the job's run state, rather than in
+   * `agent.config.json` — a saved watermark is run bookkeeping, not
+   * configuration, and this keeps it on the same atomic read-modify-write
+   * path as every other run-state field. Unset means "treat the next run
+   * as a replace" (no saved watermark yet, or it was just cleared because
+   * the job's filter/params/mapping/watermark column changed).
+   */
+  lastWatermark?: string;
 }
 
 function emptyJobState(): JobState {
@@ -136,6 +146,17 @@ export function recordJobFailure(jobId: string, input: RecordJobFailureInput, di
 export function recordJobSkipped(jobId: string, dir = defaultHomeDir()): void {
   const state = readJobState(jobId, dir);
   state.lastResult = "skipped";
+  writeJobState(jobId, state, dir);
+}
+
+export function getLastWatermark(jobId: string, dir = defaultHomeDir()): string | undefined {
+  return readJobState(jobId, dir).lastWatermark;
+}
+
+/** `value: undefined` clears the saved watermark (forces the job's next run to be a replace — §1.1/§2). */
+export function setLastWatermark(jobId: string, value: string | undefined, dir = defaultHomeDir()): void {
+  const state = readJobState(jobId, dir);
+  state.lastWatermark = value;
   writeJobState(jobId, state, dir);
 }
 

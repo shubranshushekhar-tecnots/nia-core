@@ -42,21 +42,36 @@ finds rows that disappeared).
   supports `gte`/`gt`, confirmed, no new operator needed]**.
 - **State kept:** `lastWatermark` (the boundary through which the job has
   successfully pushed). **[agent design]**
-- **Where stored:** in the job record inside `agent.config.json`
-  (`SyncJobEntry.strategy.lastWatermark`, §9 below) — it is a boundary
-  value, not customer row data, so it does not need the encrypted secret
-  store or spool-grade encryption. **[agent design]**
-- **How `lastWatermark` is computed — the source server's clock, never
-  the agent's clock, never the max value seen:** at the start of a run's
-  extraction, the agent reads the SQL Server's own clock in that same
-  connection (not `Date.now()` on whatever machine the agent runs on), and
-  sets the new `lastWatermark` to `(that server-side instant −
-  overlapSeconds)` once the run completes. It is never derived from the
-  maximum watermark value observed among the extracted rows — a run that
-  extracts zero rows still advances `lastWatermark` to the server-clock-
-  based boundary, so a quiet period never causes the watermark to stall.
-  **[agent design — guide silent on extraction-side windowing entirely,
-  since it never sees SQL Server at all.]**
+- **Where stored:** in per-job run state (`ops/state.ts`'s `JobState.
+  lastWatermark`, one atomically-written JSON file per job under
+  `jobStateDir()`), not in `agent.config.json` — a saved watermark is run
+  bookkeeping, not configuration, and this keeps it on the same atomic
+  read-modify-write path as every other run-state field (`lastRunAt`,
+  `consecutiveFailures`, etc.). **[slice C1 override of this doc's
+  original "stored in `SyncJobEntry.strategy.lastWatermark`" — superseded,
+  see `getLastWatermark`/`setLastWatermark` in `ops/state.ts`.]**
+- **How the next `lastWatermark` is computed — `min(M, S) −
+  max(overlapSeconds, extractionDurationSeconds + 60)`:** at the start of
+  a run's extraction the agent reads the SQL Server's own clock in that
+  same connection (`S`, never `Date.now()` on whatever machine the agent
+  runs on); `M` is the maximum watermark value actually seen among the
+  rows extracted by that run (undefined if none were). The new watermark
+  is the smaller of `M` and `S`, pulled back by whichever is larger of
+  `overlapSeconds` or `(this run's own extraction duration, in seconds) +
+  60` — a longer-running extraction gets a proportionally larger
+  safety margin, on top of the configured overlap, rather than a fixed
+  300 seconds regardless of how long the run actually took. When `M` is
+  undefined (zero rows extracted, or every extracted row's watermark was
+  null) and this is not a replace, the saved watermark is left unchanged
+  entirely rather than advanced — a quiet delta run must never regress or
+  stall-advance it. When `M` is undefined and this *is* a replace (first
+  run, forced replace, or an empty table), the new watermark is `S −
+  overlapSeconds` (no duration/60s floor — there is no observed row to be
+  cautious about racing). **[slice C1 override of this doc's original
+  `S − overlapSeconds` formula — superseded, see
+  `sync/watermark.ts`'s `computeNextWatermark`. Guide silent on
+  extraction-side windowing entirely, since it never sees SQL Server at
+  all.]**
 - **Clock-skew check at `job add` / `job test`:** the agent compares the
   watermark column's current `MAX()` value against the source server's own
   clock (read in the same connection); if the column's max value is
@@ -865,10 +880,10 @@ Files: new `sync/watermark.ts` (server-clock-based `lastWatermark`,
 300-second overlap, null-watermark `IS NULL` query + count reporting,
 clock-skew check for `job test`, §1.1); wired into the sync executor and
 into B2's scheduler.
-Allowed: *"`lastWatermark` advances to `(server-clock-read-at-run-start −
-overlapSeconds)` only after every part of a successful run, never to the
-max value seen among extracted rows."* Refused: *"a run that fails
-partway through leaves `lastWatermark` unchanged on disk."*
+Allowed: *"`lastWatermark` advances to `min(M, S) − max(overlapSeconds,
+extractionDurationSeconds + 60)` only after every part of a successful
+run."* Refused: *"a run that fails partway through leaves
+`lastWatermark` unchanged on disk."*
 
 **D1) Delete: key reconciliation.**
 Goal: the first real delete method, and the one every relative-date job
