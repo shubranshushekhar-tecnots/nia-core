@@ -4,33 +4,20 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SyncJobEntry } from "../config/types.js";
 import { Logger } from "../ops/logger.js";
-import { getLastWatermark, setLastWatermark } from "../ops/state.js";
+import { getLastWatermark, getLastWatermarkFingerprint, setLastWatermark } from "../ops/state.js";
 import { FakePlanometryServer, type FakeTableHandle } from "../testing/fakePlanometryServer.js";
 import { KeyedSemaphore } from "./concurrency.js";
 import { runSync, type RunSyncOptions } from "./runSync.js";
-import { computeNextWatermark } from "./watermark.js";
+import { computeJobFingerprint, computeNextWatermark, resolveSavedWatermark } from "./watermark.js";
 
 /**
- * The 4 unit tests required by docs/plans/planometry-v4-migration.md
- * §10 (C1), item 7: 1 Allowed, 1 Refused, 2 Guard. No containers — the
- * fake Planometry HTTP server (testing/fakePlanometryServer.ts) stands
- * in for Planometry; `cli/jobCommands.ts`'s `@nia/extract/mssql` import
- * is mocked (same pattern as cli/jobCommands.test.ts) for the
- * `updateJob` guard test, which never actually needs a watermark-column
- * DB check since the job's strategy there stays "replace" — only the
- * unconditional "changed filter clears the saved watermark" side effect
- * is under test.
+ * The unit tests required by docs/plans/planometry-v4-migration.md §10
+ * (C1), item 7 (1 Allowed, 1 Refused, 2 Guard), plus the C1 follow-up's
+ * two additions: the fingerprint rule (replacing the old "Guard" test 4)
+ * and a dedicated `--param` override test. No containers — the fake
+ * Planometry HTTP server (testing/fakePlanometryServer.ts) stands in for
+ * Planometry.
  */
-
-const { connectMock, introspectCatalogMock } = vi.hoisted(() => ({
-  connectMock: vi.fn(),
-  introspectCatalogMock: vi.fn(),
-}));
-
-vi.mock("@nia/extract/mssql", () => ({
-  connect: connectMock,
-  introspectCatalog: introspectCatalogMock,
-}));
 
 const baseColumns = [
   { name: "id", type: "Number" as const, isKey: true },
@@ -108,8 +95,9 @@ describe("upsertDelta (sync/watermark.ts, sync/runSync.ts, cli/jobCommands.ts)",
   it("Allowed: an upsert run sends the given delta rows and advances the saved watermark after the push succeeds", async () => {
     const handle = server.createTable({ columns: [...baseColumns, { name: "modified_at", type: "DateTime", isKey: false }] });
     const job = baseJob(handle);
+    const fingerprint = computeJobFingerprint(job);
     const savedWatermark = "2026-01-01T00:00:00.000";
-    setLastWatermark(job.id, savedWatermark, dir);
+    setLastWatermark(job.id, savedWatermark, fingerprint, dir);
 
     const result = await runSync(
       baseOptions(job, handle.pushKey, {
@@ -124,6 +112,7 @@ describe("upsertDelta (sync/watermark.ts, sync/runSync.ts, cli/jobCommands.ts)",
           forceReplace: false,
           isParamOverride: false,
           serverClockAtStart: "2026-01-01T00:10:00.000",
+          fingerprint,
         },
       }),
     );
@@ -147,8 +136,9 @@ describe("upsertDelta (sync/watermark.ts, sync/runSync.ts, cli/jobCommands.ts)",
       maxRowsPerRequest: 2,
     });
     const job = baseJob(handle);
+    const fingerprint = computeJobFingerprint(job);
     const savedWatermark = "2026-01-01T00:00:00.000";
-    setLastWatermark(job.id, savedWatermark, dir);
+    setLastWatermark(job.id, savedWatermark, fingerprint, dir);
 
     // Fault queue (FIFO, one per request against this table): a no-op delay
     // absorbs runSync's own getSchema call, a second no-op delay absorbs
@@ -172,6 +162,7 @@ describe("upsertDelta (sync/watermark.ts, sync/runSync.ts, cli/jobCommands.ts)",
           forceReplace: false,
           isParamOverride: false,
           serverClockAtStart: "2026-01-01T00:10:00.000",
+          fingerprint,
         },
       }),
     );
@@ -208,53 +199,107 @@ describe("upsertDelta (sync/watermark.ts, sync/runSync.ts, cli/jobCommands.ts)",
     expect(ahead).toBe("2026-01-01T00:05:00.000");
   });
 
-  it("Guard: updating a job's filter clears its saved watermark, forcing the next run to be a replace", async () => {
-    const { addConnection } = await import("../cli/connectionCommands.js");
-    const { addJob, updateJob } = await import("../cli/jobCommands.js");
+  it("Guard: after the filter changes, the saved watermark no longer matches and the next run is a replace", async () => {
+    const handle = server.createTable({ columns: [...baseColumns, { name: "modified_at", type: "DateTime", isKey: false }] });
+    const job = baseJob(handle);
+    const oldFingerprint = computeJobFingerprint(job);
+    setLastWatermark(job.id, "2026-01-01T00:00:00.000", oldFingerprint, dir);
 
-    connectMock.mockReset();
-    introspectCatalogMock.mockReset();
-    connectMock.mockResolvedValue({ close: async () => {} });
-    introspectCatalogMock.mockResolvedValue({
-      generatedAt: new Date().toISOString(),
-      sourceTimeZone: "UTC",
-      tables: [
-        {
-          name: "dbo.Sales",
-          kind: "table",
-          columns: [
-            { name: "Id", type: "number", nullable: false },
-            { name: "Qty", type: "number", nullable: true },
-          ],
-          excluded: [],
+    // The filter changes (same job otherwise) — its fingerprint no longer matches the one the saved watermark was computed against.
+    const jobAfterFilterChange: SyncJobEntry = { ...job, filter: [{ column: "qty", operator: "gt", value: 0 }] };
+    const newFingerprint = computeJobFingerprint(jobAfterFilterChange);
+    expect(newFingerprint).not.toBe(oldFingerprint);
+
+    // This is exactly cli/runJobCommand.ts's own resolution step: a
+    // mismatched fingerprint means "treat the saved watermark as absent".
+    const resolvedSavedWatermark = resolveSavedWatermark(
+      { watermark: getLastWatermark(job.id, dir), fingerprint: getLastWatermarkFingerprint(job.id, dir) },
+      newFingerprint,
+    );
+    expect(resolvedSavedWatermark).toBeUndefined();
+
+    // And an undefined savedWatermark makes the next run a replace (sync/runSync.ts's pushMode resolution).
+    const result = await runSync(
+      baseOptions(jobAfterFilterChange, handle.pushKey, {
+        readSourceRows: rowsSource([{ id: 1, qty: 10, modified_at: "2026-01-01T00:05:00.000" }]),
+        delta: {
+          watermarkColumn: "modified_at",
+          overlapSeconds: 300,
+          savedWatermark: resolvedSavedWatermark,
+          forceReplace: false,
+          isParamOverride: false,
+          serverClockAtStart: "2026-01-01T00:10:00.000",
+          fingerprint: newFingerprint,
         },
-      ],
-    });
-
-    addConnection(
-      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "UTC", agentKey: "k" },
-      dir,
+      }),
     );
-    const handle = server.createTable({
-      columns: [
-        { name: "Id", type: "Number", isKey: true },
-        { name: "Qty", type: "Number", isKey: false },
-      ],
-    });
 
-    const added = await addJob(
-      { name: "Sales", connectionId: "conn-1", sourceTable: "dbo.Sales", targetUrl: handle.tableUrl, pushKey: handle.pushKey, mapOverrides: [] },
-      {},
-      dir,
+    expect(result.outcome).toBe("completed");
+    if (result.outcome !== "completed") return;
+    expect(result.mode).toBe("replace");
+    // The new fingerprint is now the one saved, so the next run after this one can use the watermark again.
+    expect(getLastWatermarkFingerprint(job.id, dir)).toBe(newFingerprint);
+  });
+
+  it("Param override: a --param override run on an upsertDelta job is sent as upsert and leaves the other rows and the saved watermark untouched", async () => {
+    const handle = server.createTable({ columns: [...baseColumns, { name: "modified_at", type: "DateTime", isKey: false }] });
+    const job = baseJob(handle);
+    const fingerprint = computeJobFingerprint(job);
+
+    // Seed the table + a saved watermark via a normal first run (replace, no saved watermark yet).
+    const seed = await runSync(
+      baseOptions(job, handle.pushKey, {
+        readSourceRows: rowsSource([
+          { id: 1, qty: 10, modified_at: "2026-01-01T00:05:00.000" },
+          { id: 2, qty: 20, modified_at: "2026-01-01T00:06:00.000" },
+        ]),
+        delta: {
+          watermarkColumn: "modified_at",
+          overlapSeconds: 300,
+          savedWatermark: undefined,
+          forceReplace: false,
+          isParamOverride: false,
+          serverClockAtStart: "2026-01-01T00:10:00.000",
+          fingerprint,
+        },
+      }),
     );
-    expect(added.ok).toBe(true);
-    const jobId = added.job!.id;
+    expect(seed.outcome).toBe("completed");
+    const savedWatermarkBefore = getLastWatermark(job.id, dir);
+    const savedFingerprintBefore = getLastWatermarkFingerprint(job.id, dir);
+    expect(savedWatermarkBefore).toBeDefined();
 
-    setLastWatermark(jobId, "2026-01-01T00:00:00.000", dir);
-    expect(getLastWatermark(jobId, dir)).toBeDefined();
+    // A --param override run (cli/runJobCommand.ts always sets isParamOverride
+    // true + savedWatermark undefined for these, regardless of what's saved):
+    // its narrower filter is already baked into readSourceRows by the caller —
+    // this module never sees the filter itself, only the rows it's given.
+    const result = await runSync(
+      baseOptions(job, handle.pushKey, {
+        readSourceRows: rowsSource([{ id: 1, qty: 999, modified_at: "2026-01-01T00:05:00.000" }]),
+        delta: {
+          watermarkColumn: "modified_at",
+          overlapSeconds: 300,
+          savedWatermark: undefined,
+          forceReplace: false,
+          isParamOverride: true,
+          serverClockAtStart: "2026-01-01T00:20:00.000",
+          fingerprint,
+        },
+      }),
+    );
 
-    const updated = await updateJob(jobId, { filter: [{ column: "Qty", operator: "gt", value: 0 }] }, {}, dir);
-    expect(updated.ok).toBe(true);
-    expect(getLastWatermark(jobId, dir)).toBeUndefined();
+    expect(result.outcome).toBe("completed");
+    if (result.outcome !== "completed") return;
+    expect(result.mode).toBe("upsert");
+
+    // Row id=2 is untouched, row id=1 updated in place — never a replace-wipe.
+    const rows = server.getRows(handle.tableId);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.id === "1")?.qty).toBe("999");
+    expect(rows.find((r) => r.id === "2")?.qty).toBe("20");
+
+    // The saved watermark (and its fingerprint) from the seed run are untouched by the override run.
+    expect(getLastWatermark(job.id, dir)).toBe(savedWatermarkBefore);
+    expect(getLastWatermarkFingerprint(job.id, dir)).toBe(savedFingerprintBefore);
   });
 });

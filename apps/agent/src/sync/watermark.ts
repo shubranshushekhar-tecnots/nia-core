@@ -17,7 +17,9 @@
  * directly usable as a `gte` filter parameter (plan §1.1/§2) without a
  * new value format.
  */
+import { createHash } from "node:crypto";
 import { connect, quoteIdent, quoteQualifiedName } from "@nia/extract/mssql";
+import type { SyncJobEntry } from "../config/types.js";
 
 /** No direct `mssql` dependency in this package — same `Awaited<ReturnType<typeof connect>>` pattern `cli/jobCommands.ts`/`cli/runJobCommand.ts` already use to type a live pool. */
 type ConnectionPool = Awaited<ReturnType<typeof connect>>;
@@ -141,4 +143,48 @@ export async function checkWatermarkColumn(pool: ConnectionPool, tableName: stri
   const aheadOfServerClock = maxValue !== undefined && parseWallClockMs(maxValue) > parseWallClockMs(serverClock);
 
   return { nullCount, maxValue, serverClock, aheadOfServerClock };
+}
+
+/**
+ * The job's "delta definition" — the pieces of an `upsertDelta` job that a
+ * saved watermark is only valid against (task item 1 — the fingerprint
+ * rule): source table, filter, saved parameters, mapping, watermark
+ * column, target URL. A saved watermark computed against one fingerprint
+ * must never be reused once any of these changes — `cli/runJobCommand.ts`
+ * computes this fresh on every run and compares it against the
+ * fingerprint stored alongside the saved watermark (`ops/state.ts`'s
+ * `lastWatermarkFingerprint`) before trusting it. `job update` no longer
+ * needs to clear the saved watermark itself; a changed fingerprint makes
+ * the stale watermark naturally unusable on the next run.
+ */
+export function computeJobFingerprint(job: Pick<SyncJobEntry, "sourceTable" | "filter" | "params" | "mapping" | "watermarkColumn" | "targetUrl">): string {
+  const canonical = {
+    sourceTable: job.sourceTable,
+    filter: job.filter,
+    params: job.params,
+    // Mapping order doesn't change the job's semantics — sorted by target for a stable hash.
+    mapping: [...job.mapping].map((m) => ({ source: m.source, target: m.target })).sort((a, b) => a.target.localeCompare(b.target)),
+    watermarkColumn: job.watermarkColumn,
+    targetUrl: job.targetUrl,
+  };
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+export interface SavedWatermarkState {
+  /** `ops/state.ts`'s `getLastWatermark()` — undefined means no watermark has ever been saved. */
+  watermark?: string;
+  /** `ops/state.ts`'s `getLastWatermarkFingerprint()` — the fingerprint the watermark above was computed against. */
+  fingerprint?: string;
+}
+
+/**
+ * The fingerprint rule itself (task item 1): a saved watermark is usable
+ * only when its saved fingerprint matches the job's current one —
+ * otherwise it is treated as absent, same as a job's first run, which
+ * (per `sync/runSync.ts`'s pushMode resolution) makes the next run a
+ * replace.
+ */
+export function resolveSavedWatermark(saved: SavedWatermarkState, currentFingerprint: string): string | undefined {
+  if (saved.watermark === undefined) return undefined;
+  return saved.fingerprint === currentFingerprint ? saved.watermark : undefined;
 }

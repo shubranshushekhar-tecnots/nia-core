@@ -16,7 +16,7 @@ import { LocalSecretStore } from "../secrets/store.js";
 import { PlanometryClient } from "../planometry/client.js";
 import { isRelativeDateToken, resolveJobFilter, type FilterValueOrParam, type JobFilterCondition } from "../planometry/parameters.js";
 import type { TableSchema } from "../planometry/types.js";
-import { pauseJobState, resumeJobState, setLastWatermark } from "../ops/state.js";
+import { pauseJobState, resumeJobState } from "../ops/state.js";
 import { InvalidCronScheduleError, validateCronExpression } from "../scheduler/cronSchedule.js";
 import { checkWatermarkColumn, type WatermarkColumnReport } from "../sync/watermark.js";
 import { buildMapping, type RawMappingPair } from "./jobMapping.js";
@@ -419,7 +419,7 @@ export interface UpdateJobInput {
   schedule?: string;
   /** Undefined leaves the job's strategy unchanged. */
   strategy?: JobStrategy;
-  /** Undefined leaves it unchanged. Required (on the effective job) when the effective strategy is "upsertDelta". Changing this clears the saved watermark. */
+  /** Undefined leaves it unchanged. Required (on the effective job) when the effective strategy is "upsertDelta". Changing this changes the job's fingerprint (sync/watermark.ts's computeJobFingerprint), so the next run treats the saved watermark as stale — see the comment near the bottom of updateJob. */
   watermarkColumn?: string;
   /** Undefined leaves it unchanged. */
   overlapSeconds?: number;
@@ -532,11 +532,12 @@ export async function updateJob(
   saveConfig(upsertJob(config, updated), dir);
   if (input.rekey) secrets.delete(job.pushKeyRef);
 
-  // A changed filter/params/mapping/watermark column invalidates the saved watermark — the next `job run` must be a full replace (plan §1.1/§8).
-  const mappingChanged = (input.mapOverrides?.length ?? 0) > 0 || (input.unmapTargets?.length ?? 0) > 0;
-  const watermarkInvalidated =
-    input.filter !== undefined || input.params !== undefined || mappingChanged || (input.watermarkColumn !== undefined && input.watermarkColumn !== job.watermarkColumn);
-  if (watermarkInvalidated) setLastWatermark(id, undefined, dir);
+  // No explicit watermark invalidation needed here (task item 1, the
+  // fingerprint rule): a changed source table/filter/params/mapping/
+  // watermark column/target URL changes the job's fingerprint
+  // (sync/watermark.ts's computeJobFingerprint), so cli/runJobCommand.ts
+  // naturally treats the now-stale saved watermark as absent on the next
+  // run, without this command having to clear anything itself.
 
   return { ok: true, job: updated, sentAsNull: plan.sentAsNull, watermarkReport };
 }

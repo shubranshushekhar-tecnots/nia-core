@@ -50,6 +50,16 @@ export interface JobState {
    * the job's filter/params/mapping/watermark column changed).
    */
   lastWatermark?: string;
+  /**
+   * The job-definition fingerprint (`sync/watermark.ts`'s
+   * `computeJobFingerprint`) `lastWatermark` above was computed against —
+   * read back by `cli/runJobCommand.ts` and compared against the job's
+   * current fingerprint before the saved watermark is trusted (task item
+   * 1, the fingerprint rule: source table, filter, saved parameters,
+   * mapping, watermark column, target URL). A mismatch means the
+   * watermark is stale and must be treated as absent, not cleared here.
+   */
+  lastWatermarkFingerprint?: string;
 }
 
 function emptyJobState(): JobState {
@@ -153,10 +163,22 @@ export function getLastWatermark(jobId: string, dir = defaultHomeDir()): string 
   return readJobState(jobId, dir).lastWatermark;
 }
 
-/** `value: undefined` clears the saved watermark (forces the job's next run to be a replace — §1.1/§2). */
-export function setLastWatermark(jobId: string, value: string | undefined, dir = defaultHomeDir()): void {
+/** The fingerprint `lastWatermark` was computed against — see `JobState.lastWatermarkFingerprint`'s doc comment. */
+export function getLastWatermarkFingerprint(jobId: string, dir = defaultHomeDir()): string | undefined {
+  return readJobState(jobId, dir).lastWatermarkFingerprint;
+}
+
+/**
+ * `value: undefined` clears the saved watermark (forces the job's next
+ * run to be a replace — §1.1/§2). `fingerprint` is the job-definition
+ * fingerprint the watermark was computed against (`sync/watermark.ts`'s
+ * `computeJobFingerprint`) — stored alongside it so a future run can
+ * tell whether it's still valid (task item 1).
+ */
+export function setLastWatermark(jobId: string, value: string | undefined, fingerprint: string | undefined, dir = defaultHomeDir()): void {
   const state = readJobState(jobId, dir);
   state.lastWatermark = value;
+  state.lastWatermarkFingerprint = fingerprint;
   writeJobState(jobId, state, dir);
 }
 

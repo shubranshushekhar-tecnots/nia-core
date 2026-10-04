@@ -6,11 +6,11 @@ import { findConnection, findJob, loadConfig } from "../config/store.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { Logger } from "../ops/logger.js";
-import { getLastWatermark } from "../ops/state.js";
+import { getLastWatermark, getLastWatermarkFingerprint } from "../ops/state.js";
 import { resolveJobFilter } from "../planometry/parameters.js";
 import { KeyedSemaphore } from "../sync/concurrency.js";
 import { runSync, type RunSyncFailureKind, type RunSyncResult } from "../sync/runSync.js";
-import { readServerClock } from "../sync/watermark.js";
+import { computeJobFingerprint, readServerClock, resolveSavedWatermark } from "../sync/watermark.js";
 
 /** One process-wide semaphore (per target table URL) — a second concurrent `job run` in the same process is queued, not just refused cross-process (sync/replaceLock.ts handles that). */
 const tableSemaphore = new KeyedSemaphore(1);
@@ -192,7 +192,15 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
 
       const extractColumns = mappedSources.includes(watermarkColumn) ? mappedSources : [...mappedSources, watermarkColumn];
       const forceReplace = options.replace === true;
-      const savedWatermark = isParamOverride ? undefined : getLastWatermark(job.id, dir);
+      // Fingerprint rule (task item 1): a saved watermark is only trusted
+      // when it was computed against the job's current delta definition
+      // (source table, filter, saved params, mapping, watermark column,
+      // target URL) — a mismatch (including "never saved one") resolves
+      // to undefined, same as a first run, which forces a replace below.
+      const fingerprint = computeJobFingerprint(job);
+      const savedWatermark = isParamOverride
+        ? undefined
+        : resolveSavedWatermark({ watermark: getLastWatermark(job.id, dir), fingerprint: getLastWatermarkFingerprint(job.id, dir) }, fingerprint);
       const serverClockAtStart = await readServerClock(pool);
 
       if (isParamOverride || forceReplace || savedWatermark === undefined) {
@@ -203,7 +211,7 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
         passes = [makeSinglePassReader(extractColumns, gteFilter), makeSinglePassReader(extractColumns, isNullFilter)];
       }
 
-      delta = { watermarkColumn, overlapSeconds: job.overlapSeconds ?? 300, savedWatermark, forceReplace, isParamOverride, serverClockAtStart };
+      delta = { watermarkColumn, overlapSeconds: job.overlapSeconds ?? 300, savedWatermark, forceReplace, isParamOverride, serverClockAtStart, fingerprint };
     }
 
     const readSourceRows = async (onRow: (row: Record<string, unknown>) => void, signal: AbortSignal): Promise<void> => {

@@ -74,6 +74,8 @@ export interface RunSyncOptions {
     isParamOverride: boolean;
     /** Read via `readServerClock()` before extraction starts (`S` in the formula). */
     serverClockAtStart: string;
+    /** `sync/watermark.ts`'s `computeJobFingerprint(job)` — saved alongside the watermark on success so a future run can tell whether it's still valid (task item 1, the fingerprint rule). */
+    fingerprint: string;
   };
 }
 
@@ -420,7 +422,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
         isReplace: pushMode === "replace",
       });
       if (next !== undefined) {
-        setLastWatermark(job.id, next, options.dir);
+        setLastWatermark(job.id, next, delta.fingerprint, options.dir);
         watermarkAfter = next;
       }
     }
