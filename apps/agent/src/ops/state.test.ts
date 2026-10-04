@@ -2,7 +2,20 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getStatus, readState, recordAgentStarted, recordCatalogFingerprint, recordPoll, recordSyncComplete, recordSyncFailed } from "./state.js";
+import {
+  getStatus,
+  isJobPaused,
+  jobHealthState,
+  pauseJobState,
+  readJobState,
+  readState,
+  recordAgentStarted,
+  recordJobFailure,
+  recordJobSkipped,
+  recordJobSuccess,
+  recordNextRunAt,
+  resumeJobState,
+} from "./state.js";
 
 describe("agent state", () => {
   let dir: string;
@@ -16,8 +29,8 @@ describe("agent state", () => {
   });
 
   it("returns an empty state when no file exists yet", () => {
-    expect(readState(dir)).toEqual({ connections: {} });
-    expect(getStatus(dir)).toEqual({ startedAt: undefined, uptimeSeconds: undefined, connections: {} });
+    expect(readState(dir)).toEqual({});
+    expect(getStatus(dir)).toEqual({ startedAt: undefined, uptimeSeconds: undefined, jobs: {} });
   });
 
   it("records agent start and reports uptime", () => {
@@ -27,50 +40,70 @@ describe("agent state", () => {
     expect(status.uptimeSeconds).toBeGreaterThanOrEqual(0);
   });
 
-  it("records sync completion, clearing any prior error", () => {
-    recordSyncFailed("conn-1", "boom", dir);
-    recordSyncComplete("conn-1", 42, dir);
+  it("records job success, clearing any prior error", () => {
+    recordJobFailure("job-1", { errorClass: "transient", message: "boom" }, dir);
+    recordJobSuccess("job-1", { rowsSent: 42, durationMs: 100 }, dir);
 
-    const status = getStatus(dir);
-    expect(status.connections["conn-1"]).toMatchObject({ lastSyncRows: 42 });
-    expect(status.connections["conn-1"]!.lastError).toBeUndefined();
+    const state = readJobState("job-1", dir);
+    expect(state).toMatchObject({ rowsSent: 42, consecutiveFailures: 0 });
+    expect(state.lastError).toBeUndefined();
   });
 
-  it("records sync failure without disturbing other connections", () => {
-    recordSyncComplete("conn-1", 10, dir);
-    recordSyncFailed("conn-2", "timeout", dir);
+  it("records job failure without disturbing other jobs", () => {
+    recordJobSuccess("job-1", { rowsSent: 10, durationMs: 50 }, dir);
+    recordJobFailure("job-2", { errorClass: "transient", message: "timeout" }, dir);
 
-    const status = getStatus(dir);
-    expect(status.connections["conn-1"]).toMatchObject({ lastSyncRows: 10 });
-    expect(status.connections["conn-2"]).toMatchObject({ lastError: "timeout" });
-  });
-
-  it("records catalog fingerprint independently of sync state", () => {
-    recordCatalogFingerprint("conn-1", "abc123", dir);
-    recordSyncComplete("conn-1", 5, dir);
-
-    const status = getStatus(dir);
-    expect(status.connections["conn-1"]).toMatchObject({ catalogFingerprint: "abc123", lastSyncRows: 5 });
-  });
-
-  it("records poll timestamps independently of sync state", () => {
-    recordPoll("conn-1", dir);
-    const status = getStatus(dir);
-    expect(status.connections["conn-1"]!.lastPollAt).toBeDefined();
+    expect(readJobState("job-1", dir)).toMatchObject({ rowsSent: 10 });
+    expect(readJobState("job-2", dir).lastError).toMatchObject({ class: "transient", message: "timeout" });
   });
 
   it("increments consecutive failures across repeated failures and returns the running count", () => {
-    expect(recordSyncFailed("conn-1", "boom", dir)).toBe(1);
-    expect(recordSyncFailed("conn-1", "boom again", dir)).toBe(2);
-    expect(recordSyncFailed("conn-1", "boom again", dir)).toBe(3);
-    expect(getStatus(dir).connections["conn-1"]).toMatchObject({ consecutiveFailures: 3 });
+    expect(recordJobFailure("job-1", { errorClass: "transient", message: "boom" }, dir)).toBe(1);
+    expect(recordJobFailure("job-1", { errorClass: "transient", message: "boom again" }, dir)).toBe(2);
+    expect(recordJobFailure("job-1", { errorClass: "transient", message: "boom again" }, dir)).toBe(3);
+    expect(readJobState("job-1", dir)).toMatchObject({ consecutiveFailures: 3 });
   });
 
-  it("resets consecutive failures to 0 on the next successful sync", () => {
-    recordSyncFailed("conn-1", "boom", dir);
-    recordSyncFailed("conn-1", "boom", dir);
-    recordSyncComplete("conn-1", 7, dir);
+  it("resets consecutive failures to 0 on the next successful run", () => {
+    recordJobFailure("job-1", { errorClass: "transient", message: "boom" }, dir);
+    recordJobFailure("job-1", { errorClass: "transient", message: "boom" }, dir);
+    recordJobSuccess("job-1", { rowsSent: 7, durationMs: 10 }, dir);
 
-    expect(getStatus(dir).connections["conn-1"]).toMatchObject({ consecutiveFailures: 0 });
+    expect(readJobState("job-1", dir)).toMatchObject({ consecutiveFailures: 0 });
+  });
+
+  it("records a skipped run without disturbing consecutiveFailures", () => {
+    recordJobFailure("job-1", { errorClass: "transient", message: "boom" }, dir);
+    recordJobSkipped("job-1", dir);
+    expect(readJobState("job-1", dir)).toMatchObject({ lastResult: "skipped", consecutiveFailures: 1 });
+  });
+
+  it("records the next scheduled run time independently of run outcome", () => {
+    const next = new Date("2026-02-01T00:00:00.000Z");
+    recordNextRunAt("job-1", next, dir);
+    expect(readJobState("job-1", dir).nextRunAt).toBe(next.toISOString());
+  });
+
+  it("pauses and resumes a job's state, reporting isJobPaused accordingly", () => {
+    expect(isJobPaused("job-1", dir)).toBe(false);
+    pauseJobState("job-1", "401 unauthorized", dir);
+    expect(isJobPaused("job-1", dir)).toBe(true);
+    expect(readJobState("job-1", dir).paused).toMatchObject({ reason: "401 unauthorized" });
+
+    resumeJobState("job-1", dir);
+    expect(isJobPaused("job-1", dir)).toBe(false);
+  });
+
+  it("derives ok/failing/paused health from job state", () => {
+    expect(jobHealthState({ consecutiveFailures: 0 })).toBe("ok");
+    expect(jobHealthState({ consecutiveFailures: 2 })).toBe("failing");
+    expect(jobHealthState({ consecutiveFailures: 2, paused: { reason: "x", at: "now" } })).toBe("paused");
+  });
+
+  it("getStatus enumerates every job with a state file, keyed by job id", () => {
+    recordJobSuccess("job-1", { rowsSent: 1, durationMs: 1 }, dir);
+    recordJobFailure("job-2", { errorClass: "config", message: "401" }, dir);
+    const status = getStatus(dir);
+    expect(Object.keys(status.jobs).sort()).toEqual(["job-1", "job-2"]);
   });
 });

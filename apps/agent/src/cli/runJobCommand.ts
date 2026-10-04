@@ -8,7 +8,7 @@ import { LocalSecretStore } from "../secrets/store.js";
 import { Logger } from "../ops/logger.js";
 import { resolveJobFilter } from "../planometry/parameters.js";
 import { KeyedSemaphore } from "../sync/concurrency.js";
-import { runSync, type RunSyncResult } from "../sync/runSync.js";
+import { runSync, type RunSyncFailureKind, type RunSyncResult } from "../sync/runSync.js";
 
 /** One process-wide semaphore (per target table URL) — a second concurrent `job run` in the same process is queued, not just refused cross-process (sync/replaceLock.ts handles that). */
 const tableSemaphore = new KeyedSemaphore(1);
@@ -24,10 +24,22 @@ export interface RunJobOptions {
 export interface RunJobOutcome {
   ok: boolean;
   summary?: string;
+  /** Present on every success — lets the scheduler record rows/duration without parsing `summary`. */
+  rowsSent?: number;
+  durationMs?: number;
   /** Safe to log — never a raw server message. */
   error?: string;
   /** A 400's raw server message, console-only — never pass this to a logger. */
   consoleMessage?: string;
+  /**
+   * Present on every failure — lets the scheduler (scheduler/jobScheduler.ts)
+   * decide pause vs. retry-with-backoff vs. wait-for-next-schedule. Pre-
+   * runSync failures (missing job/connection/secrets, missing source
+   * table/column, filter resolution) are reported as "other": they're not
+   * among the pause-triggering causes in §10(B2) item 3, and retrying them
+   * immediately can't help, so the job simply waits for its next tick.
+   */
+  kind?: RunSyncFailureKind;
 }
 
 /**
@@ -42,39 +54,45 @@ export interface RunJobOutcome {
 export async function runJob(id: string, options: RunJobOptions = {}, dir = defaultHomeDir()): Promise<RunJobOutcome> {
   const config = loadConfig(dir);
   const job = findJob(config, id);
-  if (!job) return { ok: false, error: `no job with id ${JSON.stringify(id)}` };
+  if (!job) return { ok: false, error: `no job with id ${JSON.stringify(id)}`, kind: "other" };
   const connection = findConnection(config, job.connectionId);
-  if (!connection) return { ok: false, error: `no connection with id ${JSON.stringify(job.connectionId)}` };
+  if (!connection) return { ok: false, error: `no connection with id ${JSON.stringify(job.connectionId)}`, kind: "other" };
 
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
   const pushKeySecret = secrets.get<{ pushKey: string }>(job.pushKeyRef);
-  if (!pushKeySecret) return { ok: false, error: `push key for job ${id} is missing from the secret store` };
+  if (!pushKeySecret) return { ok: false, error: `push key for job ${id} is missing from the secret store`, kind: "other" };
   const credentials = secrets.get<{ user: string; password: string }>(connection.credentialRef);
-  if (!credentials) return { ok: false, error: `credentials for connection ${connection.id} are missing from the secret store` };
+  if (!credentials) return { ok: false, error: `credentials for connection ${connection.id} are missing from the secret store`, kind: "other" };
 
   const logger = new Logger(defaultLogDir(dir));
 
-  const pool = await connect({
-    server: connection.sqlserver.host,
-    port: connection.sqlserver.port,
-    database: connection.sqlserver.database,
-    user: credentials.user,
-    password: credentials.password,
-    encrypt: connection.sqlserver.encrypt,
-    allowLegacyTls: connection.sqlserver.allowLegacyTls,
-    trustServerCertificate: connection.sqlserver.trustServerCertificate,
-  });
+  let pool: Awaited<ReturnType<typeof connect>>;
+  try {
+    pool = await connect({
+      server: connection.sqlserver.host,
+      port: connection.sqlserver.port,
+      database: connection.sqlserver.database,
+      user: credentials.user,
+      password: credentials.password,
+      encrypt: connection.sqlserver.encrypt,
+      allowLegacyTls: connection.sqlserver.allowLegacyTls,
+      trustServerCertificate: connection.sqlserver.trustServerCertificate,
+    });
+  } catch (err) {
+    // SQL connection failure — §10(B2) item 2: retry at 1/5/15 min, never pause.
+    return { ok: false, error: err instanceof Error ? err.message : String(err), kind: "transient" };
+  }
 
   try {
     const catalog = await introspectCatalog(pool, connection.sourceTimeZone);
     const table = catalog.tables.find((t) => t.name === job.sourceTable);
-    if (!table) return { ok: false, error: `source table/view "${job.sourceTable}" was not found in the catalog` };
+    if (!table) return { ok: false, error: `source table/view "${job.sourceTable}" was not found in the catalog`, kind: "other" };
 
     const sourceColumnTypes: Record<string, ExtractType> = {};
     for (const pair of job.mapping) {
       const column = table.columns.find((c) => c.name === pair.source);
-      if (!column) return { ok: false, error: `source column "${pair.source}" no longer exists in the catalog` };
+      if (!column) return { ok: false, error: `source column "${pair.source}" no longer exists in the catalog`, kind: "other" };
       sourceColumnTypes[pair.source] = column.type;
     }
 
@@ -86,7 +104,7 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
     try {
       resolvedFilter = resolveJobFilter(job.filter, catalogColumnTypes, job.params, options.paramOverrides, connection.sourceTimeZone);
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      return { ok: false, error: err instanceof Error ? err.message : String(err), kind: "other" };
     }
     if (Object.keys(resolvedFilter.resolvedParams).length > 0) {
       logger.info("job_run_params", { jobId: job.id, resolvedParams: JSON.stringify(resolvedFilter.resolvedParams) });
@@ -149,7 +167,9 @@ function outcomeFromResult(result: RunSyncResult, resolvedParams: Record<string,
     return {
       ok: true,
       summary: `sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms — Planometry rowCount ${result.rowCount}, version ${result.version}${paramsSuffix}`,
+      rowsSent: result.rowsSent,
+      durationMs: result.durationMs,
     };
   }
-  return { ok: false, error: result.error, consoleMessage: result.consoleMessage };
+  return { ok: false, error: result.error, consoleMessage: result.consoleMessage, kind: result.kind };
 }

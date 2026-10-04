@@ -2,7 +2,9 @@ import { defaultHomeDir, defaultLogDir, defaultSpoolDir, keyFilePath } from "../
 import { findConnection, loadConfig } from "../config/store.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
-import { checkCancelVisibility, checkDiskSpace, checkLoginPermissions, probeSqlServer, type CheckResult } from "./doctorChecks.js";
+import { readJobState } from "../ops/state.js";
+import { checkCancelVisibility, checkDiskSpace, checkLoginPermissions, checkTargetReachable, checkTargetSchema, probeSqlServer, type CheckResult } from "./doctorChecks.js";
+import { testJob } from "./jobCommands.js";
 import { checkPathPermissions } from "./permissionChecks.js";
 
 export interface ConnectionDoctorReport {
@@ -62,4 +64,39 @@ function mustFindConnection(config: ReturnType<typeof loadConfig>, id: string) {
   const entry = findConnection(config, id);
   if (!entry) throw new Error(`no connection with id ${JSON.stringify(id)}`);
   return entry;
+}
+
+export interface JobDoctorReport {
+  jobId: string;
+  name: string;
+  checks: CheckResult[];
+}
+
+export interface PausedJobInfo {
+  jobId: string;
+  name: string;
+  reason: string;
+  since: string;
+}
+
+/** `agent doctor`'s per-job checks (§10 (B2) item 6) — `checkTargetReachable`/`checkTargetSchema`, both reusing `job test` rather than probing Planometry a second time. */
+export async function runJobDoctor(dir = defaultHomeDir()): Promise<JobDoctorReport[]> {
+  const config = loadConfig(dir);
+  const reports: JobDoctorReport[] = [];
+  for (const job of config.jobs) {
+    const testResult = await testJob(job.id, dir);
+    reports.push({ jobId: job.id, name: job.name, checks: [checkTargetReachable(testResult), checkTargetSchema(testResult)] });
+  }
+  return reports;
+}
+
+/** Every configured job currently paused (manually via `job pause` or by the scheduler), for `agent doctor`'s report. */
+export function listPausedJobs(dir = defaultHomeDir()): PausedJobInfo[] {
+  const config = loadConfig(dir);
+  const paused: PausedJobInfo[] = [];
+  for (const job of config.jobs) {
+    const state = readJobState(job.id, dir);
+    if (state.paused) paused.push({ jobId: job.id, name: job.name, reason: state.paused.reason, since: state.paused.at });
+  }
+  return paused;
 }

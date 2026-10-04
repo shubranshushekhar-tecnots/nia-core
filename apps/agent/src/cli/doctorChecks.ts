@@ -4,6 +4,7 @@ import { connect, introspectCatalog } from "@nia/extract/mssql";
 import { resolveProxyUrl } from "../planometry/network.js";
 import { assertDiskSpace, InsufficientDiskSpaceError } from "../sync/diskSpace.js";
 import type { ConnectionEntry } from "../config/types.js";
+import type { TestJobResult } from "./jobCommands.js";
 
 /**
  * `nia-agent doctor` (docs/plans/planometry-integration.md Phase 3 prep):
@@ -207,5 +208,27 @@ export async function probePlanometry(baseUrl: string, caBundlePem?: string): Pr
 
 // The old agent-key-accepted ping check (PlanometryClient.ping against the
 // work-queue protocol) was removed in the v4 migration's slice A1
-// (docs/plans/planometry-v4-migration.md §10, §982) — a later slice adds
-// its v4 replacement (checkTargetReachable/checkTargetSchema).
+// (docs/plans/planometry-v4-migration.md §10, §982) — this slice adds
+// its v4 replacement below (checkTargetReachable/checkTargetSchema).
+
+/**
+ * `agent doctor`'s per-job target checks (§10 (B2) item 6) — reuse
+ * `job test` (cli/jobCommands.ts's testJob) rather than re-probing
+ * Planometry a second time. testJob reports a Planometry connection
+ * failure and a schema-snapshot diff as one flat error list rather than
+ * two separate outcomes, so when the job/connection/push-key itself
+ * can't even be resolved (`testResult.job` unset) both checks fail
+ * together; otherwise both reflect testJob's single pass/fail with its
+ * error detail, since a connection failure and schema drift can't both
+ * be present in that list at once (schema diffing only runs after the
+ * connection succeeds).
+ */
+export function checkTargetReachable(testResult: TestJobResult): CheckResult {
+  if (!testResult.job) return { name: "target reachable (job test)", pass: false, detail: testResult.errors.join("; ") };
+  return { name: "target reachable (job test)", pass: testResult.ok, detail: testResult.ok ? "job test passed" : testResult.errors.join("; ") };
+}
+
+export function checkTargetSchema(testResult: TestJobResult): CheckResult {
+  if (!testResult.job) return { name: "target schema matches (job test)", pass: false, detail: "skipped — job/connection/push key not found" };
+  return { name: "target schema matches (job test)", pass: testResult.ok, detail: testResult.ok ? "no drift detected" : testResult.errors.join("; ") };
+}

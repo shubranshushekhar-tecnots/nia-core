@@ -1,8 +1,10 @@
+import { runJob as runJobCommand } from "./cli/runJobCommand.js";
 import { defaultHomeDir, defaultLogDir } from "./config/paths.js";
-import { loadConfig } from "./config/store.js";
+import { findConnection, loadConfig } from "./config/store.js";
 import { Logger } from "./ops/logger.js";
-import { buildMonitoringHeartbeatPayload, MonitoringHeartbeatScheduler } from "./ops/monitoringHeartbeat.js";
-import { recordAgentStarted, readState } from "./ops/state.js";
+import { buildMonitoringHeartbeatPayload, MonitoringHeartbeatScheduler, type JobHeartbeatSource } from "./ops/monitoringHeartbeat.js";
+import { readJobState, recordAgentStarted } from "./ops/state.js";
+import { JobScheduler, type SchedulerJob, type SchedulerJobOutcome } from "./scheduler/jobScheduler.js";
 
 export interface AgentLoopOptions {
   dir?: string;
@@ -12,29 +14,39 @@ export interface AgentLoopOptions {
 }
 
 /**
- * Top-level orchestrator. Cut back for the v4 migration's slice A1
- * (docs/plans/planometry-v4-migration.md §10): the old per-connection
- * poll/sync pipeline was built entirely on the now-deleted work-queue
- * wire protocol (planometry/{pollLoop,catalogSync,heartbeatScheduler}.ts).
- * Until A2+ rebuild that pipeline on the v4 push client, this just loads
- * config, runs the monitoring heartbeat, and idles until `signal` aborts
- * — `nia-agent start` with no jobs idles and stops cleanly on abort.
+ * Top-level orchestrator (docs/plans/planometry-v4-migration.md §8, §10
+ * (B2)): re-reads `agent.config.json` on every `JobScheduler` reconcile
+ * (not just once at startup) so jobs added/changed/removed by the CLI
+ * while the service is running are picked up without a restart. Each
+ * job runs on its own cron schedule, in its connection's timezone, via
+ * `cli/runJobCommand.ts`'s `runJob` — the scheduler isolates one job's
+ * failure from every other job and from the loop itself. `nia-agent
+ * start` with no scheduled jobs just idles the monitoring heartbeat
+ * until `signal` aborts.
  */
 export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
   const dir = options.dir ?? defaultHomeDir();
   const logger = options.logger ?? new Logger(defaultLogDir(dir));
   recordAgentStarted(dir);
 
-  const config = loadConfig(dir);
+  const scheduler = new JobScheduler({
+    dir,
+    logger,
+    loadJobs: () => loadSchedulerJobs(dir),
+    runJob: (job, signal) => runSchedulerJob(job, signal, dir),
+    maxConcurrentRuns: loadConfig(dir).maxConcurrentRuns,
+  });
+  scheduler.start();
 
   const monitoring = new MonitoringHeartbeatScheduler(
-    config.monitoring?.heartbeatUrl,
-    config.monitoring?.intervalSeconds,
-    () => buildMonitoringHeartbeatPayload(options.agentVersion, readState(dir)),
+    loadConfig(dir).monitoring?.heartbeatUrl,
+    loadConfig(dir).monitoring?.intervalSeconds,
+    () => buildMonitoringHeartbeatPayload(options.agentVersion, loadJobHeartbeatSources(dir)),
     (err) => logger.warn("monitoring_heartbeat_failed", { error: err instanceof Error ? err.message : String(err) }),
   );
   monitoring.start();
-  logger.warn("idle_no_jobs", {});
+
+  if (loadConfig(dir).jobs.length === 0) logger.warn("idle_no_jobs", {});
 
   try {
     await new Promise<void>((resolve) => {
@@ -46,5 +58,28 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     });
   } finally {
     monitoring.stop();
+    await scheduler.stop();
   }
+}
+
+/** Every job whose connection still exists, as of the current config on disk. A job referencing a since-deleted connection is skipped (defensive — `job remove`/`connection remove` shouldn't leave that state). */
+function loadSchedulerJobs(dir: string): SchedulerJob[] {
+  const config = loadConfig(dir);
+  const jobs: SchedulerJob[] = [];
+  for (const job of config.jobs) {
+    const connection = findConnection(config, job.connectionId);
+    if (!connection) continue;
+    jobs.push({ id: job.id, name: job.name, connectionId: job.connectionId, schedule: job.schedule, timeZone: connection.sourceTimeZone });
+  }
+  return jobs;
+}
+
+function loadJobHeartbeatSources(dir: string): JobHeartbeatSource[] {
+  return loadConfig(dir).jobs.map((job) => ({ id: job.id, name: job.name, state: readJobState(job.id, dir) }));
+}
+
+async function runSchedulerJob(job: SchedulerJob, signal: AbortSignal, dir: string): Promise<SchedulerJobOutcome> {
+  const outcome = await runJobCommand(job.id, { signal }, dir);
+  if (outcome.ok) return { ok: true, rowsSent: outcome.rowsSent ?? 0, durationMs: outcome.durationMs ?? 0 };
+  return { ok: false, kind: outcome.kind ?? "other", error: outcome.error ?? "job run failed", consoleMessage: outcome.consoleMessage };
 }

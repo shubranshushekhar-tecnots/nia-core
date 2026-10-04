@@ -1,5 +1,5 @@
 import { request } from "undici";
-import type { AgentState } from "./state.js";
+import { jobHealthState, type JobState } from "./state.js";
 
 /**
  * Optional monitoring heartbeat (Phase 3b §3: "an optional heartbeat to a
@@ -9,32 +9,51 @@ import type { AgentState } from "./state.js";
  * Planometry itself mid-sync — this reports agent health to Nia staff,
  * independent of whether a sync is in progress.
  *
- * The payload shape below is the enforcement point for "no customer
- * data": it's built field-by-field from AgentState rather than spread,
- * so nothing on ConnectionState beyond the four fields named here can
- * ever reach the wire, even if a future field is added to AgentState
- * that shouldn't be exported (e.g. anything row-derived).
+ * Rewritten per-job for the v4 migration's slice B2 (docs/plans/
+ * planometry-v4-migration.md §8, §10 (B2), item 5): the payload is
+ * built field-by-field from JobState rather than spread, so nothing
+ * beyond the fields named here (id, name, health state, error *class*,
+ * consecutive failures, times) can ever reach the wire — in particular
+ * a Planometry 400's raw console message (JobState.lastConsoleMessage)
+ * never does, even if a future field is added to JobState that
+ * shouldn't be exported.
  */
+export interface JobHeartbeatEntry {
+  id: string;
+  name: string;
+  state: "ok" | "failing" | "paused";
+  errorClass?: string;
+  consecutiveFailures: number;
+  lastRunAt?: string;
+  lastSuccessAt?: string;
+  nextRunAt?: string;
+}
+
 export interface MonitoringHeartbeatPayload {
   agentVersion: string;
   reportedAt: string;
-  connections: Array<{
-    id: string;
-    lastSyncAt?: string;
-    lastPollAt?: string;
-    errorCount: number;
-  }>;
+  jobs: JobHeartbeatEntry[];
 }
 
-export function buildMonitoringHeartbeatPayload(agentVersion: string, state: AgentState): MonitoringHeartbeatPayload {
+export interface JobHeartbeatSource {
+  id: string;
+  name: string;
+  state: JobState;
+}
+
+export function buildMonitoringHeartbeatPayload(agentVersion: string, jobs: JobHeartbeatSource[]): MonitoringHeartbeatPayload {
   return {
     agentVersion,
     reportedAt: new Date().toISOString(),
-    connections: Object.entries(state.connections).map(([id, c]) => ({
+    jobs: jobs.map(({ id, name, state }) => ({
       id,
-      lastSyncAt: c.lastSyncAt,
-      lastPollAt: c.lastPollAt,
-      errorCount: c.consecutiveFailures ?? 0,
+      name,
+      state: jobHealthState(state),
+      errorClass: state.lastError?.class,
+      consecutiveFailures: state.consecutiveFailures ?? 0,
+      lastRunAt: state.lastRunAt,
+      lastSuccessAt: state.lastSuccessAt,
+      nextRunAt: state.nextRunAt,
     })),
   };
 }

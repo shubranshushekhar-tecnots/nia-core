@@ -47,6 +47,7 @@ export function validateConfig(value: unknown): AgentConfig {
     version: CURRENT_CONFIG_VERSION,
     spoolDir: typeof v.spoolDir === "string" ? v.spoolDir : undefined,
     monitoring: validateMonitoring(v.monitoring),
+    maxConcurrentRuns: typeof v.maxConcurrentRuns === "number" ? v.maxConcurrentRuns : undefined,
     connections: v.connections as ConnectionEntry[],
     jobs: (v.jobs as SyncJobEntry[] | undefined) ?? [],
   };

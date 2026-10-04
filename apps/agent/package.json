@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@nia/extract": "workspace:*",
+    "cron-parser": "4.9.0",
     "undici": "^7.2.0"
   },
   "devDependencies": {

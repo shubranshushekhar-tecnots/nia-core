@@ -74,6 +74,8 @@ export interface SyncJobEntry {
   filter: JobFilterCondition[];
   /** Saved named-parameter values (always raw strings, including relative-date tokens stored as literal token text — resolved only at validation/run time). Overridable per-run via `job run --param`, which never mutates this. */
   params: Record<string, string>;
+  /** 5-field cron expression (minute hour day-of-month month day-of-week), evaluated in the connection's `sourceTimeZone` by the scheduler (scheduler/cronSchedule.ts). Unset: the job runs only via `job run`, never on a timer. */
+  schedule?: string;
 }
 
 /**
@@ -92,6 +94,8 @@ export interface AgentConfig {
   spoolDir?: string;
   /** Unset by default — no heartbeat is sent unless explicitly configured. */
   monitoring?: MonitoringConfig;
+  /** Global cap on simultaneously running jobs, scheduler-enforced (docs/plans/planometry-v4-migration.md §8). Default 1. */
+  maxConcurrentRuns?: number;
   connections: ConnectionEntry[];
   jobs: SyncJobEntry[];
 }

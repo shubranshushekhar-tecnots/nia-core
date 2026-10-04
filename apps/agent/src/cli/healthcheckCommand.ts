@@ -6,28 +6,17 @@ export interface HealthcheckResult {
   reason?: string;
 }
 
-const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;
-
 /**
  * `nia-agent healthcheck` (Phase 3b §1 — Docker's `HEALTHCHECK CMD`).
  * Runs as a separate, short-lived process invocation alongside the
  * long-running `start` process, so it can only inspect on-disk state —
- * no IPC into the running process. Unhealthy if the agent has never
- * recorded a start, or if any connection's last poll is older than
- * `staleAfterMs` (a generous default — `pollAfterSeconds` is server-
- * controlled, so this only catches a genuinely stuck/crashed loop).
+ * no IPC into the running process. Unhealthy only if the agent has
+ * never recorded a start (process liveness); per-job staleness/pause/
+ * failure detail is `agent status`'s job (docs/plans/planometry-v4-
+ * migration.md §10 (B2) item 4), not this process-liveness check.
  */
-export function runHealthcheck(dir = defaultHomeDir(), staleAfterMs = DEFAULT_STALE_AFTER_MS): HealthcheckResult {
+export function runHealthcheck(dir = defaultHomeDir()): HealthcheckResult {
   const status = getStatus(dir);
   if (!status.startedAt) return { healthy: false, reason: "agent has not recorded a start" };
-
-  for (const [id, connection] of Object.entries(status.connections)) {
-    if (!connection.lastPollAt) continue;
-    const ageMs = Date.now() - Date.parse(connection.lastPollAt);
-    if (ageMs > staleAfterMs) {
-      return { healthy: false, reason: `connection ${id} has not polled in ${Math.round(ageMs / 1000)}s (threshold ${Math.round(staleAfterMs / 1000)}s)` };
-    }
-  }
-
   return { healthy: true };
 }

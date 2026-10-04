@@ -41,3 +41,8 @@ export function defaultLogDir(dir = defaultHomeDir()): string {
 export function defaultLocksDir(dir = defaultHomeDir()): string {
   return path.join(dir, "locks");
 }
+
+/** One JSON file per job under here (ops/state.ts) — written atomically by both the running service and manual `job run`s. */
+export function jobStateDir(dir = defaultHomeDir()): string {
+  return path.join(dir, "job-state");
+}

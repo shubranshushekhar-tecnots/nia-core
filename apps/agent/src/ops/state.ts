@@ -1,35 +1,181 @@
 import fs from "node:fs";
-import { defaultHomeDir, stateFilePath } from "../config/paths.js";
+import path from "node:path";
+import { defaultHomeDir, jobStateDir, stateFilePath } from "../config/paths.js";
 
 /**
- * Small local state file (Phase 2 §7, extended by Phase 3b §3: "`agent
- * status` shows per-connection state — last poll, last sync, last
- * error, spool usage"). Never holds row data or secrets — only
- * timestamps, counts, and error messages. Spool usage itself isn't
- * stored here (it's read live off disk at status time — see
- * ops/spoolUsage.ts) since it can change between polls without any
- * state-file write.
+ * v4 migration slice B2 (docs/plans/planometry-v4-migration.md §8, §10
+ * (B2)): state moved from per-connection to per-job, one JSON file per
+ * job under `jobStateDir()`, written atomically (temp file + rename —
+ * POSIX rename is atomic, so a reader never observes a half-written
+ * file) by both the running scheduler and a manual `job run`. Never
+ * holds row data or secrets. `lastConsoleMessage` (a Planometry 400's
+ * raw server text) is the one field that's allowed to hold free-form
+ * server text — it must never be copied into the log file or the
+ * monitoring webhook payload (ops/monitoringHeartbeat.ts), only read
+ * back here and by `agent status`.
  */
-export interface ConnectionState {
-  lastSyncAt?: string;
-  lastSyncRows?: number;
-  lastErrorAt?: string;
-  lastError?: string;
-  catalogFingerprint?: string;
-  /** Set on every `GET /v1/work` poll, whether or not it returned work. */
-  lastPollAt?: string;
-  /** Consecutive sync failures for this connection, reset to 0 on the next success. Drives the repeated-failure log escalation (ops/syncFailureLog.ts) without needing to scan the log file itself. */
-  consecutiveFailures?: number;
+export type JobRunResult = "completed" | "failed" | "skipped";
+
+export interface JobErrorInfo {
+  /** A RunSyncFailureKind (sync/runSync.ts) or "other" — never a raw server message. */
+  class: string;
+  message: string;
+  at: string;
 }
 
+export interface JobPauseInfo {
+  reason: string;
+  at: string;
+}
+
+export interface JobState {
+  lastRunAt?: string;
+  lastSuccessAt?: string;
+  lastResult?: JobRunResult;
+  lastError?: JobErrorInfo;
+  /** A Planometry 400's raw console message, if the last run failed with one. Console/state-file only — see module doc. */
+  lastConsoleMessage?: string;
+  consecutiveFailures: number;
+  paused?: JobPauseInfo;
+  nextRunAt?: string;
+  rowsSent?: number;
+  durationMs?: number;
+}
+
+function emptyJobState(): JobState {
+  return { consecutiveFailures: 0 };
+}
+
+function encodeJobId(jobId: string): string {
+  return Buffer.from(jobId, "utf8").toString("base64url");
+}
+
+function decodeJobId(encoded: string): string {
+  return Buffer.from(encoded, "base64url").toString("utf8");
+}
+
+function jobStateFilePath(jobId: string, dir: string): string {
+  return path.join(jobStateDir(dir), `${encodeJobId(jobId)}.json`);
+}
+
+/** Atomic write: write to a temp file in the same directory, then rename over the real path. */
+function writeFileAtomic(file: string, contents: string): void {
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+  fs.writeFileSync(tmp, contents, { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+export function readJobState(jobId: string, dir = defaultHomeDir()): JobState {
+  const file = jobStateFilePath(jobId, dir);
+  if (!fs.existsSync(file)) return emptyJobState();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<JobState>;
+    return { ...emptyJobState(), ...parsed };
+  } catch {
+    return emptyJobState();
+  }
+}
+
+export function writeJobState(jobId: string, state: JobState, dir = defaultHomeDir()): void {
+  fs.mkdirSync(jobStateDir(dir), { recursive: true, mode: 0o700 });
+  writeFileAtomic(jobStateFilePath(jobId, dir), JSON.stringify(state, null, 2));
+}
+
+/** Every job id with a state file on disk — used by `agent status`/the monitoring heartbeat to enumerate jobs without needing the config. */
+export function listJobStateIds(dir = defaultHomeDir()): string[] {
+  const stateDir = jobStateDir(dir);
+  if (!fs.existsSync(stateDir)) return [];
+  return fs
+    .readdirSync(stateDir)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => decodeJobId(f.slice(0, -".json".length)));
+}
+
+export function recordJobRunStarted(jobId: string, dir = defaultHomeDir()): void {
+  const state = readJobState(jobId, dir);
+  state.lastRunAt = new Date().toISOString();
+  writeJobState(jobId, state, dir);
+}
+
+export interface RecordJobSuccessInput {
+  rowsSent: number;
+  durationMs: number;
+}
+
+export function recordJobSuccess(jobId: string, input: RecordJobSuccessInput, dir = defaultHomeDir()): void {
+  const state = readJobState(jobId, dir);
+  state.lastSuccessAt = new Date().toISOString();
+  state.lastResult = "completed";
+  state.lastError = undefined;
+  state.lastConsoleMessage = undefined;
+  state.consecutiveFailures = 0;
+  state.rowsSent = input.rowsSent;
+  state.durationMs = input.durationMs;
+  writeJobState(jobId, state, dir);
+}
+
+export interface RecordJobFailureInput {
+  errorClass: string;
+  message: string;
+  /** A Planometry 400's raw server text, if any — never logged, never webhooked (see module doc). */
+  consoleMessage?: string;
+}
+
+/** Returns the job's new consecutive-failure count, so callers can decide whether to escalate without a second read. */
+export function recordJobFailure(jobId: string, input: RecordJobFailureInput, dir = defaultHomeDir()): number {
+  const state = readJobState(jobId, dir);
+  const consecutiveFailures = (state.consecutiveFailures ?? 0) + 1;
+  state.lastResult = "failed";
+  state.lastError = { class: input.errorClass, message: input.message, at: new Date().toISOString() };
+  state.lastConsoleMessage = input.consoleMessage;
+  state.consecutiveFailures = consecutiveFailures;
+  writeJobState(jobId, state, dir);
+  return consecutiveFailures;
+}
+
+export function recordJobSkipped(jobId: string, dir = defaultHomeDir()): void {
+  const state = readJobState(jobId, dir);
+  state.lastResult = "skipped";
+  writeJobState(jobId, state, dir);
+}
+
+export function recordNextRunAt(jobId: string, nextRunAt: Date | undefined, dir = defaultHomeDir()): void {
+  const state = readJobState(jobId, dir);
+  state.nextRunAt = nextRunAt?.toISOString();
+  writeJobState(jobId, state, dir);
+}
+
+export function pauseJobState(jobId: string, reason: string, dir = defaultHomeDir()): void {
+  const state = readJobState(jobId, dir);
+  state.paused = { reason, at: new Date().toISOString() };
+  writeJobState(jobId, state, dir);
+}
+
+export function resumeJobState(jobId: string, dir = defaultHomeDir()): void {
+  const state = readJobState(jobId, dir);
+  state.paused = undefined;
+  writeJobState(jobId, state, dir);
+}
+
+export function isJobPaused(jobId: string, dir = defaultHomeDir()): boolean {
+  return readJobState(jobId, dir).paused !== undefined;
+}
+
+export type JobHealth = "ok" | "failing" | "paused";
+
+export function jobHealthState(state: JobState): JobHealth {
+  if (state.paused) return "paused";
+  if ((state.consecutiveFailures ?? 0) > 0) return "failing";
+  return "ok";
+}
+
+/** Top-level agent state (just `startedAt` now — per-connection/per-job fields moved to the per-job files above). */
 export interface AgentState {
-  /** Set once per process start; status's "uptime" is derived from this. */
   startedAt?: string;
-  connections: Record<string, ConnectionState>;
 }
 
 function emptyState(): AgentState {
-  return { connections: {} };
+  return {};
 }
 
 export function readState(dir = defaultHomeDir()): AgentState {
@@ -37,7 +183,7 @@ export function readState(dir = defaultHomeDir()): AgentState {
   if (!fs.existsSync(file)) return emptyState();
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<AgentState>;
-    return { startedAt: parsed.startedAt, connections: parsed.connections ?? {} };
+    return { startedAt: parsed.startedAt };
   } catch {
     return emptyState();
   }
@@ -54,53 +200,17 @@ export function recordAgentStarted(dir = defaultHomeDir()): void {
   writeState(state, dir);
 }
 
-export function recordSyncComplete(connectionId: string, rows: number, dir = defaultHomeDir()): void {
-  const state = readState(dir);
-  state.connections[connectionId] = {
-    ...state.connections[connectionId],
-    lastSyncAt: new Date().toISOString(),
-    lastSyncRows: rows,
-    lastError: undefined,
-    lastErrorAt: undefined,
-    consecutiveFailures: 0,
-  };
-  writeState(state, dir);
-}
-
-/** Returns the connection's new consecutive-failure count, so the caller (ops/syncFailureLog.ts) can decide whether to escalate the log line without a second state read. */
-export function recordSyncFailed(connectionId: string, error: string, dir = defaultHomeDir()): number {
-  const state = readState(dir);
-  const consecutiveFailures = (state.connections[connectionId]?.consecutiveFailures ?? 0) + 1;
-  state.connections[connectionId] = {
-    ...state.connections[connectionId],
-    lastErrorAt: new Date().toISOString(),
-    lastError: error,
-    consecutiveFailures,
-  };
-  writeState(state, dir);
-  return consecutiveFailures;
-}
-
-export function recordCatalogFingerprint(connectionId: string, fingerprint: string, dir = defaultHomeDir()): void {
-  const state = readState(dir);
-  state.connections[connectionId] = { ...state.connections[connectionId], catalogFingerprint: fingerprint };
-  writeState(state, dir);
-}
-
-export function recordPoll(connectionId: string, dir = defaultHomeDir()): void {
-  const state = readState(dir);
-  state.connections[connectionId] = { ...state.connections[connectionId], lastPollAt: new Date().toISOString() };
-  writeState(state, dir);
-}
-
 export interface StatusReport {
   startedAt?: string;
   uptimeSeconds?: number;
-  connections: Record<string, ConnectionState>;
+  /** Keyed by job id — every job with a state file on disk, whether or not it's still in the current config. */
+  jobs: Record<string, JobState>;
 }
 
 export function getStatus(dir = defaultHomeDir()): StatusReport {
   const state = readState(dir);
   const uptimeSeconds = state.startedAt ? Math.max(0, Math.round((Date.now() - Date.parse(state.startedAt)) / 1000)) : undefined;
-  return { startedAt: state.startedAt, uptimeSeconds, connections: state.connections };
+  const jobs: Record<string, JobState> = {};
+  for (const id of listJobStateIds(dir)) jobs[id] = readJobState(id, dir);
+  return { startedAt: state.startedAt, uptimeSeconds, jobs };
 }

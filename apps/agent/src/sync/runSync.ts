@@ -3,7 +3,7 @@ import type { ExtractType } from "@nia/extract";
 import { defaultLocksDir, defaultSpoolDir } from "../config/paths.js";
 import type { SyncJobEntry } from "../config/types.js";
 import type { Logger } from "../ops/logger.js";
-import { buildWireRow, createFormatter, type MappedColumnFormatter } from "../planometry/formatForTarget.js";
+import { buildWireRow, createFormatter, FormatForTargetError, type MappedColumnFormatter } from "../planometry/formatForTarget.js";
 import { PlanometryClient, PlanometryConfigError, PlanometryRejectedError, PlanometryTransientError } from "../planometry/client.js";
 import type { TableSchema } from "../planometry/types.js";
 import type { KeyedSemaphore } from "./concurrency.js";
@@ -51,9 +51,34 @@ export interface RunSyncOptions {
   readSourceRows: (onRow: (row: Record<string, unknown>) => void, signal: AbortSignal) => Promise<void>;
 }
 
+/**
+ * Classifies why a run failed, so the scheduler (scheduler/jobScheduler.ts)
+ * can decide pause vs. retry-with-backoff vs. "just wait for next schedule"
+ * without re-deriving it from error text. Per §10(B2) item 3, only
+ * "config" (401/404), "schemaDrift", "typeMismatch" and "nullKey" pause the
+ * job. "transient" and "diskSpace" retry at 1/5/15 min and never pause.
+ * Everything else ("lockTaken", "aborted", "emptyReplace", "rejected" — a
+ * Planometry 400 at the getSchema/push step, "mismatch" — a row-count
+ * mismatch during the push itself, "other") neither pauses nor retries —
+ * the job just waits for its next scheduled tick.
+ */
+export type RunSyncFailureKind =
+  | "lockTaken"
+  | "schemaDrift"
+  | "typeMismatch"
+  | "nullKey"
+  | "emptyReplace"
+  | "aborted"
+  | "config"
+  | "rejected"
+  | "mismatch"
+  | "transient"
+  | "diskSpace"
+  | "other";
+
 export type RunSyncResult =
   | { outcome: "completed"; rowsSent: number; rowsSkipped: number; parts: number; durationMs: number; rowCount: number; version: number }
-  | { outcome: "failed"; error: string; consoleMessage?: string };
+  | { outcome: "failed"; error: string; consoleMessage?: string; kind: RunSyncFailureKind };
 
 interface SchemaDriftResult {
   stop: boolean;
@@ -130,13 +155,14 @@ function buildFormatters(
 }
 
 function toFailure(err: unknown): RunSyncResult {
-  if (err instanceof PlanometryConfigError) return { outcome: "failed", error: err.message };
+  if (err instanceof PlanometryConfigError) return { outcome: "failed", error: err.message, kind: "config" };
   if (err instanceof PlanometryRejectedError) {
-    return { outcome: "failed", error: "Planometry rejected the request (status 400)", consoleMessage: err.message };
+    return { outcome: "failed", error: "Planometry rejected the request (status 400)", consoleMessage: err.message, kind: "rejected" };
   }
-  if (err instanceof PlanometryTransientError) return { outcome: "failed", error: `transient error: ${err.message}` };
-  if (err instanceof Error) return { outcome: "failed", error: err.message };
-  return { outcome: "failed", error: String(err) };
+  if (err instanceof PlanometryTransientError) return { outcome: "failed", error: `transient error: ${err.message}`, kind: "transient" };
+  if (err instanceof FormatForTargetError) return { outcome: "failed", error: err.message, kind: "typeMismatch" };
+  if (err instanceof Error) return { outcome: "failed", error: err.message, kind: "other" };
+  return { outcome: "failed", error: String(err), kind: "other" };
 }
 
 /** Combines an optional external signal with a required internal one — no reliance on `AbortSignal.any`. */
@@ -170,7 +196,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     try {
       releaseLock = acquireReplaceLock(locksDir, job.targetUrl, now);
     } catch (err) {
-      if (err instanceof ReplaceLockTakenError) return { outcome: "failed", error: err.message };
+      if (err instanceof ReplaceLockTakenError) return { outcome: "failed", error: err.message, kind: "lockTaken" };
       throw err;
     }
 
@@ -190,11 +216,17 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     if (drift.stop) {
       const message = drift.message ?? "schema drift detected";
       options.logger.error("schema_drift_stop", { message });
-      return { outcome: "failed", error: message };
+      return { outcome: "failed", error: message, kind: "schemaDrift" };
     }
 
     // Step (c): extract mapped columns only, map + format, write to the encrypted spool.
-    const formatters = buildFormatters(job, options.sourceColumnTypes, options.sourceTimeZone);
+    let formatters: MappedColumnFormatter[];
+    try {
+      formatters = buildFormatters(job, options.sourceColumnTypes, options.sourceTimeZone);
+    } catch (err) {
+      if (err instanceof FormatForTargetError) return { outcome: "failed", error: err.message, kind: "typeMismatch" };
+      throw err;
+    }
     const keyTargets = job.targetSchemaSnapshot.keyColumns;
     const spool = new ReplaceSpoolWriter(spoolDir, runId, options.masterKey);
     await spool.prepare();
@@ -205,7 +237,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     } catch (err) {
       if (err instanceof InsufficientDiskSpaceError) {
         await removeReplaceSpool(spoolDir, runId);
-        return { outcome: "failed", error: err.message };
+        return { outcome: "failed", error: err.message, kind: "diskSpace" };
       }
       throw err;
     }
@@ -247,13 +279,14 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     // Step (d): guards, before any push request is made.
     if (options.signal?.aborted) {
       await removeReplaceSpool(spoolDir, runId);
-      return { outcome: "failed", error: "run aborted" };
+      return { outcome: "failed", error: "run aborted", kind: "aborted" };
     }
     if (stopOnNullKey) {
       await removeReplaceSpool(spoolDir, runId);
       return {
         outcome: "failed",
         error: `${nullKeyCount} row(s) had a null or empty-string key value; stopping the run (onNullKey: stop)`,
+        kind: "nullKey",
       };
     }
     if (extractionError) {
@@ -262,7 +295,11 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     }
     if (totalRows === 0 && !job.allowEmptyReplace) {
       await removeReplaceSpool(spoolDir, runId);
-      return { outcome: "failed", error: "the source table returned zero rows; refusing an empty replace (use --allow-empty-replace to proceed)" };
+      return {
+        outcome: "failed",
+        error: "the source table returned zero rows; refusing an empty replace (use --allow-empty-replace to proceed)",
+        kind: "emptyReplace",
+      };
     }
 
     // Step (e): push.

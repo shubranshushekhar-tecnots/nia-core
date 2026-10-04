@@ -16,6 +16,8 @@ import { LocalSecretStore } from "../secrets/store.js";
 import { PlanometryClient } from "../planometry/client.js";
 import { resolveJobFilter, type JobFilterCondition } from "../planometry/parameters.js";
 import type { TableSchema } from "../planometry/types.js";
+import { pauseJobState, resumeJobState } from "../ops/state.js";
+import { InvalidCronScheduleError, validateCronExpression } from "../scheduler/cronSchedule.js";
 import { buildMapping, type RawMappingPair } from "./jobMapping.js";
 
 /** `{ column name -> source ExtractType }`, for filter type-checking — filter columns need not be in the job's mapping. */
@@ -59,6 +61,8 @@ export interface AddJobInput {
   filter?: JobFilterCondition[];
   /** Saved named-parameter values; default none. */
   params?: Record<string, string>;
+  /** 5-field cron expression, evaluated in the connection's sourceTimeZone (scheduler/cronSchedule.js). Unset = runs only via `job run`. */
+  schedule?: string;
 }
 
 /**
@@ -98,6 +102,15 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     return { ok: false, errors: [describeError(err)] };
   }
 
+  if (input.schedule !== undefined) {
+    try {
+      validateCronExpression(input.schedule);
+    } catch (err) {
+      if (err instanceof InvalidCronScheduleError) return { ok: false, errors: [err.message] };
+      throw err;
+    }
+  }
+
   const pairs: JobMappingColumn[] = plan.pairs;
   const preview: JobMappingPreview = { pairs, sentAsNull: plan.sentAsNull };
   options.onPlan?.(preview);
@@ -122,6 +135,7 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     allowEmptyReplace: input.allowEmptyReplace ?? false,
     filter,
     params,
+    schedule: input.schedule,
   };
 
   saveConfig(upsertJob(config, job), dir);
@@ -234,6 +248,22 @@ export function removeJob(id: string, dir = defaultHomeDir()): boolean {
   return true;
 }
 
+/** `nia-agent job pause <id>`: manually pauses a job — the scheduler skips it until `job resume`; `job run` still works on it. */
+export function pauseJob(id: string, reason: string, dir = defaultHomeDir()): boolean {
+  const job = findJob(loadConfig(dir), id);
+  if (!job) return false;
+  pauseJobState(id, reason, dir);
+  return true;
+}
+
+/** `nia-agent job resume <id>`: clears a job's paused state, whether it was paused manually or by the scheduler. */
+export function resumeJob(id: string, dir = defaultHomeDir()): boolean {
+  const job = findJob(loadConfig(dir), id);
+  if (!job) return false;
+  resumeJobState(id, dir);
+  return true;
+}
+
 export interface UpdateJobInput {
   name?: string;
   targetUrl?: string;
@@ -246,6 +276,8 @@ export interface UpdateJobInput {
   filter?: JobFilterCondition[];
   /** Merged into the job's existing saved params (overwriting by key) — undefined leaves them unchanged. */
   params?: Record<string, string>;
+  /** 5-field cron expression, evaluated in the connection's sourceTimeZone — undefined leaves it unchanged; pass "" to clear it. */
+  schedule?: string;
 }
 
 /**
@@ -303,6 +335,16 @@ export async function updateJob(
     return { ok: false, errors: [describeError(err)] };
   }
 
+  const schedule = input.schedule !== undefined ? (input.schedule === "" ? undefined : input.schedule) : job.schedule;
+  if (schedule !== undefined) {
+    try {
+      validateCronExpression(schedule);
+    } catch (err) {
+      if (err instanceof InvalidCronScheduleError) return { ok: false, errors: [err.message] };
+      throw err;
+    }
+  }
+
   const preview: JobMappingPreview = { pairs: plan.pairs, sentAsNull: plan.sentAsNull };
   options.onPlan?.(preview);
   const confirmed = await (options.confirm?.(preview) ?? true);
@@ -321,6 +363,7 @@ export async function updateJob(
     allowEmptyReplace: input.allowEmptyReplace ?? job.allowEmptyReplace,
     filter,
     params,
+    schedule,
   };
 
   saveConfig(upsertJob(config, updated), dir);

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { recordAgentStarted, recordPoll } from "../ops/state.js";
+import { recordAgentStarted } from "../ops/state.js";
 import { runHealthcheck } from "./healthcheckCommand.js";
 
 describe("runHealthcheck", () => {
@@ -21,23 +21,8 @@ describe("runHealthcheck", () => {
     expect(result).toEqual({ healthy: false, reason: "agent has not recorded a start" });
   });
 
-  it("is healthy once started, even with no connections polled yet", () => {
+  it("is healthy once started, even with no jobs run yet", () => {
     recordAgentStarted(dir);
     expect(runHealthcheck(dir)).toEqual({ healthy: true });
-  });
-
-  it("is healthy when every connection's last poll is within the stale threshold", () => {
-    recordAgentStarted(dir);
-    recordPoll("conn-1", dir);
-    expect(runHealthcheck(dir, 10_000)).toEqual({ healthy: true });
-  });
-
-  it("is unhealthy when a connection's last poll is older than the stale threshold", () => {
-    recordAgentStarted(dir);
-    recordPoll("conn-1", dir);
-    const result = runHealthcheck(dir, -1);
-    expect(result.healthy).toBe(false);
-    expect(result.reason).toContain("conn-1");
-    expect(result.reason).toContain("has not polled in");
   });
 });

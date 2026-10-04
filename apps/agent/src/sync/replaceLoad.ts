@@ -43,6 +43,9 @@ export interface ReplaceLoadOptions {
   signal?: AbortSignal;
 }
 
+/** Mirrors sync/runSync.ts's RunSyncFailureKind — kept local to avoid a circular import (runSync.ts imports this module), re-exported as part of RunSyncFailureKind there. */
+export type ReplaceLoadFailureKind = "config" | "rejected" | "transient" | "mismatch" | "aborted" | "other";
+
 export type ReplaceLoadResult =
   | { outcome: "completed"; parts: number; rowCount: number; version: number }
   | {
@@ -51,6 +54,7 @@ export type ReplaceLoadResult =
       error: string;
       /** A 400's raw server message, console-only — never pass this to a logger. */
       consoleMessage?: string;
+      kind: ReplaceLoadFailureKind;
     };
 
 /**
@@ -78,8 +82,8 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
     timeoutMs: options.lastPartTimeoutMs ?? DEFAULT_LAST_PART_TIMEOUT_MS,
   });
 
-  function fail(error: string, consoleMessage?: string): ReplaceLoadResult {
-    return { outcome: "failed", error, consoleMessage };
+  function fail(error: string, kind: ReplaceLoadFailureKind, consoleMessage?: string): ReplaceLoadResult {
+    return { outcome: "failed", error, consoleMessage, kind };
   }
 
   function delay(ms: number): Promise<void> {
@@ -95,7 +99,7 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
 
   async function triggerRestart(): Promise<ReplaceLoadResult> {
     if (restarted) {
-      return fail("a mismatch occurred after the one restart this run already used; stopping");
+      return fail("a mismatch occurred after the one restart this run already used; stopping", "mismatch");
     }
     restarted = true;
     lastAcceptedAt = now();
@@ -105,7 +109,7 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
 
   async function sendMiddlePart(part: RequestPart, loadId: string, sentBefore: number): Promise<MiddleOutcome> {
     for (let attempt = 1; attempt <= MAX_MIDDLE_PART_ATTEMPTS; attempt++) {
-      if (isAborted()) return { status: "terminal", result: fail("run aborted") };
+      if (isAborted()) return { status: "terminal", result: fail("run aborted", "aborted") };
       try {
         const pushResult = await defaultClient.push(part.body);
         const expected = sentBefore + part.rowCount;
@@ -116,22 +120,22 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
         return { status: "continue" };
       } catch (err) {
         if (err instanceof PlanometryConfigError) {
-          return { status: "terminal", result: fail(err.message) };
+          return { status: "terminal", result: fail(err.message, "config") };
         }
         if (err instanceof PlanometryRejectedError) {
-          return { status: "terminal", result: fail("Planometry rejected the request (status 400)", err.message) };
+          return { status: "terminal", result: fail("Planometry rejected the request (status 400)", "rejected", err.message) };
         }
         if (err instanceof PlanometryTransientError) {
           if (attempt < MAX_MIDDLE_PART_ATTEMPTS) {
             await delay(backoffDelayMs(attempt, RETRY_BASE_DELAY_MS));
             continue;
           }
-          return { status: "terminal", result: fail(`transient error retrying a middle part: ${err.message}`) };
+          return { status: "terminal", result: fail(`transient error retrying a middle part: ${err.message}`, "transient") };
         }
         throw err;
       }
     }
-    return { status: "terminal", result: fail("middle part failed after all retry attempts") };
+    return { status: "terminal", result: fail("middle part failed after all retry attempts", "transient") };
   }
 
   async function recoverLastPart(part: RequestPart, partCount: number): Promise<ReplaceLoadResult> {
@@ -152,18 +156,18 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
       const pushResult = await lastPartClient.push(part.body);
       if (pushResult.status === "completed") {
         if (pushResult.rowCount !== options.totalRows) {
-          return fail(`Planometry reported rowCount ${pushResult.rowCount}, expected ${options.totalRows}`);
+          return fail(`Planometry reported rowCount ${pushResult.rowCount}, expected ${options.totalRows}`, "mismatch");
         }
         return { outcome: "completed", parts: partCount, rowCount: pushResult.rowCount, version: pushResult.version! };
       }
-      return fail("Planometry did not report the load as completed on the resent final part");
+      return fail("Planometry did not report the load as completed on the resent final part", "mismatch");
     } catch (err) {
       if (err instanceof PlanometryRejectedError) {
         // A 400 on the resend of an already-landed last part means it was double-counted.
         return triggerRestart();
       }
-      if (err instanceof PlanometryConfigError) return fail(err.message);
-      if (err instanceof PlanometryTransientError) return fail(`transient error resending the final part: ${err.message}`);
+      if (err instanceof PlanometryConfigError) return fail(err.message, "config");
+      if (err instanceof PlanometryTransientError) return fail(`transient error resending the final part: ${err.message}`, "transient");
       throw err;
     }
   }
@@ -173,7 +177,7 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
       const pushResult = await lastPartClient.push(part.body);
       if (pushResult.status === "completed") {
         if (pushResult.rowCount !== options.totalRows) {
-          return fail(`Planometry reported rowCount ${pushResult.rowCount}, expected ${options.totalRows}`);
+          return fail(`Planometry reported rowCount ${pushResult.rowCount}, expected ${options.totalRows}`, "mismatch");
         }
         return { outcome: "completed", parts: partCount, rowCount: pushResult.rowCount, version: pushResult.version! };
       }
@@ -181,10 +185,10 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
       if (pushResult.loadRowsReceived !== expected) {
         return triggerRestart();
       }
-      return fail("Planometry did not report the load as completed on the final part");
+      return fail("Planometry did not report the load as completed on the final part", "mismatch");
     } catch (err) {
-      if (err instanceof PlanometryConfigError) return fail(err.message);
-      if (err instanceof PlanometryRejectedError) return fail("Planometry rejected the request (status 400)", err.message);
+      if (err instanceof PlanometryConfigError) return fail(err.message, "config");
+      if (err instanceof PlanometryRejectedError) return fail("Planometry rejected the request (status 400)", "rejected", err.message);
       if (err instanceof PlanometryTransientError) return recoverLastPart(part, partCount);
       throw err;
     }
@@ -204,9 +208,9 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
     for await (const part of parts) {
       partCount += 1;
       if (now().getTime() - lastAcceptedAt.getTime() > IDLE_LIMIT_MS) {
-        return fail("more than 55 minutes passed since the last part Planometry accepted; stopping the run");
+        return fail("more than 55 minutes passed since the last part Planometry accepted; stopping the run", "transient");
       }
-      if (isAborted()) return fail("run aborted");
+      if (isAborted()) return fail("run aborted", "aborted");
 
       if (part.last) {
         return sendLastPart(part, sentSoFar, partCount);
@@ -217,7 +221,7 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
       sentSoFar += part.rowCount;
       lastAcceptedAt = now();
     }
-    return fail("replace load produced no request parts");
+    return fail("replace load produced no request parts", "other");
   }
 
   try {
@@ -228,7 +232,7 @@ export async function replaceLoad(options: ReplaceLoadOptions): Promise<ReplaceL
       totalRows: options.totalRows,
     });
     const first = await probe.next();
-    if (first.done) return fail("replace load produced no request parts");
+    if (first.done) return fail("replace load produced no request parts", "other");
 
     if (first.value.last) {
       return await sendLastPart(first.value, 0, 1);

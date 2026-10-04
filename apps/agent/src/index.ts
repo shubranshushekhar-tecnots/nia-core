@@ -2,15 +2,15 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
-import { addJob, listJobs, removeJob, testJob, updateJob } from "./cli/jobCommands.js";
+import { addJob, listJobs, pauseJob, removeJob, resumeJob, testJob, updateJob } from "./cli/jobCommands.js";
 import { runJob } from "./cli/runJobCommand.js";
 import { parseMapOverrides } from "./cli/jobMapping.js";
 import { parseParamOverrides, type JobFilterCondition } from "./planometry/parameters.js";
 import { readSecretFromStdin } from "./cli/securePrompt.js";
 import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
-import { runDoctor } from "./cli/doctorCommand.js";
+import { listPausedJobs, runDoctor, runJobDoctor } from "./cli/doctorCommand.js";
 import { runHealthcheck } from "./cli/healthcheckCommand.js";
-import { getStatus } from "./ops/state.js";
+import { jobHealthState, getStatus } from "./ops/state.js";
 import { getSpoolUsage } from "./ops/spoolUsage.js";
 import { installGracefulShutdown } from "./ops/shutdown.js";
 import { versionString } from "./cli/versionCommand.js";
@@ -52,17 +52,23 @@ async function main(argv: string[]): Promise<void> {
     const spoolUsage = getSpoolUsage(spoolDir);
     console.log(`spool usage: ${formatBytes(spoolUsage.bytes)} across ${spoolUsage.fileCount} file(s) in ${spoolDir}`);
 
-    const connectionIds = Object.keys(status.connections);
-    if (connectionIds.length === 0) {
-      console.log("no sync history yet");
+    const jobIds = Object.keys(status.jobs);
+    if (jobIds.length === 0) {
+      console.log("no job history yet");
     }
-    for (const id of connectionIds) {
-      const c = status.connections[id]!;
-      const poll = c.lastPollAt ? `last poll ${c.lastPollAt}` : "no poll yet";
-      const sync = c.lastSyncAt ? `last sync ${c.lastSyncAt} (${c.lastSyncRows} rows)` : "no sync yet";
-      const error = c.lastError ? `, last error ${c.lastErrorAt}: ${c.lastError}${c.consecutiveFailures && c.consecutiveFailures > 1 ? ` (${c.consecutiveFailures} in a row)` : ""}` : "";
-      console.log(`${id}: ${poll}, ${sync}${error}`);
+    let anyUnhealthy = false;
+    for (const id of jobIds) {
+      const job = status.jobs[id]!;
+      const health = jobHealthState(job);
+      if (health === "paused" || job.consecutiveFailures >= 3) anyUnhealthy = true;
+      const run = job.lastRunAt ? `last run ${job.lastRunAt} (${job.lastResult})` : "no run yet";
+      const success = job.lastSuccessAt ? `last success ${job.lastSuccessAt} (${job.rowsSent ?? 0} rows, ${job.durationMs ?? 0}ms)` : "no success yet";
+      const paused = job.paused ? `, paused since ${job.paused.at}: ${job.paused.reason}` : "";
+      const error = job.lastError ? `, last error ${job.lastError.at} [${job.lastError.class}]: ${job.lastError.message}${job.consecutiveFailures > 1 ? ` (${job.consecutiveFailures} in a row)` : ""}` : "";
+      const next = job.nextRunAt ? `, next run ${job.nextRunAt}` : "";
+      console.log(`${id} [${health}]: ${run}, ${success}${error}${paused}${next}`);
     }
+    if (anyUnhealthy) process.exitCode = 1;
     return;
   }
 
@@ -185,9 +191,8 @@ async function main(argv: string[]): Promise<void> {
   if (command === "doctor") {
     const connectionId = subcommand;
     const reports = await runDoctor(connectionId);
-    if (reports.length === 0) {
+    if (reports.length === 0 && connectionId === undefined) {
       console.log("no connections configured");
-      return;
     }
     let anyFailed = false;
     for (const report of reports) {
@@ -200,6 +205,25 @@ async function main(argv: string[]): Promise<void> {
         console.log(`  ${status} ${check.name} — ${check.detail}${fix}`);
       }
     }
+
+    if (connectionId === undefined) {
+      const jobReports = await runJobDoctor();
+      for (const report of jobReports) {
+        console.log(`${report.jobId} (${report.name}):`);
+        for (const check of report.checks) {
+          if (!check.pass) anyFailed = true;
+          const status = check.pass ? "[PASS]" : "[FAIL]";
+          console.log(`  ${status} ${check.name} — ${check.detail}`);
+        }
+      }
+
+      const paused = listPausedJobs();
+      if (paused.length > 0) {
+        console.log("paused jobs:");
+        for (const p of paused) console.log(`  ${p.jobId} (${p.name}) — paused since ${p.since}: ${p.reason}`);
+      }
+    }
+
     if (anyFailed) process.exitCode = 1;
     return;
   }
@@ -219,13 +243,14 @@ async function main(argv: string[]): Promise<void> {
         filter: { type: "string" },
         "filter-file": { type: "string" },
         param: { type: "string", multiple: true },
+        schedule: { type: "string" },
       },
     });
     const connectionId = values.connection as string | undefined;
     const table = values.table as string | undefined;
     const targetUrl = values["target-url"] as string | undefined;
     if (!connectionId || !table || !targetUrl) {
-      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--yes]");
+      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--yes]");
       process.exitCode = 1;
       return;
     }
@@ -263,6 +288,7 @@ async function main(argv: string[]): Promise<void> {
       allowEmptyReplace: values["allow-empty-replace"] as boolean | undefined,
       filter,
       params,
+      schedule: values.schedule as string | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -322,6 +348,31 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "job" && subcommand === "pause") {
+    const id = rest[0];
+    if (!id) {
+      console.error("usage: nia-agent job pause <id> [reason]");
+      process.exitCode = 1;
+      return;
+    }
+    const reason = rest.slice(1).join(" ") || "paused manually";
+    const paused = pauseJob(id, reason);
+    console.log(paused ? `paused job ${id}` : `no job with id ${id}`);
+    return;
+  }
+
+  if (command === "job" && subcommand === "resume") {
+    const id = rest[0];
+    if (!id) {
+      console.error("usage: nia-agent job resume <id>");
+      process.exitCode = 1;
+      return;
+    }
+    const resumed = resumeJob(id);
+    console.log(resumed ? `resumed job ${id}` : `no job with id ${id}`);
+    return;
+  }
+
   if (command === "job" && subcommand === "update") {
     const id = rest[0];
     const { values } = parseArgs({
@@ -337,10 +388,11 @@ async function main(argv: string[]): Promise<void> {
         filter: { type: "string" },
         "filter-file": { type: "string" },
         param: { type: "string", multiple: true },
+        schedule: { type: "string" },
       },
     });
     if (!id) {
-      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...]");
+      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>]");
       process.exitCode = 1;
       return;
     }
@@ -378,6 +430,7 @@ async function main(argv: string[]): Promise<void> {
       allowEmptyReplace: values["allow-empty-replace"] as boolean | undefined,
       filter,
       params,
+      schedule: values.schedule as string | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -457,7 +510,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   console.error(
-    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
+    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
   );
   process.exitCode = 1;
 }

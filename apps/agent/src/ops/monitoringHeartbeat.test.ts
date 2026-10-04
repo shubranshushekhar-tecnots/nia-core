@@ -1,38 +1,78 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMonitoringHeartbeatPayload, MonitoringHeartbeatScheduler, sendMonitoringHeartbeat } from "./monitoringHeartbeat.js";
-import type { AgentState } from "./state.js";
+import { buildMonitoringHeartbeatPayload, type JobHeartbeatSource, MonitoringHeartbeatScheduler, sendMonitoringHeartbeat } from "./monitoringHeartbeat.js";
 
 describe("buildMonitoringHeartbeatPayload", () => {
-  it("includes only agent version, connection ids, last-success times, and error counts", () => {
-    const state: AgentState = {
-      startedAt: "2026-01-01T00:00:00.000Z",
-      connections: {
-        "conn-1": { lastSyncAt: "2026-01-01T01:00:00.000Z", lastSyncRows: 12345, lastPollAt: "2026-01-01T01:05:00.000Z", consecutiveFailures: 0 },
-        "conn-2": { lastErrorAt: "2026-01-01T02:00:00.000Z", lastError: "connection refused to host 10.0.0.5 as user sa", consecutiveFailures: 4 },
+  it("includes only agent version, job ids, health state, error class, failure count, and times", () => {
+    const jobs: JobHeartbeatSource[] = [
+      {
+        id: "job-1",
+        name: "Orders sync",
+        state: { lastSuccessAt: "2026-01-01T01:00:00.000Z", lastRunAt: "2026-01-01T01:00:00.000Z", rowsSent: 12345, consecutiveFailures: 0 },
       },
-    };
+      {
+        id: "job-2",
+        name: "Customers sync",
+        state: {
+          lastError: { class: "config", message: "connection refused to host 10.0.0.5 as user sa", at: "2026-01-01T02:00:00.000Z" },
+          lastConsoleMessage: "raw planometry 400 body naming a column",
+          consecutiveFailures: 4,
+        },
+      },
+    ];
 
-    const payload = buildMonitoringHeartbeatPayload("1.2.3", state);
+    const payload = buildMonitoringHeartbeatPayload("1.2.3", jobs);
 
     expect(payload.agentVersion).toBe("1.2.3");
-    expect(payload.connections).toEqual([
-      { id: "conn-1", lastSyncAt: "2026-01-01T01:00:00.000Z", lastPollAt: "2026-01-01T01:05:00.000Z", errorCount: 0 },
-      { id: "conn-2", lastSyncAt: undefined, lastPollAt: undefined, errorCount: 4 },
+    expect(payload.jobs).toEqual([
+      {
+        id: "job-1",
+        name: "Orders sync",
+        state: "ok",
+        errorClass: undefined,
+        consecutiveFailures: 0,
+        lastRunAt: "2026-01-01T01:00:00.000Z",
+        lastSuccessAt: "2026-01-01T01:00:00.000Z",
+        nextRunAt: undefined,
+      },
+      {
+        id: "job-2",
+        name: "Customers sync",
+        state: "failing",
+        errorClass: "config",
+        consecutiveFailures: 4,
+        lastRunAt: undefined,
+        lastSuccessAt: undefined,
+        nextRunAt: undefined,
+      },
     ]);
 
-    // No row data (lastSyncRows) or potentially sensitive free-text (lastError, which may
-    // embed hostnames/usernames) ever reaches the payload — asserted on the serialized
-    // wire form, not just the typed shape, so a future field addition can't silently leak.
+    // No row data (rowsSent), potentially sensitive free-text error messages, or a
+    // Planometry 400's raw console message ever reach the payload — asserted on the
+    // serialized wire form, not just the typed shape, so a future field addition can't
+    // silently leak any of this.
     const serialized = JSON.stringify(payload);
     expect(serialized).not.toContain("12345");
     expect(serialized).not.toContain("connection refused");
     expect(serialized).not.toContain("10.0.0.5");
+    expect(serialized).not.toContain("raw planometry 400 body");
   });
 
-  it("produces an empty connections array for a fresh state", () => {
-    const payload = buildMonitoringHeartbeatPayload("1.0.0", { connections: {} });
-    expect(payload.connections).toEqual([]);
+  it("produces an empty jobs array when there are no jobs", () => {
+    const payload = buildMonitoringHeartbeatPayload("1.0.0", []);
+    expect(payload.jobs).toEqual([]);
+  });
+
+  it("reports a paused job's state as paused even if it also has failures", () => {
+    const jobs: JobHeartbeatSource[] = [
+      {
+        id: "job-1",
+        name: "Orders sync",
+        state: { consecutiveFailures: 2, paused: { reason: "401 unauthorized", at: "2026-01-01T00:00:00.000Z" } },
+      },
+    ];
+    const payload = buildMonitoringHeartbeatPayload("1.0.0", jobs);
+    expect(payload.jobs[0]!.state).toBe("paused");
   });
 });
 
@@ -63,7 +103,7 @@ describe("sendMonitoringHeartbeat", () => {
   });
 
   it("POSTs the payload as JSON", async () => {
-    const payload = buildMonitoringHeartbeatPayload("1.0.0", { connections: { "conn-1": { consecutiveFailures: 1 } } });
+    const payload = buildMonitoringHeartbeatPayload("1.0.0", [{ id: "job-1", name: "Orders sync", state: { consecutiveFailures: 1 } }]);
     await sendMonitoringHeartbeat(url, payload);
     expect(received).toEqual(payload);
   });
@@ -88,7 +128,7 @@ describe("MonitoringHeartbeatScheduler", () => {
   });
 
   it("fires at the configured interval while started, and stops on stop()", async () => {
-    const getPayload = vi.fn(() => buildMonitoringHeartbeatPayload("1.0.0", { connections: {} }));
+    const getPayload = vi.fn(() => buildMonitoringHeartbeatPayload("1.0.0", []));
     const send = vi.fn().mockResolvedValue(undefined);
 
     const scheduler = new MonitoringHeartbeatScheduler("http://127.0.0.1:9/ingest", 30, getPayload, undefined, send);
@@ -107,7 +147,7 @@ describe("MonitoringHeartbeatScheduler", () => {
   });
 
   it("swallows send errors via onError without throwing", async () => {
-    const getPayload = () => buildMonitoringHeartbeatPayload("1.0.0", { connections: {} });
+    const getPayload = () => buildMonitoringHeartbeatPayload("1.0.0", []);
     const send = vi.fn().mockRejectedValue(new Error("network down"));
     const onError = vi.fn();
 
