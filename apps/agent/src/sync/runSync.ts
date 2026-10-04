@@ -3,12 +3,14 @@ import type { ExtractType } from "@nia/extract";
 import { defaultLocksDir, defaultSpoolDir } from "../config/paths.js";
 import type { SyncJobEntry } from "../config/types.js";
 import type { Logger } from "../ops/logger.js";
-import { setLastWatermark } from "../ops/state.js";
-import { buildWireRow, createFormatter, FormatForTargetError, type MappedColumnFormatter } from "../planometry/formatForTarget.js";
+import { pauseJobState, setLastWatermark } from "../ops/state.js";
+import { buildKeyRow, buildWireRow, createFormatter, FormatForTargetError, type MappedColumnFormatter, type WireRow } from "../planometry/formatForTarget.js";
 import { PlanometryClient, PlanometryConfigError, PlanometryRejectedError, PlanometryTransientError } from "../planometry/client.js";
 import type { PushMode, TableSchema } from "../planometry/types.js";
 import type { KeyedSemaphore } from "./concurrency.js";
+import { deletePush } from "./deletePush.js";
 import { assertDiskSpace, InsufficientDiskSpaceError } from "./diskSpace.js";
+import { buildKeyListFromReplace, canonicalKeyString, computeReconciliation } from "./keyReconciliation.js";
 import { acquireReplaceLock, ReplaceLockTakenError } from "./replaceLock.js";
 import { replaceLoad } from "./replaceLoad.js";
 import { readReplaceSpool, removeReplaceSpool, ReplaceSpoolWriter } from "./replaceSpool.js";
@@ -77,6 +79,24 @@ export interface RunSyncOptions {
     /** `sync/watermark.ts`'s `computeJobFingerprint(job)` — saved alongside the watermark on success so a future run can tell whether it's still valid (task item 1, the fingerprint rule). */
     fingerprint: string;
   };
+  /**
+   * `job.deleteMode === "reconciliation"` only (§1.2/§10, slice D1). The
+   * caller (cli/runJobCommand.ts) decides when to pass this — only for an
+   * `upsertDelta` job that isn't a `--param` override run (item 3: "a
+   * `--param` override run never reads or writes the list"). Reuses
+   * `delta.fingerprint` rather than carrying its own. On a replace-mode
+   * run (first run / forced replace / no saved watermark) the saved list
+   * is rebuilt directly from the rows just replaced, no scan or deletes;
+   * on an ongoing delta ("upsert") run, a second extraction pass scans
+   * the current keys (key columns only, same resolved filter) and the
+   * saved list minus that scan is pushed as deletes, guarded by
+   * `maxDeletePercent`/`allowMassDelete` (item 4).
+   */
+  reconciliation?: {
+    readKeyScanRows: (onRow: (row: Record<string, unknown>) => void, signal: AbortSignal) => Promise<void>;
+    maxDeletePercent: number;
+    allowMassDelete: boolean;
+  };
 }
 
 /**
@@ -102,6 +122,7 @@ export type RunSyncFailureKind =
   | "mismatch"
   | "transient"
   | "diskSpace"
+  | "massDelete"
   | "other";
 
 export type RunSyncResult =
@@ -118,6 +139,8 @@ export type RunSyncResult =
       /** `delta`-driven runs only (slice C1) — the saved watermark before/after this run (after reflects the computed value even on the rare case it wasn't persisted — see step (e)'s "leave unchanged" comment). */
       watermarkBefore?: string;
       watermarkAfter?: string;
+      /** Set only when key reconciliation actually ran (an upsert-mode delta run with `options.reconciliation` set). */
+      reconciliation?: { deletesSent: number; duplicateKeyCount: number };
     }
   | { outcome: "failed"; error: string; consoleMessage?: string; kind: RunSyncFailureKind };
 
@@ -308,6 +331,14 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     let maxSeenWatermark: string | undefined;
     const extractionStartedAt = Date.now();
 
+    // Reconciliation only ever reads/writes the saved list on an ongoing
+    // upsert-mode delta run (never a replace, never a param override —
+    // item 3) — this run's upserted keys are collected inline here, from
+    // the already-built `wireRow`, so the later reconciliation pass never
+    // needs a third pass over this run's own rows.
+    const trackUpsertedKeys = options.reconciliation !== undefined && pushMode === "upsert";
+    const upsertedKeysThisRun = new Set<string>();
+
     try {
       await options.readSourceRows((sourceRow) => {
         if (internalController.signal.aborted) return;
@@ -326,6 +357,11 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
             internalController.abort();
           }
           return;
+        }
+        if (trackUpsertedKeys) {
+          const keyRow: WireRow = {};
+          for (const k of keyTargets) keyRow[k] = wireRow[k] ?? null;
+          upsertedKeysThisRun.add(canonicalKeyString(keyRow));
         }
         spool.write(wireRow);
         totalRows += 1;
@@ -399,12 +435,116 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
       });
     }
 
+    // Key reconciliation (§1.2/§10, slice D1): inside the table lock, after
+    // the push above succeeds and before the main spool is removed below
+    // (the replace-mode branch reads the just-written spool). The caller
+    // only sets `options.reconciliation` for an upsertDelta job that isn't
+    // a `--param` override run (item 3).
+    let reconciliationInfo: { deletesSent: number; duplicateKeyCount: number } | undefined;
+    let reconciliationFailure: RunSyncResult | undefined;
+    if (result.outcome === "completed" && options.reconciliation && delta) {
+      if (pushMode === "replace") {
+        // No scan, no deletes — the whole table was just replaced, so the
+        // new saved list is simply every key just sent.
+        const built = await buildKeyListFromReplace(options.dir, job.id, options.masterKey, delta.fingerprint, spoolDir, runId, keyTargets);
+        if (built.duplicateKeyCount > 0) {
+          options.logger.warn("key_reconciliation_duplicate_keys", { duplicateKeyCount: built.duplicateKeyCount });
+        }
+      } else if (!schemaAtStart.supportedModes.includes("delete")) {
+        reconciliationFailure = {
+          outcome: "failed",
+          error: "delete is not a supported mode for this table; key reconciliation cannot remove rows",
+          kind: "schemaDrift",
+        };
+      } else {
+        const keyScanRunId = `${runId}-keyscan`;
+        const keyScanSpool = new ReplaceSpoolWriter(spoolDir, keyScanRunId, options.masterKey);
+        await keyScanSpool.prepare();
+
+        let keyScanError: unknown;
+        try {
+          await assertDiskSpace(spoolDir, options.minFreeBytes);
+        } catch (err) {
+          keyScanError = err;
+        }
+
+        if (!keyScanError) {
+          const keyScanSignal = combineSignals(options.signal, new AbortController().signal);
+          try {
+            await options.reconciliation.readKeyScanRows((sourceRow) => {
+              keyScanSpool.write(buildKeyRow(formatters, sourceRow, keyTargets));
+            }, keyScanSignal);
+          } catch (err) {
+            keyScanError = err;
+          }
+          try {
+            await keyScanSpool.finish();
+          } catch (err) {
+            keyScanError = keyScanError ?? err;
+          }
+        }
+
+        if (keyScanError) {
+          await removeReplaceSpool(spoolDir, keyScanRunId);
+          reconciliationFailure =
+            keyScanError instanceof InsufficientDiskSpaceError ? { outcome: "failed", error: keyScanError.message, kind: "diskSpace" } : toFailure(keyScanError);
+        } else {
+          const outcome = await computeReconciliation({
+            dir: options.dir,
+            jobId: job.id,
+            masterKey: options.masterKey,
+            fingerprint: delta.fingerprint,
+            scanSpoolDir: spoolDir,
+            scanRunId: keyScanRunId,
+            upsertedKeysThisRun,
+            maxDeletePercent: options.reconciliation.maxDeletePercent,
+            allowMassDelete: options.reconciliation.allowMassDelete,
+          });
+          await removeReplaceSpool(spoolDir, keyScanRunId);
+
+          if (outcome.guard.tripped) {
+            // Deliberate exception to "only the scheduler pauses a job"
+            // (jobScheduler.ts's executeWithRetry): a direct CLI `job run`
+            // must also be able to pause on a tripped mass-delete guard.
+            pauseJobState(job.id, outcome.guard.reason ?? "key reconciliation mass-delete guard tripped", options.dir);
+            await outcome.discard();
+            reconciliationFailure = { outcome: "failed", error: outcome.guard.reason ?? "mass-delete guard tripped", kind: "massDelete" };
+          } else {
+            const deleteResult = await deletePush({
+              tableUrl: job.targetUrl,
+              pushKey: options.pushKey,
+              rows: outcome.readDeletes(),
+              schemaAtStart,
+              logger: options.logger,
+              signal: options.signal,
+            });
+            if (deleteResult.outcome === "failed") {
+              await outcome.discard();
+              reconciliationFailure = { outcome: "failed", error: deleteResult.error, consoleMessage: deleteResult.consoleMessage, kind: deleteResult.kind };
+            } else {
+              await outcome.commit();
+              if (outcome.stats.duplicateKeyCount > 0) {
+                options.logger.warn("key_reconciliation_duplicate_keys", { duplicateKeyCount: outcome.stats.duplicateKeyCount });
+              }
+              reconciliationInfo = { deletesSent: deleteResult.rowsSent, duplicateKeyCount: outcome.stats.duplicateKeyCount };
+            }
+          }
+        }
+      }
+    }
+
     // Step (f): the spool is removed on success, failure and abort alike.
     await removeReplaceSpool(spoolDir, runId);
 
     if (result.outcome === "failed") {
       options.logger.error("push_failed", { mode: pushMode, error: result.error });
       return result;
+    }
+    if (reconciliationFailure) {
+      if (reconciliationFailure.outcome === "failed") {
+        options.logger.error("key_reconciliation_failed", { kind: reconciliationFailure.kind, error: reconciliationFailure.error });
+      }
+      return reconciliationFailure;
     }
 
     // Watermark persistence: only after a successful push, and only for a
@@ -449,6 +589,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
       mode: pushMode,
       watermarkBefore: delta?.savedWatermark,
       watermarkAfter,
+      reconciliation: reconciliationInfo,
     };
   } finally {
     releaseLock?.();

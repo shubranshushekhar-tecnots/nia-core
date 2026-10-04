@@ -433,7 +433,7 @@ describe("job commands", () => {
         dir,
       );
 
-      expect(removeJob(added.job!.id, dir)).toBe(true);
+      expect(await removeJob(added.job!.id, dir)).toBe(true);
       expect(listJobs(dir)).toHaveLength(0);
 
       const masterKey = loadOrCreateMasterKey(dir);

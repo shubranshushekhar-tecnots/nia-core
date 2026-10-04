@@ -10,7 +10,7 @@ import {
   saveConfig,
   upsertJob,
 } from "../config/store.js";
-import type { ConnectionEntry, JobMappingColumn, JobStrategy, OnNullKey, SyncJobEntry, TargetSchemaSnapshot } from "../config/types.js";
+import type { ConnectionEntry, DeleteMode, JobMappingColumn, JobStrategy, OnNullKey, SyncJobEntry, TargetSchemaSnapshot } from "../config/types.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { PlanometryClient } from "../planometry/client.js";
@@ -18,8 +18,40 @@ import { isRelativeDateToken, resolveJobFilter, type FilterValueOrParam, type Jo
 import type { TableSchema } from "../planometry/types.js";
 import { pauseJobState, resumeJobState } from "../ops/state.js";
 import { InvalidCronScheduleError, validateCronExpression } from "../scheduler/cronSchedule.js";
+import { removeKeyList } from "../sync/keyReconciliation.js";
 import { checkWatermarkColumn, type WatermarkColumnReport } from "../sync/watermark.js";
 import { buildMapping, type RawMappingPair } from "./jobMapping.js";
+
+const DEFAULT_MAX_DELETE_PERCENT = 20;
+
+/**
+ * `deleteMode: "reconciliation"` validation shared by `addJob`/`updateJob`
+ * (plan §1.2/§7/§10 D1): reconciliation only makes sense for an
+ * `upsertDelta` job; `maxDeletePercent` (if given) must be in (0, 100];
+ * `reconcileSchedule` (if given) must be a valid cron expression. Mirrors
+ * `validateUpsertDelta`'s error style.
+ */
+function validateDeleteMode(
+  strategy: JobStrategy,
+  deleteMode: DeleteMode | undefined,
+  maxDeletePercent: number | undefined,
+  reconcileSchedule: string | undefined,
+): { ok: true } | { ok: false; error: string } {
+  if (deleteMode === undefined || deleteMode === "none") return { ok: true };
+  if (strategy !== "upsertDelta") return { ok: false, error: `deleteMode "reconciliation" requires strategy "upsertDelta"` };
+  if (maxDeletePercent !== undefined && !(maxDeletePercent > 0 && maxDeletePercent <= 100)) {
+    return { ok: false, error: `maxDeletePercent must be greater than 0 and at most 100` };
+  }
+  if (reconcileSchedule !== undefined) {
+    try {
+      validateCronExpression(reconcileSchedule);
+    } catch (err) {
+      if (err instanceof InvalidCronScheduleError) return { ok: false, error: err.message };
+      throw err;
+    }
+  }
+  return { ok: true };
+}
 
 /** Opens a connection pool for `connection`, runs `fn`, and always closes it — the watermark-column check (needs a live connection, unlike the catalog-only `readSourceTable` below) is the one caller of this so far. */
 async function withConnectedPool<T>(connection: ConnectionEntry, dir: string, fn: (pool: Awaited<ReturnType<typeof connect>>) => Promise<T>): Promise<T> {
@@ -166,6 +198,12 @@ export interface AddJobInput {
   overlapSeconds?: number;
   /** `strategy: "upsertDelta"` only — required when `filter` uses a relative-date token. */
   replaceSchedule?: string;
+  /** `strategy: "upsertDelta"` only — default "none" (§10 slice D1). */
+  deleteMode?: DeleteMode;
+  /** `deleteMode: "reconciliation"` only — default 20 when unset. */
+  maxDeletePercent?: number;
+  /** `deleteMode: "reconciliation"` only — reserved, not yet scheduler-enforced (see config/types.ts). */
+  reconcileSchedule?: string;
 }
 
 /**
@@ -231,6 +269,9 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     watermarkReport = check.report;
   }
 
+  const deleteModeCheck = validateDeleteMode(strategy, input.deleteMode, input.maxDeletePercent, input.reconcileSchedule);
+  if (!deleteModeCheck.ok) return { ok: false, errors: [deleteModeCheck.error] };
+
   const pairs: JobMappingColumn[] = plan.pairs;
   const preview: JobMappingPreview = { pairs, sentAsNull: plan.sentAsNull };
   options.onPlan?.(preview);
@@ -259,6 +300,10 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     watermarkColumn: strategy === "upsertDelta" ? input.watermarkColumn : undefined,
     overlapSeconds: strategy === "upsertDelta" ? input.overlapSeconds : undefined,
     replaceSchedule: strategy === "upsertDelta" ? input.replaceSchedule : undefined,
+    deleteMode: strategy === "upsertDelta" ? input.deleteMode : undefined,
+    maxDeletePercent:
+      strategy === "upsertDelta" && input.deleteMode === "reconciliation" ? input.maxDeletePercent ?? DEFAULT_MAX_DELETE_PERCENT : undefined,
+    reconcileSchedule: strategy === "upsertDelta" && input.deleteMode === "reconciliation" ? input.reconcileSchedule : undefined,
   };
 
   saveConfig(upsertJob(config, job), dir);
@@ -373,8 +418,8 @@ export function listJobs(dir = defaultHomeDir()): SyncJobEntry[] {
   return loadConfig(dir).jobs;
 }
 
-/** `nia-agent job remove <id>`: removes the job and its push key from the secret store. */
-export function removeJob(id: string, dir = defaultHomeDir()): boolean {
+/** `nia-agent job remove <id>`: removes the job, its push key from the secret store, and (if present) its key reconciliation list (§10 slice D1). */
+export async function removeJob(id: string, dir = defaultHomeDir()): Promise<boolean> {
   const config = loadConfig(dir);
   const job = findJob(config, id);
   if (!job) return false;
@@ -382,6 +427,7 @@ export function removeJob(id: string, dir = defaultHomeDir()): boolean {
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
   secrets.delete(job.pushKeyRef);
+  await removeKeyList(dir, id);
 
   saveConfig(removeFromConfig(config, id), dir);
   return true;
@@ -425,6 +471,12 @@ export interface UpdateJobInput {
   overlapSeconds?: number;
   /** Undefined leaves it unchanged; pass "" to clear it. */
   replaceSchedule?: string;
+  /** Undefined leaves it unchanged; pass "none" to clear it. */
+  deleteMode?: DeleteMode;
+  /** Undefined leaves it unchanged (or defaults to 20 if `deleteMode` is being newly set to "reconciliation"). */
+  maxDeletePercent?: number;
+  /** Undefined leaves it unchanged; pass "" to clear it. */
+  reconcileSchedule?: string;
 }
 
 /**
@@ -496,6 +548,11 @@ export async function updateJob(
   const watermarkColumn = input.watermarkColumn ?? (strategy === job.strategy ? job.watermarkColumn : undefined);
   const overlapSeconds = input.overlapSeconds ?? job.overlapSeconds;
   const replaceSchedule = input.replaceSchedule !== undefined ? (input.replaceSchedule === "" ? undefined : input.replaceSchedule) : job.replaceSchedule;
+  const deleteMode = input.deleteMode ?? (strategy === job.strategy ? job.deleteMode : undefined);
+  const maxDeletePercent =
+    input.maxDeletePercent ?? (deleteMode === "reconciliation" ? job.maxDeletePercent ?? DEFAULT_MAX_DELETE_PERCENT : undefined);
+  const reconcileSchedule =
+    input.reconcileSchedule !== undefined ? (input.reconcileSchedule === "" ? undefined : input.reconcileSchedule) : job.reconcileSchedule;
 
   let watermarkReport: WatermarkColumnReport | undefined;
   if (strategy === "upsertDelta") {
@@ -503,6 +560,9 @@ export async function updateJob(
     if (!check.ok) return { ok: false, errors: [check.error] };
     watermarkReport = check.report;
   }
+
+  const deleteModeCheck = validateDeleteMode(strategy, deleteMode, maxDeletePercent, reconcileSchedule);
+  if (!deleteModeCheck.ok) return { ok: false, errors: [deleteModeCheck.error] };
 
   const preview: JobMappingPreview = { pairs: plan.pairs, sentAsNull: plan.sentAsNull };
   options.onPlan?.(preview);
@@ -527,6 +587,9 @@ export async function updateJob(
     watermarkColumn: strategy === "upsertDelta" ? watermarkColumn : undefined,
     overlapSeconds: strategy === "upsertDelta" ? overlapSeconds : undefined,
     replaceSchedule: strategy === "upsertDelta" ? replaceSchedule : undefined,
+    deleteMode: strategy === "upsertDelta" ? deleteMode : undefined,
+    maxDeletePercent: strategy === "upsertDelta" && deleteMode === "reconciliation" ? maxDeletePercent : undefined,
+    reconcileSchedule: strategy === "upsertDelta" && deleteMode === "reconciliation" ? reconcileSchedule : undefined,
   };
 
   saveConfig(upsertJob(config, updated), dir);

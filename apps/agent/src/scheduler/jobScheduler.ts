@@ -38,7 +38,7 @@ export type SchedulerJobOutcome =
     };
 
 /** §10(B2) item 3: these — and only these — pause a job until `job resume`. */
-const PAUSE_KINDS: ReadonlySet<RunSyncFailureKind> = new Set(["config", "schemaDrift", "typeMismatch", "nullKey"]);
+const PAUSE_KINDS: ReadonlySet<RunSyncFailureKind> = new Set(["config", "schemaDrift", "typeMismatch", "nullKey", "massDelete"]);
 /** §10(B2) item 2: these retry with backoff instead of pausing or waiting for the next tick. */
 const RETRY_KINDS: ReadonlySet<RunSyncFailureKind> = new Set(["transient", "diskSpace"]);
 /** 1, 5, 15 minutes. */

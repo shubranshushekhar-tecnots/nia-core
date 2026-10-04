@@ -249,13 +249,16 @@ async function main(argv: string[]): Promise<void> {
         "watermark-column": { type: "string" },
         "overlap-seconds": { type: "string" },
         "replace-schedule": { type: "string" },
+        "delete-mode": { type: "string" },
+        "max-delete-percent": { type: "string" },
+        "reconcile-schedule": { type: "string" },
       },
     });
     const connectionId = values.connection as string | undefined;
     const table = values.table as string | undefined;
     const targetUrl = values["target-url"] as string | undefined;
     if (!connectionId || !table || !targetUrl) {
-      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--yes]");
+      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation] [--max-delete-percent <n>] [--reconcile-schedule <cron>] [--yes]");
       process.exitCode = 1;
       return;
     }
@@ -275,6 +278,19 @@ async function main(argv: string[]): Promise<void> {
     const overlapSeconds = overlapSecondsRaw !== undefined ? Number(overlapSecondsRaw) : undefined;
     if (overlapSecondsRaw !== undefined && (overlapSeconds === undefined || Number.isNaN(overlapSeconds))) {
       console.error(`--overlap-seconds must be a number, got ${JSON.stringify(overlapSecondsRaw)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const deleteMode = parseDeleteMode(values["delete-mode"] as string | undefined);
+    if (deleteMode === undefined && values["delete-mode"] !== undefined) {
+      console.error(`--delete-mode must be "none" or "reconciliation", got ${JSON.stringify(values["delete-mode"])}`);
+      process.exitCode = 1;
+      return;
+    }
+    const maxDeletePercentRaw = values["max-delete-percent"] as string | undefined;
+    const maxDeletePercent = maxDeletePercentRaw !== undefined ? Number(maxDeletePercentRaw) : undefined;
+    if (maxDeletePercentRaw !== undefined && (maxDeletePercent === undefined || Number.isNaN(maxDeletePercent))) {
+      console.error(`--max-delete-percent must be a number, got ${JSON.stringify(maxDeletePercentRaw)}`);
       process.exitCode = 1;
       return;
     }
@@ -311,6 +327,9 @@ async function main(argv: string[]): Promise<void> {
       watermarkColumn: values["watermark-column"] as string | undefined,
       overlapSeconds,
       replaceSchedule: values["replace-schedule"] as string | undefined,
+      deleteMode,
+      maxDeletePercent,
+      reconcileSchedule: values["reconcile-schedule"] as string | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -367,7 +386,7 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const removed = removeJob(id);
+    const removed = await removeJob(id);
     console.log(removed ? `removed job ${id}` : `no job with id ${id}`);
     return;
   }
@@ -417,10 +436,13 @@ async function main(argv: string[]): Promise<void> {
         "watermark-column": { type: "string" },
         "overlap-seconds": { type: "string" },
         "replace-schedule": { type: "string" },
+        "delete-mode": { type: "string" },
+        "max-delete-percent": { type: "string" },
+        "reconcile-schedule": { type: "string" },
       },
     });
     if (!id) {
-      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>]");
+      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation] [--max-delete-percent <n>] [--reconcile-schedule <cron>]");
       process.exitCode = 1;
       return;
     }
@@ -440,6 +462,19 @@ async function main(argv: string[]): Promise<void> {
     const overlapSeconds = overlapSecondsRaw !== undefined ? Number(overlapSecondsRaw) : undefined;
     if (overlapSecondsRaw !== undefined && (overlapSeconds === undefined || Number.isNaN(overlapSeconds))) {
       console.error(`--overlap-seconds must be a number, got ${JSON.stringify(overlapSecondsRaw)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const deleteMode = parseDeleteMode(values["delete-mode"] as string | undefined);
+    if (deleteMode === undefined && values["delete-mode"] !== undefined) {
+      console.error(`--delete-mode must be "none" or "reconciliation", got ${JSON.stringify(values["delete-mode"])}`);
+      process.exitCode = 1;
+      return;
+    }
+    const maxDeletePercentRaw = values["max-delete-percent"] as string | undefined;
+    const maxDeletePercent = maxDeletePercentRaw !== undefined ? Number(maxDeletePercentRaw) : undefined;
+    if (maxDeletePercentRaw !== undefined && (maxDeletePercent === undefined || Number.isNaN(maxDeletePercent))) {
+      console.error(`--max-delete-percent must be a number, got ${JSON.stringify(maxDeletePercentRaw)}`);
       process.exitCode = 1;
       return;
     }
@@ -476,6 +511,9 @@ async function main(argv: string[]): Promise<void> {
       watermarkColumn: values["watermark-column"] as string | undefined,
       overlapSeconds,
       replaceSchedule: values["replace-schedule"] as string | undefined,
+      deleteMode,
+      maxDeletePercent,
+      reconcileSchedule: values["reconcile-schedule"] as string | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -500,10 +538,11 @@ async function main(argv: string[]): Promise<void> {
       options: {
         replace: { type: "boolean" },
         param: { type: "string", multiple: true },
+        "allow-mass-delete": { type: "boolean" },
       },
     });
     if (!id) {
-      console.error("usage: nia-agent job run <id> [--replace] [--param name=value ...]");
+      console.error("usage: nia-agent job run <id> [--replace] [--param name=value ...] [--allow-mass-delete]");
       process.exitCode = 1;
       return;
     }
@@ -519,7 +558,12 @@ async function main(argv: string[]): Promise<void> {
     const controller = new AbortController();
     const uninstall = installGracefulShutdown(controller);
     try {
-      const result = await runJob(id, { replace: values.replace as boolean | undefined, signal: controller.signal, paramOverrides });
+      const result = await runJob(id, {
+        replace: values.replace as boolean | undefined,
+        signal: controller.signal,
+        paramOverrides,
+        allowMassDelete: values["allow-mass-delete"] as boolean | undefined,
+      });
       if (result.ok) {
         console.log(result.summary);
       } else {
@@ -573,6 +617,11 @@ function parseOnNullKey(value: string | undefined): "stop" | "skip" | undefined 
 
 function parseStrategy(value: string | undefined): "replace" | "upsertDelta" | undefined {
   if (value === "replace" || value === "upsertDelta") return value;
+  return undefined;
+}
+
+function parseDeleteMode(value: string | undefined): "none" | "reconciliation" | undefined {
+  if (value === "none" || value === "reconciliation") return value;
   return undefined;
 }
 

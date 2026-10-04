@@ -35,6 +35,8 @@ export interface RunJobOptions {
    * about the job's normal delta progress.
    */
   paramOverrides?: Record<string, string>;
+  /** `job run --allow-mass-delete`: lets one run through key reconciliation's mass-delete guard (§1.2/§10, slice D1). */
+  allowMassDelete?: boolean;
 }
 
 export interface RunJobOutcome {
@@ -214,6 +216,22 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
       delta = { watermarkColumn, overlapSeconds: job.overlapSeconds ?? 300, savedWatermark, forceReplace, isParamOverride, serverClockAtStart, fingerprint };
     }
 
+    // Key reconciliation (§1.2/§10, slice D1): only for an upsertDelta job
+    // opted into it, and never for a `--param` override run (item 3 — "a
+    // `--param` override run never reads or writes the list"). The scan
+    // reads key source columns only, with the job's resolved filter, no
+    // ORDER BY — same reader factory as every other pass.
+    let reconciliation: Parameters<typeof runSync>[0]["reconciliation"];
+    if (isUpsertDelta && job.deleteMode === "reconciliation" && !isParamOverride) {
+      const keyTargets = job.targetSchemaSnapshot.keyColumns;
+      const keySourceColumns = job.mapping.filter((m) => keyTargets.includes(m.target)).map((m) => m.source);
+      reconciliation = {
+        readKeyScanRows: makeSinglePassReader(keySourceColumns, resolvedFilter.filter),
+        maxDeletePercent: job.maxDeletePercent ?? 20,
+        allowMassDelete: options.allowMassDelete ?? false,
+      };
+    }
+
     const readSourceRows = async (onRow: (row: Record<string, unknown>) => void, signal: AbortSignal): Promise<void> => {
       for (const pass of passes) {
         await pass(onRow, signal);
@@ -232,6 +250,7 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
       signal: options.signal,
       readSourceRows,
       delta,
+      reconciliation,
     });
 
     return outcomeFromResult(result, resolvedFilter.resolvedParams);
@@ -250,9 +269,14 @@ function outcomeFromResult(result: RunSyncResult, resolvedParams: Record<string,
       result.watermarkBefore !== undefined || result.watermarkAfter !== undefined
         ? ` — watermark ${result.watermarkBefore ?? "(none)"} -> ${result.watermarkAfter ?? "(none)"}`
         : "";
+    const reconciliationSuffix = result.reconciliation
+      ? ` — key reconciliation: ${result.reconciliation.deletesSent} delete(s) sent${
+          result.reconciliation.duplicateKeyCount > 0 ? ` (WARNING: ${result.reconciliation.duplicateKeyCount} duplicate key(s) seen)` : ""
+        }`
+      : "";
     return {
       ok: true,
-      summary: `${result.mode}: sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms${planometrySuffix}${watermarkSuffix}${paramsSuffix}`,
+      summary: `${result.mode}: sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms${planometrySuffix}${watermarkSuffix}${reconciliationSuffix}${paramsSuffix}`,
       rowsSent: result.rowsSent,
       durationMs: result.durationMs,
     };

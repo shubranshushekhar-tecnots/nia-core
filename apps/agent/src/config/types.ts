@@ -57,6 +57,14 @@ export interface TargetSchemaSnapshot {
 /** §7 "Safety rules": a null/empty-string key value either stops the run (default) or is dropped and counted. */
 export type OnNullKey = "stop" | "skip";
 
+/**
+ * `strategy: "upsertDelta"` only (§1.2, slice D1): "none" (default) never
+ * removes rows; "reconciliation" keeps a saved key list and, on every
+ * delta run, deletes keys that disappeared from the source or left the
+ * job's filter, guarded by `maxDeletePercent`/`--allow-mass-delete`.
+ */
+export type DeleteMode = "none" | "reconciliation";
+
 export interface SyncJobEntry {
   id: string;
   name: string;
@@ -86,6 +94,12 @@ export interface SyncJobEntry {
   overlapSeconds?: number;
   /** A separate cron expression (same format/timezone as `schedule`) for a periodic full `replace`, independent of `schedule`'s delta cadence (§2, §8). Required when the job's filter uses a relative-date parameter. */
   replaceSchedule?: string;
+  /** `strategy: "upsertDelta"` only (§1.2, slice D1): default "none". "reconciliation" requires `strategy === "upsertDelta"`. */
+  deleteMode?: DeleteMode;
+  /** `deleteMode: "reconciliation"` only: mass-delete guard threshold, percent of the saved key list (§7/D1). Default 20, applied where read, not stored as a literal default here. */
+  maxDeletePercent?: number;
+  /** `deleteMode: "reconciliation"` only: reserved for a future independent reconciliation cadence (same cron/timezone format as `schedule`). Not yet scheduler-enforced — every delta run reconciles inline in this slice regardless of this value. */
+  reconcileSchedule?: string;
 }
 
 /**
