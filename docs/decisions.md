@@ -6465,3 +6465,35 @@ Kept unchanged in meaning (only the now-dropped `sourceTimeZone`
 number (both tests), date, the explicit-offset datetime test (renamed
 for clarity, same assertion), the invalid-value rejection, and the
 explicit-offset fractional-precision test.
+
+## Planometry v4 migration slice B2 (commit 33a28dd): tests removed, by name and reason
+
+State moved from per-connection polling to per-job run tracking (§8,
+§10 (B2)); two concepts that only made sense for a per-connection poll
+loop had no per-job equivalent and were dropped outright, taking their
+tests with them. Everything else changed in `state.test.ts` and
+`monitoringHeartbeat.test.ts` this slice is a rename/extension of
+existing coverage onto the new per-job API (test count went up, not
+down) — not recorded here.
+
+- `apps/agent/src/ops/state.test.ts`:
+  - "records catalog fingerprint independently of sync state" (removed)
+    — `recordCatalogFingerprint`/`catalogFingerprint` tracked whether a
+    connection's source catalog had changed since the last push; v4's
+    per-job model detects source/target drift via `job test`'s live
+    schema diff against the job's saved `targetSchemaSnapshot`
+    instead, with no separate fingerprint-tracking state of its own.
+  - "records poll timestamps independently of sync state" (removed) —
+    `recordPoll`/`lastPollAt` tracked when a connection was last polled
+    under the old work-queue poll loop (removed in slice A1); the v4
+    scheduler has no analogous "poll" step to time-stamp, only
+    `lastRunAt`/`nextRunAt` per job.
+- `apps/agent/src/cli/healthcheckCommand.test.ts`:
+  - "is healthy when every connection's last poll is within the stale
+    threshold" (removed) and "is unhealthy when a connection's last
+    poll is older than the stale threshold" (removed) — both exercised
+    `runHealthcheck`'s per-connection `staleAfterMs` check built on
+    `recordPoll`, which no longer exists; `runHealthcheck` is now a
+    pure process-liveness check (`status.startedAt`), with per-job
+    staleness/pause/failure detail reassigned to `agent status`
+    (§10 (B2) item 4) instead of `healthcheck`.
