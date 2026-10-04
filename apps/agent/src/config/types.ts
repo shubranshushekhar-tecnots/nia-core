@@ -98,8 +98,6 @@ export interface SyncJobEntry {
   deleteMode?: DeleteMode;
   /** `deleteMode: "reconciliation"` only: mass-delete guard threshold, percent of the saved key list (§7/D1). Default 20, applied where read, not stored as a literal default here. */
   maxDeletePercent?: number;
-  /** `deleteMode: "reconciliation"` only: reserved for a future independent reconciliation cadence (same cron/timezone format as `schedule`). Not yet scheduler-enforced — every delta run reconciles inline in this slice regardless of this value. */
-  reconcileSchedule?: string;
 }
 
 /**

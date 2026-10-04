@@ -1,8 +1,9 @@
 /**
  * `deleteMode: "reconciliation"` (docs/plans/planometry-v4-migration.md
- * §1.2, slice D1): a saved list of every key the agent has sent (and not
- * yet deleted), kept as wire-formatted key-only rows, so a delta run can
- * compute `saved - currentScan` and push those keys as `mode: "delete"`.
+ * §1.2, slice D1 + its follow-up): a saved list of every key the agent has
+ * sent (and not yet deleted), kept as wire-formatted key-only rows, so a
+ * delta run can compute `saved - currentScan` and push those keys as
+ * `mode: "delete"`.
  *
  * Bucket count: 256. Comparison is done one bucket at a time so at most
  * one bucket's worth of keys is ever held in memory — for 10,000,000
@@ -13,21 +14,24 @@
  * large the table grows beyond that (bucket count is fixed; only the
  * average bucket size grows).
  *
- * This bound is achieved by re-using the existing `ReplaceSpoolWriter`/
- * `readReplaceSpool` pair (sync/replaceSpool.ts) to hold the current
- * scan's key rows on disk, then re-reading that same spooled file once
- * per bucket (256 full re-reads), keeping only that bucket's keys in
- * memory each pass. This trades I/O passes for simplicity and bounded
- * memory, reusing an already-proven mechanism rather than a new
- * per-bucket fan-out writer (which would risk a filesystem blow-up at
- * scale — up to hundreds of thousands of tiny files). At the scale this
- * slice is tested/run at (tens to a few thousand rows), 256 re-reads of a
- * small file cost nothing in practice.
+ * Storage layout: each job has one `jobDir` containing a small
+ * `pointer.json` (`{ current: "<generation name>" }`) plus one or more
+ * `gen-*` generation directories (each self-contained: `meta.json` +
+ * per-bucket files). Committing a new list renames a staging dir into a
+ * brand-new `gen-*` path (never over an existing/non-empty directory —
+ * that rename fails on Windows and some Linux filesystems), then swaps
+ * `pointer.json` with a single write-to-temp-then-rename, then removes
+ * the now-orphaned previous generation. Every bucket file is a sequence
+ * of length-prefixed AES-256-GCM frames, one per key, appended as they're
+ * discovered — `KeyListWriter` never buffers more than one key/frame in
+ * memory, and computed deletes live on disk (the deletes-staging
+ * generation) from the moment each is found, never in an in-memory array.
  *
  * No key value is ever written in plaintext to disk: every bucket file
- * is AES-256-GCM encrypted via spoolCrypto.ts's envelope, and `meta.json`
- * (the only plaintext file) holds only `{ fingerprint, bucketCount,
- * totalKeys }` — never a key value.
+ * is AES-256-GCM encrypted via spoolCrypto.ts's envelope, and `meta.json`/
+ * `pointer.json` (the only plaintext files) hold only `{ fingerprint,
+ * bucketCount, totalKeys }` / `{ current: "<generation name>" }` — never
+ * a key value.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -61,20 +65,71 @@ function keyReconciliationRootDir(dir: string): string {
   return path.join(dir, "key-reconciliation");
 }
 
-function keyListDir(dir: string, jobId: string): string {
+function jobDir(dir: string, jobId: string): string {
   return path.join(keyReconciliationRootDir(dir), encodeJobId(jobId));
 }
 
-function metaFilePath(listDir: string): string {
-  return path.join(listDir, "meta.json");
+function pointerFilePath(jobDirPath: string): string {
+  return path.join(jobDirPath, "pointer.json");
+}
+
+function generationDir(jobDirPath: string, genName: string): string {
+  return path.join(jobDirPath, genName);
+}
+
+function metaFilePath(genDirPath: string): string {
+  return path.join(genDirPath, "meta.json");
 }
 
 function bucketFileName(bucketIndex: number): string {
   return `bucket-${String(bucketIndex).padStart(3, "0")}.ndjson.enc`;
 }
 
-function bucketFilePath(listDir: string, bucketIndex: number): string {
-  return path.join(listDir, bucketFileName(bucketIndex));
+function bucketFilePath(genDirPath: string, bucketIndex: number): string {
+  return path.join(genDirPath, bucketFileName(bucketIndex));
+}
+
+/** `undefined` if no pointer file exists yet, or it's unreadable/malformed. */
+async function readPointer(jobDirPath: string): Promise<string | undefined> {
+  try {
+    const raw = await readFile(pointerFilePath(jobDirPath), "utf8");
+    const parsed = JSON.parse(raw) as { current?: unknown };
+    return typeof parsed.current === "string" ? parsed.current : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The single atomic step that switches readers to a new generation: write to a temp file, then `rename()` over `pointer.json`. */
+async function writePointerAtomic(jobDirPath: string, genName: string): Promise<void> {
+  await mkdir(jobDirPath, { recursive: true, mode: 0o700 });
+  const tmp = path.join(jobDirPath, `.pointer-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+  await fs.promises.writeFile(tmp, JSON.stringify({ current: genName }), { mode: 0o600 });
+  await rename(tmp, pointerFilePath(jobDirPath));
+}
+
+/**
+ * Removes every directory under the job's key-list dir that isn't the
+ * live generation — leftover `.staging-*` dirs from an interrupted prior
+ * run, and orphaned old `gen-*` dirs (e.g. if a process died between
+ * renaming a new generation into place and removing the old one). Safe
+ * to call when the job has no key-list dir at all yet. Call this at the
+ * start of any run that touches reconciliation, before reading or
+ * writing anything else under this job's key-list dir.
+ */
+export async function sweepStaleKeyListGenerations(dir: string, jobId: string): Promise<void> {
+  const jobDirPath = jobDir(dir, jobId);
+  let entries: string[];
+  try {
+    entries = await readdir(jobDirPath);
+  } catch {
+    return;
+  }
+  const current = await readPointer(jobDirPath);
+  for (const entry of entries) {
+    if (entry === "pointer.json" || entry === current) continue;
+    await rm(path.join(jobDirPath, entry), { recursive: true, force: true });
+  }
 }
 
 // --- saved list read/remove ---------------------------------------------
@@ -87,107 +142,145 @@ export interface KeyListMeta {
 }
 
 export async function readSavedKeyListMeta(dir: string, jobId: string): Promise<KeyListMeta | undefined> {
+  const jobDirPath = jobDir(dir, jobId);
+  const current = await readPointer(jobDirPath);
+  if (!current) return undefined;
   try {
-    const raw = await readFile(metaFilePath(keyListDir(dir, jobId)), "utf8");
+    const raw = await readFile(metaFilePath(generationDir(jobDirPath, current)), "utf8");
     return JSON.parse(raw) as KeyListMeta;
   } catch {
     return undefined;
   }
 }
 
-/** Decrypts+parses one bucket's saved keys. Empty Set if the file is absent (bucket had no keys, or the list itself doesn't exist). */
-export async function readSavedBucketKeys(dir: string, jobId: string, bucketIndex: number, masterKey: Buffer): Promise<Set<string>> {
-  const keys = new Set<string>();
+/** Decodes every length-prefixed `[4-byte BE length][AES-GCM envelope]` frame in one bucket file. Empty array if the file is absent. */
+async function readFramesFromFile(filePath: string, masterKey: Buffer): Promise<string[]> {
   let raw: Buffer;
   try {
-    raw = await readFile(bucketFilePath(keyListDir(dir, jobId), bucketIndex));
+    raw = await readFile(filePath);
   } catch {
-    return keys;
+    return [];
   }
-  const plaintext = decryptSpoolBuffer(masterKey, raw).toString("utf8");
-  for (const line of plaintext.split("\n")) {
-    if (line.length === 0) continue;
-    keys.add(line);
+  const keys: string[] = [];
+  let offset = 0;
+  while (offset + 4 <= raw.length) {
+    const len = raw.readUInt32BE(offset);
+    offset += 4;
+    const envelope = raw.subarray(offset, offset + len);
+    offset += len;
+    keys.push(decryptSpoolBuffer(masterKey, envelope).toString("utf8"));
   }
   return keys;
 }
 
-/** `job remove` cleanup — removes the saved key list entirely. Safe to call when nothing was ever saved. */
-export async function removeKeyList(dir: string, jobId: string): Promise<void> {
-  await rm(keyListDir(dir, jobId), { recursive: true, force: true });
+/** Decrypts+parses one bucket's saved keys from the live generation. Empty Set if there's no saved list, or the bucket had no keys. */
+export async function readSavedBucketKeys(dir: string, jobId: string, bucketIndex: number, masterKey: Buffer): Promise<Set<string>> {
+  const jobDirPath = jobDir(dir, jobId);
+  const current = await readPointer(jobDirPath);
+  if (!current) return new Set();
+  const keys = await readFramesFromFile(bucketFilePath(generationDir(jobDirPath, current), bucketIndex), masterKey);
+  return new Set(keys);
 }
 
-// --- bucket-indexed staging writer (shared by "new saved list" and "computed deletes") ---
+/** `job remove` cleanup — removes the saved key list entirely (pointer + every generation). Safe to call when nothing was ever saved. */
+export async function removeKeyList(dir: string, jobId: string): Promise<void> {
+  await rm(jobDir(dir, jobId), { recursive: true, force: true });
+}
 
-class BucketStagingWriter {
+// --- bucket-indexed streaming writer (shared by "new saved list" and "computed deletes") ---
+
+function writeToStream(stream: fs.WriteStream, chunk: Buffer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    stream.write(chunk, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
+function closeStream(stream: fs.WriteStream): Promise<void> {
+  return new Promise((resolve, reject) => {
+    stream.end((err?: Error | null) => (err ? reject(err) : resolve()));
+  });
+}
+
+class KeyListWriter {
   private readonly stagingDir: string;
+  private readonly streams = new Map<number, fs.WriteStream>();
+  private closed = false;
   private meta: KeyListMeta | undefined;
 
   constructor(
-    private readonly rootDir: string,
+    private readonly jobDirPath: string,
     private readonly masterKey: Buffer,
     label: string,
   ) {
-    this.stagingDir = path.join(rootDir, `.staging-${label}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    this.stagingDir = path.join(jobDirPath, `.staging-${label}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   }
 
   async prepare(): Promise<void> {
     await mkdir(this.stagingDir, { recursive: true, mode: 0o700 });
   }
 
-  /** Encrypts+writes one bucket's canonical keys in one shot (a single bucket's content is bounded — see module doc's memory math). Skips writing a file at all for an empty bucket. */
-  async writeBucket(bucketIndex: number, canonicalKeys: Iterable<string>): Promise<void> {
-    const lines: string[] = [];
-    for (const key of canonicalKeys) lines.push(key);
-    if (lines.length === 0) return;
-    const plaintext = Buffer.from(lines.join("\n") + "\n", "utf8");
-    const envelope = encryptSpoolBuffer(this.masterKey, plaintext);
-    await fs.promises.writeFile(bucketFilePath(this.stagingDir, bucketIndex), envelope, { mode: 0o600 });
+  private getStream(bucketIndex: number): fs.WriteStream {
+    let stream = this.streams.get(bucketIndex);
+    if (!stream) {
+      stream = fs.createWriteStream(bucketFilePath(this.stagingDir, bucketIndex), { mode: 0o600 });
+      this.streams.set(bucketIndex, stream);
+    }
+    return stream;
+  }
+
+  /** Encrypts one key and appends it as a length-prefixed frame to its bucket's file — never buffers more than one key/frame in memory. */
+  async appendKey(bucketIndex: number, canonicalKey: string): Promise<void> {
+    const envelope = encryptSpoolBuffer(this.masterKey, Buffer.from(canonicalKey, "utf8"));
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(envelope.length, 0);
+    await writeToStream(this.getStream(bucketIndex), Buffer.concat([header, envelope]));
   }
 
   writeMeta(meta: KeyListMeta): void {
     this.meta = meta;
   }
 
-  /** Streams every bucket file in this (not-yet-committed) staging dir back out as WireRows — used by the deletes-staging writer's `readDeletes()`. */
+  async closeStreams(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    const streams = [...this.streams.values()];
+    this.streams.clear();
+    await Promise.all(streams.map((s) => closeStream(s)));
+  }
+
+  /** Streams this (not-yet-committed) staging dir's frames back out as WireRows. Closes streams first so every appended frame is flushed to disk. */
   async *readRows(): AsyncGenerator<WireRow> {
+    await this.closeStreams();
     yield* readBucketStagingRows(this.stagingDir, this.masterKey);
   }
 
   /**
-   * Atomically swaps this staging dir into place as `liveDir`. Moves any
-   * pre-existing live dir aside first, renames staging into place, then
-   * removes the old sibling only once the swap itself has succeeded — the
-   * live path is never observably missing, and a rename failure rolls the
-   * old dir back before rethrowing.
+   * Commits this staging dir as a brand-new generation and atomically
+   * swaps the job's pointer file to it. Never renames a directory over
+   * an existing/non-empty one (that fails on Windows and some Linux
+   * filesystems): the staging dir is renamed to a fresh, never-before-
+   * used `gen-*` path, `pointer.json` is then swapped with a single
+   * write-to-temp-then-rename, and only afterward is the now-orphaned
+   * previous generation (if any) removed.
    */
-  async commitTo(liveDir: string): Promise<void> {
+  async commitTo(jobDirPath: string): Promise<void> {
+    await this.closeStreams();
     if (this.meta) {
       await fs.promises.writeFile(metaFilePath(this.stagingDir), JSON.stringify(this.meta, null, 2), { mode: 0o600 });
     }
-    const oldAside = `${liveDir}.old-${process.pid}-${Date.now()}`;
-    let hadOld = false;
-    try {
-      await rename(liveDir, oldAside);
-      hadOld = true;
-    } catch {
-      hadOld = false;
-    }
-    try {
-      await rename(this.stagingDir, liveDir);
-    } catch (err) {
-      if (hadOld) {
-        await rename(oldAside, liveDir).catch(() => {});
-      }
-      throw err;
-    }
-    if (hadOld) {
-      await rm(oldAside, { recursive: true, force: true });
+    await mkdir(jobDirPath, { recursive: true, mode: 0o700 });
+    const genName = `gen-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await rename(this.stagingDir, generationDir(jobDirPath, genName));
+    const previousGen = await readPointer(jobDirPath);
+    await writePointerAtomic(jobDirPath, genName);
+    if (previousGen && previousGen !== genName) {
+      await rm(generationDir(jobDirPath, previousGen), { recursive: true, force: true });
     }
   }
 
   /** Discards this staging dir without touching anything already committed. */
   async discard(): Promise<void> {
+    await this.closeStreams();
     await rm(this.stagingDir, { recursive: true, force: true });
   }
 }
@@ -200,19 +293,21 @@ async function* readBucketStagingRows(stagingDir: string, masterKey: Buffer): As
     return;
   }
   for (const name of names.filter((n) => n.startsWith("bucket-") && n.endsWith(".ndjson.enc")).sort()) {
-    const raw = await readFile(path.join(stagingDir, name));
-    const plaintext = decryptSpoolBuffer(masterKey, raw).toString("utf8");
-    for (const line of plaintext.split("\n")) {
-      if (line.length === 0) continue;
-      yield JSON.parse(line) as WireRow;
-    }
+    const keys = await readFramesFromFile(path.join(stagingDir, name), masterKey);
+    for (const key of keys) yield JSON.parse(key) as WireRow;
   }
 }
 
 // --- replace-mode: rebuild the saved list directly from a just-written replace spool ---
 
-/** For a replace-mode run: no scan, no deletes (the whole table was just replaced, nothing stale to remove) — the new saved list is simply every key in the rows just sent. */
-export async function buildKeyListFromReplace(
+/**
+ * For a replace-mode run: no scan, no deletes (the whole table was just
+ * replaced, nothing stale to remove) — the new saved list is simply every
+ * key in the rows just sent. Does NOT commit — returns the built list's
+ * stats plus `commit`/`discard` closures so the caller can defer
+ * committing until after everything else in the run has succeeded.
+ */
+export async function buildReplaceKeyList(
   dir: string,
   jobId: string,
   masterKey: Buffer,
@@ -221,10 +316,9 @@ export async function buildKeyListFromReplace(
   runId: string,
   keyTargets: string[],
   bucketCount: number = KEY_BUCKET_COUNT,
-): Promise<{ totalKeys: number; duplicateKeyCount: number }> {
-  const root = keyReconciliationRootDir(dir);
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const writer = new BucketStagingWriter(root, masterKey, "replace");
+): Promise<{ totalKeys: number; duplicateKeyCount: number; commit: () => Promise<void>; discard: () => Promise<void> }> {
+  const jobDirPath = jobDir(dir, jobId);
+  const writer = new KeyListWriter(jobDirPath, masterKey, "replace");
   await writer.prepare();
 
   let totalKeys = 0;
@@ -242,12 +336,16 @@ export async function buildKeyListFromReplace(
       }
     }
     totalKeys += bucketKeys.size;
-    await writer.writeBucket(bucket, bucketKeys);
+    for (const key of bucketKeys) await writer.appendKey(bucket, key);
   }
 
   writer.writeMeta({ fingerprint, bucketCount, totalKeys });
-  await writer.commitTo(keyListDir(dir, jobId));
-  return { totalKeys, duplicateKeyCount };
+  return {
+    totalKeys,
+    duplicateKeyCount,
+    commit: () => writer.commitTo(jobDirPath),
+    discard: () => writer.discard(),
+  };
 }
 
 function pickKeyRow(row: WireRow, keyTargets: string[]): WireRow {
@@ -324,15 +422,14 @@ export interface ReconciliationOutcome {
 
 export async function computeReconciliation(input: ComputeReconciliationInput): Promise<ReconciliationOutcome> {
   const bucketCount = input.bucketCount ?? KEY_BUCKET_COUNT;
-  const root = keyReconciliationRootDir(input.dir);
-  await mkdir(root, { recursive: true, mode: 0o700 });
+  const jobDirPath = jobDir(input.dir, input.jobId);
 
   const savedMeta = await readSavedKeyListMeta(input.dir, input.jobId);
   const fingerprintMatches = savedMeta !== undefined && savedMeta.fingerprint === input.fingerprint;
   const savedTotal = fingerprintMatches ? savedMeta!.totalKeys : 0;
 
-  const newListWriter = new BucketStagingWriter(root, input.masterKey, "newlist");
-  const deletesWriter = new BucketStagingWriter(root, input.masterKey, "deletes");
+  const newListWriter = new KeyListWriter(jobDirPath, input.masterKey, "newlist");
+  const deletesWriter = new KeyListWriter(jobDirPath, input.masterKey, "deletes");
   await newListWriter.prepare();
   await deletesWriter.prepare();
 
@@ -354,6 +451,9 @@ export async function computeReconciliation(input: ComputeReconciliationInput): 
 
   for (let bucket = 0; bucket < bucketCount; bucket += 1) {
     const currentKeys = new Set<string>();
+    // Duplicate counting covers only repeats within the scan itself — a key
+    // that also appears in this run's upserts (merged in below) is never
+    // counted as a duplicate.
     for await (const row of readReplaceSpool(input.scanSpoolDir, input.scanRunId, input.masterKey)) {
       const canonical = canonicalKeyString(row);
       if (bucketIndexFor(canonical, bucketCount) !== bucket) continue;
@@ -369,15 +469,18 @@ export async function computeReconciliation(input: ComputeReconciliationInput): 
     currentTotal += currentKeys.size;
 
     const savedKeys = fingerprintMatches ? await readSavedBucketKeys(input.dir, input.jobId, bucket, input.masterKey) : new Set<string>();
-    const deletesInBucket: string[] = [];
     for (const saved of savedKeys) {
-      if (!currentKeys.has(saved)) deletesInBucket.push(saved);
+      if (!currentKeys.has(saved)) {
+        deleteCount += 1;
+        await deletesWriter.appendKey(bucket, saved);
+      }
     }
-    deleteCount += deletesInBucket.length;
 
-    await newListWriter.writeBucket(bucket, currentKeys);
-    await deletesWriter.writeBucket(bucket, deletesInBucket);
+    for (const key of currentKeys) {
+      await newListWriter.appendKey(bucket, key);
+    }
   }
+  await deletesWriter.closeStreams();
 
   const stats: ReconciliationStats = { currentTotal, savedTotal, deleteCount, duplicateKeyCount };
   const guard = evaluateMassDeleteGuard(stats, input.maxDeletePercent, input.allowMassDelete);
@@ -389,7 +492,7 @@ export async function computeReconciliation(input: ComputeReconciliationInput): 
     stats,
     readDeletes: () => deletesWriter.readRows(),
     commit: async () => {
-      await newListWriter.commitTo(keyListDir(input.dir, input.jobId));
+      await newListWriter.commitTo(jobDirPath);
       await deletesWriter.discard();
     },
     discard: async () => {
@@ -398,4 +501,3 @@ export async function computeReconciliation(input: ComputeReconciliationInput): 
     },
   };
 }
-

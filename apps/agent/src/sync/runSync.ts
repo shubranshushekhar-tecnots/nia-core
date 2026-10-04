@@ -10,7 +10,14 @@ import type { PushMode, TableSchema } from "../planometry/types.js";
 import type { KeyedSemaphore } from "./concurrency.js";
 import { deletePush } from "./deletePush.js";
 import { assertDiskSpace, InsufficientDiskSpaceError } from "./diskSpace.js";
-import { buildKeyListFromReplace, canonicalKeyString, computeReconciliation } from "./keyReconciliation.js";
+import {
+  buildReplaceKeyList,
+  canonicalKeyString,
+  computeReconciliation,
+  readSavedKeyListMeta,
+  sweepStaleKeyListGenerations,
+  type ReconciliationOutcome,
+} from "./keyReconciliation.js";
 import { acquireReplaceLock, ReplaceLockTakenError } from "./replaceLock.js";
 import { replaceLoad } from "./replaceLoad.js";
 import { readReplaceSpool, removeReplaceSpool, ReplaceSpoolWriter } from "./replaceSpool.js";
@@ -80,17 +87,22 @@ export interface RunSyncOptions {
     fingerprint: string;
   };
   /**
-   * `job.deleteMode === "reconciliation"` only (§1.2/§10, slice D1). The
-   * caller (cli/runJobCommand.ts) decides when to pass this — only for an
-   * `upsertDelta` job that isn't a `--param` override run (item 3: "a
-   * `--param` override run never reads or writes the list"). Reuses
-   * `delta.fingerprint` rather than carrying its own. On a replace-mode
-   * run (first run / forced replace / no saved watermark) the saved list
-   * is rebuilt directly from the rows just replaced, no scan or deletes;
-   * on an ongoing delta ("upsert") run, a second extraction pass scans
-   * the current keys (key columns only, same resolved filter) and the
-   * saved list minus that scan is pushed as deletes, guarded by
-   * `maxDeletePercent`/`allowMassDelete` (item 4).
+   * `job.deleteMode === "reconciliation"` only (§1.2/§10, slice D1 + its
+   * follow-up). The caller (cli/runJobCommand.ts) decides when to pass
+   * this — only for an `upsertDelta` job that isn't a `--param` override
+   * run (item 3: "a `--param` override run never reads or writes the
+   * list"). Reuses `delta.fingerprint` rather than carrying its own.
+   *
+   * With no valid saved list (none ever written, or a fingerprint
+   * mismatch), the run is forced to "replace", exactly like a missing
+   * watermark — the saved list is then rebuilt directly from the rows
+   * just replaced, no scan or deletes. On an ongoing delta ("upsert")
+   * run, the current keys are scanned and the delete set + mass-delete
+   * guard are both computed BEFORE any push request is sent; only once
+   * the guard passes do upserts get pushed, then deletes. The saved
+   * watermark and the new saved key list are committed together at the
+   * very end, only after every push involved has succeeded — on a guard
+   * trip or any failure, neither changes.
    */
   reconciliation?: {
     readKeyScanRows: (onRow: (row: Record<string, unknown>) => void, signal: AbortSignal) => Promise<void>;
@@ -254,12 +266,29 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
 
   // Three-way push-mode resolution (§6): a param-override one-off run never
   // replace-wipes the table (its filter is a deliberately narrow override,
-  // not the job's real one); a forced replace or a first run (no saved
-  // watermark yet) for an upsertDelta job still does a full replace, driven
-  // through the unchanged replaceLoad() path below; everything else is an
-  // ongoing delta run, pushed via "upsert".
-  const pushMode: PushMode =
-    !delta || delta.isParamOverride ? (delta ? "upsert" : "replace") : delta.forceReplace || delta.savedWatermark === undefined ? "replace" : "upsert";
+  // not the job's real one); a forced replace, a first run (no saved
+  // watermark yet), or — with key reconciliation active — no valid saved
+  // key list (none ever written, or a fingerprint mismatch) for an
+  // upsertDelta job still does a full replace, driven through the
+  // unchanged replaceLoad() path below; everything else is an ongoing
+  // delta run, pushed via "upsert". Reconciliation's stale-generation
+  // sweep runs here too, unconditionally whenever reconciliation is
+  // active, before anything else touches this job's key-list dir.
+  let pushMode: PushMode;
+  if (!delta || delta.isParamOverride) {
+    pushMode = delta ? "upsert" : "replace";
+  } else {
+    let reconciliationListValid = true;
+    if (options.reconciliation) {
+      await sweepStaleKeyListGenerations(options.dir, job.id);
+      const savedMeta = await readSavedKeyListMeta(options.dir, job.id);
+      reconciliationListValid = savedMeta !== undefined && savedMeta.fingerprint === delta.fingerprint;
+    }
+    pushMode =
+      delta.forceReplace || delta.savedWatermark === undefined || (options.reconciliation !== undefined && !reconciliationListValid)
+        ? "replace"
+        : "upsert";
+  }
   // Never persist a param-override run's watermark (§2's ops/state.ts note) — every other delta run does, including a forced-replace/first-run one (isReplace: true in the formula).
   const persistWatermark = delta !== undefined && !delta.isParamOverride;
 
@@ -406,51 +435,20 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
       };
     }
 
-    // Step (e): push — "replace" (unchanged) or "upsert" (slice C1).
-    let result: { outcome: "completed"; parts: number; rowCount?: number; version?: number } | { outcome: "failed"; error: string; consoleMessage?: string; kind: RunSyncFailureKind };
-    if (pushMode === "upsert") {
-      if (totalRows === 0) {
-        result = { outcome: "completed", parts: 0 };
-      } else {
-        result = await upsertPush({
-          tableUrl: job.targetUrl,
-          pushKey: options.pushKey,
-          rows: readReplaceSpool(spoolDir, runId, options.masterKey),
-          schemaAtStart,
-          logger: options.logger,
-          signal: options.signal,
-        }).then((r) => (r.outcome === "completed" ? { outcome: "completed" as const, parts: r.parts } : r));
-      }
-    } else {
-      result = await replaceLoad({
-        tableUrl: job.targetUrl,
-        pushKey: options.pushKey,
-        openRows: () => readReplaceSpool(spoolDir, runId, options.masterKey),
-        totalRows,
-        schemaAtStart,
-        logger: options.logger,
-        now: options.now,
-        lastPartTimeoutMs: options.lastPartTimeoutMs,
-        signal: options.signal,
-      });
-    }
-
-    // Key reconciliation (§1.2/§10, slice D1): inside the table lock, after
-    // the push above succeeds and before the main spool is removed below
-    // (the replace-mode branch reads the just-written spool). The caller
-    // only sets `options.reconciliation` for an upsertDelta job that isn't
-    // a `--param` override run (item 3).
-    let reconciliationInfo: { deletesSent: number; duplicateKeyCount: number } | undefined;
+    // Step (d.5): key reconciliation scan + guard (§1.2/§10, slice D1 +
+    // its follow-up) — runs entirely BEFORE any push request for this run
+    // is sent. The caller only sets `options.reconciliation` for an
+    // upsertDelta job that isn't a `--param` override run (item 3); a
+    // replace-mode run (forced replace, first run, or an invalid saved
+    // list — resolved into `pushMode` above) never scans or computes
+    // deletes, so this block is skipped entirely for it. If the guard
+    // trips (or the scan itself fails), the run fails here, before
+    // `upsertPush`/`replaceLoad` is ever called — no request of any kind
+    // is sent.
+    let reconciliationOutcome: ReconciliationOutcome | undefined;
     let reconciliationFailure: RunSyncResult | undefined;
-    if (result.outcome === "completed" && options.reconciliation && delta) {
-      if (pushMode === "replace") {
-        // No scan, no deletes — the whole table was just replaced, so the
-        // new saved list is simply every key just sent.
-        const built = await buildKeyListFromReplace(options.dir, job.id, options.masterKey, delta.fingerprint, spoolDir, runId, keyTargets);
-        if (built.duplicateKeyCount > 0) {
-          options.logger.warn("key_reconciliation_duplicate_keys", { duplicateKeyCount: built.duplicateKeyCount });
-        }
-      } else if (!schemaAtStart.supportedModes.includes("delete")) {
+    if (options.reconciliation && delta && pushMode === "upsert") {
+      if (!schemaAtStart.supportedModes.includes("delete")) {
         reconciliationFailure = {
           outcome: "failed",
           error: "delete is not a supported mode for this table; key reconciliation cannot remove rows",
@@ -510,25 +508,82 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
             await outcome.discard();
             reconciliationFailure = { outcome: "failed", error: outcome.guard.reason ?? "mass-delete guard tripped", kind: "massDelete" };
           } else {
-            const deleteResult = await deletePush({
-              tableUrl: job.targetUrl,
-              pushKey: options.pushKey,
-              rows: outcome.readDeletes(),
-              schemaAtStart,
-              logger: options.logger,
-              signal: options.signal,
-            });
-            if (deleteResult.outcome === "failed") {
-              await outcome.discard();
-              reconciliationFailure = { outcome: "failed", error: deleteResult.error, consoleMessage: deleteResult.consoleMessage, kind: deleteResult.kind };
-            } else {
-              await outcome.commit();
-              if (outcome.stats.duplicateKeyCount > 0) {
-                options.logger.warn("key_reconciliation_duplicate_keys", { duplicateKeyCount: outcome.stats.duplicateKeyCount });
-              }
-              reconciliationInfo = { deletesSent: deleteResult.rowsSent, duplicateKeyCount: outcome.stats.duplicateKeyCount };
-            }
+            reconciliationOutcome = outcome;
           }
+        }
+      }
+    }
+
+    if (reconciliationFailure) {
+      await removeReplaceSpool(spoolDir, runId);
+      if (reconciliationFailure.outcome === "failed") {
+        options.logger.error("key_reconciliation_failed", { kind: reconciliationFailure.kind, error: reconciliationFailure.error });
+      }
+      return reconciliationFailure;
+    }
+
+    // Step (e): push — "replace" (unchanged) or "upsert" (slice C1).
+    let result: { outcome: "completed"; parts: number; rowCount?: number; version?: number } | { outcome: "failed"; error: string; consoleMessage?: string; kind: RunSyncFailureKind };
+    if (pushMode === "upsert") {
+      if (totalRows === 0) {
+        result = { outcome: "completed", parts: 0 };
+      } else {
+        result = await upsertPush({
+          tableUrl: job.targetUrl,
+          pushKey: options.pushKey,
+          rows: readReplaceSpool(spoolDir, runId, options.masterKey),
+          schemaAtStart,
+          logger: options.logger,
+          signal: options.signal,
+        }).then((r) => (r.outcome === "completed" ? { outcome: "completed" as const, parts: r.parts } : r));
+      }
+    } else {
+      result = await replaceLoad({
+        tableUrl: job.targetUrl,
+        pushKey: options.pushKey,
+        openRows: () => readReplaceSpool(spoolDir, runId, options.masterKey),
+        totalRows,
+        schemaAtStart,
+        logger: options.logger,
+        now: options.now,
+        lastPartTimeoutMs: options.lastPartTimeoutMs,
+        signal: options.signal,
+      });
+    }
+
+    // Step (e.5): push this run's computed deletes (upsert-mode
+    // reconciliation), or rebuild the saved list directly from the rows
+    // just replaced (replace-mode reconciliation, no scan/no deletes).
+    // Neither the watermark nor the key list is committed yet in either
+    // branch — that happens together, only at the very end (step g),
+    // once everything here has succeeded.
+    let reconciliationInfo: { deletesSent: number; duplicateKeyCount: number } | undefined;
+    let commitKeyList: (() => Promise<void>) | undefined;
+    if (result.outcome === "completed" && options.reconciliation && delta) {
+      if (pushMode === "replace") {
+        const built = await buildReplaceKeyList(options.dir, job.id, options.masterKey, delta.fingerprint, spoolDir, runId, keyTargets);
+        if (built.duplicateKeyCount > 0) {
+          options.logger.warn("key_reconciliation_duplicate_keys", { duplicateKeyCount: built.duplicateKeyCount });
+        }
+        commitKeyList = built.commit;
+      } else if (reconciliationOutcome) {
+        const deleteResult = await deletePush({
+          tableUrl: job.targetUrl,
+          pushKey: options.pushKey,
+          rows: reconciliationOutcome.readDeletes(),
+          schemaAtStart,
+          logger: options.logger,
+          signal: options.signal,
+        });
+        if (deleteResult.outcome === "failed") {
+          await reconciliationOutcome.discard();
+          reconciliationFailure = { outcome: "failed", error: deleteResult.error, consoleMessage: deleteResult.consoleMessage, kind: deleteResult.kind };
+        } else {
+          if (reconciliationOutcome.stats.duplicateKeyCount > 0) {
+            options.logger.warn("key_reconciliation_duplicate_keys", { duplicateKeyCount: reconciliationOutcome.stats.duplicateKeyCount });
+          }
+          reconciliationInfo = { deletesSent: deleteResult.rowsSent, duplicateKeyCount: reconciliationOutcome.stats.duplicateKeyCount };
+          commitKeyList = reconciliationOutcome.commit;
         }
       }
     }
@@ -547,11 +602,14 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
       return reconciliationFailure;
     }
 
-    // Watermark persistence: only after a successful push, and only for a
-    // delta run that isn't a param override. computeNextWatermark()
+    // Step (g): watermark persistence and the key-list commit happen
+    // together, right here at the very end — only reached once the push
+    // (and, when reconciliation is active, the delete push / replace-mode
+    // list rebuild) have all fully succeeded. computeNextWatermark()
     // returning undefined means "leave the saved watermark unchanged" —
     // setLastWatermark must then be skipped entirely, never called with
-    // `undefined` (which would actively clear it instead).
+    // `undefined` (which would actively clear it instead) — but the key
+    // list still commits regardless, since the push itself succeeded.
     let watermarkAfter: string | undefined = delta?.savedWatermark;
     if (persistWatermark && delta) {
       const next = computeNextWatermark({
@@ -565,6 +623,9 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
         setLastWatermark(job.id, next, delta.fingerprint, options.dir);
         watermarkAfter = next;
       }
+    }
+    if (commitKeyList) {
+      await commitKeyList();
     }
 
     const durationMs = Date.now() - startedAt;

@@ -251,14 +251,13 @@ async function main(argv: string[]): Promise<void> {
         "replace-schedule": { type: "string" },
         "delete-mode": { type: "string" },
         "max-delete-percent": { type: "string" },
-        "reconcile-schedule": { type: "string" },
       },
     });
     const connectionId = values.connection as string | undefined;
     const table = values.table as string | undefined;
     const targetUrl = values["target-url"] as string | undefined;
     if (!connectionId || !table || !targetUrl) {
-      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation] [--max-delete-percent <n>] [--reconcile-schedule <cron>] [--yes]");
+      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation] [--max-delete-percent <n>] [--yes]");
       process.exitCode = 1;
       return;
     }
@@ -329,7 +328,6 @@ async function main(argv: string[]): Promise<void> {
       replaceSchedule: values["replace-schedule"] as string | undefined,
       deleteMode,
       maxDeletePercent,
-      reconcileSchedule: values["reconcile-schedule"] as string | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -438,11 +436,10 @@ async function main(argv: string[]): Promise<void> {
         "replace-schedule": { type: "string" },
         "delete-mode": { type: "string" },
         "max-delete-percent": { type: "string" },
-        "reconcile-schedule": { type: "string" },
       },
     });
     if (!id) {
-      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation] [--max-delete-percent <n>] [--reconcile-schedule <cron>]");
+      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation] [--max-delete-percent <n>]");
       process.exitCode = 1;
       return;
     }
@@ -513,7 +510,6 @@ async function main(argv: string[]): Promise<void> {
       replaceSchedule: values["replace-schedule"] as string | undefined,
       deleteMode,
       maxDeletePercent,
-      reconcileSchedule: values["reconcile-schedule"] as string | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");

@@ -27,28 +27,18 @@ const DEFAULT_MAX_DELETE_PERCENT = 20;
 /**
  * `deleteMode: "reconciliation"` validation shared by `addJob`/`updateJob`
  * (plan §1.2/§7/§10 D1): reconciliation only makes sense for an
- * `upsertDelta` job; `maxDeletePercent` (if given) must be in (0, 100];
- * `reconcileSchedule` (if given) must be a valid cron expression. Mirrors
- * `validateUpsertDelta`'s error style.
+ * `upsertDelta` job; `maxDeletePercent` (if given) must be in (0, 100].
+ * Mirrors `validateUpsertDelta`'s error style.
  */
 function validateDeleteMode(
   strategy: JobStrategy,
   deleteMode: DeleteMode | undefined,
   maxDeletePercent: number | undefined,
-  reconcileSchedule: string | undefined,
 ): { ok: true } | { ok: false; error: string } {
   if (deleteMode === undefined || deleteMode === "none") return { ok: true };
   if (strategy !== "upsertDelta") return { ok: false, error: `deleteMode "reconciliation" requires strategy "upsertDelta"` };
   if (maxDeletePercent !== undefined && !(maxDeletePercent > 0 && maxDeletePercent <= 100)) {
     return { ok: false, error: `maxDeletePercent must be greater than 0 and at most 100` };
-  }
-  if (reconcileSchedule !== undefined) {
-    try {
-      validateCronExpression(reconcileSchedule);
-    } catch (err) {
-      if (err instanceof InvalidCronScheduleError) return { ok: false, error: err.message };
-      throw err;
-    }
   }
   return { ok: true };
 }
@@ -202,8 +192,6 @@ export interface AddJobInput {
   deleteMode?: DeleteMode;
   /** `deleteMode: "reconciliation"` only — default 20 when unset. */
   maxDeletePercent?: number;
-  /** `deleteMode: "reconciliation"` only — reserved, not yet scheduler-enforced (see config/types.ts). */
-  reconcileSchedule?: string;
 }
 
 /**
@@ -269,7 +257,7 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     watermarkReport = check.report;
   }
 
-  const deleteModeCheck = validateDeleteMode(strategy, input.deleteMode, input.maxDeletePercent, input.reconcileSchedule);
+  const deleteModeCheck = validateDeleteMode(strategy, input.deleteMode, input.maxDeletePercent);
   if (!deleteModeCheck.ok) return { ok: false, errors: [deleteModeCheck.error] };
 
   const pairs: JobMappingColumn[] = plan.pairs;
@@ -303,7 +291,6 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     deleteMode: strategy === "upsertDelta" ? input.deleteMode : undefined,
     maxDeletePercent:
       strategy === "upsertDelta" && input.deleteMode === "reconciliation" ? input.maxDeletePercent ?? DEFAULT_MAX_DELETE_PERCENT : undefined,
-    reconcileSchedule: strategy === "upsertDelta" && input.deleteMode === "reconciliation" ? input.reconcileSchedule : undefined,
   };
 
   saveConfig(upsertJob(config, job), dir);
@@ -475,8 +462,6 @@ export interface UpdateJobInput {
   deleteMode?: DeleteMode;
   /** Undefined leaves it unchanged (or defaults to 20 if `deleteMode` is being newly set to "reconciliation"). */
   maxDeletePercent?: number;
-  /** Undefined leaves it unchanged; pass "" to clear it. */
-  reconcileSchedule?: string;
 }
 
 /**
@@ -551,8 +536,6 @@ export async function updateJob(
   const deleteMode = input.deleteMode ?? (strategy === job.strategy ? job.deleteMode : undefined);
   const maxDeletePercent =
     input.maxDeletePercent ?? (deleteMode === "reconciliation" ? job.maxDeletePercent ?? DEFAULT_MAX_DELETE_PERCENT : undefined);
-  const reconcileSchedule =
-    input.reconcileSchedule !== undefined ? (input.reconcileSchedule === "" ? undefined : input.reconcileSchedule) : job.reconcileSchedule;
 
   let watermarkReport: WatermarkColumnReport | undefined;
   if (strategy === "upsertDelta") {
@@ -561,7 +544,7 @@ export async function updateJob(
     watermarkReport = check.report;
   }
 
-  const deleteModeCheck = validateDeleteMode(strategy, deleteMode, maxDeletePercent, reconcileSchedule);
+  const deleteModeCheck = validateDeleteMode(strategy, deleteMode, maxDeletePercent);
   if (!deleteModeCheck.ok) return { ok: false, errors: [deleteModeCheck.error] };
 
   const preview: JobMappingPreview = { pairs: plan.pairs, sentAsNull: plan.sentAsNull };
@@ -589,7 +572,6 @@ export async function updateJob(
     replaceSchedule: strategy === "upsertDelta" ? replaceSchedule : undefined,
     deleteMode: strategy === "upsertDelta" ? deleteMode : undefined,
     maxDeletePercent: strategy === "upsertDelta" && deleteMode === "reconciliation" ? maxDeletePercent : undefined,
-    reconcileSchedule: strategy === "upsertDelta" && deleteMode === "reconciliation" ? reconcileSchedule : undefined,
   };
 
   saveConfig(upsertJob(config, updated), dir);

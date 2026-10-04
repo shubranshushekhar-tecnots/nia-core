@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SyncJobEntry } from "../config/types.js";
 import { Logger } from "../ops/logger.js";
-import { isJobPaused } from "../ops/state.js";
+import { getLastWatermark, isJobPaused } from "../ops/state.js";
 import { FakePlanometryServer, type FakeTableHandle } from "../testing/fakePlanometryServer.js";
 import { KeyedSemaphore } from "./concurrency.js";
 import { bucketIndexFor, canonicalKeyString, readSavedBucketKeys, readSavedKeyListMeta } from "./keyReconciliation.js";
@@ -183,7 +183,7 @@ describe("key reconciliation (sync/keyReconciliation.ts, sync/deletePush.ts, syn
     expect(savedKeys1.has(canonical1)).toBe(false);
   });
 
-  it("Refused: deletes above maxDeletePercent, and a zero-key current scan, both send no delete and pause the job", async () => {
+  it("Refused: deletes above maxDeletePercent, and a zero-key current scan, both send no request of any kind and leave the saved watermark and key list unchanged", async () => {
     // Sub-case A: computed deletes (3 of 4 saved keys = 75%) exceed the 50% limit.
     const handleA = server.createTable({ columns: [...baseColumns, { name: "modified_at", type: "DateTime", isKey: false }] });
     const jobA = baseJob(handleA, { id: "job-a" });
@@ -211,6 +211,10 @@ describe("key reconciliation (sync/keyReconciliation.ts, sync/deletePush.ts, syn
     );
     expect(seedA.outcome).toBe("completed");
 
+    const versionBeforeA = server.getVersion(handleA.tableId);
+    const watermarkBeforeA = getLastWatermark(jobA.id, dir);
+    const metaBeforeA = await readSavedKeyListMeta(dir, jobA.id);
+
     const resultA = await runSync(
       baseOptions(jobA, handleA.pushKey, {
         readSourceRows: source([]),
@@ -228,8 +232,13 @@ describe("key reconciliation (sync/keyReconciliation.ts, sync/deletePush.ts, syn
     );
     expect(resultA.outcome).toBe("failed");
     if (resultA.outcome === "failed") expect(resultA.kind).toBe("massDelete");
+    // No request of any kind was sent: the table's push version never moved.
+    expect(server.getVersion(handleA.tableId)).toBe(versionBeforeA);
     expect(server.getRows(handleA.tableId)).toHaveLength(4);
     expect(isJobPaused(jobA.id, dir)).toBe(true);
+    // Neither the saved watermark nor the saved key list changed.
+    expect(getLastWatermark(jobA.id, dir)).toBe(watermarkBeforeA);
+    expect(await readSavedKeyListMeta(dir, jobA.id)).toEqual(metaBeforeA);
 
     // Sub-case B: the current scan sees zero keys at all — refuse regardless of maxDeletePercent.
     const handleB = server.createTable({ columns: [...baseColumns, { name: "modified_at", type: "DateTime", isKey: false }] });
@@ -256,6 +265,10 @@ describe("key reconciliation (sync/keyReconciliation.ts, sync/deletePush.ts, syn
     );
     expect(seedB.outcome).toBe("completed");
 
+    const versionBeforeB = server.getVersion(handleB.tableId);
+    const watermarkBeforeB = getLastWatermark(jobB.id, dir);
+    const metaBeforeB = await readSavedKeyListMeta(dir, jobB.id);
+
     const resultB = await runSync(
       baseOptions(jobB, handleB.pushKey, {
         readSourceRows: source([]),
@@ -273,11 +286,14 @@ describe("key reconciliation (sync/keyReconciliation.ts, sync/deletePush.ts, syn
     );
     expect(resultB.outcome).toBe("failed");
     if (resultB.outcome === "failed") expect(resultB.kind).toBe("massDelete");
+    expect(server.getVersion(handleB.tableId)).toBe(versionBeforeB);
     expect(server.getRows(handleB.tableId)).toHaveLength(2);
     expect(isJobPaused(jobB.id, dir)).toBe(true);
+    expect(getLastWatermark(jobB.id, dir)).toBe(watermarkBeforeB);
+    expect(await readSavedKeyListMeta(dir, jobB.id)).toEqual(metaBeforeB);
   });
 
-  it("Guard: no saved list, and a fingerprint mismatch against a saved list, both compute zero deletes and still succeed", async () => {
+  it("Guard: no saved list, and a fingerprint mismatch against a saved list, both force the run to a replace and send no delete", async () => {
     // Sub-case A: no saved list has ever been written for this job.
     const handleA = server.createTable({ columns: [...baseColumns, { name: "modified_at", type: "DateTime", isKey: false }] });
     const jobA = baseJob(handleA, { id: "job-a" });
@@ -300,7 +316,11 @@ describe("key reconciliation (sync/keyReconciliation.ts, sync/deletePush.ts, syn
     );
     expect(resultA.outcome).toBe("completed");
     if (resultA.outcome !== "completed") return;
-    expect(resultA.reconciliation?.deletesSent).toBe(0);
+    // No saved list ever existed, so a watermark that would otherwise mean
+    // "ongoing delta" is overridden — same treatment as a missing watermark.
+    expect(resultA.mode).toBe("replace");
+    expect(resultA.reconciliation).toBeUndefined();
+    expect(server.getRows(handleA.tableId)).toHaveLength(1);
 
     // Sub-case B: a saved list exists, but under a different job fingerprint (e.g. the filter changed).
     const handleB = server.createTable({ columns: [...baseColumns, { name: "modified_at", type: "DateTime", isKey: false }] });
@@ -333,7 +353,14 @@ describe("key reconciliation (sync/keyReconciliation.ts, sync/deletePush.ts, syn
 
     const resultB = await runSync(
       baseOptions(jobBAfterFilterChange, handleB.pushKey, {
-        readSourceRows: source([]),
+        // The saved list is "absent" (fingerprint mismatch), so this run is
+        // forced to a replace — it must supply the full current source rows,
+        // not an empty delta extraction, or it would hit the separate
+        // "refuse an empty replace" guard instead of exercising this one.
+        readSourceRows: source([
+          { id: 1, qty: 15, modified_at: "2026-01-01T00:07:00.000" },
+          { id: 2, qty: 25, modified_at: "2026-01-01T00:07:00.000" },
+        ]),
         delta: {
           watermarkColumn: "modified_at",
           overlapSeconds: 300,
@@ -348,8 +375,8 @@ describe("key reconciliation (sync/keyReconciliation.ts, sync/deletePush.ts, syn
     );
     expect(resultB.outcome).toBe("completed");
     if (resultB.outcome !== "completed") return;
-    expect(resultB.reconciliation?.deletesSent).toBe(0);
-    // Neither saved key (1 nor 2) was removed — the mismatched fingerprint made the old list "absent".
+    expect(resultB.mode).toBe("replace");
+    expect(resultB.reconciliation).toBeUndefined();
     expect(server.getRows(handleB.tableId)).toHaveLength(2);
   });
 
