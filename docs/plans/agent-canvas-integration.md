@@ -238,300 +238,445 @@ outbound, no inbound listener anywhere in `src/` outside test fixtures.
 
 ## Part B — Design
 
-### B.1 Data model
+### B.1 Permissions
 
-Reuse, don't duplicate: the "Local database (via agent)" connection itself is just
-a new row in the existing `connections` table (`connector_id = 'sqlserver_agent'`,
-`config = {agentId, agentConnectionId}`, `vault_secret_ref` unused/nullable for
-this connector kind — no secret is ever held platform-side). No new table needed
-for the connection itself, and the existing connection-registration pattern
-(one manifest + one registry entry) is reused as-is.
+Agents are scoped exactly like connections today: `org_id` (a personal workspace
+is itself an org row, per the existing individual-workspace-as-org design —
+`0005_individual_workspace.sql`), not a separate "agents are org-only" rule. Any
+**member** can pair an agent, create `sqlserver_agent`/`planometry_table`/
+`https_endpoint` connections, and publish/run-now/pause/resume a route-2 setup —
+these are treated as connection-and-workflow actions, which members already have
+today. **Viewers** are read-only on all of it (Agents page, setups, run history),
+matching the existing `viewer` role restrictions (`0057_viewer_role_restrictions.sql`).
+**Revoking or removing an agent** (and, since it's equally sensitive, rotating its
+key) is restricted to admins, owners, and the specific member who paired it —
+a new helper `private.can_manage_agent(agent_id)` (admin/owner OR
+`platform_agents.created_by_user_id = current_user`), mirrored in
+`packages/schemas/src/can.ts`. Local connections (`sqlserver_agent`,
+`planometry_table`, `https_endpoint`) and the workflows built on them keep the
+*existing* project-membership and workflow-access rules unchanged — nothing about
+being agent-backed changes who can see or edit a given workflow.
 
-Five new tables, three migrations:
+### B.2 Data model — six new tables, three migrations
 
-1. **`platform_agents`** — paired agent registry. `id, org_id, display_name,
-   agent_key_hash, status (pending|active|revoked), agent_version,
-   last_check_in_at, created_at`. One org, many agents (per fixed decisions).
-2. **`agent_pairing_codes`** — one-time pairing codes. `id, org_id, code_hash,
-   created_by_user_id, expires_at, used_at`. *(migration 1, with `platform_agents`)*
-3. **`agent_reported_connections`** — the agent's local DB connections, as reported
-   on check-in (non-secret only: label, database name, dialect). Backs the Canvas
-   dropdown when creating a `sqlserver_agent` connection. `agent_id,
-   agent_connection_id, label, metadata jsonb, last_seen_at`. *(migration 1)*
+Reuse, don't duplicate: `sqlserver_agent`, `planometry_table`, and `https_endpoint`
+(B.6) are all just rows in the existing `connections` table via the existing
+one-manifest-one-registry-entry pattern — no new table for any connection type
+itself.
+
+Six new tables:
+
+1. **`platform_agents`** — paired agent registry. `id, org_id, created_by_user_id,
+   display_name, agent_key_hash, status (pending|active|revoked), agent_version,
+   last_check_in_at, created_at`.
+2. **`agent_pairing_codes`** — one-time pairing codes (B.12). `id, org_id,
+   created_by_user_id, code_hash, expires_at, attempt_count, max_attempts,
+   used_at, created_at`.
+3. **`agent_reported_connections`** — the agent's local DB connections as reported
+   on check-in (non-secret: label, database name, dialect). Backs the picker when
+   creating a `sqlserver_agent` connection. `agent_id, agent_connection_id, label,
+   metadata jsonb, last_seen_at`.
 4. **`agent_tasks`** — the task queue (test_connection, list_tables, preview_count,
    read_batch, apply_setup, run_now, pause, resume). `id, agent_id, kind,
    payload jsonb, status (pending|claimed|done|failed), created_at, claimed_at,
-   completed_at, result jsonb, error jsonb`. Row payloads for `read_batch` results
-   are **not** stored here — they land in a short-TTL Redis key referenced by
-   `task.id`, consumed once by the waiting bridge call, to avoid bloating Postgres
-   with transient row data. *(migration 2)*
-5. **`agent_setups`** — route-2 job definitions (the agent-side analogue of
-   `workflow_graphs`). `id, agent_id, connection_id, destination jsonb, schedule,
-   wanted_version, applied_version, rejection_reason, updated_at`. *(migration 3)*
-6. **`agent_setup_runs`** — route-2 run history, mirrors `workflow_runs`'s shape
-   (`status, rows_sent, duration_ms, error, started_at, finished_at`), written from
-   the agent's status reports, not by apps/worker. *(migration 3)*
+   completed_at, result jsonb, error jsonb`. `payload`/`result` never contain
+   secret values (B.6) or row data (`read_batch` rows are staged in Redis, B.9, and
+   `run_now`/`apply_setup` secrets are pulled by the agent through a separate
+   authenticated endpoint, B.6) — only shapes/identifiers/counts.
+5. **`agent_setups`** — route-2 job definitions, created only by Publish (B.7).
+   `id, workflow_id (FK workflows, nullable), local_job_id (text, nullable),
+   source (platform|local), agent_id, connection_id, destination_connection_id,
+   wanted_version, applied_version, rejection_reason, updated_at`. Exactly one of
+   `workflow_id`/`local_job_id` is set (`CHECK`) — a platform-published setup
+   always carries a `workflow_id`; a CLI-only job reported via check-in (B.11) has
+   no `workflow_id`, only a `local_job_id`, and `source = 'local'`.
+6. **`agent_setup_runs`** — route-2 run history. `id, agent_setup_id, run_id
+   (unique — the outbox idempotency key, B.7), status, rows_sent, duration_ms,
+   error, started_at, finished_at, is_realtime_aggregate, period_start,
+   period_end`.
 
-All six get RLS via the existing `private.is_member`/`private.is_admin` helpers,
-scoped by `org_id` (agents are always org-scoped, never personal-workspace, since
-pairing requires admin/owner — see B.8). Audit reuses `log_connection_audit`-style
-field-names-only logging (never config values, never credentials).
+RLS: tables 1–4 use `private.is_member` for read, `private.can_manage_agent` for
+pair/revoke/rotate, and plain membership for create/publish/run-now/pause/resume
+(B.1). Tables 5–6 (`agent_setups`/`agent_setup_runs`) reuse
+**`private.can_access_workflow(workflow_id)`** directly — the same helper
+`workflow_graphs`/`workflow_runs` already use — for `source = 'platform'` rows;
+`source = 'local'` rows (no `workflow_id`) fall back to plain org membership via
+`agent_id`'s org. No new RLS pattern is introduced.
 
-### B.2 Agent API
+Migration numbers are **not** fixed here: the current HEAD is `0068`
+(`llm_usage`), but this plan assumes v1.1.0 ships first, so these six tables land
+as whatever immediately follows HEAD at that point — illustrated below as
+`0069`–`0071`, to be renumbered at implementation time:
+`0069_platform_agents.sql` (tables 1–2), `0070_agent_reported_connections_and_tasks.sql`
+(tables 3–4), `0071_agent_setups.sql` (tables 5–6).
 
-- **Pairing**: `POST /agents/pairing-codes` (admin/owner only) → short code + TTL,
-  shown once in the Agents page. On the agent machine: `nia-agent pair --code XXXX
-  --url <platform>`. Agent calls `POST /agent-api/pair {code}` → server validates
-  against `agent_pairing_codes`, creates `platform_agents` (status `active`),
-  returns a long-lived opaque API key **once** (never retrievable again — same
-  discipline as write-grant `write_credential_vault_ref`, but here the secret is
-  held by the agent, not the platform; the platform stores only `agent_key_hash`).
-- **Check-in (long poll)**: `POST /agent-api/check-in` with `Authorization: Bearer
+### B.3 Agent API
+
+- **Pairing** (B.12 has exact code parameters): `POST /agents/pairing-codes` (any
+  member) → short code + TTL, shown once on the Agents page. Agent runs `nia-agent
+  pair --code XXXX --url <platform>` → `POST /agent-api/pair {code}` validates
+  against `agent_pairing_codes`, creates `platform_agents` (status `active`,
+  `created_by_user_id` = the pairing member), returns a long-lived opaque API key
+  **once** — the platform stores only `agent_key_hash`.
+- **Check-in (long poll)**: `POST /agent-api/check-in`, `Authorization: Bearer
   <agent key>`, body = `{agentVersion, reportedConnections[], jobStatuses[],
-  completedTaskResults[]}`. Server updates `last_check_in_at` and
-  `agent_reported_connections`, applies any completed-task results, and holds the
-  response for up to ~25 s waiting for new pending tasks (classic long-poll, not a
-  true streaming connection) before returning `{tasks: []}` if none arrive. The
-  transport itself (long poll) is isolated behind an `AgentTransport` interface on
-  both ends so it can be swapped for a streaming transport later without touching
-  task semantics.
-- **Task types**: `test_connection`, `list_tables` (introspect), `preview_count`,
-  `read_batch` (route 1: table + columns + filter + cursor + limit), `apply_setup`
-  (route 2: push a job spec, wanted-version bump), `run_now`, `pause`, `resume`.
-  Each maps to one row in `agent_tasks`.
-- **Status/run reports**: separate from individual task completion — a periodic
-  summary of job health per `agent_setup` (last run, rows sent, error class),
-  folded into the same check-in body (`jobStatuses[]`), which also writes
-  `agent_setup_runs`.
-- **Auth**: Bearer agent key, compared against `agent_key_hash` (SHA-256, same
-  "never store the plaintext" discipline as everything else in this codebase).
-- **Versioning**: every call carries `agentVersion`; recorded, not yet enforced.
-  Future: a minimum-supported-version gate, same shape as `CURRENT_CONFIG_VERSION`.
+  runReports[], completedTaskResults[]}`. Server updates `last_check_in_at`,
+  `agent_reported_connections`, acks `runReports[]` (B.7's outbox), applies
+  `completedTaskResults[]`, and holds the response up to ~25 s waiting for new
+  pending tasks before returning `{tasks: []}`. Isolated behind an
+  `AgentTransport` interface on both ends so long-polling can be swapped later.
+- **Task types**: `test_connection`, `list_tables`, `preview_count`, `read_batch`
+  (route 1), `apply_setup` (route 2, B.7), `run_now` (B.8, carries one-off param
+  overrides and an `allowMassDelete` flag), `pause`, `resume`.
+- **Secret fetch (new, not a task)**: `GET /agent-api/connections/:connectionId/secret`,
+  Bearer agent key, returns the plaintext secret for a `planometry_table` or
+  `https_endpoint` connection the agent has been told (via `apply_setup`) to
+  deliver to. Called by the agent on-demand, right before it needs the secret;
+  the secret is stored in the agent's existing local encrypted store afterwards
+  and is never embedded in `agent_tasks.payload` or any log line (B.6).
+- **Auth**: Bearer agent key vs. `agent_key_hash` (SHA-256).
+- **Versioning**: every call carries `agentVersion`; recorded, not yet enforced
+  (minimum-version gate is slice 5 / B.13).
 
-### B.3 Offline behaviour and setup versions
+### B.4 Offline behaviour and setup versions
 
-An agent is "unreachable" after N missed check-in intervals (e.g. 3× the expected
-interval). Tasks are not discarded on disconnect — they sit `pending` with a TTL;
-stale tasks past TTL are marked `failed` with a `agent_offline` reason. A route-1
-chunk waiting on a `read_batch` task that times out returns a **transient** error
-from the bridge, which is the same failure class the worker already retries with
-backoff — no new retry logic needed in `runEtl.ts`, only a longer, connector-
-specific timeout.
+**Nothing changes in the agent's own scheduling when the platform is
+unreachable.** `JobScheduler` (A.6) is already fully local — it re-reads
+`agent.config.json`/job-state and fires cron/interval timers with zero dependency
+on reaching the platform per tick. A platform outage only affects two things: (a)
+no *new* `apply_setup`/`run_now`/`pause`/`resume` tasks arrive until check-in
+reconnects, and (b) run reports queue in the local outbox (B.7) instead of being
+acked. Every setup the agent has already applied keeps running on its existing
+schedule throughout.
 
-Setup versions follow the "wanted vs. applied" pattern explicitly requested:
-`agent_setups.wanted_version` increments on every platform-side edit (new
-destination, new schedule, etc.). The agent reports back `applied_version` plus
-`rejection_reason` (free text) if it could not apply the wanted setup — e.g.
-schema drift, destination not in its local allow-list (B.8), or a Planometry
-rejection. The Agents page shows wanted vs. applied with the reason, exactly like
-`cred_version` bumps drive connector pool invalidation elsewhere in this codebase.
+An agent is "unreachable" (platform's view) after N missed check-in intervals.
+Pending tasks aren't discarded — they sit with a TTL and expire `failed` with
+`agent_offline` if the agent never reconnects in time. A route-1 chunk waiting on
+a `read_batch` task that times out returns a **transient** error from the bridge
+— the same class the worker already retries with backoff.
 
-### B.4 "Local database (via agent)" connection type on the Canvas
+`agent_setups.wanted_version` increments only on Publish (B.7, never autosave).
+The agent reports `applied_version` + `rejection_reason` on check-in — schema
+drift, destination not on the local allow-list (B.10), a Planometry rejection, or
+an untranslatable filter (B.7). The Agents page shows wanted vs. applied + reason,
+the same spirit as `cred_version` bumps driving pool invalidation elsewhere.
 
-New manifest `sqlserver_agent` in `packages/schemas/src/connectors/registry.ts`,
-category "database", `operations: ["read"]` only. Its `configSchema` has **no
-host/user/password fields** (those live only on the agent machine, per the fixed
-decision) — just `agentId` (select from the org's paired agents) and
-`agentConnectionId` (select from that agent's `agent_reported_connections`,
-populated from check-in sync). The rest of `ConnectionForm.tsx` is unchanged; this
-is one more schema-driven form, not a special case.
+### B.5 The bridge — one design
 
-Browsing/table list: the existing entity picker (`useConnectionEntities` →
-`getConnectionSchema`) is unchanged on the Canvas side. On the API side,
-`getConnectionSchema()`/`dispatchIntrospect()` gets one new branch: for
-`connector_id = 'sqlserver_agent'`, instead of POSTing to a static connector
-microservice, it creates a `list_tables` `agent_task` and waits (bounded) for the
-agent to answer via check-in — then returns the same `IntrospectResponse` shape
-the canvas already expects. Zero changes to `NodeDrawer.tsx`'s entity picker.
+**One service, two listeners, no per-connector branch anywhere in apps/api or
+apps/worker.** This resolves the earlier draft's contradiction between "the
+bridge is just another connector service" (B.5/B.9) and "`getConnectionSchema`
+gets a new branch" (B.4) — there is no branch; the manifest's `service.host/port`
+field points straight at the bridge, exactly like every other connector.
 
-### B.5 Route 1 — through Nia Core
+- **Internal listener** (e.g. `agent-bridge:4041`) — `/test`, `/introspect`,
+  `/execute`. Called by `apps/api`'s `connectorDispatch.ts` and
+  `apps/worker`'s `connectorClient.ts` with **no code change to either file beyond
+  what any new connector manifest already requires** — same `signReadContext()`/
+  `verifyReadContext()` HMAC scheme (`WRITE_DISPATCH_SIGNING_SECRET`) the three
+  existing connector services use (A.3/A.4 research: this is HMAC-signed, not
+  just network trust, so the bridge must verify it identically). Never published
+  in `docker-compose.prod.yml` (no `ports:`), never routed by nginx or Next's
+  `/api/backend` rewrite — same isolation as `connector-mysql`/`-mongodb`/
+  `-supabase` today.
+- **Public listener** (e.g. `agent-bridge:4040`, proxied by nginx at
+  `/agent-api/*` — deliberately **not** under `/api/backend`, which stays
+  reserved for `apps/api`) — `/pair`, `/check-in`, `/tasks/:id/upload`,
+  `/connections/:id/secret`. This is the only piece of this plan reachable from
+  the public internet by design, since real agents dial in from outside the
+  docker network.
 
-Worker reads through the **same** `dispatch()`/`QueryPayload` abstraction, but the
-"connector service" this manifest points to is not a stateless microservice — it's
-an **agent-dispatch bridge** that speaks the identical `/execute`/`/introspect`/
-`/test` HTTP contract `connectorClient.ts` already expects, and internally
-translates each call into an `agent_tasks` row + bounded wait + Redis-staged row
-fetch. This keeps `connectorClient.ts`, `dispatch.ts`, and `resolveConnection.ts`
-unchanged in spirit — the bridge is just "another connector service" from the
-worker's point of view.
+Internally, the two listeners share the same `agent_tasks` row store: the
+internal side *creates* tasks (and bounded-waits on them for `/execute`), the
+public side is where a real agent *claims and completes* them via check-in.
 
-The one real new concept: `QueryPayload` gets a third variant,
-`{kind:"structured", table, columns, filter, cursor, limit}` — because the agent
-only runs structured reads, never SQL. A matching guardrail validator
-(`packages/guardrails/src/structured.ts`, registered in
-`packages/guardrails/src/registry.ts`) checks table/column names are plain
-identifiers and `filter` is a small whitelisted comparison-op shape — stricter
-than the SQL path, since there is no SQL string to construct in the first place.
+### B.6 "Local database (via agent)" connection type on the Canvas
 
-Batch upload / back-pressure / temp storage: each ETL chunk (already ≤1000 rows,
-keyset-paginated) becomes one `read_batch` task. The agent uploads the batch via a
-dedicated endpoint (gzip JSON, same shape discipline as its existing Planometry
-delivery code) into a short-TTL Redis key; the bridge's `/execute` response reads
-that key once and the key is deleted. Because chunks are already sequential in
-`runEtl.ts`, there is naturally at most one in-flight `read_batch` task per
-connection — no new back-pressure logic required.
+New manifest `sqlserver_agent`, category "database", `operations: ["read"]` only.
+`configSchema` has **no host/user/password fields** — just `agentId` and
+`agentConnectionId` (picked from `agent_reported_connections`). Introspection goes
+through the bridge's internal listener exactly like any connector (B.5) — zero
+special-casing in `getConnectionSchema()`/`dispatchIntrospect()`, zero change to
+`NodeDrawer.tsx`'s entity picker.
 
-Cancel/timeouts: `getRunCheckpoint()` polling is unchanged; add one cleanup call so
-cancelling a run also marks any outstanding `agent_tasks` row for it `failed`. Add
-one new timeout constant in `connectorClient.ts` for this manifest (longer than the
-15 s static-service default, to allow for a real long-poll round trip) rather than
-changing the generic timeout.
+### B.7 Destinations are connection types; publishing is explicit
 
-**apps/worker files this route would touch (for approval):**
-- `apps/worker/src/lib/etl/queryBuilder.ts` — new branch building the `structured`
-  `QueryPayload` instead of SQL/Mongo, for this one connector kind.
-- `apps/worker/src/lib/connectorClient.ts` — one new timeout constant, no
-  structural change (it already just forwards a JSON body).
-- `apps/worker/src/lib/dispatch.ts` — none expected (manifestId check already
-  generic); flagged in case the structured-query validator surfaces a new error
-  shape that needs mapping to a `DispatchResult` error kind.
-- `apps/worker/src/lib/resolveConnection.ts` — none expected if `vault_secret_ref`
-  is nullable; otherwise a migration change (not a worker code change) to make it
-  so for this connector kind.
-- No changes expected to `runEtl.ts`'s core loop, checkpointing, or retry logic.
+**Planometry table** and **generic HTTPS endpoint** are *platform* connection
+types, not agent-only concepts:
 
-### B.6 Route 2 — direct (agent-delivered)
+- `planometry_table` manifest: `configSchema = {tableUrl}` + secret (API key),
+  created through the normal `ConnectionForm`/`createConnectionAction` path,
+  secret stored in `nia_secrets` like any connection. `service.host/port` points
+  at a small new connector service that calls Planometry **directly from the
+  platform** for `/test` and `/introspect` (reusing apps/agent's existing
+  `planometry/client.ts` schema-fetch shape) — so the existing `MappingEditor`
+  and `checkMappings` work completely unchanged, because this is "just another
+  introspectable destination" from the Canvas's point of view.
+- `https_endpoint` manifest: `configSchema = {address, authMethod}` + secret
+  (API key / bearer token / basic auth). `/test` is a reachability ping; `/introspect`
+  returns no schema (an arbitrary endpoint has nothing to introspect) — the
+  mapping UI falls back to manual target-field entry for this one connector kind,
+  same fallback already needed for any schemaless destination.
+- **Secrets never ride in `agent_tasks`.** `apply_setup`'s payload references
+  `destination_connection_id` only. On receiving `apply_setup`, the agent calls
+  the new `GET /agent-api/connections/:id/secret` (B.3) to pull the plaintext
+  once, over its own outbound HTTPS call, and stores it in its existing local
+  encrypted store — identical discipline to a CLI-entered push key, just sourced
+  from the platform instead of stdin.
 
-Destination types live in the agent, reusing what already exists almost
-unchanged: Planometry table (apps/agent's existing `replaceLoad`/`upsertPush`/
-`deletePush`/`realtimeTick` + `requestBuilder` + `planometry/client.ts`) and a new
-generic HTTPS endpoint client built the same way (see B.7).
+**Publishing**: the graph always autosaves to `workflow_graphs` exactly as today
+(A.2), regardless of route — autosave never touches `agent_setups`. A **Publish**
+action (visible only when source = `sqlserver_agent` and destination =
+`planometry_table`/`https_endpoint`) is the sole writer of `agent_setups`:
 
-A Canvas workflow becomes an agent job when its source is `sqlserver_agent` and its
-destination is one of these two types: instead of writing `workflow_graphs` and
-relying on apps/worker, saving/activating it writes an `agent_setups` row (bumping
-`wanted_version`) whose shape is deliberately close to apps/agent's existing
-`SyncJobEntry` — table/columns/filter from the source, strategy/mapping/delete-mode
-from the destination, schedule. The agent receives it via an `apply_setup` task and
-runs it through its existing, already-tested sync engine; the only new code on the
-agent is consuming `apply_setup` instead of local CLI `job add`, plus the generic
-HTTPS delivery path.
+1. Derives the job spec from the current graph (source table/columns/filter,
+   destination mapping/mode/schedule — B.7's field map below).
+2. Diffs it against the currently-applied setup and shows what will change,
+   explicitly flagging anything that **forces a full reload** — switching source
+   table, changing key/watermark columns, or switching mode away from
+   `upsertDelta`/`realtime` — versus an in-place change (schedule, column
+   mapping, filter value).
+3. On confirm, upserts `agent_setups` and bumps `wanted_version`; the agent picks
+   it up via `apply_setup` on its next check-in (B.4 covers rejection reporting).
 
-Panels: a slimmed `NodeDrawer` — source panel unchanged (entity picker); destination
-panel for Planometry reuses the job-config fields apps/agent already has
-(strategy, delete mode, watermark column); destination panel for HTTPS adds
-address/auth/batching fields (B.7).
+**Where each route-2 setting lives**, since several of these don't exist in the
+schema yet and are called out as new rather than assumed:
 
-What's unavailable: **transform steps**. The agent has no residual-transform
-runtime matching `packages/schemas`' `TransformStep` set (filter/computed_field/
-aggregate/etc.) — only field mapping/rename, which the agent already supports.
-The Canvas disables inserting a transform node between a `sqlserver_agent` source
-and a route-2 destination, with a message to route through Nia Core instead.
+| Setting | Lives on | Status |
+|---|---|---|
+| Column selection | Source node (new `columns: string[]` on `SourceDestConfig`, defaulting to all introspected columns) | **New** — today's source panel has no column UI (A.2); the agent needs an explicit list, never `SELECT *`. |
+| Mapping | Destination node, existing `MappingEditor` tab (`NodeDrawer.tsx` `showMappingTab`) | Reused unchanged. |
+| Filter | Existing `filter` `TransformStep` between source and destination | Reused **only** when it is the flat `FilterCondition[]` AND-chain shape (what the row editor always produces); Publish's diff step (above) runs the existing `exprToConditions`-style check and blocks publish with a plain message ("this filter is too complex for direct delivery — route it through Nia Core instead") if the saved step is a full `Expr` tree with `or`/`not`/computed fields. |
+| Parameters / rolling dates | **New** — doesn't exist in `packages/schemas` today (confirmed: no `params` field, no rolling-date type anywhere in `nodeConfig.ts`/`graph.ts`). Proposed: a new `params` map on the source node's config, with a `rollingDate(offset)` literal usable inside the filter. Maps onto apps/agent's **already-existing** `SyncJobEntry.params`/`filter` placeholder substitution (A.6) — the gap is entirely platform-side schema/UI, not agent-side. | **New**, platform-side only. |
+| Mode (replace / upsertDelta / realtime) | Destination node, new route-2-only "Delivery" section | **New** section, reusing apps/agent's existing enum. |
+| Watermark column | Same "Delivery" section | **New** UI, existing agent concept. |
+| Delete method + safety (null-key policy, empty-replace guard, max-delete %) | Same "Delivery" section, "Safety" subsection | **New** UI, existing agent concepts (`onNullKey`, `allowEmptyReplace`, `maxDeletePercent`). |
+| Schedule / replace schedule / poll interval | Same "Delivery" section, "Schedule" subsection | **New** UI, existing agent concepts. |
 
-### B.7 Generic HTTPS destination
+**Run reports — outbox, idempotent, aggregated for realtime**: the agent appends
+one run-report record per completed run to a local outbox file (same durability
+class as `job-state/*.json`), includes outstanding outbox entries in every
+check-in body (`runReports[]`), and only drops an entry once the server acks it
+by `run_id` in the check-in response. The server upserts `agent_setup_runs` on
+`run_id` (unique), so resends are idempotent. **Realtime jobs do not report per
+tick** — the agent accumulates `realtimeTick` results over a period (e.g. 60s)
+and emits one aggregated `agent_setup_runs` row per period
+(`is_realtime_aggregate = true`, `period_start`/`period_end`, summed rows).
 
-- **Address**: HTTPS only, validated like other config fields in this codebase
-  (`connections.config` is already documented as "SSRF-validatable" — same bar
-  applies here).
-- **Sign-in methods**: API key header, Bearer token, Basic auth — credentials
-  entered and stored only on the agent (same `secrets/store.ts` AES-256-GCM local
-  store apps/agent already has for push keys).
-- **Request shape**: gzip JSON, envelope `{batchId, runNumber, rows: [...]}` — new
-  fields vs. today's Planometry envelope, added for idempotency/traceability.
-- **Batching/retries**: reuse `requestBuilder.ts`'s row/byte-bounded part-splitting
-  and `chunkUploader.ts`'s exponential backoff verbatim.
-- **Batch ID / run number**: a fresh UUID per batch, plus a monotonically
-  increasing `runNumber` persisted in the agent's job-state file (same file that
-  already tracks `lastWatermark`), included on every request.
-- **Delivery semantics**: at-least-once, explicitly — there's no two-phase commit
-  with an arbitrary third-party endpoint. `batchId` is provided so the destination
-  can dedupe if it wants to; this is documented as the destination's
-  responsibility, not guaranteed by the agent.
-- **"Send all" vs "send changed"**: same `replace`/`upsertDelta` strategy
-  vocabulary apps/agent already uses for Planometry, applied to the generic
-  destination too — no new vocabulary.
+**Route-2 runs in the workflow's run history, not only the Agents page**: extend
+`listRunsForWorkflow` (`apps/api/src/services/runs.ts:219` — today only called by
+Copilot tools, no browser route exists yet per research) to also select
+`agent_setup_runs` joined through `agent_setups.workflow_id = workflowId`, union
+with `workflow_runs`, tag each row with its source (`worker`/`agent`), order by
+`started_at`. Exposed via a new `GET /workflows/:id/runs` — which is needed
+anyway, since no run-history route exists at all today.
 
-### B.8 Security
+**What's unavailable**: every transform step except the (translatable) `filter`
+— the agent has no residual-transform runtime for `computed_field`/`aggregate`/
+`to_json`/`flatten`/`drop_fields`. The Canvas disables inserting any of those
+between a `sqlserver_agent` source and a route-2 destination, with a message to
+route through Nia Core instead.
+
+### B.8 Actions
+
+- **Test**: dispatches `test_connection` for the source plus the destination's own
+  `/test` (called directly by the platform, B.7) — validates reachability without
+  running anything.
+- **Run now** (one-off param values): a dialog collecting current values for the
+  setup's `params` (B.7), sent as a `run_now` task carrying overrides that are
+  **not** persisted to `agent_setups` — a single run only.
+- **Force full reload**: a `run_now` variant that resets the watermark and runs
+  once in `replace` semantics, regardless of the setup's normal mode.
+- **Pause / resume**: `pause`/`resume` tasks, mirroring the existing CLI commands.
+- **Allow one large delete**: a confirmation checkbox required when a `run_now`
+  would exceed `maxDeletePercent`; checking it sends `run_now {allowMassDelete:
+  true}`, passed straight through to the agent's existing massDelete guard
+  (today gated by the CLI's `--allow-mass-delete` flag, A.6) — a one-time
+  override, not a setup change.
+
+### B.9 Route 1 — through Nia Core
+
+Unchanged core idea: a third `QueryPayload` variant, `{kind:"structured", table,
+columns, filter, cursor, limit}`, validated by a new guardrail
+(`packages/guardrails/src/structured.ts`) that checks plain identifiers and a
+whitelisted comparison-op filter — stricter than the SQL path since there's no
+SQL string at all.
+
+**Every apps/worker file that builds a query for a source** needs the same new
+`structured` branch (listed for approval, per the research above):
+
+- `apps/worker/src/lib/etl/queryBuilder.ts` — `buildEtlReadQuery` (per-chunk read)
+  and `buildFailurePreCheckQuery` (pre-count for a `FailurePreCheck` step).
+- `apps/worker/src/lib/preview/runPreview.ts` — `buildPreviewQuery` (one-shot
+  preview with field aliasing).
+- `apps/worker/src/lib/profile/sampleEntity.ts` — `buildSqlPage`/`buildMongoPage`
+  (profiler keyset sampling) and the inline unkeyed-page fallback.
+- `apps/worker/src/lib/connectorClient.ts` — one new timeout constant for this
+  manifest (longer than the 15s static-service default, to allow a real
+  long-poll round trip).
+- `apps/worker/src/lib/dispatch.ts`/`resolveConnection.ts` — none expected
+  (both already fully generic); `vault_secret_ref` nullability for this
+  connector kind is a migration concern, not a worker code change.
+- No change to `runEtl.ts`'s core loop, checkpointing, or retry logic.
+
+**Byte cap and concurrency, new**: each `read_batch` response is capped at **5 MB**
+uncompressed JSON (not Planometry's 56 MB — this rides inside one long-poll
+response cycle, not a dedicated bulk upload) in addition to the existing
+`MAX_CHUNK_ROWS = 1000`. The agent enforces a new `maxConcurrentAgentTasks`
+semaphore (default 1), separate from `maxConcurrentRuns` (A.6, route-2 jobs), so
+ad hoc route-1 reads can't starve the agent's own scheduled route-2 jobs.
+
+**What this route is for**: each chunk costs one full long-poll round trip
+(dominated by check-in cadence, not raw transfer — realistically single-digit
+seconds per chunk at best). That puts sustained throughput in the tens-to-low-
+hundreds of rows/second, **not** a bulk-transfer rate. Route 1 is sized for
+small-to-medium tables (comfortably up to roughly 1–2 million rows at a run
+duration of tens of minutes); large fact tables should use route 2's Planometry
+delivery (which bypasses the per-chunk round trip entirely via the agent's own
+direct multi-part upload) instead.
+
+Batch staging and cancel are unchanged from the earlier draft: rows land in a
+short-TTL Redis key per task, read once by the bridge's `/execute` response; a
+cancelled run also marks its outstanding `agent_tasks` row `failed`.
+
+### B.10 Security
 
 - **What reaches the platform per route**: Route 1 — rows and keys genuinely pass
-  through Nia Core (that's the point of the route); logged the same way
-  `log_execution_audit` already logs query shape today (table/column names, row
-  counts — never values). Route 2 — only status, counts, and error *classes* reach
-  the platform; actual Planometry rejection text stays on the agent, exactly like
-  apps/agent's existing `lastConsoleMessage` field (already documented as
-  state-file/CLI-only, never forwarded) — the same restraint extends to generic
-  HTTPS destination error bodies.
-- **Local allow-list**: for the HTTPS destination, the agent keeps its own
-  allow-list of destination hosts, configured locally (CLI, same trust model as
-  `connection add`). A platform-issued `apply_setup` whose destination host isn't
-  on that list is rejected locally with `rejection_reason = "destination not on
-  local allow-list"` — the platform cannot silently redirect where an agent sends
-  data.
-- **Roles**: pairing a new agent and creating/editing route-2 setups are
-  admin/owner-only (same `requireCapability` gate already used for write-grant
-  RPCs); reading agent status is any member.
-- **Audit**: agent pairing/revocation and every `read_batch`/`apply_setup` task
-  logged with `log_connection_audit`-style discipline (shape/counts only, never
-  values or credentials).
+  through (that's the route's purpose), logged the same shape-only way
+  `log_execution_audit` already logs query shape (names/counts, never values).
+  Route 2 — only status, counts, and error *classes*; rejection text (Planometry
+  or otherwise) stays on the agent, exactly like the existing `lastConsoleMessage`
+  field (A.6, already state-file/CLI-only).
+- **Local allow-list covers every route-2 destination host, Planometry
+  included** — not just the generic HTTPS case. A platform-issued `apply_setup`
+  whose destination host (Planometry's `tableUrl` host or an `https_endpoint`
+  address) isn't on the agent's local allow-list is rejected locally with
+  `rejection_reason = "destination not on local allow-list"`.
+- **Roles**: per B.1 — pair/create/publish/run-now/pause/resume = any member;
+  revoke/remove/rotate = admin, owner, or the pairing member.
+- **Audit**: agent pairing/revocation/rotation and every `read_batch`/
+  `apply_setup`/`run_now` task logged with `log_connection_audit`-style
+  discipline (shape/counts only).
 
-### B.9 Monitoring
+### B.11 Local CLI jobs stay supported, visible read-only
 
-New "Agents" page (web app): paired agents with status (online/offline, derived
-from `last_check_in_at`), version, per-agent setups with wanted vs. applied version
-and rejection reason, route-2 run history from `agent_setup_runs`. Alerts (email on
-"agent offline" or "setup rejected") are listed as an open question (B.11) — not
-in scope for the first slices.
+A job created by `nia-agent job add` (A.6) continues to work exactly as today —
+nothing about this plan changes the CLI. On check-in, the agent additionally
+reports status for **all** jobs it knows about, not just platform-published
+ones; a job with no matching `apply_setup` origin is upserted into `agent_setups`
+with `source = 'local'`, `workflow_id = NULL`, `local_job_id` set, and no
+`wanted_version` the platform ever writes. The Agents page lists these alongside
+platform-managed setups, clearly marked "local," with status and
+`agent_setup_runs` history visible but no Publish/run-now/pause/resume controls
+exposed for them — they stay entirely CLI-owned.
 
-### B.10 Slices
+### B.12 Pairing and keys
 
-1. **Link and Agents page** — *Medium*. Goal: pairing + long-poll check-in works
-   end to end; an agent shows up as online in the UI. Files: `platform_agents`,
-   `agent_pairing_codes` migration; `apps/api` pairing/check-in routes;
-   `AgentTransport` interface; Agents page (list, status). Tests: pairing-code
-   issue+consume, check-in updates `last_check_in_at`, expired-code rejection,
-   offline-after-N-misses. Real check (timed): pair a real agent process against a
-   local stack and see it flip to "online" within 60 s.
+- **Pairing code**: 8-character base32 (excludes `0/O/1/I` to avoid transcription
+  errors), 15-minute expiry, **5 attempts** before the code is invalidated and a
+  new one must be issued (`agent_pairing_codes.attempt_count`/`max_attempts`).
+- **Revoke**: sets `platform_agents.status = 'revoked'`; every subsequent
+  check-in is rejected immediately. Available from the Agents page to admins,
+  owners, and the pairing member (B.1).
+- **Key rotation**: issues a new `agent_key_hash`, returns the new plaintext key
+  once (same "shown once" discipline as pairing), invalidates the old key
+  atomically in the same transaction. Same role gate as revoke, since it's
+  equally sensitive.
 
-2. **Connection type and browsing** — *Medium*. Goal: create a `sqlserver_agent`
-   connection on the Canvas and browse its tables. Files: `sqlserver_agent`
-   manifest + registry entry; `agent_reported_connections` migration + check-in
-   write path; `list_tables` task + bridge branch in `getConnectionSchema`/
-   `dispatchIntrospect`; `ConnectionForm` picks up the new schema automatically.
+### B.13 Monitoring
+
+Agents page: paired agents (status derived from `last_check_in_at`), version,
+per-agent setups (platform-managed and local, B.11) with wanted vs. applied
+version and rejection reason, route-2 run history. Route-2 runs also surface in
+the owning workflow's own run history (B.7). Alerts (email on offline/rejected)
+stay an open question (B.14) — not in the first five slices.
+
+### B.14 Slices
+
+**Migrations are numbered after `0068` and assume v1.1.0 ships first** — numbers
+below are illustrative (`0069`+), to be renumbered against whatever HEAD actually
+is at implementation time.
+
+1. **Link** — *Medium*. Goal: pairing, check-in, and the run-report outbox work
+   end to end; an agent shows up on the Agents page. Files: `platform_agents` +
+   `agent_pairing_codes` migration (`0069`); bridge public listener (`/pair`,
+   `/check-in`); `AgentTransport` interface; `private.can_manage_agent`; Agents
+   page (list, status, revoke, rotate). Tests: pairing-code issue/consume/expiry/
+   attempt-limit, check-in updates `last_check_in_at`, outbox ack-by-run_id is
+   idempotent, offline-after-N-misses. **Real check** (≤60s): sandbox = Postgres +
+   Redis + bridge only (no SQL Server needed yet) — pair a real agent process and
+   see it flip to "online."
+
+2. **Connection** — *Medium*. Goal: create a `sqlserver_agent` connection and
+   browse its tables through the bridge's internal listener. Files:
+   `sqlserver_agent` manifest + registry entry; `agent_reported_connections`
+   migration (`0070`, with `agent_tasks`); `list_tables` task; bridge internal
+   listener (`/test`, `/introspect`) with HMAC verification (B.5).
    Tests: create connection from reported list, `list_tables` round trip, stale
-   `agent_reported_connections` pruning, permission check (admin-only create).
-   Real check (timed): introspect a real local SQL Server table through a real
-   paired agent within 30 s.
+   row pruning, permission check (any member can create). **Real check** (≤30s):
+   sandbox = Postgres + Redis + bridge + one real agent pointed at an
+   **external** SQL Server via env vars (`SQLSERVER_HOST`/`PORT`/`USER`/
+   `PASSWORD` — no local SQL Server container on an 8 GB machine) — introspect a
+   real table.
 
-3. **Route 2 on the Canvas** — *Large*. Goal: a source+Planometry-table or
-   source+HTTPS workflow becomes a running agent job, visible in run history.
-   Files: `agent_setups`/`agent_setup_runs` migrations; `apply_setup`/`run_now`/
-   `pause`/`resume` tasks; Canvas save path branching to `agent_setups` when both
-   ends qualify; transform-node disablement; slimmed destination panels; generic
-   HTTPS client in `apps/agent` (B.7). Tests: setup apply + version bump, rejection
-   reason surfaced (bad allow-list), Planometry delivery via `apply_setup` instead
-   of CLI, HTTPS delivery batching/retry. Real check (timed): one real row batch
-   delivered to a real Planometry sandbox table via `apply_setup`, confirmed within
-   2 minutes.
+3. **Route 2** — *Large*. Goal: Publish turns a source+Planometry-table or
+   source+HTTPS workflow into a running, monitorable agent job. Files:
+   `planometry_table`/`https_endpoint` manifests + their connector service (direct
+   Planometry test/introspect); `agent_setups`/`agent_setup_runs` migration
+   (`0071`); secret-fetch endpoint; `apply_setup`/`run_now`/`pause`/`resume`
+   tasks; Publish action + diff/full-reload UI; new column-selection/params/
+   delivery-section panels; transform-step disablement; generic HTTPS sender in
+   `apps/agent`; run-history merge (B.7). Tests: Publish diff flags a full-reload
+   change correctly, untranslatable filter blocks publish with a clear message,
+   realtime aggregation produces one run row per period, local-allow-list
+   rejection surfaces as `rejection_reason`. **Real check** (≤2 min): sandbox =
+   Postgres + Redis + bridge + agent (external SQL Server via env) + a real
+   Planometry **staging** table (no local Planometry) — one published setup
+   delivers one real batch.
 
 4. **Route 1** — *Large*. Goal: an ETL run reads a chunk from a real agent through
-   Nia Core into an existing destination. Files: `agent_tasks` migration;
-   structured `QueryPayload` variant + guardrail validator; `queryBuilder.ts`
-   branch; bridge `/execute` implementing `read_batch` + Redis staging;
-   `connectorClient.ts` timeout constant; cancel cleanup hook. Tests: structured
-   query validation (reject bad table/column names), one-chunk round trip, timeout
-   → transient retry, cancel mid-task. Real check (timed): a full small-table ETL
-   run from a real local SQL Server through a real agent into Postgres, completed
-   within 5 minutes.
+   Nia Core into an existing destination. Files: `structured` `QueryPayload` +
+   guardrail validator; the four query-builder files in B.9; bridge `/execute`
+   (read_batch + Redis-staged batch upload, 5 MB cap); `connectorClient.ts`
+   timeout constant; `maxConcurrentAgentTasks` semaphore; cancel cleanup. Tests:
+   structured-query validation rejects bad identifiers, one-chunk round trip,
+   byte-cap enforcement, cancel mid-task. **Real check** (≤5 min): sandbox =
+   Postgres + Redis + bridge + agent (external SQL Server via env) + worker,
+   destination = the same Postgres sandbox — a full small-table ETL run end to
+   end.
 
-5. **Hardening and delivery** — *Medium*. Goal: production-shaped edges closed.
-   Files: local allow-list enforcement end to end; audit logging for every new
-   task kind; `agent_key_hash` rotation path; minimum-agent-version gate; usage
-   metering (`usage_events` kind `agent_job_run`). Tests: allow-list rejection,
-   audit rows for pairing/read_batch/apply_setup, old-version agent rejected,
-   usage event idempotency. Real check (timed): full pairing→browse→route-1-run→
-   route-2-run smoke, start to finish, under 10 minutes.
+5. **Delivery** — *Medium*. Goal: production-shaped edges closed and the
+   installer ships. Files: local allow-list enforcement end to end (Planometry
+   included); audit logging for every new task kind; key rotation; minimum-
+   agent-version gate; usage metering (B.15); a route-2 test asserting **no row
+   or key value ever reaches the platform** (static grep over `agent_tasks`
+   payload shapes plus a live run with network capture); installer packaging +
+   pairing docs. Tests: allow-list rejection (Planometry host too), audit rows
+   present for pairing/rotation/read_batch/apply_setup, old-version agent
+   rejected, the no-row-reaches-platform test itself. **Real check** (≤10 min):
+   the full stack, plus the one test genuinely meant to stress this — **a real
+   Windows machine, a real cloud SQL Server, and a real Planometry staging
+   table**, pairing → browse → publish → route-1 run → route-2 run, start to
+   finish.
 
-### B.11 Open questions (with recommended defaults)
+### B.15 Open questions (with recommended defaults)
 
-1. **Who uses the Agents/pairing screens?** Recommended: admin/owner only (matches
-   write-grant precedent); members can view status read-only.
-2. **Do agent job runs count against plan limits?** Recommended: yes, reuse
-   `usage_events` with `kind = 'agent_job_run'` (route 2) and the existing
-   `rows_moved` kind (route 1, already counted since it's a normal worker run) —
-   keeps one metering model instead of a parallel one.
+1. **Do agent job runs count against plan limits?** Recommended: yes — route 2
+   rows count toward the monthly row limit via `usage_events`
+   (`kind = 'agent_rows_sent'`, `subject_id = run_id`, naturally idempotent
+   through the outbox's run_id dedup, B.7); route 1 is already counted as a
+   normal worker run.
+2. **What exactly gets counted, given overlap re-sends?** `upsertDelta`/
+   `realtime`'s `overlapSeconds` (A.6) deliberately re-reads some already-sent
+   rows on the next run to catch late changes, which inflates a naive "rows sent
+   this run" counter. Recommended default: count what the agent reports as rows
+   sent per run, documented explicitly as an approximation that can overcount
+   during overlap windows — simplest to implement now; revisit with a
+   distinct-keys-per-period measure only if the overcounting proves material in
+   practice.
 3. **Email alerts on agent offline / setup rejected?** Recommended: not in the
-   first five slices; add once the Agents page and run history have been used for
-   a while and real alert thresholds are known, to avoid guessing at noise levels.
+   first five slices; add once the Agents page and run history have real usage
+   to calibrate alert thresholds against.
 
 ---
 
