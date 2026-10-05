@@ -34,7 +34,7 @@ describe("agent-bridge /check-in (route-level)", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ tasks: [] });
+    expect(response.json()).toEqual({ tasks: [], acknowledgedRunIds: [] });
     expect(waitForTasks).toHaveBeenCalledWith("agent-1", 25_000);
 
     const [sql, params] = mockQuery.mock.calls[0]!;

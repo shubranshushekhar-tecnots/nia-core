@@ -176,6 +176,48 @@ function splitFieldsForEdit(
   return { config, secret };
 }
 
+/**
+ * Slice C1 guard — the one place `sqlserver_agent`'s non-secret config
+ * (agentId/agentConnectionId) is validated against the caller's own
+ * workspace scope and the agent's *current* reported connections, called
+ * from both createConnection and updateConnection (point 4 of the plan).
+ * RLS on platform_agents/agent_reported_connections would otherwise just
+ * return zero rows for a cross-org id rather than a clear error — this
+ * turns that into an explicit 403/404 at the point the connection is
+ * actually being saved.
+ */
+async function assertAgentConnectionScope(
+  withUser: WithUser,
+  scope: WorkspaceScope,
+  manifestId: string,
+  config: Record<string, unknown>,
+): Promise<void> {
+  if (manifestId !== "sqlserver-agent") return;
+  const agentId = config.agentId;
+  const agentConnectionId = config.agentConnectionId;
+  if (typeof agentId !== "string" || typeof agentConnectionId !== "string") return;
+
+  const agentWhere = workspaceWhere(scope, 2);
+  const { rows: agentRows } = await withUser((db) =>
+    db.query<{ id: string }>(
+      `select id from platform_agents where id = $1 and ${agentWhere.sql}`,
+      [agentId, ...agentWhere.params],
+    ),
+  );
+  if (!agentRows[0]) throw new AppError(404, "AGENT_NOT_FOUND", "That agent was not found in this workspace.");
+
+  const { rows: reportedRows } = await withUser((db) =>
+    db.query<{ id: string }>(
+      `select id from agent_reported_connections
+       where agent_id = $1 and local_connection_id = $2 and removed_at is null`,
+      [agentId, agentConnectionId],
+    ),
+  );
+  if (!reportedRows[0]) {
+    throw new AppError(404, "AGENT_CONNECTION_NOT_FOUND", "That agent no longer reports this local connection.");
+  }
+}
+
 const MAX_HANDLE_ATTEMPTS = 20;
 
 export async function createConnection(
@@ -202,6 +244,7 @@ export async function createConnection(
   }
 
   const { config, secret } = splitFields(manifest.configSchema, input.fields);
+  await assertAgentConnectionScope(withUser, scope, manifest.id, config);
 
   const vaultRef = await getSecretStore(withUser).put(secret, toSecretScope(scope));
 
@@ -338,6 +381,10 @@ export async function updateConnection(
     (key) => JSON.stringify(configPatch[key]) !== JSON.stringify(existing.config[key]),
   );
   const displayNameChanged = input.displayName !== undefined && input.displayName !== existing.displayName;
+
+  if (changedConfigKeys.length > 0) {
+    await assertAgentConnectionScope(withUser, scope, manifest.id, mergedConfig);
+  }
 
   if ((changedConfigKeys.includes("host") || changedConfigKeys.includes("database")) && !input.confirmed) {
     const usages = await listConnectionUsages(withUser, scope, id);

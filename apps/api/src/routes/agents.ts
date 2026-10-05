@@ -8,7 +8,13 @@ import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { AppError } from "../lib/appError.js";
 import { scopeFromActor } from "../lib/workspaceScope.js";
-import { listAgents, createPairingCode, revokeAgent, listAgentSetups } from "../services/agents.js";
+import {
+  listAgents,
+  createPairingCode,
+  revokeAgent,
+  listAgentSetups,
+  listAgentConnections,
+} from "../services/agents.js";
 
 // Mounted at /agents — docs/plans/agent-canvas-integration.md B.1/B.3.
 export const agentsRouter: ExpressRouter = Router();
@@ -49,6 +55,19 @@ agentsRouter.get(
   asyncHandler(async (req, res) => {
     if (!req.withUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     res.json(await listAgentSetups(req.withUser, req.params.agentId!));
+  }),
+);
+
+// Slice C1 — the agent's self-reported local connections, used by the web
+// picker when creating a `sqlserver_agent` connection. Same posture as
+// /:agentId/setups above: read-only, "agents.view" covers viewers.
+agentsRouter.get(
+  "/:agentId/connections",
+  requireCapability("agents.view"),
+  validate({ params: agentParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.withUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    res.json(await listAgentConnections(req.withUser, req.params.agentId!));
   }),
 );
 

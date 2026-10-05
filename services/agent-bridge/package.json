@@ -12,10 +12,13 @@
   },
   "dependencies": {
     "@nia/db": "workspace:*",
+    "@nia/schemas": "workspace:*",
     "fastify": "^5.1.0",
+    "pg": "^8.13.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/pg": "^8.11.10",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^5.0.0"

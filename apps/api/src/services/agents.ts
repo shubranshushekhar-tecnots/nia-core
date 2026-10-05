@@ -198,6 +198,52 @@ export async function listAgentSetups(
   return { setups, runs };
 }
 
+/**
+ * Slice C1 — the agent's self-reported local connections (name/database/
+ * dialect only, never host/user/password — same discipline as
+ * LocalJobSummary above), used by the web picker when a user is creating a
+ * `sqlserver_agent` connection. RLS (agent_reported_connections_select_members)
+ * scopes this to the caller's own org/personal workspace, same posture as
+ * listAgentSetups — never a 403. Removed (soft-deleted) rows are excluded.
+ */
+export type AgentReportedConnection = {
+  id: string;
+  localConnectionId: string;
+  name: string;
+  databaseName: string;
+  dialect: string;
+};
+
+type AgentReportedConnectionRow = {
+  id: string;
+  local_connection_id: string;
+  name: string;
+  database_name: string;
+  dialect: string;
+};
+
+export async function listAgentConnections(
+  withUser: WithUser,
+  agentId: string,
+): Promise<AgentReportedConnection[]> {
+  const { rows } = await withUser((db) =>
+    db.query<AgentReportedConnectionRow>(
+      `select id, local_connection_id, name, database_name, dialect
+       from agent_reported_connections
+       where agent_id = $1 and removed_at is null
+       order by name asc`,
+      [agentId],
+    ),
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    localConnectionId: row.local_connection_id,
+    name: row.name,
+    databaseName: row.database_name,
+    dialect: row.dialect,
+  }));
+}
+
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // excludes 0/O/1/I (B.12)
 
 function generatePairingCode(): string {

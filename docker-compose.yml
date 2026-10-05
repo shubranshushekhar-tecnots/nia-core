@@ -114,21 +114,27 @@ services:
 
   # Agent-canvas integration, Slice 1 ("Link") — public listener for the
   # desktop agent (services/agent-bridge/README has none yet; see
-  # docs/plans/agent-canvas-integration.md B.2/B.3). Unlike the connectors
-  # above, it never touches nia_secrets or write-dispatch signing, so it
-  # only needs PORT/DATABASE_URL.
+  # docs/plans/agent-canvas-integration.md B.2/B.3). Slice C1 adds a second,
+  # internal-only listener (INTERNAL_PORT) for the sqlserver_agent
+  # connector's /test, /introspect, /execute — it now needs
+  # WRITE_DISPATCH_SIGNING_SECRET too, same value every connector-* service
+  # already uses, to verify apps/api's signed ReadContext.
   agent-bridge:
     build:
       context: .
       dockerfile: services/agent-bridge/Dockerfile
     environment:
       PORT: 4040
+      INTERNAL_PORT: 4041
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+      WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "4040:4040"   # exposed for local curl; internal-network-only in prod
+      # No "4041:4041" entry here — that omission is what keeps the internal
+      # listener off the host, same posture as every connector-*'s own port.
     networks:
       - nia-internal
       - default

@@ -4,6 +4,31 @@ import type { LocalJobReport } from "./localJobReports.js";
 import type { RunReport } from "./runReportOutbox.js";
 
 /**
+ * Slice C1 — the agent's self-reported local connections, used by the
+ * platform's `sqlserver_agent` connection picker. Only name/database/
+ * dialect travel to the platform — never host/user/password. Matches
+ * the bridge's `AgentConnectionEntry` zod schema (services/agent-bridge/
+ * src/app.ts) exactly.
+ */
+export interface AgentConnectionReport {
+  id: string;
+  name: string;
+  database: string;
+  dialect: string;
+}
+
+/**
+ * Slice C1 — one task delivered by the bridge in a check-in response,
+ * flattened from its internal `AgentTask` shape (services/agent-bridge/
+ * src/app.ts's check-in handler: `{id, kind, localConnectionId}`).
+ */
+export interface AgentTask {
+  id: string;
+  kind: "test_connection" | "list_tables";
+  localConnectionId: string;
+}
+
+/**
  * Slice L2 (docs/plans/agent-canvas-integration.md B.3): "Isolated behind
  * an AgentTransport interface on both ends so long-polling can be
  * swapped later." This is the agent-side half — CheckInLoop depends only
@@ -20,10 +45,12 @@ export interface CheckInRequest {
   localJobs?: LocalJobReport[];
   /** Slice L4 (B.7) — every un-acknowledged run report in the agent's outbox. */
   runReports?: RunReport[];
+  /** Slice C1 — every locally-defined connection's current non-secret summary. Same absent-vs-empty-array discipline as `localJobs`. */
+  agentConnections?: AgentConnectionReport[];
 }
 
 export interface CheckInResponse {
-  tasks: unknown[];
+  tasks: AgentTask[];
   /** Slice L4 (B.7) — run ids the bridge has durably stored; the agent removes them from its outbox. */
   acknowledgedRunIds?: string[];
 }

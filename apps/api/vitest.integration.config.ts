@@ -44,6 +44,7 @@ export default defineConfig({
       "src/lib/invites.integration.test.ts",
       "src/routes/billingWebhook.integration.test.ts",
       "src/services/agents.integration.test.ts",
+      "src/services/connections.agentScope.integration.test.ts",
     ],
     env: {
       SUPABASE_URL: "http://localhost:54321",

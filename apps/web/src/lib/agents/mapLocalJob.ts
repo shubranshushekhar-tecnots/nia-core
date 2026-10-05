@@ -1,4 +1,4 @@
-import type { AgentSetup, AgentSetupRun, LocalJobSummary } from "./types";
+import type { AgentReportedConnection, AgentSetup, AgentSetupRun, LocalJobSummary } from "./types";
 
 /**
  * Explicit whitelist mapping, same rationale as mapAgent.ts: a raw
@@ -61,4 +61,22 @@ export function mapAgentSetupsResponse(raw: unknown): { setups: AgentSetup[]; ru
   const setups = Array.isArray(body.setups) ? body.setups.map(mapAgentSetup) : [];
   const runs = Array.isArray(body.runs) ? body.runs.map(mapAgentSetupRun) : [];
   return { setups, runs };
+}
+
+// Slice C1 — explicit whitelist mapping for the agent's self-reported
+// local connections (/:agentId/connections), same rationale as
+// mapAgent.ts/mapAgentSetup above.
+function mapAgentReportedConnection(raw: unknown): AgentReportedConnection {
+  const row = raw as Record<string, unknown>;
+  return {
+    id: String(row.id ?? ""),
+    localConnectionId: String(row.localConnectionId ?? ""),
+    name: String(row.name ?? ""),
+    databaseName: String(row.databaseName ?? ""),
+    dialect: String(row.dialect ?? ""),
+  };
+}
+
+export function mapAgentReportedConnections(raw: unknown[]): AgentReportedConnection[] {
+  return raw.map(mapAgentReportedConnection);
 }

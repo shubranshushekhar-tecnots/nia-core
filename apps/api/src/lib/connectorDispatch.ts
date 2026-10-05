@@ -25,6 +25,13 @@ function buildReadContext(route: "test" | "introspect" | "invalidate", connectio
   return { issuedAt, signature };
 }
 
+// Mirrors apps/worker/src/lib/connectorClient.ts's DEFAULT_TEST_TIMEOUT_MS /
+// DEFAULT_INTROSPECT_TIMEOUT_MS exactly — this file had no timeout at all
+// before (a pre-existing gap vs. the worker's equivalent client), so a hung
+// connector service could block a /test or /introspect request forever.
+const DEFAULT_TEST_TIMEOUT_MS = 15000;
+const DEFAULT_INTROSPECT_TIMEOUT_MS = 15000;
+
 function baseUrl(manifest: ConnectorManifest): string {
   // manifest.service.{host,port} is the Docker-internal-network address
   // (e.g. connector-mysql:4010), correct once apps/api runs in the compose
@@ -91,11 +98,25 @@ export async function dispatchTest(
   credential: CredentialRef,
   config: ConnectorConfig,
 ): Promise<{ ok: boolean; latencyMs?: number; error?: ConnectorErrorInfo }> {
-  const res = await fetch(`${baseUrl(manifest)}/test`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ credential, config, context: buildReadContext("test", credential.connectionId) }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_TEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(manifest)}/test`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ credential, config, context: buildReadContext("test", credential.connectionId) }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    const message =
+      err instanceof Error && err.name === "AbortError"
+        ? `Test of connector "${manifest.id}" timed out after ${DEFAULT_TEST_TIMEOUT_MS}ms.`
+        : `Could not reach connector service "${manifest.id}": ${err instanceof Error ? err.message : String(err)}`;
+    return { ok: false, error: { message, details: message } };
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     return { ok: false, error: await connectorErrorMessage(res) };
   }
@@ -114,11 +135,25 @@ export async function dispatchIntrospect(
   credential: CredentialRef,
   config: ConnectorConfig,
 ): Promise<{ ok: true; value: IntrospectResponse } | { ok: false; error: ConnectorErrorInfo }> {
-  const res = await fetch(`${baseUrl(manifest)}/introspect`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ credential, config, context: buildReadContext("introspect", credential.connectionId) }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_INTROSPECT_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(manifest)}/introspect`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ credential, config, context: buildReadContext("introspect", credential.connectionId) }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    const message =
+      err instanceof Error && err.name === "AbortError"
+        ? `Introspection of connector "${manifest.id}" timed out after ${DEFAULT_INTROSPECT_TIMEOUT_MS}ms.`
+        : `Could not reach connector service "${manifest.id}": ${err instanceof Error ? err.message : String(err)}`;
+    return { ok: false, error: { message, details: message } };
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     return { ok: false, error: await connectorErrorMessage(res) };
   }

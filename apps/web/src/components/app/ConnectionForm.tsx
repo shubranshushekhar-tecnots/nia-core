@@ -6,7 +6,14 @@ import { autoCompleteFor, urlPastePlaceholder } from '@/lib/connections/formFiel
 import { parseExtraSchemas } from '@/lib/connections/parseExtraSchemas';
 import HelpPanel from './HelpPanel';
 import ConnectorLogo from './ConnectorLogo';
+import AgentConnectionPicker from './AgentConnectionPicker';
 import { nxModalErrorStyle, nxModalFieldStyle, nxModalLabelStyle, nxModalTitleStyle } from './styles';
+
+// Slice C1 — this connector's two fields (agentId/agentConnectionId) are both
+// `type: "select"` with no static options; the generic loop below has no
+// `select` support, so they're rendered by the dedicated AgentConnectionPicker
+// instead and skipped here.
+const AGENT_PICKER_KEYS = new Set(['agentId', 'agentConnectionId']);
 
 // Connect-form body, used by the canvas's AddConnectionDialog (single-step
 // dialog, Server Action submit) — the only entry point for adding a
@@ -188,7 +195,12 @@ export default function ConnectionForm({
         </div>
       )}
 
+      {connectorId === 'sqlserver-agent' && (
+        <AgentConnectionPicker idPrefix={idPrefix} fieldErrors={errors?.fieldErrors} />
+      )}
+
       {configSchema.map((field) => {
+        if (AGENT_PICKER_KEYS.has(field.key)) return null;
         if (field.type === 'boolean') {
           return (
             <div key={field.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -2,7 +2,14 @@ import os from "node:os";
 import type { Logger } from "../ops/logger.js";
 import type { LocalJobReport } from "./localJobReports.js";
 import type { RunReport } from "./runReportOutbox.js";
-import { LinkRevokedError, LinkTransientError, type AgentTransport, type CheckInResponse } from "./transport.js";
+import {
+  LinkRevokedError,
+  LinkTransientError,
+  type AgentConnectionReport,
+  type AgentTask,
+  type AgentTransport,
+  type CheckInResponse,
+} from "./transport.js";
 
 const DEFAULT_INITIAL_DELAY_MS = 1_000;
 const DEFAULT_MAX_DELAY_MS = 60_000;
@@ -20,6 +27,10 @@ export interface CheckInLoopOptions {
   buildLocalJobs?: () => LocalJobReport[];
   /** Slice L4 (B.7) — called fresh on every check-in to collect the current outbox contents (also flushes any overdue realtime bucket). */
   buildRunReports?: () => RunReport[];
+  /** Slice C1 — called fresh on every check-in so a connection added/changed/removed between check-ins is always reported current. */
+  buildLocalConnections?: () => AgentConnectionReport[];
+  /** Slice C1 — invoked with every task delivered on a successful check-in, in addition to (not instead of) `onSuccess`. */
+  onTasks?: (tasks: AgentTask[]) => void;
 }
 
 /**
@@ -93,6 +104,7 @@ export class CheckInLoop {
     try {
       const localJobs = this.options.buildLocalJobs?.();
       const runReports = this.options.buildRunReports?.();
+      const agentConnections = this.options.buildLocalConnections?.();
       const response = await this.options.transport.checkIn(
         {
           agentVersion: this.options.agentVersion,
@@ -100,12 +112,14 @@ export class CheckInLoop {
           ...(noHold ? { noHold: true } : {}),
           ...(localJobs !== undefined ? { localJobs } : {}),
           ...(runReports !== undefined ? { runReports } : {}),
+          ...(agentConnections !== undefined ? { agentConnections } : {}),
         },
         signal,
       );
       if (this.stopped) return;
       this.delayMs = this.initialDelayMs;
       this.options.onSuccess?.(response);
+      if (response.tasks.length > 0) this.options.onTasks?.(response.tasks);
       this.scheduleNext(0);
     } catch (err) {
       if (this.stopped) return;

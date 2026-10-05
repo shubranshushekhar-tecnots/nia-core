@@ -274,12 +274,17 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4040
+      # Slice C1 — internal-only listener (/test, /introspect, /execute for
+      # the sqlserver_agent connector); never published via niacore-proxy or
+      # any port mapping below, same posture as every connector-* service.
+      - INTERNAL_PORT=4041
 
       # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
 
       # Database
       - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
+      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
 
     # Alias is required: niacore-proxy calls this service as "agent-bridge"
     networks:

@@ -1,7 +1,7 @@
 import { ensureBearerToken } from '@/lib/auth/browserSession';
 import { mapAgents } from '@/lib/agents/mapAgent';
-import { mapAgentSetupsResponse } from '@/lib/agents/mapLocalJob';
-import type { AgentSetup, AgentSetupRun, PlatformAgent } from '@/lib/agents/types';
+import { mapAgentReportedConnections, mapAgentSetupsResponse } from '@/lib/agents/mapLocalJob';
+import type { AgentReportedConnection, AgentSetup, AgentSetupRun, PlatformAgent } from '@/lib/agents/types';
 
 /**
  * Browser-side poll for the Agents list — AgentsClient.tsx re-fetches this
@@ -68,4 +68,24 @@ export async function listAgentSetupsClient(
   }
   const raw = await res.json();
   return mapAgentSetupsResponse(raw);
+}
+
+// Slice C1 — read-only; drives the "Local database (via agent)" connection
+// picker's second dropdown once an agent is selected.
+export async function listAgentConnectionsClient(agentId: string): Promise<AgentReportedConnection[]> {
+  const res = await fetch(`/api/backend/agents/${agentId}/connections`, {
+    method: 'GET',
+    headers: { Accept: 'application/json', ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new AgentsApiError(
+      res.status,
+      body?.error?.code ?? 'UNKNOWN',
+      body?.error?.message ?? res.statusText,
+      body?.error?.details,
+    );
+  }
+  const raw = (await res.json()) as unknown[];
+  return mapAgentReportedConnections(raw);
 }

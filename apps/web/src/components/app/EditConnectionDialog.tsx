@@ -8,6 +8,7 @@ import { autoCompleteFor } from '@/lib/connections/formFields';
 import { useModalA11y } from '@/lib/a11y/useModalDialog';
 import HelpPanel from './HelpPanel';
 import ConnectorLogo from './ConnectorLogo';
+import AgentConnectionPicker from './AgentConnectionPicker';
 import {
   nxModalCancelCellStyle,
   nxModalCardStyle,
@@ -36,6 +37,11 @@ function inputType(field: ConfigField): string {
   if (field.type === 'number') return 'number';
   return 'text';
 }
+
+// Slice C1 — same rationale as ConnectionForm.tsx's AGENT_PICKER_KEYS: these
+// two fields are rendered by the dedicated AgentConnectionPicker instead of
+// the generic loop below, which has no `select` support.
+const AGENT_PICKER_KEYS = new Set(['agentId', 'agentConnectionId']);
 
 // `user` isn't ConfigField.type === 'password', but it's still a credential
 // value we never want to display back to the browser — same "blank means
@@ -203,7 +209,16 @@ export default function EditConnectionDialog({
             />
           </div>
 
+          {connection.connectorId === 'sqlserver-agent' && (
+            <AgentConnectionPicker
+              idPrefix="edit-connection"
+              initialAgentId={String(connection.config.agentId ?? '')}
+              initialAgentConnectionId={String(connection.config.agentConnectionId ?? '')}
+            />
+          )}
+
           {manifest.configSchema.map((field) => {
+            if (AGENT_PICKER_KEYS.has(field.key)) return null;
             if (field.type === 'boolean') {
               const current = connection.config[field.key];
               return (

@@ -1,9 +1,12 @@
 import { runJob as runJobCommand } from "./cli/runJobCommand.js";
 import { defaultHomeDir, defaultLogDir } from "./config/paths.js";
 import { findConnection, loadConfig } from "./config/store.js";
+import { buildAgentConnectionReports } from "./link/agentConnectionReports.js";
 import { CheckInLoop } from "./link/checkInLoop.js";
 import { buildLocalJobReports } from "./link/localJobReports.js";
 import * as runReportOutbox from "./link/runReportOutbox.js";
+import { TaskResultsClient } from "./link/taskResultsClient.js";
+import { TaskRunner } from "./link/taskRunner.js";
 import { HttpAgentTransport } from "./link/transport.js";
 import { Logger } from "./ops/logger.js";
 import { buildMonitoringHeartbeatPayload, MonitoringHeartbeatScheduler, type JobHeartbeatSource } from "./ops/monitoringHeartbeat.js";
@@ -58,22 +61,27 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
   const link = loadConfig(dir).link;
   let checkInLoop: CheckInLoop | undefined;
   let transport: HttpAgentTransport | undefined;
+  let taskResultsClient: TaskResultsClient | undefined;
   if (link) {
     const masterKey = loadOrCreateMasterKey(dir);
     const secrets = new LocalSecretStore(masterKey, dir);
     const secret = secrets.get<{ agentKey: string }>(link.agentKeyRef);
     if (secret) {
       transport = new HttpAgentTransport({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
+      taskResultsClient = new TaskResultsClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
+      const taskRunner = new TaskRunner(taskResultsClient, logger, dir);
       checkInLoop = new CheckInLoop({
         transport,
         agentVersion: options.agentVersion,
         logger,
         buildLocalJobs: () => buildLocalJobReports(dir),
         buildRunReports: () => runReportOutbox.pendingReports(dir, logger),
+        buildLocalConnections: () => buildAgentConnectionReports(dir),
         onSuccess: (response) => {
           recordCheckInSuccess(dir);
           runReportOutbox.acknowledge(dir, response.acknowledgedRunIds ?? []);
         },
+        onTasks: (tasks) => taskRunner.handle(tasks),
         onRevoked: () => recordRevoked(dir),
       });
       checkInLoop.start();
@@ -109,6 +117,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     await scheduler.stop();
     await checkInLoop?.stop();
     await transport?.close();
+    await taskResultsClient?.close();
   }
 }
 

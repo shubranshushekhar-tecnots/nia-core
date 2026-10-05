@@ -3,7 +3,8 @@ import { z } from "zod";
 import { withServiceRole } from "@nia/db";
 import { dbPool } from "./db.js";
 import { generateAgentKey, sha256Hex } from "./crypto.js";
-import { LongPollTransport, type AgentTransport } from "./transport.js";
+import { DbAgentTransport, type AgentTransport } from "./transport.js";
+import { taskBus } from "./taskBus.js";
 
 /**
  * Thrown by a route handler to force a specific HTTP status. Fastify's
@@ -64,6 +65,16 @@ const RunReportEntry = z.object({
   periodEnd: z.string().optional(),
 });
 
+// Slice C1 — same allow-list discipline as LocalJobEntry above: never host/
+// user/password, name/db/dialect only (docs/plans/agent-canvas-integration.md
+// Slice C1's "agent reports which local connections it has").
+const AgentConnectionEntry = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  database: z.string(),
+  dialect: z.string(),
+});
+
 const CheckInBody = z
   .object({
     agentVersion: z.string().optional(),
@@ -78,8 +89,17 @@ const CheckInBody = z
     // jobs" (see the handler below).
     localJobs: z.array(LocalJobEntry).optional(),
     runReports: z.array(RunReportEntry).optional(),
+    // Slice C1 — same absent-vs-empty-array discipline as localJobs.
+    agentConnections: z.array(AgentConnectionEntry).optional(),
   })
   .optional();
+
+const TaskResultBody = z.object({
+  taskId: z.string().uuid(),
+  status: z.enum(["done", "failed"]),
+  result: z.unknown().optional(),
+  errorClass: z.string().optional(),
+});
 
 type ConsumeResult = {
   status: "ok" | "not_found" | "locked" | "used" | "expired" | "incorrect";
@@ -107,7 +127,7 @@ type AgentRow = {
  * AgentTransport and skip the real 25-second check-in hold — see
  * src/transport.ts's header comment.
  */
-export function buildApp(transport: AgentTransport = new LongPollTransport()) {
+export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool)) {
   const app = Fastify({ logger: true });
 
   app.get("/health", async () => ({ status: "ok" as const, service: "agent-bridge" }));
@@ -170,7 +190,8 @@ export function buildApp(transport: AgentTransport = new LongPollTransport()) {
     const agentKey = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
     if (!agentKey) throw new HttpError(401, "missing agent key");
 
-    const { agentVersion, hostName, noHold, localJobs, runReports } = CheckInBody.parse(req.body) ?? {};
+    const { agentVersion, hostName, noHold, localJobs, runReports, agentConnections } =
+      CheckInBody.parse(req.body) ?? {};
     const agentKeyHash = sha256Hex(agentKey);
 
     const { rows, acknowledgedRunIds } = await withServiceRole(dbPool, async (db) => {
@@ -207,6 +228,29 @@ export function buildApp(transport: AgentTransport = new LongPollTransport()) {
            where agent_id = $1 and source = 'local' and removed_at is null
              and local_job_id <> all($2::text[])`,
           [agent.id, reportedIds],
+        );
+      }
+
+      // Slice C1 — same absent-vs-empty-array discipline as localJobs above.
+      if (agentConnections !== undefined) {
+        for (const conn of agentConnections) {
+          await db.query(
+            `insert into public.agent_reported_connections
+               (agent_id, local_connection_id, name, database_name, dialect, removed_at, updated_at)
+             values ($1, $2, $3, $4, $5, null, now())
+             on conflict (agent_id, local_connection_id) do update
+               set name = excluded.name, database_name = excluded.database_name,
+                   dialect = excluded.dialect, removed_at = null, updated_at = now()`,
+            [agent.id, conn.id, conn.name, conn.database, conn.dialect],
+          );
+        }
+        const reportedConnectionIds = agentConnections.map((c) => c.id);
+        await db.query(
+          `update public.agent_reported_connections
+             set removed_at = now()
+           where agent_id = $1 and removed_at is null
+             and local_connection_id <> all($2::text[])`,
+          [agent.id, reportedConnectionIds],
         );
       }
 
@@ -261,8 +305,45 @@ export function buildApp(transport: AgentTransport = new LongPollTransport()) {
     const agent = rows[0];
     if (!agent) throw new HttpError(401, "agent key is invalid or revoked");
 
-    const tasks = await transport.waitForTasks(agent.id, noHold ? 0 : CHECK_IN_HOLD_MS);
+    const delivered = await transport.waitForTasks(agent.id, noHold ? 0 : CHECK_IN_HOLD_MS);
+    // Flatten to exactly what the agent's taskRunner needs — the platform's
+    // own connections.id (connectionId) is never exposed to the agent, only
+    // the agent's own local_connection_id that connection resolves to.
+    const tasks = delivered.map((task) => ({
+      id: task.id,
+      kind: task.kind,
+      localConnectionId: task.payload.localConnectionId,
+    }));
     return { tasks, acknowledgedRunIds };
+  });
+
+  // Slice C1 (point 1) — the ONLY path a task result ever travels; never
+  // carried on the next check-in. Authenticated the same way as check-in
+  // (Bearer agent key, no acting user).
+  app.post("/agent-api/task-results", async (req) => {
+    const authHeader = req.headers.authorization ?? "";
+    const agentKey = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
+    if (!agentKey) throw new HttpError(401, "missing agent key");
+
+    const { taskId, status, result, errorClass } = TaskResultBody.parse(req.body);
+    const agentKeyHash = sha256Hex(agentKey);
+
+    const { rows } = await withServiceRole(dbPool, (db) =>
+      db.query<{ id: string }>(
+        `update public.agent_tasks t
+           set status = $3, result = $4::jsonb, error_class = $5, completed_at = now()
+         where t.id = $2
+           and t.agent_id = (select id from public.platform_agents where agent_key_hash = $1 and status <> 'revoked')
+           and t.status = 'delivered'
+         returning t.id`,
+        [agentKeyHash, taskId, status, result !== undefined ? JSON.stringify(result) : null, errorClass ?? null],
+      ),
+    );
+    const updated = rows[0];
+    if (!updated) throw new HttpError(404, "task not found, not yours, or already resolved");
+
+    taskBus.resolveTaskResult(taskId, { status, result, errorClass });
+    return { ok: true as const };
   });
 
   return app;

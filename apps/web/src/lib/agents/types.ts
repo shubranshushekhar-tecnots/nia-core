@@ -36,6 +36,17 @@ export type AgentSetup = {
   localJob: LocalJobSummary | null;
 };
 
+// Slice C1 — mirrors apps/api/src/services/agents.ts's AgentReportedConnection
+// exactly (the allow-list). Non-secret only: name/database/dialect, never
+// host/user/password.
+export type AgentReportedConnection = {
+  id: string;
+  localConnectionId: string;
+  name: string;
+  databaseName: string;
+  dialect: string;
+};
+
 export type AgentSetupRun = {
   id: string;
   agentSetupId: string;
