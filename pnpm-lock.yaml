@@ -395,6 +395,9 @@ importers:
       '@nia/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
+      '@nia/secrets':
+        specifier: workspace:*
+        version: link:../../packages/secrets
       fastify:
         specifier: ^5.1.0
         version: 5.12.3

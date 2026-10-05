@@ -1,6 +1,6 @@
 import { Router, type Router as ExpressRouter } from "express";
 import { z } from "zod";
-import { GraphDoc, Plan, PlanDiff, CleanBindingInput } from "@nia/schemas";
+import { GraphDoc, Plan, PlanDiff, CleanBindingInput, AgentJobSetup } from "@nia/schemas";
 import { requireAuth } from "../middleware/auth.js";
 import { attachDb } from "../middleware/db.js";
 import { attachActor } from "../middleware/actor.js";
@@ -19,6 +19,7 @@ import { proposeMappingForWorkflow } from "../services/mappings.js";
 import { proposeCleaningForWorkflow } from "../services/cleanPropose.js";
 import { previewWorkflowDestination } from "../services/preview.js";
 import { getLatestConversationForWorkflow, listMessages } from "../services/chat.js";
+import { previewPublishAgentSetup, publishAgentSetup, unpublishAgentSetup } from "../services/agentSetups.js";
 
 export const workflowsRouter: ExpressRouter = Router();
 
@@ -307,6 +308,66 @@ workflowsRouter.post(
       req.actor.userId,
     );
     res.status(201).json(data);
+  }),
+);
+
+const agentSetupBodySchema = z.object({
+  sourceConnectionId: z.string().uuid(),
+  destinationConnectionId: z.string().uuid(),
+  setup: AgentJobSetup,
+});
+
+// Agent-Canvas integration, Slice R3a (docs/plans/agent-canvas-integration.md
+// B.2/B.4/B.7) — publishing a job to an agent, platform side. Gated the
+// same as every other config-editing route in this file
+// (workflows.updateDefinition — already excludes viewer, see can.ts);
+// services/agentSetups.ts's publish_agent_setup/unpublish_agent_setup RPC
+// calls re-check authorization server-side regardless, same posture as
+// every other RPC-backed route. Preview never writes.
+workflowsRouter.post(
+  "/:id/agent-setup/preview-publish",
+  requireCapability("workflows.updateDefinition"),
+  validate({ params: workflowParamsSchema, body: agentSetupBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await previewPublishAgentSetup(
+      req.withUser,
+      scopeFromActor(req.actor),
+      req.params.id!,
+      req.body.sourceConnectionId,
+      req.body.destinationConnectionId,
+      req.body.setup,
+    );
+    res.json(data);
+  }),
+);
+
+workflowsRouter.post(
+  "/:id/agent-setup/publish",
+  requireCapability("workflows.updateDefinition"),
+  validate({ params: workflowParamsSchema, body: agentSetupBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await publishAgentSetup(
+      req.withUser,
+      scopeFromActor(req.actor),
+      req.params.id!,
+      req.body.sourceConnectionId,
+      req.body.destinationConnectionId,
+      req.body.setup,
+    );
+    res.status(201).json(data);
+  }),
+);
+
+workflowsRouter.post(
+  "/:id/agent-setup/unpublish",
+  requireCapability("workflows.updateDefinition"),
+  validate({ params: workflowParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await unpublishAgentSetup(req.withUser, scopeFromActor(req.actor), req.params.id!);
+    res.json(data);
   }),
 );
 

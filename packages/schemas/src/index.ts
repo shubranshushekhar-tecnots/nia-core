@@ -58,3 +58,4 @@ export * from "./destinationContract.js";
 export * from "./connectionErrorMessages.js";
 export * from "./appErrorMessages.js";
 export * from "./help/content.js";
+export * from "./agentJobSetup.js";

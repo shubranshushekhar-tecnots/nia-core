@@ -1,10 +1,12 @@
 import { createDbPool } from "@nia/db";
 
 /**
- * The bridge never touches connector secrets or write-dispatch signing —
- * it only reads/writes platform_agents/agent_pairing_codes via
- * withServiceRole, so (unlike services/connector-mysql's pool-manager.ts)
- * there is no per-connection secret-backed pool here, just one shared pool.
+ * The bridge never touches write-dispatch signing, and (unlike
+ * services/connector-mysql's pool-manager.ts) has no per-connection
+ * secret-backed pool — just one shared pool here. It does decrypt one
+ * specific secret, a published setup's own destination vault_secret_ref,
+ * for the owning agent only (Slice R3a, app.ts's
+ * /agent-api/setups/:id/secret) — never any other connector's credential.
  */
 export const dbPool = createDbPool({ connectionString: process.env.DATABASE_URL ?? "", max: 5 });
 

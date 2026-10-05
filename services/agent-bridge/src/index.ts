@@ -1,6 +1,8 @@
+import type { Client } from "pg";
 import { buildApp } from "./app.js";
 import { buildInternalApp } from "./internalApp.js";
 import { checkDbReachable, dbPool } from "./db.js";
+import { startAgentSetupNotifyListener } from "./notifyListener.js";
 import { withServiceRole } from "@nia/db";
 
 const app = buildApp();
@@ -31,8 +33,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // /introspect, /execute (see internalApp.ts's header comment).
   const internalPort = Number(process.env.INTERNAL_PORT ?? 4041);
 
+  let notifyClient: Client | undefined;
+
   checkDbReachable()
-    .then(() => Promise.all([app.listen({ port, host: "0.0.0.0" }), internalApp.listen({ port: internalPort, host: "0.0.0.0" })]))
+    .then(() =>
+      Promise.all([
+        app.listen({ port, host: "0.0.0.0" }),
+        internalApp.listen({ port: internalPort, host: "0.0.0.0" }),
+        startAgentSetupNotifyListener(process.env.DATABASE_URL ?? "").then((client) => {
+          notifyClient = client;
+        }),
+      ]),
+    )
     .catch((err) => {
       app.log.error(err);
       process.exit(1);
@@ -44,7 +56,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const shutdown = () => {
     app.log.info("shutting down…");
     clearInterval(cleanupTimer);
-    Promise.all([app.close(), internalApp.close()])
+    Promise.all([app.close(), internalApp.close(), notifyClient?.end()])
       .then(() => process.exit(0))
       .catch((err) => {
         app.log.error(err);
