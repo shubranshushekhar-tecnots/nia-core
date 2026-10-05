@@ -22,6 +22,7 @@ export type PlatformAgent = {
   hostName: string | null;
   lastCheckInAt: string | null;
   createdByUserId: string;
+  createdAt: string;
   online: boolean;
 };
 
@@ -33,9 +34,11 @@ type AgentRow = {
   host_name: string | null;
   last_check_in_at: string | null;
   created_by_user_id: string;
+  created_at: string;
 };
 
-const AGENTS_SELECT = "id, display_name, status, agent_version, host_name, last_check_in_at, created_by_user_id";
+const AGENTS_SELECT =
+  "id, display_name, status, agent_version, host_name, last_check_in_at, created_by_user_id, created_at";
 
 function toAgent(row: AgentRow): PlatformAgent {
   const online =
@@ -48,6 +51,7 @@ function toAgent(row: AgentRow): PlatformAgent {
     hostName: row.host_name,
     lastCheckInAt: row.last_check_in_at,
     createdByUserId: row.created_by_user_id,
+    createdAt: row.created_at,
     online,
   };
 }

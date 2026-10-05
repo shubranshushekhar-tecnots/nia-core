@@ -36,6 +36,7 @@ import {
   workflowRowStyle,
 } from './styles';
 import {
+  NxAgentsIcon,
   NxBillingIcon,
   NxChevronRightIcon,
   NxCollapseIcon,
@@ -209,6 +210,10 @@ export default function Sidebar({
   // packages/schemas/src/can.ts's CAPABILITY_MATRIX exactly, unlike
   // canManageOrg above (admin/owner only) which the old placeholder used.
   const canViewMembers = can(role, 'members.view');
+  // Slice L3 (agent-canvas-integration.md B.1) — agents.view includes every
+  // role (viewer too); kept as an explicit gate for defense-in-depth
+  // consistency with the rest of this file, not because it ever hides this.
+  const canViewAgents = can(role, 'agents.view');
   // Viewer is read-only everywhere (0057_viewer_role_restrictions.sql)
   // — hide the one write control this sidebar renders.
   const canWrite = role !== 'viewer';
@@ -367,6 +372,23 @@ export default function Sidebar({
           >
             <NxMembersIcon size={20} />
             {wide && <span style={navRailBtnLabelStyle}>Members & roles</span>}
+          </a>
+        )}
+
+        {canViewAgents && (
+          <a
+            href="/app/agents"
+            className={`nx-wipe${pathname === '/app/agents' ? ' nx-active-cell' : ''}`}
+            style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
+            aria-label="Agents"
+            title={wide ? 'Agents' : undefined}
+            onMouseEnter={(e) => showHoverLabel(e, 'Agents')}
+            onMouseLeave={hideHoverLabel}
+            onFocus={(e) => showHoverLabel(e, 'Agents')}
+            onBlur={hideHoverLabel}
+          >
+            <NxAgentsIcon size={20} />
+            {wide && <span style={navRailBtnLabelStyle}>Agents</span>}
           </a>
         )}
 

@@ -271,6 +271,13 @@ export const NxAuditIcon: IconComponent = ({ size = 16 }) => (
   </svg>
 );
 
+/** docs/plans/agent-canvas-integration.md Slice L3 — paired platform agents nav entry. */
+export const NxAgentsIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M6 2.5h8v6H6zM8.5 8.5v2.5M11.5 8.5v2.5M5.5 11h9v6.5h-9zM2.5 13h3M14.5 13h3" />
+  </svg>
+);
+
 export const NxBillingIcon: IconComponent = ({ size = 16 }) => (
   <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
     <path d="M2.5 4.5h15v11h-15zM2.5 8h15M5.5 12h3" />
