@@ -1,3 +1,9 @@
+> **Superseded.** This describes an earlier version of the agent's setup
+> protocol (no pairing step, a different `connection add` flag set, and
+> `agent doctor` checks that no longer exist). For current, generic
+> install instructions, see `docs/pilot/install-guide.md`. Kept here for
+> GMS-pilot-specific history only.
+
 # GMS install guide — Nia Agent
 
 Audience: GMS IT. Installs the on-premise Nia Agent that reads GMS's 7

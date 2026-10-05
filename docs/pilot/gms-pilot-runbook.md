@@ -1,3 +1,8 @@
+> **Superseded.** This describes an earlier version of the agent's setup
+> protocol (no pairing step, no job concept, `agent doctor` checks that
+> no longer exist). For current, generic operating instructions, see
+> `docs/pilot/runbook.md`. Kept here for GMS-pilot-specific history only.
+
 # GMS pilot runbook
 
 Audience: whoever is on point for the GMS pilot (Nia side), working with
