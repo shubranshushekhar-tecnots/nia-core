@@ -2,7 +2,17 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
-import { addJob, listJobs, pauseJob, removeJob, resumeJob, testJob, updateJob, type AddJobHttpsInput } from "./cli/jobCommands.js";
+import {
+  addJob,
+  listJobs,
+  pauseJob,
+  PlatformManagedJobError,
+  removeJob,
+  resumeJob,
+  testJob,
+  updateJob,
+  type AddJobHttpsInput,
+} from "./cli/jobCommands.js";
 import type { WatermarkColumnReport } from "./sync/watermark.js";
 import { runJob } from "./cli/runJobCommand.js";
 import { parseMapOverrides } from "./cli/jobMapping.js";
@@ -452,8 +462,17 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const removed = await removeJob(id);
-    console.log(removed ? `removed job ${id}` : `no job with id ${id}`);
+    try {
+      const removed = await removeJob(id);
+      console.log(removed ? `removed job ${id}` : `no job with id ${id}`);
+    } catch (err) {
+      if (err instanceof PlatformManagedJobError) {
+        console.error(err.message);
+        process.exitCode = 1;
+        return;
+      }
+      throw err;
+    }
     return;
   }
 

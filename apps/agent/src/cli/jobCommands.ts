@@ -33,7 +33,15 @@ import { checkWatermarkColumn, type WatermarkColumnReport } from "../sync/waterm
 import { validateHttpsAddress } from "../destinations/httpsAddress.js";
 import { buildHttpsMapping, buildMapping, type RawMappingPair } from "./jobMapping.js";
 
-const DEFAULT_MAX_DELETE_PERCENT = 20;
+/** Slice R3b (docs/plans/agent-canvas-integration.md B.4): thrown by `removeJob` for a platform-managed job unless the caller explicitly opts in via `{ allowPlatformManaged: true }` — `SetupManager` passes that when a setup is unpublished; `nia-agent job remove` does not. */
+export class PlatformManagedJobError extends Error {
+  constructor(id: string) {
+    super(`job ${id} is managed from the platform — it cannot be removed locally`);
+    this.name = "PlatformManagedJobError";
+  }
+}
+
+export const DEFAULT_MAX_DELETE_PERCENT = 20;
 /** `strategy: "realtime"` only (§1.3/E1): tick interval default/minimum, seconds. */
 const DEFAULT_POLL_INTERVAL_SECONDS = 60;
 const MIN_POLL_INTERVAL_SECONDS = 10;
@@ -53,7 +61,7 @@ const SOFT_DELETE_FILTER_WARNING =
  * boolean (SQL Server `bit`) column. Mirrors `validateUpsertDelta`'s
  * error style.
  */
-function validateDeleteMode(
+export function validateDeleteMode(
   strategy: JobStrategy,
   deleteMode: DeleteMode | undefined,
   maxDeletePercent: number | undefined,
@@ -136,7 +144,7 @@ function filterUsesRelativeDateToken(filter: JobFilterCondition[], params: Recor
  * cron expression. Returns the null-count/clock-skew report on
  * success, for the caller to attach to its result.
  */
-async function validateUpsertDelta(
+export async function validateUpsertDelta(
   strategy: "upsertDelta" | "realtime",
   connection: ConnectionEntry,
   table: CatalogTable,
@@ -177,7 +185,7 @@ async function validateUpsertDelta(
  * 60, minimum 10; `reconciliationIntervalSeconds` (only meaningful when
  * `deleteMode === "reconciliation"`) default 600.
  */
-function validateRealtimeIntervals(
+export function validateRealtimeIntervals(
   pollIntervalSeconds: number | undefined,
   reconciliationIntervalSeconds: number | undefined,
   deleteMode: DeleteMode | undefined,
@@ -189,7 +197,7 @@ function validateRealtimeIntervals(
 }
 
 /** `{ column name -> source ExtractType }`, for filter type-checking — filter columns need not be in the job's mapping. */
-function columnTypesOf(table: CatalogTable): Record<string, ExtractType> {
+export function columnTypesOf(table: CatalogTable): Record<string, ExtractType> {
   return Object.fromEntries(table.columns.map((c) => [c.name, c.type]));
 }
 
@@ -678,11 +686,22 @@ export function listJobs(dir = defaultHomeDir()): SyncJobEntry[] {
   return loadConfig(dir).jobs;
 }
 
-/** `nia-agent job remove <id>`: removes the job, its push key from the secret store, and (if present) its key reconciliation list (§10 slice D1). */
-export async function removeJob(id: string, dir = defaultHomeDir()): Promise<boolean> {
+/**
+ * `nia-agent job remove <id>`: removes the job, its push key from the
+ * secret store, and (if present) its key reconciliation list (§10 slice
+ * D1). Refuses (`PlatformManagedJobError`) for a platform-managed job
+ * unless `options.allowPlatformManaged` — `SetupManager` passes that
+ * when a setup is unpublished (slice R3b).
+ */
+export async function removeJob(
+  id: string,
+  dir = defaultHomeDir(),
+  options: { allowPlatformManaged?: boolean } = {},
+): Promise<boolean> {
   const config = loadConfig(dir);
   const job = findJob(config, id);
   if (!job) return false;
+  if (job.platformManaged && !options.allowPlatformManaged) throw new PlatformManagedJobError(id);
 
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
@@ -760,6 +779,9 @@ export async function updateJob(
   if (!job) return { ok: false, errors: [`no job with id ${JSON.stringify(id)}`] };
   if (job.destinationType === "https") {
     return { ok: false, errors: ['job update is not yet supported for destinationType "https" — remove and re-add the job instead'] };
+  }
+  if (job.platformManaged) {
+    return { ok: false, errors: [`job ${id} is managed from the platform — it cannot be updated locally`] };
   }
   const connection = findConnection(config, job.connectionId);
   if (!connection) return { ok: false, errors: [`no connection with id ${JSON.stringify(job.connectionId)}`] };
@@ -887,9 +909,9 @@ export async function updateJob(
   return { ok: true, job: updated, sentAsNull: plan.sentAsNull, watermarkReport, warnings };
 }
 
-type ReadSourceTableResult = { ok: true; table: CatalogTable } | { ok: false; error: string };
+export type ReadSourceTableResult = { ok: true; table: CatalogTable } | { ok: false; error: string };
 
-async function readSourceTable(connection: ConnectionEntry, sourceTable: string, dir: string): Promise<ReadSourceTableResult> {
+export async function readSourceTable(connection: ConnectionEntry, sourceTable: string, dir: string): Promise<ReadSourceTableResult> {
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
   const credentials = secrets.get<{ user: string; password: string }>(connection.credentialRef);
@@ -915,7 +937,7 @@ async function readSourceTable(connection: ConnectionEntry, sourceTable: string,
   }
 }
 
-function buildTargetSchemaSnapshot(schema: TableSchema, pairs: JobMappingColumn[]): TargetSchemaSnapshot {
+export function buildTargetSchemaSnapshot(schema: TableSchema, pairs: JobMappingColumn[]): TargetSchemaSnapshot {
   const columnByName = new Map(schema.columns.map((c) => [c.name, c]));
   return {
     columns: pairs.map((p) => {
@@ -926,6 +948,6 @@ function buildTargetSchemaSnapshot(schema: TableSchema, pairs: JobMappingColumn[
   };
 }
 
-function describeError(err: unknown): string {
+export function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }

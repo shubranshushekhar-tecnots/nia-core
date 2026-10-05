@@ -28,6 +28,8 @@ export interface RunReport {
   isRealtimeAggregate?: boolean;
   periodStart?: string;
   periodEnd?: string;
+  /** Slice R3b — the job's platform setup id, present only for a platform-managed job. */
+  setupId?: string;
 }
 
 export interface RecordRunInput {
@@ -44,6 +46,8 @@ export interface RecordRunInput {
   isRealtime: boolean;
   /** Realtime only: true when the tick sent/deleted nothing and didn't fail — dropped entirely, never aggregated ("only when something was sent/failed"). */
   empty?: boolean;
+  /** Slice R3b — the job's platform setup id, present only for a platform-managed job. */
+  setupId?: string;
 }
 
 const MAX_OUTBOX_SIZE = 500;
@@ -58,6 +62,7 @@ interface RealtimeBucket {
   parts: number;
   status: "ok" | "failed";
   errorClass?: string;
+  setupId?: string;
 }
 
 interface OutboxFile {
@@ -132,6 +137,7 @@ function flushStaleBuckets(outbox: OutboxFile, now: number, logger?: Logger): vo
         isRealtimeAggregate: true,
         periodStart: bucket.periodStart,
         periodEnd: bucket.finishedAt,
+        setupId: bucket.setupId,
       },
       logger,
     );
@@ -158,6 +164,7 @@ export function recordRun(dir: string, input: RecordRunInput, logger?: Logger): 
         rowsDeleted: input.rowsDeleted,
         parts: input.parts,
         errorClass: input.errorClass,
+        setupId: input.setupId,
       },
       logger,
     );
@@ -182,6 +189,7 @@ export function recordRun(dir: string, input: RecordRunInput, logger?: Logger): 
       parts: input.parts,
       status: input.status,
       errorClass: input.errorClass,
+      setupId: input.setupId,
     };
   } else {
     existing.rowsSent += input.rowsSent;
@@ -191,6 +199,7 @@ export function recordRun(dir: string, input: RecordRunInput, logger?: Logger): 
     existing.errorClass = input.errorClass;
     existing.finishedAt = input.finishedAt;
     existing.mode = input.mode ?? existing.mode;
+    existing.setupId = input.setupId ?? existing.setupId;
   }
   writeOutbox(outbox, dir);
 }

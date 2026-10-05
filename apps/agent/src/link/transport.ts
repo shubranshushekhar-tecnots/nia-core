@@ -49,10 +49,25 @@ export interface CheckInRequest {
   agentConnections?: AgentConnectionReport[];
 }
 
+/**
+ * Slice R3b (docs/plans/agent-canvas-integration.md B.4/B.7): one platform-
+ * published setup's current version state, as surfaced on every check-in —
+ * `SetupManager` diffs this against each job's `platformManaged.appliedVersion`.
+ */
+export interface CheckInSetupSummary {
+  id: string;
+  workflowId: string;
+  wantedVersion: number;
+  appliedVersion: number;
+  removed: boolean;
+}
+
 export interface CheckInResponse {
   tasks: AgentTask[];
   /** Slice L4 (B.7) — run ids the bridge has durably stored; the agent removes them from its outbox. */
   acknowledgedRunIds?: string[];
+  /** Slice R3b — every setup published to this agent, present or removed. Omitted entirely means "this agent build doesn't apply setups" — never treat an absent key as "zero setups". */
+  setups?: CheckInSetupSummary[];
 }
 
 export interface AgentTransport {

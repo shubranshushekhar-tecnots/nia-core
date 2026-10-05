@@ -5,6 +5,8 @@ import { buildAgentConnectionReports } from "./link/agentConnectionReports.js";
 import { CheckInLoop } from "./link/checkInLoop.js";
 import { buildLocalJobReports } from "./link/localJobReports.js";
 import * as runReportOutbox from "./link/runReportOutbox.js";
+import { SetupClient } from "./link/setupClient.js";
+import { SetupManager } from "./link/setupManager.js";
 import { TaskResultsClient } from "./link/taskResultsClient.js";
 import { TaskRunner } from "./link/taskRunner.js";
 import { HttpAgentTransport } from "./link/transport.js";
@@ -62,6 +64,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
   let checkInLoop: CheckInLoop | undefined;
   let transport: HttpAgentTransport | undefined;
   let taskResultsClient: TaskResultsClient | undefined;
+  let setupClient: SetupClient | undefined;
   if (link) {
     const masterKey = loadOrCreateMasterKey(dir);
     const secrets = new LocalSecretStore(masterKey, dir);
@@ -70,6 +73,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
       transport = new HttpAgentTransport({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
       taskResultsClient = new TaskResultsClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
       const taskRunner = new TaskRunner(taskResultsClient, logger, dir);
+      setupClient = new SetupClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
+      const setupManager = new SetupManager({ setupClient, logger, dir });
       checkInLoop = new CheckInLoop({
         transport,
         agentVersion: options.agentVersion,
@@ -80,6 +85,12 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
         onSuccess: (response) => {
           recordCheckInSuccess(dir);
           runReportOutbox.acknowledge(dir, response.acknowledgedRunIds ?? []);
+          // Item 3: fire-and-forget — applying setups must never delay check-ins/scheduling.
+          if (response.setups) {
+            void setupManager.handleCheckIn(response.setups).catch((err) => {
+              logger.warn("setup_check_in_failed", { error: err instanceof Error ? err.message : String(err) });
+            });
+          }
         },
         onTasks: (tasks) => taskRunner.handle(tasks),
         onRevoked: () => recordRevoked(dir),
@@ -118,6 +129,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     await checkInLoop?.stop();
     await transport?.close();
     await taskResultsClient?.close();
+    await setupClient?.close();
   }
 }
 

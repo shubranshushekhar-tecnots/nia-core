@@ -1,4 +1,5 @@
 import { defaultHomeDir } from "../config/paths.js";
+import { findJob, loadConfig } from "../config/store.js";
 import * as runReportOutbox from "../link/runReportOutbox.js";
 import type { Logger } from "./logger.js";
 import { isPauseKind, pauseJobState, recordJobFailure, recordJobSuccess } from "./state.js";
@@ -38,6 +39,8 @@ export function recordRunOutcome(
   dir = defaultHomeDir(),
 ): void {
   const finishedAt = new Date().toISOString();
+  // Slice R3b (B.7): propagate the job's setup id onto its run report, if platform-managed.
+  const setupId = findJob(loadConfig(dir), jobId)?.platformManaged?.setupId;
 
   if (outcome.ok) {
     recordJobSuccess(jobId, { rowsSent: outcome.rowsSent, durationMs: outcome.durationMs }, dir);
@@ -54,6 +57,7 @@ export function recordRunOutcome(
         parts: outcome.parts ?? 0,
         isRealtime: options.isRealtime,
         empty: outcome.empty,
+        setupId,
       },
       options.logger,
     );
@@ -77,6 +81,7 @@ export function recordRunOutcome(
       parts: 0,
       errorClass: outcome.kind,
       isRealtime: options.isRealtime,
+      setupId,
     },
     options.logger,
   );

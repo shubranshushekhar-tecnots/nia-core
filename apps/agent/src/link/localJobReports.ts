@@ -24,6 +24,8 @@ export interface LocalJobReport {
   lastRunAt?: string;
   nextRunAt?: string;
   consecutiveFailures: number;
+  /** Slice R3b — this job's platform setup id, present only for a platform-managed job. */
+  setupId?: string;
 }
 
 function destinationFromTargetUrl(targetUrl: string): { destinationType: string; destinationHost: string } {
@@ -55,6 +57,7 @@ export function buildLocalJobReports(dir = defaultHomeDir()): LocalJobReport[] {
       lastRunAt: state.lastRunAt,
       nextRunAt: state.nextRunAt,
       consecutiveFailures: state.consecutiveFailures,
+      setupId: job.platformManaged?.setupId,
     };
   });
 }

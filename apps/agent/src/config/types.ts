@@ -147,6 +147,14 @@ export interface SyncJobEntry {
   maxDeletePercent?: number;
   /** `deleteMode: "softDelete"` only (§1.2, slice D2): a boolean source column, read even when not in `mapping` and never sent to Planometry — `true` means the row is deleted. */
   softDeleteColumn?: string;
+  /**
+   * Slice R3b (docs/plans/agent-canvas-integration.md B.4/B.7/B.10): set only
+   * when this job was created/last updated by `SetupManager` from a platform-
+   * published setup — `job update`/`job remove` refuse such a job locally.
+   * `setupId` is this job's own `id` (SetupManager uses the setup id as the
+   * job id directly); `appliedVersion` is the setup version last applied.
+   */
+  platformManaged?: { setupId: string; appliedVersion: number };
 }
 
 /**
