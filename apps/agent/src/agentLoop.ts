@@ -83,7 +83,15 @@ function loadSchedulerJobs(dir: string): SchedulerJob[] {
   for (const job of config.jobs) {
     const connection = findConnection(config, job.connectionId);
     if (!connection) continue;
-    jobs.push({ id: job.id, name: job.name, connectionId: job.connectionId, schedule: job.schedule, replaceSchedule: job.replaceSchedule, timeZone: connection.sourceTimeZone });
+    jobs.push({
+      id: job.id,
+      name: job.name,
+      connectionId: job.connectionId,
+      schedule: job.schedule,
+      replaceSchedule: job.replaceSchedule,
+      pollIntervalSeconds: job.pollIntervalSeconds,
+      timeZone: connection.sourceTimeZone,
+    });
   }
   return jobs;
 }
@@ -94,6 +102,6 @@ function loadJobHeartbeatSources(dir: string): JobHeartbeatSource[] {
 
 async function runSchedulerJob(job: SchedulerJob, signal: AbortSignal, forceReplace: boolean, dir: string): Promise<SchedulerJobOutcome> {
   const outcome = await runJobCommand(job.id, { signal, replace: forceReplace }, dir);
-  if (outcome.ok) return { ok: true, rowsSent: outcome.rowsSent ?? 0, durationMs: outcome.durationMs ?? 0 };
+  if (outcome.ok) return { ok: true, rowsSent: outcome.rowsSent ?? 0, durationMs: outcome.durationMs ?? 0, empty: outcome.empty };
   return { ok: false, kind: outcome.kind ?? "other", error: outcome.error ?? "job run failed", consoleMessage: outcome.consoleMessage };
 }

@@ -36,11 +36,12 @@ export interface JobMappingColumn {
 }
 
 /**
- * "replace" (full reload, every run) or "upsertDelta" (watermark-based
+ * "replace" (full reload, every run), "upsertDelta" (watermark-based
  * incremental sync, slice C1 — docs/plans/planometry-v4-migration.md
- * §1.1/§10). `realtime` and other strategies are later slices.
+ * §1.1/§10), or "realtime" (short repeating watermark-based tick sending
+ * upserts and deletes together in mode `realtime`, slice E1 — §1.3/§10).
  */
-export type JobStrategy = "replace" | "upsertDelta";
+export type JobStrategy = "replace" | "upsertDelta" | "realtime";
 
 export interface TargetSchemaColumnSnapshot {
   name: string;
@@ -58,14 +59,16 @@ export interface TargetSchemaSnapshot {
 export type OnNullKey = "stop" | "skip";
 
 /**
- * `strategy: "upsertDelta"` only (§1.2): "none" (default) never removes
- * rows; "reconciliation" (slice D1) keeps a saved key list and, on every
- * delta run, deletes keys that disappeared from the source or left the
- * job's filter, guarded by `maxDeletePercent`/`--allow-mass-delete`;
- * "softDelete" (slice D2) treats a boolean source column as "this row is
- * deleted" — a delta/param-override run sends a flagged row as a delete
- * instead of an upsert, a replace excludes flagged rows entirely. No
- * mass-delete guard applies to "softDelete".
+ * `strategy: "upsertDelta"` or `"realtime"` only (§1.2): "none" (default)
+ * never removes rows; "reconciliation" (slice D1) keeps a saved key list
+ * and, on every delta run (or, for `realtime`, every tick where the
+ * reconciliation interval has elapsed — §1.3/E1), deletes keys that
+ * disappeared from the source or left the job's filter, guarded by
+ * `maxDeletePercent`/`--allow-mass-delete`; "softDelete" (slice D2) treats
+ * a boolean source column as "this row is deleted" — a delta/param-
+ * override run (or realtime tick) sends a flagged row as a delete instead
+ * of an upsert, a replace excludes flagged rows entirely. No mass-delete
+ * guard applies to "softDelete".
  */
 export type DeleteMode = "none" | "reconciliation" | "softDelete";
 
@@ -90,15 +93,19 @@ export interface SyncJobEntry {
   filter: JobFilterCondition[];
   /** Saved named-parameter values (always raw strings, including relative-date tokens stored as literal token text — resolved only at validation/run time). Overridable per-run via `job run --param`, which never mutates this. */
   params: Record<string, string>;
-  /** 5-field cron expression (minute hour day-of-month month day-of-week), evaluated in the connection's `sourceTimeZone` by the scheduler (scheduler/cronSchedule.ts). Unset: the job runs only via `job run`, never on a timer. For an `upsertDelta` job this is the delta cadence; `replaceSchedule` below is the separate periodic full-reload cadence. */
+  /** 5-field cron expression (minute hour day-of-month month day-of-week), evaluated in the connection's `sourceTimeZone` by the scheduler (scheduler/cronSchedule.ts). Unset: the job runs only via `job run`, never on a timer. For an `upsertDelta` job this is the delta cadence; `replaceSchedule` below is the separate periodic full-reload cadence. Unused by `realtime` jobs — they use `pollIntervalSeconds` instead. */
   schedule?: string;
-  /** `strategy: "upsertDelta"` only: the date-time watermark column (no-offset family — datetime/datetime2/smalldatetime), read even when not in `mapping` (§1.1). Required for `upsertDelta`, absent for `replace`. */
+  /** `strategy: "upsertDelta"` or `"realtime"` only: the date-time watermark column (no-offset family — datetime/datetime2/smalldatetime), read even when not in `mapping` (§1.1). Required for `upsertDelta`/`realtime`, absent for `replace`. */
   watermarkColumn?: string;
-  /** `strategy: "upsertDelta"` only: overlap window in seconds subtracted from the computed watermark (§1.1). Default 300, applied where read, not stored as a literal default here. */
+  /** `strategy: "upsertDelta"` or `"realtime"` only: overlap window in seconds subtracted from the computed watermark (§1.1). Default 300, applied where read, not stored as a literal default here. */
   overlapSeconds?: number;
-  /** A separate cron expression (same format/timezone as `schedule`) for a periodic full `replace`, independent of `schedule`'s delta cadence (§2, §8). Required when the job's filter uses a relative-date parameter. */
+  /** A separate cron expression (same format/timezone as `schedule`) for a periodic full `replace`, independent of `schedule`'s delta cadence (or, for `realtime`, independent of `pollIntervalSeconds`'s tick cadence) (§2, §8). Required when the job's filter uses a relative-date parameter. */
   replaceSchedule?: string;
-  /** `strategy: "upsertDelta"` only (§1.2): default "none". Any non-"none" value requires `strategy === "upsertDelta"`. */
+  /** `strategy: "realtime"` only (§1.3/E1): tick interval in seconds — how often the scheduler fires a tick. Default 60, minimum 10. */
+  pollIntervalSeconds?: number;
+  /** `strategy: "realtime"` + `deleteMode: "reconciliation"` only (§1.3/E1): how often (in seconds) a tick runs the key-list comparison, rather than just upserting. Default 600. */
+  reconciliationIntervalSeconds?: number;
+  /** `strategy: "upsertDelta"` or `"realtime"` only (§1.2): default "none". Any non-"none" value requires `strategy === "upsertDelta"` or `"realtime"`. */
   deleteMode?: DeleteMode;
   /** `deleteMode: "reconciliation"` only: mass-delete guard threshold, percent of the saved key list (§7/D1). Default 20, applied where read, not stored as a literal default here. */
   maxDeletePercent?: number;

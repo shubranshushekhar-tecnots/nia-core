@@ -252,13 +252,15 @@ async function main(argv: string[]): Promise<void> {
         "delete-mode": { type: "string" },
         "max-delete-percent": { type: "string" },
         "soft-delete-column": { type: "string" },
+        "poll-interval": { type: "string" },
+        "reconcile-interval": { type: "string" },
       },
     });
     const connectionId = values.connection as string | undefined;
     const table = values.table as string | undefined;
     const targetUrl = values["target-url"] as string | undefined;
     if (!connectionId || !table || !targetUrl) {
-      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation|softDelete] [--max-delete-percent <n>] [--soft-delete-column <col>] [--yes]");
+      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta|realtime] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation|softDelete] [--max-delete-percent <n>] [--soft-delete-column <col>] [--poll-interval <seconds>] [--reconcile-interval <seconds>] [--yes]");
       process.exitCode = 1;
       return;
     }
@@ -270,7 +272,7 @@ async function main(argv: string[]): Promise<void> {
     }
     const strategy = parseStrategy(values.strategy as string | undefined);
     if (strategy === undefined && values.strategy !== undefined) {
-      console.error(`--strategy must be "replace" or "upsertDelta", got ${JSON.stringify(values.strategy)}`);
+      console.error(`--strategy must be "replace", "upsertDelta", or "realtime", got ${JSON.stringify(values.strategy)}`);
       process.exitCode = 1;
       return;
     }
@@ -291,6 +293,20 @@ async function main(argv: string[]): Promise<void> {
     const maxDeletePercent = maxDeletePercentRaw !== undefined ? Number(maxDeletePercentRaw) : undefined;
     if (maxDeletePercentRaw !== undefined && (maxDeletePercent === undefined || Number.isNaN(maxDeletePercent))) {
       console.error(`--max-delete-percent must be a number, got ${JSON.stringify(maxDeletePercentRaw)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const pollIntervalRaw = values["poll-interval"] as string | undefined;
+    const pollIntervalSeconds = pollIntervalRaw !== undefined ? Number(pollIntervalRaw) : undefined;
+    if (pollIntervalRaw !== undefined && (pollIntervalSeconds === undefined || Number.isNaN(pollIntervalSeconds))) {
+      console.error(`--poll-interval must be a number, got ${JSON.stringify(pollIntervalRaw)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const reconcileIntervalRaw = values["reconcile-interval"] as string | undefined;
+    const reconciliationIntervalSeconds = reconcileIntervalRaw !== undefined ? Number(reconcileIntervalRaw) : undefined;
+    if (reconcileIntervalRaw !== undefined && (reconciliationIntervalSeconds === undefined || Number.isNaN(reconciliationIntervalSeconds))) {
+      console.error(`--reconcile-interval must be a number, got ${JSON.stringify(reconcileIntervalRaw)}`);
       process.exitCode = 1;
       return;
     }
@@ -330,6 +346,8 @@ async function main(argv: string[]): Promise<void> {
       deleteMode,
       maxDeletePercent,
       softDeleteColumn: values["soft-delete-column"] as string | undefined,
+      pollIntervalSeconds,
+      reconciliationIntervalSeconds,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -440,10 +458,12 @@ async function main(argv: string[]): Promise<void> {
         "delete-mode": { type: "string" },
         "max-delete-percent": { type: "string" },
         "soft-delete-column": { type: "string" },
+        "poll-interval": { type: "string" },
+        "reconcile-interval": { type: "string" },
       },
     });
     if (!id) {
-      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation|softDelete] [--max-delete-percent <n>] [--soft-delete-column <col>]");
+      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta|realtime] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation|softDelete] [--max-delete-percent <n>] [--soft-delete-column <col>] [--poll-interval <seconds>] [--reconcile-interval <seconds>]");
       process.exitCode = 1;
       return;
     }
@@ -455,7 +475,7 @@ async function main(argv: string[]): Promise<void> {
     }
     const strategy = parseStrategy(values.strategy as string | undefined);
     if (strategy === undefined && values.strategy !== undefined) {
-      console.error(`--strategy must be "replace" or "upsertDelta", got ${JSON.stringify(values.strategy)}`);
+      console.error(`--strategy must be "replace", "upsertDelta", or "realtime", got ${JSON.stringify(values.strategy)}`);
       process.exitCode = 1;
       return;
     }
@@ -476,6 +496,20 @@ async function main(argv: string[]): Promise<void> {
     const maxDeletePercent = maxDeletePercentRaw !== undefined ? Number(maxDeletePercentRaw) : undefined;
     if (maxDeletePercentRaw !== undefined && (maxDeletePercent === undefined || Number.isNaN(maxDeletePercent))) {
       console.error(`--max-delete-percent must be a number, got ${JSON.stringify(maxDeletePercentRaw)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const pollIntervalRaw = values["poll-interval"] as string | undefined;
+    const pollIntervalSeconds = pollIntervalRaw !== undefined ? Number(pollIntervalRaw) : undefined;
+    if (pollIntervalRaw !== undefined && (pollIntervalSeconds === undefined || Number.isNaN(pollIntervalSeconds))) {
+      console.error(`--poll-interval must be a number, got ${JSON.stringify(pollIntervalRaw)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const reconcileIntervalRaw = values["reconcile-interval"] as string | undefined;
+    const reconciliationIntervalSeconds = reconcileIntervalRaw !== undefined ? Number(reconcileIntervalRaw) : undefined;
+    if (reconcileIntervalRaw !== undefined && (reconciliationIntervalSeconds === undefined || Number.isNaN(reconciliationIntervalSeconds))) {
+      console.error(`--reconcile-interval must be a number, got ${JSON.stringify(reconcileIntervalRaw)}`);
       process.exitCode = 1;
       return;
     }
@@ -515,6 +549,8 @@ async function main(argv: string[]): Promise<void> {
       deleteMode,
       maxDeletePercent,
       softDeleteColumn: values["soft-delete-column"] as string | undefined,
+      pollIntervalSeconds,
+      reconciliationIntervalSeconds,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -617,8 +653,8 @@ function parseOnNullKey(value: string | undefined): "stop" | "skip" | undefined 
   return undefined;
 }
 
-function parseStrategy(value: string | undefined): "replace" | "upsertDelta" | undefined {
-  if (value === "replace" || value === "upsertDelta") return value;
+function parseStrategy(value: string | undefined): "replace" | "upsertDelta" | "realtime" | undefined {
+  if (value === "replace" || value === "upsertDelta" || value === "realtime") return value;
   return undefined;
 }
 

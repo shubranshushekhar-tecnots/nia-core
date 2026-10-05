@@ -221,8 +221,8 @@ function checkSchemaDrift(job: SyncJobEntry, live: TableSchema, pushMode: PushMo
   return { stop: false, warnings };
 }
 
-/** Run order step (c): one formatter per mapped column, built once per run (never per row). */
-function buildFormatters(
+/** Run order step (c): one formatter per mapped column, built once per run (never per row). Exported for `sync/realtimeTick.ts` (slice E1), which reuses it directly rather than duplicating the mapping-to-formatter logic. */
+export function buildFormatters(
   job: SyncJobEntry,
   sourceColumnTypes: Record<string, ExtractType>,
   sourceTimeZone: string | undefined,

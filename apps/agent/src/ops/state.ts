@@ -60,6 +60,16 @@ export interface JobState {
    * watermark is stale and must be treated as absent, not cleared here.
    */
   lastWatermarkFingerprint?: string;
+  /**
+   * `strategy: "realtime"` + `deleteMode: "reconciliation"` only
+   * (`sync/realtimeTick.ts`, §1.3/slice E1). The time the key-list
+   * comparison last ran as part of a tick — compared against
+   * `reconciliationIntervalSeconds` to decide whether the *next* tick
+   * should reconcile or just upsert-and-append-to-the-saved-list. Unset
+   * means "never reconciled yet", which forces the next tick to
+   * reconcile (same as the interval having already elapsed).
+   */
+  lastRealtimeReconciledAt?: string;
 }
 
 function emptyJobState(): JobState {
@@ -179,6 +189,17 @@ export function setLastWatermark(jobId: string, value: string | undefined, finge
   const state = readJobState(jobId, dir);
   state.lastWatermark = value;
   state.lastWatermarkFingerprint = fingerprint;
+  writeJobState(jobId, state, dir);
+}
+
+/** See `JobState.lastRealtimeReconciledAt`'s doc comment. */
+export function getLastRealtimeReconciledAt(jobId: string, dir = defaultHomeDir()): string | undefined {
+  return readJobState(jobId, dir).lastRealtimeReconciledAt;
+}
+
+export function setLastRealtimeReconciledAt(jobId: string, value: string | undefined, dir = defaultHomeDir()): void {
+  const state = readJobState(jobId, dir);
+  state.lastRealtimeReconciledAt = value;
   writeJobState(jobId, state, dir);
 }
 

@@ -6,9 +6,10 @@ import { findConnection, findJob, loadConfig } from "../config/store.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { Logger } from "../ops/logger.js";
-import { getLastWatermark, getLastWatermarkFingerprint } from "../ops/state.js";
+import { getLastRealtimeReconciledAt, getLastWatermark, getLastWatermarkFingerprint, setLastRealtimeReconciledAt } from "../ops/state.js";
 import { resolveJobFilter } from "../planometry/parameters.js";
 import { KeyedSemaphore } from "../sync/concurrency.js";
+import { realtimeTick, type RealtimeTickResult } from "../sync/realtimeTick.js";
 import { runSync, type RunSyncFailureKind, type RunSyncResult } from "../sync/runSync.js";
 import { softDeleteExclusionFilter } from "../sync/softDelete.js";
 import { computeJobFingerprint, readServerClock, resolveSavedWatermark } from "../sync/watermark.js";
@@ -46,6 +47,8 @@ export interface RunJobOutcome {
   /** Present on every success — lets the scheduler record rows/duration without parsing `summary`. */
   rowsSent?: number;
   durationMs?: number;
+  /** `strategy: "realtime"` only (§1.3/E1): true when a tick's `readChangedRows`/delete detection found nothing to send, so no request was made — the scheduler (scheduler/jobScheduler.ts) skips writing this run to the log file, per spec, while still recording it in job state. */
+  empty?: boolean;
   /** Safe to log — never a raw server message. */
   error?: string;
   /** A 400's raw server message, console-only — never pass this to a logger. */
@@ -177,17 +180,19 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
     };
 
     const isUpsertDelta = job.strategy === "upsertDelta";
-    const isParamOverride = isUpsertDelta && options.paramOverrides !== undefined;
+    const isRealtime = job.strategy === "realtime";
+    const isDeltaStrategy = isUpsertDelta || isRealtime;
+    const isParamOverride = isDeltaStrategy && options.paramOverrides !== undefined;
 
     let passes: ((onRow: (row: Record<string, unknown>) => void, signal: AbortSignal) => Promise<void>)[];
     let delta: Parameters<typeof runSync>[0]["delta"];
 
-    if (!isUpsertDelta) {
+    if (!isDeltaStrategy) {
       passes = [makeSinglePassReader(mappedSources, resolvedFilter.filter)];
     } else {
       const watermarkColumn = job.watermarkColumn;
       if (!watermarkColumn) {
-        return { ok: false, error: `job ${id} has strategy "upsertDelta" but no watermarkColumn configured`, kind: "config" };
+        return { ok: false, error: `job ${id} has strategy ${JSON.stringify(job.strategy)} but no watermarkColumn configured`, kind: "config" };
       }
       if (!table.columns.some((c) => c.name === watermarkColumn)) {
         return { ok: false, error: `watermark column "${watermarkColumn}" no longer exists in the catalog`, kind: "config" };
@@ -207,14 +212,71 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
         : resolveSavedWatermark({ watermark: getLastWatermark(job.id, dir), fingerprint: getLastWatermarkFingerprint(job.id, dir) }, fingerprint);
       const serverClockAtStart = await readServerClock(pool);
 
-      // Soft delete (§1.2/§10, slice D2): the flag column is extracted in
-      // addition to the mapped columns (never sent) for any pass whose
-      // rows runSync must classify as upsert-or-delete — i.e. every pass
-      // except a true replace, which instead excludes flagged rows at
-      // the SQL level below and has no need to read the column at all.
-      const softDeleteColumn = isUpsertDelta && job.deleteMode === "softDelete" ? job.softDeleteColumn : undefined;
+      // Soft delete (§1.2/§10, slice D2 — also reused by realtime, §1.3/E1):
+      // the flag column is extracted in addition to the mapped columns
+      // (never sent) for any pass whose rows must be classified as
+      // upsert-or-delete — i.e. every pass except a true replace, which
+      // instead excludes flagged rows at the SQL level below and has no
+      // need to read the column at all.
+      const softDeleteColumn = job.deleteMode === "softDelete" ? job.softDeleteColumn : undefined;
       const extractColumnsForUpsert =
         softDeleteColumn && !extractColumns.includes(softDeleteColumn) ? [...extractColumns, softDeleteColumn] : extractColumns;
+
+      // Realtime (§1.3/E1): a genuine tick (a valid saved watermark exists,
+      // and this isn't a forced replace or a `--param` override run) is
+      // dispatched to `realtimeTick` instead of `runSync` — it builds its
+      // own upsert+delete request(s) in mode "realtime" and persists its
+      // own watermark/key-list state. "No valid saved state means the tick
+      // is a replace, as for upsertDelta" falls through to the unchanged
+      // code below instead.
+      if (isRealtime && !isParamOverride && !forceReplace && savedWatermark !== undefined) {
+        const readChangedRows = async (onRow: (row: Record<string, unknown>) => void, signal: AbortSignal): Promise<void> => {
+          const gteFilter: FilterCondition[] = [...resolvedFilter.filter, { column: watermarkColumn, operator: "gte", value: savedWatermark }];
+          const isNullFilter: FilterCondition[] = [...resolvedFilter.filter, { column: watermarkColumn, operator: "isNull" }];
+          await makeSinglePassReader(extractColumnsForUpsert, gteFilter)(onRow, signal);
+          await makeSinglePassReader(extractColumnsForUpsert, isNullFilter)(onRow, signal);
+        };
+
+        let reconciliationForTick: Parameters<typeof realtimeTick>[0]["reconciliation"];
+        if (job.deleteMode === "reconciliation") {
+          const keyTargets = job.targetSchemaSnapshot.keyColumns;
+          const keySourceColumns = job.mapping.filter((m) => keyTargets.includes(m.target)).map((m) => m.source);
+          const reconcileIntervalMs = (job.reconciliationIntervalSeconds ?? 600) * 1000;
+          const lastReconciledAt = getLastRealtimeReconciledAt(job.id, dir);
+          const shouldReconcile = lastReconciledAt === undefined || Date.now() - new Date(lastReconciledAt).getTime() >= reconcileIntervalMs;
+          reconciliationForTick = {
+            shouldReconcile,
+            readKeyScanRows: makeSinglePassReader(keySourceColumns, resolvedFilter.filter),
+            maxDeletePercent: job.maxDeletePercent ?? 20,
+            allowMassDelete: options.allowMassDelete ?? false,
+          };
+        }
+
+        const tickResult = await realtimeTick({
+          job,
+          pushKey: pushKeySecret.pushKey,
+          sourceColumnTypes,
+          sourceTimeZone: connection.sourceTimeZone,
+          dir,
+          masterKey,
+          logger,
+          signal: options.signal,
+          readChangedRows,
+          watermarkColumn,
+          overlapSeconds: job.overlapSeconds ?? 300,
+          savedWatermark,
+          serverClockAtStart,
+          fingerprint,
+          softDelete: softDeleteColumn ? { column: softDeleteColumn } : undefined,
+          reconciliation: reconciliationForTick,
+        });
+
+        if (tickResult.outcome === "completed" && tickResult.reconciled === true) {
+          setLastRealtimeReconciledAt(job.id, new Date().toISOString(), dir);
+        }
+
+        return outcomeFromRealtimeTickResult(tickResult);
+      }
 
       if (isParamOverride || forceReplace || savedWatermark === undefined) {
         const isTrueReplace = !isParamOverride;
@@ -239,7 +301,7 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
     // reads key source columns only, with the job's resolved filter, no
     // ORDER BY — same reader factory as every other pass.
     let reconciliation: Parameters<typeof runSync>[0]["reconciliation"];
-    if (isUpsertDelta && job.deleteMode === "reconciliation" && !isParamOverride) {
+    if (isDeltaStrategy && job.deleteMode === "reconciliation" && !isParamOverride) {
       const keyTargets = job.targetSchemaSnapshot.keyColumns;
       const keySourceColumns = job.mapping.filter((m) => keyTargets.includes(m.target)).map((m) => m.source);
       reconciliation = {
@@ -260,7 +322,7 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
     // run (unlike reconciliation, this mode applies to it too — §1.2
     // groups "delta run and --param override run" together).
     const softDelete: Parameters<typeof runSync>[0]["softDelete"] =
-      isUpsertDelta && job.deleteMode === "softDelete" && job.softDeleteColumn ? { column: job.softDeleteColumn } : undefined;
+      isDeltaStrategy && job.deleteMode === "softDelete" && job.softDeleteColumn ? { column: job.softDeleteColumn } : undefined;
 
     const result = await runSync({
       job,
@@ -305,6 +367,22 @@ function outcomeFromResult(result: RunSyncResult, resolvedParams: Record<string,
       summary: `${result.mode}: sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms${planometrySuffix}${watermarkSuffix}${reconciliationSuffix}${softDeleteSuffix}${paramsSuffix}`,
       rowsSent: result.rowsSent,
       durationMs: result.durationMs,
+    };
+  }
+  return { ok: false, error: result.error, consoleMessage: result.consoleMessage, kind: result.kind };
+}
+
+/** Realtime (§1.3/E1): maps a single tick's result to the same `RunJobOutcome` shape `job run`/the scheduler already understand. */
+function outcomeFromRealtimeTickResult(result: RealtimeTickResult): RunJobOutcome {
+  if (result.outcome === "completed") {
+    if (result.empty) {
+      return { ok: true, summary: "realtime tick: empty — nothing to send", rowsSent: 0, durationMs: 0, empty: true };
+    }
+    const reconciliationSuffix = result.reconciled !== undefined ? ` — key reconciliation ${result.reconciled ? "ran" : "skipped"} this tick` : "";
+    return {
+      ok: true,
+      summary: `realtime: sent ${result.rowsUpserted} upsert(s) + ${result.rowsDeleted} delete(s) in ${result.parts} part(s)${reconciliationSuffix} — watermark -> ${result.watermarkAfter}`,
+      rowsSent: result.rowsUpserted + result.rowsDeleted,
     };
   }
   return { ok: false, error: result.error, consoleMessage: result.consoleMessage, kind: result.kind };

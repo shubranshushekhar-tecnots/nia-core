@@ -23,6 +23,11 @@ import { checkWatermarkColumn, type WatermarkColumnReport } from "../sync/waterm
 import { buildMapping, type RawMappingPair } from "./jobMapping.js";
 
 const DEFAULT_MAX_DELETE_PERCENT = 20;
+/** `strategy: "realtime"` only (§1.3/E1): tick interval default/minimum, seconds. */
+const DEFAULT_POLL_INTERVAL_SECONDS = 60;
+const MIN_POLL_INTERVAL_SECONDS = 10;
+/** `strategy: "realtime"` + `deleteMode: "reconciliation"` only (§1.3/E1): key-list comparison cadence default, seconds. */
+const DEFAULT_RECONCILIATION_INTERVAL_SECONDS = 600;
 
 /** `deleteMode: "softDelete"` only (§1.2/§10, slice D2): a non-fatal reminder returned via `JobCommandResult.warnings` — this mode only ever removes a row whose flag column is true; a row that instead simply leaves the job's filter (e.g. no longer matches a date range) is never removed by it. */
 const SOFT_DELETE_FILTER_WARNING =
@@ -30,11 +35,12 @@ const SOFT_DELETE_FILTER_WARNING =
 
 /**
  * `deleteMode` validation shared by `addJob`/`updateJob` (plan §1.2/§7/
- * §10, slices D1/D2): any non-"none" mode requires `strategy ===
- * "upsertDelta"`. "reconciliation": `maxDeletePercent` (if given) must be
- * in (0, 100]. "softDelete": a `softDeleteColumn` is required, must exist
- * in the live source catalog, and must be a boolean (SQL Server `bit`)
- * column. Mirrors `validateUpsertDelta`'s error style.
+ * §10, slices D1/D2/E1): any non-"none" mode requires `strategy ===
+ * "upsertDelta"` or `"realtime"`. "reconciliation": `maxDeletePercent`
+ * (if given) must be in (0, 100]. "softDelete": a `softDeleteColumn` is
+ * required, must exist in the live source catalog, and must be a
+ * boolean (SQL Server `bit`) column. Mirrors `validateUpsertDelta`'s
+ * error style.
  */
 function validateDeleteMode(
   strategy: JobStrategy,
@@ -44,7 +50,9 @@ function validateDeleteMode(
   table: CatalogTable,
 ): { ok: true } | { ok: false; error: string } {
   if (deleteMode === undefined || deleteMode === "none") return { ok: true };
-  if (strategy !== "upsertDelta") return { ok: false, error: `deleteMode "${deleteMode}" requires strategy "upsertDelta"` };
+  if (strategy !== "upsertDelta" && strategy !== "realtime") {
+    return { ok: false, error: `deleteMode "${deleteMode}" requires strategy "upsertDelta" or "realtime"` };
+  }
   if (deleteMode === "reconciliation") {
     if (maxDeletePercent !== undefined && !(maxDeletePercent > 0 && maxDeletePercent <= 100)) {
       return { ok: false, error: `maxDeletePercent must be greater than 0 and at most 100` };
@@ -109,14 +117,16 @@ function filterUsesRelativeDateToken(filter: JobFilterCondition[], params: Recor
 }
 
 /**
- * `strategy: "upsertDelta"` validation shared by `addJob`/`updateJob`
- * (plan §1.1/§2/§8): the watermark column must exist in the live source
- * catalog and be a datetime-family column; a relative-date filter
- * parameter requires a `replaceSchedule`; a given `replaceSchedule` must
- * itself be a valid cron expression. Returns the null-count/clock-skew
- * report on success, for the caller to attach to its result.
+ * `strategy: "upsertDelta"` or `"realtime"` validation shared by
+ * `addJob`/`updateJob` (plan §1.1/§1.3/§2/§8/§10, slices C1/E1): the
+ * watermark column must exist in the live source catalog and be a
+ * datetime-family column; a relative-date filter parameter requires a
+ * `replaceSchedule`; a given `replaceSchedule` must itself be a valid
+ * cron expression. Returns the null-count/clock-skew report on
+ * success, for the caller to attach to its result.
  */
 async function validateUpsertDelta(
+  strategy: "upsertDelta" | "realtime",
   connection: ConnectionEntry,
   table: CatalogTable,
   sourceTable: string,
@@ -126,13 +136,13 @@ async function validateUpsertDelta(
   replaceSchedule: string | undefined,
   dir: string,
 ): Promise<{ ok: true; report: WatermarkColumnReport } | { ok: false; error: string }> {
-  if (!watermarkColumn) return { ok: false, error: `strategy "upsertDelta" requires a watermarkColumn` };
+  if (!watermarkColumn) return { ok: false, error: `strategy "${strategy}" requires a watermarkColumn` };
   const column = table.columns.find((c) => c.name === watermarkColumn);
   if (!column) return { ok: false, error: `watermark column "${watermarkColumn}" was not found in the catalog` };
   if (column.type !== "datetime") return { ok: false, error: `watermark column "${watermarkColumn}" is type ${column.type}, not a datetime-family column` };
 
   if (filterUsesRelativeDateToken(filter, params) && replaceSchedule === undefined) {
-    return { ok: false, error: `a filter using a relative-date token requires a replaceSchedule (periodic full replace) for an "upsertDelta" job` };
+    return { ok: false, error: `a filter using a relative-date token requires a replaceSchedule (periodic full replace) for a "${strategy}" job` };
   }
   if (replaceSchedule !== undefined) {
     try {
@@ -149,6 +159,22 @@ async function validateUpsertDelta(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * `strategy: "realtime"` only (§1.3/E1): `pollIntervalSeconds` default
+ * 60, minimum 10; `reconciliationIntervalSeconds` (only meaningful when
+ * `deleteMode === "reconciliation"`) default 600.
+ */
+function validateRealtimeIntervals(
+  pollIntervalSeconds: number | undefined,
+  reconciliationIntervalSeconds: number | undefined,
+  deleteMode: DeleteMode | undefined,
+): { ok: true; pollIntervalSeconds: number; reconciliationIntervalSeconds: number | undefined } | { ok: false; error: string } {
+  const poll = pollIntervalSeconds ?? DEFAULT_POLL_INTERVAL_SECONDS;
+  if (poll < MIN_POLL_INTERVAL_SECONDS) return { ok: false, error: `pollIntervalSeconds must be at least ${MIN_POLL_INTERVAL_SECONDS}` };
+  const reconcile = deleteMode === "reconciliation" ? reconciliationIntervalSeconds ?? DEFAULT_RECONCILIATION_INTERVAL_SECONDS : undefined;
+  return { ok: true, pollIntervalSeconds: poll, reconciliationIntervalSeconds: reconcile };
 }
 
 /** `{ column name -> source ExtractType }`, for filter type-checking — filter columns need not be in the job's mapping. */
@@ -198,20 +224,24 @@ export interface AddJobInput {
   params?: Record<string, string>;
   /** 5-field cron expression, evaluated in the connection's sourceTimeZone (scheduler/cronSchedule.js). Unset = runs only via `job run`. */
   schedule?: string;
-  /** Default "replace" (§10 slice C1). */
+  /** Default "replace" (§10 slice C1/E1). */
   strategy?: JobStrategy;
-  /** `strategy: "upsertDelta"` only — required then. */
+  /** `strategy: "upsertDelta"` or `"realtime"` only — required then. */
   watermarkColumn?: string;
-  /** `strategy: "upsertDelta"` only — default 300, applied where read. */
+  /** `strategy: "upsertDelta"` or `"realtime"` only — default 300, applied where read. */
   overlapSeconds?: number;
-  /** `strategy: "upsertDelta"` only — required when `filter` uses a relative-date token. */
+  /** `strategy: "upsertDelta"` or `"realtime"` only — required when `filter` uses a relative-date token. */
   replaceSchedule?: string;
-  /** `strategy: "upsertDelta"` only — default "none" (§10 slice D1). */
+  /** `strategy: "upsertDelta"` or `"realtime"` only — default "none" (§10 slice D1/E1). */
   deleteMode?: DeleteMode;
   /** `deleteMode: "reconciliation"` only — default 20 when unset. */
   maxDeletePercent?: number;
   /** `deleteMode: "softDelete"` only — required then. */
   softDeleteColumn?: string;
+  /** `strategy: "realtime"` only (§1.3/E1) — default 60, minimum 10. */
+  pollIntervalSeconds?: number;
+  /** `strategy: "realtime"` + `deleteMode: "reconciliation"` only (§1.3/E1) — default 600. */
+  reconciliationIntervalSeconds?: number;
 }
 
 /**
@@ -262,8 +292,9 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
 
   const strategy: JobStrategy = input.strategy ?? "replace";
   let watermarkReport: WatermarkColumnReport | undefined;
-  if (strategy === "upsertDelta") {
+  if (strategy === "upsertDelta" || strategy === "realtime") {
     const check = await validateUpsertDelta(
+      strategy,
       connection,
       catalogResult.table,
       input.sourceTable,
@@ -279,6 +310,13 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
 
   const deleteModeCheck = validateDeleteMode(strategy, input.deleteMode, input.maxDeletePercent, input.softDeleteColumn, catalogResult.table);
   if (!deleteModeCheck.ok) return { ok: false, errors: [deleteModeCheck.error] };
+
+  let realtimeIntervals: { pollIntervalSeconds: number; reconciliationIntervalSeconds: number | undefined } | undefined;
+  if (strategy === "realtime") {
+    const check = validateRealtimeIntervals(input.pollIntervalSeconds, input.reconciliationIntervalSeconds, input.deleteMode);
+    if (!check.ok) return { ok: false, errors: [check.error] };
+    realtimeIntervals = check;
+  }
 
   const pairs: JobMappingColumn[] = plan.pairs;
   const preview: JobMappingPreview = { pairs, sentAsNull: plan.sentAsNull };
@@ -305,17 +343,22 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     filter,
     params,
     schedule: input.schedule,
-    watermarkColumn: strategy === "upsertDelta" ? input.watermarkColumn : undefined,
-    overlapSeconds: strategy === "upsertDelta" ? input.overlapSeconds : undefined,
-    replaceSchedule: strategy === "upsertDelta" ? input.replaceSchedule : undefined,
-    deleteMode: strategy === "upsertDelta" ? input.deleteMode : undefined,
+    watermarkColumn: strategy === "upsertDelta" || strategy === "realtime" ? input.watermarkColumn : undefined,
+    overlapSeconds: strategy === "upsertDelta" || strategy === "realtime" ? input.overlapSeconds : undefined,
+    replaceSchedule: strategy === "upsertDelta" || strategy === "realtime" ? input.replaceSchedule : undefined,
+    deleteMode: strategy === "upsertDelta" || strategy === "realtime" ? input.deleteMode : undefined,
     maxDeletePercent:
-      strategy === "upsertDelta" && input.deleteMode === "reconciliation" ? input.maxDeletePercent ?? DEFAULT_MAX_DELETE_PERCENT : undefined,
-    softDeleteColumn: strategy === "upsertDelta" && input.deleteMode === "softDelete" ? input.softDeleteColumn : undefined,
+      (strategy === "upsertDelta" || strategy === "realtime") && input.deleteMode === "reconciliation"
+        ? input.maxDeletePercent ?? DEFAULT_MAX_DELETE_PERCENT
+        : undefined,
+    softDeleteColumn:
+      (strategy === "upsertDelta" || strategy === "realtime") && input.deleteMode === "softDelete" ? input.softDeleteColumn : undefined,
+    pollIntervalSeconds: strategy === "realtime" ? realtimeIntervals!.pollIntervalSeconds : undefined,
+    reconciliationIntervalSeconds: strategy === "realtime" ? realtimeIntervals!.reconciliationIntervalSeconds : undefined,
   };
 
   saveConfig(upsertJob(config, job), dir);
-  const warnings = strategy === "upsertDelta" && input.deleteMode === "softDelete" ? [SOFT_DELETE_FILTER_WARNING] : undefined;
+  const warnings = (strategy === "upsertDelta" || strategy === "realtime") && input.deleteMode === "softDelete" ? [SOFT_DELETE_FILTER_WARNING] : undefined;
   return { ok: true, job, sentAsNull: plan.sentAsNull, watermarkReport, warnings };
 }
 
@@ -486,6 +529,10 @@ export interface UpdateJobInput {
   maxDeletePercent?: number;
   /** Undefined leaves it unchanged (or is required if `deleteMode` is being newly set to "softDelete"). */
   softDeleteColumn?: string;
+  /** `strategy: "realtime"` only (§1.3/E1) — undefined leaves it unchanged (or defaults to 60 if the effective strategy is newly set to "realtime"). */
+  pollIntervalSeconds?: number;
+  /** `strategy: "realtime"` + `deleteMode: "reconciliation"` only (§1.3/E1) — undefined leaves it unchanged (or defaults to 600 if newly applicable). */
+  reconciliationIntervalSeconds?: number;
 }
 
 /**
@@ -563,14 +610,25 @@ export async function updateJob(
   const softDeleteColumn = input.softDeleteColumn ?? (deleteMode === "softDelete" ? job.softDeleteColumn : undefined);
 
   let watermarkReport: WatermarkColumnReport | undefined;
-  if (strategy === "upsertDelta") {
-    const check = await validateUpsertDelta(connection, catalogResult.table, job.sourceTable, watermarkColumn, filter, params, replaceSchedule, dir);
+  if (strategy === "upsertDelta" || strategy === "realtime") {
+    const check = await validateUpsertDelta(strategy, connection, catalogResult.table, job.sourceTable, watermarkColumn, filter, params, replaceSchedule, dir);
     if (!check.ok) return { ok: false, errors: [check.error] };
     watermarkReport = check.report;
   }
 
   const deleteModeCheck = validateDeleteMode(strategy, deleteMode, maxDeletePercent, softDeleteColumn, catalogResult.table);
   if (!deleteModeCheck.ok) return { ok: false, errors: [deleteModeCheck.error] };
+
+  let realtimeIntervals: { pollIntervalSeconds: number; reconciliationIntervalSeconds: number | undefined } | undefined;
+  if (strategy === "realtime") {
+    const pollIntervalSeconds =
+      input.pollIntervalSeconds ?? (strategy === job.strategy ? job.pollIntervalSeconds : undefined);
+    const reconciliationIntervalSeconds =
+      input.reconciliationIntervalSeconds ?? (strategy === job.strategy ? job.reconciliationIntervalSeconds : undefined);
+    const check = validateRealtimeIntervals(pollIntervalSeconds, reconciliationIntervalSeconds, deleteMode);
+    if (!check.ok) return { ok: false, errors: [check.error] };
+    realtimeIntervals = check;
+  }
 
   const preview: JobMappingPreview = { pairs: plan.pairs, sentAsNull: plan.sentAsNull };
   options.onPlan?.(preview);
@@ -592,12 +650,16 @@ export async function updateJob(
     params,
     schedule,
     strategy,
-    watermarkColumn: strategy === "upsertDelta" ? watermarkColumn : undefined,
-    overlapSeconds: strategy === "upsertDelta" ? overlapSeconds : undefined,
-    replaceSchedule: strategy === "upsertDelta" ? replaceSchedule : undefined,
-    deleteMode: strategy === "upsertDelta" ? deleteMode : undefined,
-    maxDeletePercent: strategy === "upsertDelta" && deleteMode === "reconciliation" ? maxDeletePercent : undefined,
-    softDeleteColumn: strategy === "upsertDelta" && deleteMode === "softDelete" ? softDeleteColumn : undefined,
+    watermarkColumn: strategy === "upsertDelta" || strategy === "realtime" ? watermarkColumn : undefined,
+    overlapSeconds: strategy === "upsertDelta" || strategy === "realtime" ? overlapSeconds : undefined,
+    replaceSchedule: strategy === "upsertDelta" || strategy === "realtime" ? replaceSchedule : undefined,
+    deleteMode: strategy === "upsertDelta" || strategy === "realtime" ? deleteMode : undefined,
+    maxDeletePercent:
+      (strategy === "upsertDelta" || strategy === "realtime") && deleteMode === "reconciliation" ? maxDeletePercent : undefined,
+    softDeleteColumn:
+      (strategy === "upsertDelta" || strategy === "realtime") && deleteMode === "softDelete" ? softDeleteColumn : undefined,
+    pollIntervalSeconds: strategy === "realtime" ? realtimeIntervals!.pollIntervalSeconds : undefined,
+    reconciliationIntervalSeconds: strategy === "realtime" ? realtimeIntervals!.reconciliationIntervalSeconds : undefined,
   };
 
   saveConfig(upsertJob(config, updated), dir);
@@ -610,7 +672,7 @@ export async function updateJob(
   // naturally treats the now-stale saved watermark as absent on the next
   // run, without this command having to clear anything itself.
 
-  const warnings = strategy === "upsertDelta" && deleteMode === "softDelete" ? [SOFT_DELETE_FILTER_WARNING] : undefined;
+  const warnings = (strategy === "upsertDelta" || strategy === "realtime") && deleteMode === "softDelete" ? [SOFT_DELETE_FILTER_WARNING] : undefined;
   return { ok: true, job: updated, sentAsNull: plan.sentAsNull, watermarkReport, warnings };
 }
 

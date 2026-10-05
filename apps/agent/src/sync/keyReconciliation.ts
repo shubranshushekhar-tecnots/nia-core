@@ -354,6 +354,64 @@ function pickKeyRow(row: WireRow, keyTargets: string[]): WireRow {
   return picked;
 }
 
+// --- realtime tick (non-reconciling): merge this tick's upserted keys into the saved list ---
+
+/**
+ * `strategy: "realtime"` only (`sync/realtimeTick.ts`, §1.3/E1): on a tick
+ * that does NOT run the full key-list comparison, the keys it upserted
+ * still need to end up in the saved list so a *later* reconciling tick's
+ * `saved - currentScan` diff doesn't treat them as deleted. Bucket-by-
+ * bucket like `computeReconciliation`/`buildReplaceKeyList` (never holds
+ * more than one bucket's saved keys in memory at a time), but reads
+ * `newKeys` (this tick's small upsert set, already in memory) instead of
+ * scanning a spool. A saved list with a stale/missing fingerprint is
+ * treated as empty — `newKeys` alone becomes the new list, same as
+ * `computeReconciliation`'s `fingerprintMatches` handling. Does NOT
+ * commit — returns `commit`/`discard` so the caller can defer committing
+ * until after the tick's push has succeeded.
+ */
+export async function addKeysToSavedList(
+  dir: string,
+  jobId: string,
+  masterKey: Buffer,
+  fingerprint: string,
+  newKeys: Set<string>,
+  bucketCount: number = KEY_BUCKET_COUNT,
+): Promise<{ totalKeys: number; commit: () => Promise<void>; discard: () => Promise<void> }> {
+  const jobDirPath = jobDir(dir, jobId);
+  const savedMeta = await readSavedKeyListMeta(dir, jobId);
+  const fingerprintMatches = savedMeta !== undefined && savedMeta.fingerprint === fingerprint && savedMeta.bucketCount === bucketCount;
+
+  const newKeysByBucket = new Map<number, Set<string>>();
+  for (const canonical of newKeys) {
+    const bucket = bucketIndexFor(canonical, bucketCount);
+    let set = newKeysByBucket.get(bucket);
+    if (!set) {
+      set = new Set<string>();
+      newKeysByBucket.set(bucket, set);
+    }
+    set.add(canonical);
+  }
+
+  const writer = new KeyListWriter(jobDirPath, masterKey, "append");
+  await writer.prepare();
+
+  let totalKeys = 0;
+  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+    const mergedKeys = fingerprintMatches ? await readSavedBucketKeys(dir, jobId, bucket, masterKey) : new Set<string>();
+    for (const canonical of newKeysByBucket.get(bucket) ?? []) mergedKeys.add(canonical);
+    totalKeys += mergedKeys.size;
+    for (const key of mergedKeys) await writer.appendKey(bucket, key);
+  }
+
+  writer.writeMeta({ fingerprint, bucketCount, totalKeys });
+  return {
+    totalKeys,
+    commit: () => writer.commitTo(jobDirPath),
+    discard: () => writer.discard(),
+  };
+}
+
 // --- mass-delete guard ---------------------------------------------------
 
 export interface MassDeleteGuardResult {

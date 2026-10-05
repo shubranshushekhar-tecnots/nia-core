@@ -18,16 +18,18 @@ export interface SchedulerJob {
   id: string;
   name: string;
   connectionId: string;
-  /** 5-field cron expression. Unset: never scheduled, only run via `job run`. */
+  /** 5-field cron expression. Unset: never scheduled, only run via `job run`. Unused by `realtime` jobs — see `pollIntervalSeconds`. */
   schedule?: string;
-  /** A separate 5-field cron expression for a periodic full `replace`, independent of `schedule`'s delta cadence (plan §2, §8, §10 slice C1) — `upsertDelta` jobs only. Unset: no periodic forced replace. */
+  /** A separate 5-field cron expression for a periodic full `replace`, independent of `schedule`'s delta cadence (or, for `realtime`, independent of `pollIntervalSeconds`'s tick cadence) (plan §2, §8, §10 slice C1). Unset: no periodic forced replace. */
   replaceSchedule?: string;
+  /** `strategy: "realtime"` only (§1.3/E1): tick interval in seconds — an interval timer, not cron. Mutually exclusive with `schedule` (a realtime job never sets it). */
+  pollIntervalSeconds?: number;
   /** IANA time zone both `schedule` and `replaceSchedule` are evaluated in — the job's connection's sourceTimeZone. */
   timeZone: string;
 }
 
 export type SchedulerJobOutcome =
-  | { ok: true; rowsSent: number; durationMs: number }
+  | { ok: true; rowsSent: number; durationMs: number; /** `strategy: "realtime"` only (§1.3/E1): true for a tick that made no request — the scheduler skips writing it to the log file. */ empty?: boolean }
   | {
       ok: false;
       kind: RunSyncFailureKind;
@@ -143,7 +145,8 @@ export class JobScheduler {
         this.scheduleNewRuntime(runtime);
         continue;
       }
-      const scheduleChanged = existing.job.schedule !== job.schedule || existing.job.timeZone !== job.timeZone;
+      const scheduleChanged =
+        existing.job.schedule !== job.schedule || existing.job.pollIntervalSeconds !== job.pollIntervalSeconds || existing.job.timeZone !== job.timeZone;
       const replaceScheduleChanged = existing.job.replaceSchedule !== job.replaceSchedule || existing.job.timeZone !== job.timeZone;
       existing.job = job;
       if (scheduleChanged) {
@@ -166,9 +169,13 @@ export class JobScheduler {
     }
   }
 
-  /** A brand-new runtime (first seen this process): if its persisted nextRunAt is already due, that's a run missed while the agent was down — run it once now via the normal onTick path, rather than waiting for the next occurrence. `replaceSchedule` has no missed-run catch-up (no persisted state of its own) — it's simply armed fresh from now. */
+  /** A brand-new runtime (first seen this process): if its persisted nextRunAt is already due, that's a run missed while the agent was down — run it once now via the normal onTick path, rather than waiting for the next occurrence. `replaceSchedule` has no missed-run catch-up (no persisted state of its own) — it's simply armed fresh from now. A `realtime` job (`pollIntervalSeconds` set, §1.3/E1) has no cron/missed-run concept at all — it's simply armed fresh from now on an interval timer. */
   private scheduleNewRuntime(runtime: JobRuntime): void {
-    if (runtime.job.schedule) this.scheduleNewScheduleRuntime(runtime);
+    if (runtime.job.pollIntervalSeconds !== undefined) {
+      this.scheduleNext(runtime);
+    } else if (runtime.job.schedule) {
+      this.scheduleNewScheduleRuntime(runtime);
+    }
     this.scheduleNextReplace(runtime);
   }
 
@@ -187,10 +194,22 @@ export class JobScheduler {
    * a timer for it. Also deliberately ref'd — see `start()`'s comment —
    * so a scheduled job's pending tick genuinely keeps the process alive
    * until it fires, instead of letting the process exit from under it.
+   * A `realtime` job (`pollIntervalSeconds` set, §1.3/E1) arms a plain
+   * fixed-delay interval timer instead of a cron occurrence — no
+   * `nextRunAt` persistence, since there's no missed-run catch-up
+   * concept for it (`scheduleNewRuntime`'s doc comment).
    */
   private scheduleNext(runtime: JobRuntime): void {
-    if (!runtime.job.schedule || this.stopped) return;
+    if (this.stopped) return;
     if (runtime.timer) clearTimeout(runtime.timer);
+    if (runtime.job.pollIntervalSeconds !== undefined) {
+      const delayMs = Math.max(0, runtime.job.pollIntervalSeconds * 1000);
+      runtime.timer = setTimeout(() => {
+        this.onTick(runtime).catch((err) => this.logTickError(runtime, err));
+      }, delayMs);
+      return;
+    }
+    if (!runtime.job.schedule) return;
     const next = nextOccurrence(runtime.job.schedule, runtime.job.timeZone, this.now());
     recordNextRunAt(runtime.job.id, next, this.options.dir);
     const delayMs = Math.max(0, next.getTime() - this.now().getTime());
@@ -325,7 +344,10 @@ export class JobScheduler {
 
       if (outcome.ok) {
         recordJobSuccess(job.id, { rowsSent: outcome.rowsSent, durationMs: outcome.durationMs }, dir);
-        this.options.logger.info("job_run_completed", { jobId: job.id, rowsSent: outcome.rowsSent });
+        // Realtime (§1.3/E1): an empty tick (nothing to send, no request made) is still recorded in job state above, but isn't written to the log file — only a tick that sent something or failed is.
+        if (!outcome.empty) {
+          this.options.logger.info("job_run_completed", { jobId: job.id, rowsSent: outcome.rowsSent });
+        }
         return;
       }
 
