@@ -46,7 +46,20 @@ export async function streamExtract(pool: sql.ConnectionPool, catalog: Catalog, 
   writer.writeColumns(columnTypes.map((c) => ({ name: c.name, type: c.type })));
   writer.startKeepAlive();
 
-  const sqlRequest = new sql.Request(pool);
+  // mssql/tedious's requestTimeout (15s default, unset anywhere in
+  // connection.ts) is a time-to-first-byte timer — it's cleared the moment
+  // the first response packet arrives (tedious/lib/connection.js,
+  // SentClientRequest.enter), not a cap on total query duration. A
+  // streaming extract can legitimately sit fully blocked (e.g. a lock wait
+  // behind a concurrent writer) for longer than 15s before its first row,
+  // so it must not inherit that short default. Short single-value queries
+  // (watermark.ts's readServerClock/checkWatermarkColumn) are unaffected —
+  // they keep the pool's default short timeout.
+  // @types/mssql doesn't declare the `overrides` constructor arg that the
+  // runtime `mssql` package actually accepts (lib/base/request.js), so the
+  // second argument is typed via a local constructor shape instead of `any`.
+  type RequestWithOverrides = new (connection: sql.ConnectionPool, overrides?: { requestTimeout?: number }) => sql.Request;
+  const sqlRequest = new (sql.Request as unknown as RequestWithOverrides)(pool, { requestTimeout: 0 });
   sqlRequest.stream = true;
   for (let i = 0; i < params.length; i++) {
     sqlRequest.input(`p${i + 1}`, params[i]);
@@ -97,7 +110,12 @@ export async function streamExtract(pool: sql.ConnectionPool, catalog: Catalog, 
         finish(err);
       }
     });
-    sqlRequest.on("error", (err: unknown) => finish(err));
+    sqlRequest.on("error", (err: unknown) => {
+      // Release the connection cleanly on any failure, not just abort/a
+      // malformed row — mirrors the catch block above.
+      if (!aborted) sqlRequest.cancel();
+      finish(err);
+    });
     sqlRequest.on("done", () => finish());
 
     sqlRequest.query(sqlText);

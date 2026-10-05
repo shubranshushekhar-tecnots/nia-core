@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type sql from "mssql";
+import sql from "mssql";
 import { connect, introspectCatalog, streamExtract } from "./index.js";
 import { NdjsonWriter } from "../ndjsonWriter.js";
 import { UnknownColumnError, UnknownTableError } from "../catalog.js";
@@ -299,6 +299,43 @@ describe("mssql integration (throwaway harness)", () => {
 
       expect(chunks.join("")).toContain('"error":"aborted"');
     });
+  });
+
+  describe("streamExtract request timeout (regression — E1 realtime stall)", () => {
+    it("completes a scan blocked (lock wait, zero rows yet) for longer than the old 15000ms default, once the blocker releases", async () => {
+      // Reproduces the real root cause: mssql/tedious's requestTimeout is a
+      // time-to-first-byte timer, not a total-duration cap (cleared on the
+      // first response packet — see streamExtract.ts's comment). A
+      // concurrent writer holding a lock makes the reader's first row wait
+      // past that timer with zero bytes received. Before the fix
+      // (streamExtract.ts not passing `{ requestTimeout: 0 }`), this test
+      // throws "Timeout: Request failed to complete in 15000ms" at ~15s,
+      // before the blocker ever releases its lock.
+      // Selecting `name` (not just the clustered PK `id`) matters: a scan
+      // that reads only the clustering key does not block on another
+      // session's X lock on that key, but reading a non-key column forces
+      // SQL Server to touch the locked row and wait, which is what actually
+      // happens for every real column list the agent extracts.
+      const HOLD_MS = 16_000; // longer than the old 15000ms default
+      const tx = new sql.Transaction(pool);
+      await tx.begin();
+      await new sql.Request(tx).query("UPDATE dbo.widgets SET name = name WHERE id = 1");
+
+      const releaseTimer = setTimeout(() => {
+        tx.commit().catch(() => {});
+      }, HOLD_MS);
+
+      try {
+        const started = Date.now();
+        const { rows, trailer } = await runExtract(pool, catalog, { table: "dbo.widgets", columns: ["id", "name"], filter: [] });
+        expect(Date.now() - started).toBeGreaterThanOrEqual(HOLD_MS);
+        expect(rows).toHaveLength(3);
+        expect(trailer).toEqual({ end: true, rows: 3 });
+      } finally {
+        clearTimeout(releaseTimer);
+        await tx.commit().catch(() => tx.rollback().catch(() => {}));
+      }
+    }, 30_000);
   });
 
   describe("dbo.big_table (1.2M rows)", () => {
