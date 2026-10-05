@@ -113,8 +113,18 @@ function stopAgent(child: ChildProcess): Promise<void> {
  */
 function startFakePlanometryServer(): Promise<ChildProcess> {
   return new Promise((resolve, reject) => {
+    // `detached: true` makes this child its own process group leader —
+    // tsx's CLI re-spawns (rather than exec-replaces) into a second, inner
+    // node process carrying the actual loader flags (confirmed via `ps`:
+    // the running command is the inner `node --require tsx/preflight
+    // --import tsx/loader runFakePlanometryServer.ts`, a different PID from
+    // the one `spawn()` returns here), so a plain `child.kill()` on only
+    // the outer PID leaves that inner process running, orphaned (reparented
+    // to PID 1) once the outer one dies. Killing the whole group (negative
+    // PID, see stopFakePlanometryServer) reaches the inner process too.
     const child = spawn(tsxBin, [fakePlanometryEntryPoint], {
       cwd: agentDir,
+      detached: true,
       env: {
         ...process.env,
         NIA_AGENT_FAKE_PLANOMETRY_PORT: String(FAKE_PLANOMETRY_PORT),
@@ -156,7 +166,15 @@ function startFakePlanometryServer(): Promise<ChildProcess> {
 function stopFakePlanometryServer(child: ChildProcess): Promise<void> {
   return new Promise((resolve) => {
     child.once('exit', () => resolve());
-    child.kill('SIGTERM');
+    // Negative PID = kill the whole process group (see startFakePlanometryServer's
+    // `detached: true` comment) — reaches the inner, actually-listening node
+    // process tsx's CLI re-spawns, not just the outer wrapper `child` points at.
+    try {
+      process.kill(-child.pid!, 'SIGKILL');
+    } catch {
+      // Group (or process) already gone — nothing left to kill.
+      resolve();
+    }
   });
 }
 
@@ -533,7 +551,7 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
         (agentChild as ChildProcess).kill('SIGKILL');
       }
       if (fakeServerChild && (fakeServerChild as ChildProcess).exitCode === null) {
-        (fakeServerChild as ChildProcess).kill('SIGKILL');
+        await stopFakePlanometryServer(fakeServerChild as ChildProcess);
       }
       try {
         if ((await page.locator('.react-flow__node').count()) > 0) {
