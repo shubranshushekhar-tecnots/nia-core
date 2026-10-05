@@ -6497,3 +6497,17 @@ down) — not recorded here.
     pure process-liveness check (`status.startedAt`), with per-job
     staleness/pause/failure detail reassigned to `agent status`
     (§10 (B2) item 4) instead of `healthcheck`.
+
+## Removed dead code: `sync/spoolWriter.ts` (`SpoolWriter`)
+
+Deleted `apps/agent/src/sync/spoolWriter.ts` and its test
+`apps/agent/src/sync/spoolWriter.test.ts` — `SpoolWriter` had no
+remaining callers anywhere in `apps/agent` (every real spool-writing
+call site uses `sync/replaceSpool.ts`'s `ReplaceSpoolWriter` instead);
+the only reference left was its own test file. Removed tests (all in
+`spoolWriter.test.ts`, under `describe("SpoolWriter")`):
+- "spools all rows into a single chunk file when under the row threshold"
+- "rotates to a new self-contained chunk file once the row threshold is crossed"
+- "captures the error trailer instead of a chunk rotation"
+- "ignores keep-alive lines"
+- "encrypts chunk files at rest — not readable as gzip without the master key"
