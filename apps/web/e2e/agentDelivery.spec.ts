@@ -238,7 +238,12 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
         for (const connectorId of ['sqlserver-agent', 'planometry-table']) {
           const card = page.locator(`[data-testid="connector-card"][data-connector-id="${connectorId}"]`);
           await expect(card).toBeVisible({ timeout: 15_000 });
-          const installBtn = card.getByRole('button', { name: 'Install' });
+          // `exact: true` matters: an already-installed card's button is named
+          // "Uninstall", which contains "Install" as a substring and would
+          // otherwise match here too, opening the uninstall-confirmation modal
+          // instead of skipping (observed hanging the whole step on a stray
+          // leftover-installed connector from an earlier run).
+          const installBtn = card.getByRole('button', { name: 'Install', exact: true });
           if (await installBtn.isVisible().catch(() => false)) {
             await installBtn.click();
             await expect(card.getByText('Installed')).toBeVisible({ timeout: 10_000 });
