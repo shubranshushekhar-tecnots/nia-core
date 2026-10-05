@@ -37,6 +37,12 @@ export const sqlserverAgentManifest: ConnectorManifest = {
     { key: "agentConnectionId", label: "Local connection", type: "select", required: true, secret: false },
   ],
   operations: ["read"],
-  capabilities: ["queryable"],
+  // "etl_source" (not "etl_sink" — write/publish is explicitly out of
+  // scope) is what makes NodesRail.tsx's buildEntries() give this
+  // connector a `source` role at all; without it, `roles.length === 0`
+  // and the entry is filtered out of the rail entirely, leaving no way
+  // to drag it onto the canvas and reach the node drawer's existing
+  // Test-connection/table-browsing panels this slice reuses unchanged.
+  capabilities: ["queryable", "etl_source"],
   service: { host: "agent-bridge", port: 4041 },
 };
