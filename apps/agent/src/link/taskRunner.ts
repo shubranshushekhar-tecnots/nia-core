@@ -1,6 +1,7 @@
 import { connect, introspectCatalog } from "@nia/extract/mssql";
+import { pauseJob, resumeJob, testJob } from "../cli/jobCommands.js";
 import { defaultHomeDir } from "../config/paths.js";
-import { findConnection, loadConfig } from "../config/store.js";
+import { findConnection, findJob, loadConfig } from "../config/store.js";
 import type { ConnectionEntry } from "../config/types.js";
 import type { Logger } from "../ops/logger.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
@@ -10,10 +11,19 @@ import type { AgentTask } from "./transport.js";
 
 // Strictly ≤ the bridge's own per-kind task timeout (services/agent-
 // bridge/src/internalApp.ts's TASK_TIMEOUT_MS) so this agent never
-// "finishes late" relative to the bridge's own give-up point.
+// "finishes late" relative to the bridge's own give-up point. Slice
+// R5b's four action kinds act on a local job rather than a live SQL
+// Server connection: run_now/pause/resume only ever start or flip local
+// state (never await the run itself), so a short timeout is plenty;
+// test_job re-checks a live connection/schema like list_tables, so it
+// gets the same budget.
 const TASK_TIMEOUT_MS: Record<AgentTask["kind"], number> = {
   test_connection: 8_000,
   list_tables: 45_000,
+  run_now: 5_000,
+  pause: 5_000,
+  resume: 5_000,
+  test_job: 45_000,
 };
 
 // Small fixed pool (plan §3 point 1) — local task execution never
@@ -22,6 +32,27 @@ const TASK_TIMEOUT_MS: Record<AgentTask["kind"], number> = {
 const MAX_CONCURRENT_TASKS = 3;
 
 type TaskOutcome = { status: "done"; result: unknown } | { status: "failed"; errorClass: string };
+
+type ConnectionTask = Extract<AgentTask, { kind: "test_connection" | "list_tables" }>;
+type SetupActionTask = Extract<AgentTask, { kind: "run_now" | "pause" | "resume" | "test_job" }>;
+
+/**
+ * Slice R5b (docs/plans/agent-canvas-integration.md B.7) — the one piece
+ * of `run_now` that TaskRunner can't do on its own: starting the job
+ * through the scheduler's own lock/concurrency-semaphore/run-report
+ * path. Kept as a small structural interface (rather than importing
+ * `JobScheduler` directly) so a test's fake runner can be a plain object
+ * literal — `JobScheduler.runNow` (scheduler/jobScheduler.ts) matches
+ * this shape exactly, and that's the real implementation agentLoop.ts
+ * wires in.
+ */
+export interface JobActionRunner {
+  runNow(
+    jobId: string,
+    forceReplace: boolean,
+    extra?: { paramOverrides?: Record<string, string>; allowMassDelete?: boolean },
+  ): { ok: true } | { ok: false; error: string };
+}
 
 /**
  * `connect()`/`introspectCatalog()` have no abort-signal support, so a
@@ -46,7 +77,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 }
 
 async function runTaskBody(
-  task: AgentTask,
+  task: ConnectionTask,
   entry: ConnectionEntry,
   credentials: { user: string; password: string },
 ): Promise<TaskOutcome> {
@@ -91,7 +122,7 @@ async function runTaskBody(
   }
 }
 
-async function runOneTask(task: AgentTask, dir: string): Promise<TaskOutcome> {
+async function runConnectionTask(task: ConnectionTask, dir: string): Promise<TaskOutcome> {
   const config = loadConfig(dir);
   const entry = findConnection(config, task.localConnectionId);
   if (!entry) return { status: "failed", errorClass: `no local connection with id ${JSON.stringify(task.localConnectionId)}` };
@@ -108,6 +139,79 @@ async function runOneTask(task: AgentTask, dir: string): Promise<TaskOutcome> {
   }
 }
 
+/** `payload.params` is attacker/platform-controlled JSON — only trusted as a one-off param override once every value is confirmed to be a plain string. */
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && Object.values(value).every((v) => typeof v === "string");
+}
+
+/**
+ * Slice R5b — run_now/pause/resume/test_job all act on one platform-
+ * managed job, found locally by `task.agentSetupId` (that job's own id
+ * — SetupManager uses the setup id as the job id directly, config/
+ * types.ts's `platformManaged.setupId`). A setup id this agent doesn't
+ * have — never applied, or applied then unpublished/removed — fails
+ * with a short, fixed reason; no secrets, row values, or key values
+ * ever appear in a task result (task rules).
+ */
+async function runSetupActionBody(task: SetupActionTask, dir: string, jobRunner: JobActionRunner | undefined): Promise<TaskOutcome> {
+  const job = findJob(loadConfig(dir), task.agentSetupId);
+  if (!job || !job.platformManaged) return { status: "failed", errorClass: "job not found on this agent" };
+
+  switch (task.kind) {
+    case "pause":
+      pauseJob(job.id, "paused via a platform action", dir);
+      return { status: "done", result: { paused: true } };
+
+    case "resume":
+      resumeJob(job.id, dir);
+      return { status: "done", result: { resumed: true } };
+
+    case "test_job": {
+      const result = await testJob(job.id, dir);
+      if (result.ok) return { status: "done", result: { ok: true } };
+      return { status: "failed", errorClass: result.errors[0] ?? "job test failed" };
+    }
+
+    case "run_now": {
+      if (!jobRunner) return { status: "failed", errorClass: "run_now is not available on this agent" };
+      const payload = task.payload;
+      const forceReplace = payload.fullReload === true;
+      const paramOverrides = isStringRecord(payload.params) ? payload.params : undefined;
+      const allowMassDelete = payload.allowMassDelete === true;
+      // Fire-and-forget by design (jobRunner.runNow never awaits the run
+      // itself) — refused synchronously ("already running") if a run for
+      // this job is already in flight; otherwise the task is reported
+      // "done" the instant the run is accepted, and its real outcome
+      // surfaces later through the normal run report (ops/recordRun.ts),
+      // never through this task result.
+      const outcome = jobRunner.runNow(job.id, forceReplace, { paramOverrides, allowMassDelete });
+      if (!outcome.ok) return { status: "failed", errorClass: outcome.error };
+      return { status: "done", result: { started: true } };
+    }
+  }
+}
+
+async function runSetupActionTask(task: SetupActionTask, dir: string, jobRunner: JobActionRunner | undefined): Promise<TaskOutcome> {
+  try {
+    return await withTimeout(runSetupActionBody(task, dir, jobRunner), TASK_TIMEOUT_MS[task.kind], "task timed out");
+  } catch (err) {
+    return { status: "failed", errorClass: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function runOneTask(task: AgentTask, dir: string, jobRunner: JobActionRunner | undefined): Promise<TaskOutcome> {
+  // A plain `kind === "a" || kind === "b"` check doesn't narrow `task` here (TS doesn't narrow a
+  // discriminated union via an OR'd equality check when the discriminant is itself multi-literal
+  // per member) — a switch on the same property does.
+  switch (task.kind) {
+    case "test_connection":
+    case "list_tables":
+      return runConnectionTask(task, dir);
+    default:
+      return runSetupActionTask(task, dir, jobRunner);
+  }
+}
+
 /**
  * Slice C1 — fully separate from scheduler/jobScheduler.ts (own
  * lifecycle, own concurrency, never touches sync jobs). Receives tasks
@@ -115,6 +219,12 @@ async function runOneTask(task: AgentTask, dir: string): Promise<TaskOutcome> {
  * bounded concurrency, and POSTs each result immediately via
  * TaskResultsClient the moment it finishes — not queued for the next
  * check-in.
+ *
+ * Slice R5b adds `run_now`/`pause`/`resume`/`test_job`, which act on a
+ * local platform-managed job rather than a connection — `jobRunner` is
+ * only consulted for `run_now` (the one action that needs the
+ * scheduler's own lock/semaphore), and is optional so an agent build
+ * with no scheduler wired in simply refuses that one action kind.
  */
 export class TaskRunner {
   private readonly queue: AgentTask[] = [];
@@ -124,6 +234,7 @@ export class TaskRunner {
     private readonly resultsClient: TaskResultsClient,
     private readonly logger: Logger,
     private readonly dir: string = defaultHomeDir(),
+    private readonly jobRunner?: JobActionRunner,
   ) {}
 
   handle(tasks: AgentTask[]): void {
@@ -143,7 +254,7 @@ export class TaskRunner {
   }
 
   private async runAndReport(task: AgentTask): Promise<void> {
-    const outcome = await runOneTask(task, this.dir);
+    const outcome = await runOneTask(task, this.dir, this.jobRunner);
     this.logger.info("agent_task_completed", { taskId: task.id, kind: task.kind, status: outcome.status });
     await this.resultsClient.post({
       taskId: task.id,

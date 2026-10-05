@@ -16,7 +16,7 @@ import { recordCheckInSuccess, recordRevoked } from "./ops/linkState.js";
 import { readJobState, recordAgentStarted } from "./ops/state.js";
 import { loadOrCreateMasterKey } from "./secrets/keyfile.js";
 import { LocalSecretStore } from "./secrets/store.js";
-import { JobScheduler, type SchedulerJob, type SchedulerJobOutcome } from "./scheduler/jobScheduler.js";
+import { JobScheduler, type RunNowExtra, type SchedulerJob, type SchedulerJobOutcome } from "./scheduler/jobScheduler.js";
 
 export interface AgentLoopOptions {
   dir?: string;
@@ -45,7 +45,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     dir,
     logger,
     loadJobs: () => loadSchedulerJobs(dir),
-    runJob: (job, signal, forceReplace) => runSchedulerJob(job, signal, forceReplace, dir),
+    runJob: (job, signal, forceReplace, extra) => runSchedulerJob(job, signal, forceReplace, dir, extra),
     maxConcurrentRuns: loadConfig(dir).maxConcurrentRuns,
   });
   scheduler.start();
@@ -72,7 +72,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     if (secret) {
       transport = new HttpAgentTransport({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
       taskResultsClient = new TaskResultsClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
-      const taskRunner = new TaskRunner(taskResultsClient, logger, dir);
+      // Slice R5b — the scheduler itself satisfies TaskRunner's JobActionRunner (runNow), so run_now reuses the scheduler's own lock/semaphore/run-report path.
+      const taskRunner = new TaskRunner(taskResultsClient, logger, dir, scheduler);
       setupClient = new SetupClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
       const setupManager = new SetupManager({ setupClient, logger, dir });
       checkInLoop = new CheckInLoop({
@@ -157,8 +158,18 @@ function loadJobHeartbeatSources(dir: string): JobHeartbeatSource[] {
   return loadConfig(dir).jobs.map((job) => ({ id: job.id, name: job.name, state: readJobState(job.id, dir) }));
 }
 
-async function runSchedulerJob(job: SchedulerJob, signal: AbortSignal, forceReplace: boolean, dir: string): Promise<SchedulerJobOutcome> {
-  const outcome = await runJobCommand(job.id, { signal, replace: forceReplace }, dir);
+async function runSchedulerJob(
+  job: SchedulerJob,
+  signal: AbortSignal,
+  forceReplace: boolean,
+  dir: string,
+  extra?: RunNowExtra,
+): Promise<SchedulerJobOutcome> {
+  const outcome = await runJobCommand(
+    job.id,
+    { signal, replace: forceReplace, paramOverrides: extra?.paramOverrides, allowMassDelete: extra?.allowMassDelete },
+    dir,
+  );
   if (outcome.ok)
     return {
       ok: true,

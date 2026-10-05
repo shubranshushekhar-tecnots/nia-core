@@ -50,6 +50,12 @@ export type SchedulerJobOutcome =
       consoleMessage?: string;
     };
 
+/** Slice R5b (docs/plans/agent-canvas-integration.md B.7): one-off extras for a `runNow` call — never persisted, same discipline as `RunJobOptions.paramOverrides`/`allowMassDelete` (cli/runJobCommand.ts). */
+export interface RunNowExtra {
+  paramOverrides?: Record<string, string>;
+  allowMassDelete?: boolean;
+}
+
 /** §10(B2) item 2: these retry with backoff instead of pausing or waiting for the next tick. */
 const RETRY_KINDS: ReadonlySet<RunSyncFailureKind> = new Set(["transient", "diskSpace"]);
 /** 1, 5, 15 minutes. */
@@ -66,8 +72,8 @@ export interface JobSchedulerOptions {
   reconcileIntervalMs?: number;
   /** Re-read on every reconcile — lets a running service see job add/update/remove without restarting. */
   loadJobs: () => SchedulerJob[];
-  /** Runs one job to completion. `forceReplace` is true for a `replaceSchedule` tick (periodic forced full replace) — same meaning as `job run --replace`. */
-  runJob: (job: SchedulerJob, signal: AbortSignal, forceReplace: boolean) => Promise<SchedulerJobOutcome>;
+  /** Runs one job to completion. `forceReplace` is true for a `replaceSchedule` tick (periodic forced full replace) — same meaning as `job run --replace`. `extra` is set only for a `runNow` call (Slice R5b) — undefined for every scheduled/realtime tick. */
+  runJob: (job: SchedulerJob, signal: AbortSignal, forceReplace: boolean, extra?: RunNowExtra) => Promise<SchedulerJobOutcome>;
   /** Global cap on simultaneously running jobs, queued (not refused) past the limit. Default 1. */
   maxConcurrentRuns?: number;
   /** Backoff delays for "transient"/"diskSpace" failures, in order. Defaults to 1/5/15 min. */
@@ -299,13 +305,13 @@ export class JobScheduler {
     await this.fire(runtime, true);
   }
 
-  /** Runs the job through the global concurrency semaphore + retry logic — isolated via catch so one job's throw can never escape to the scheduler or another job. `forceReplace` is true for a `replaceSchedule` tick. */
-  private fire(runtime: JobRuntime, forceReplace: boolean): Promise<void> {
+  /** Runs the job through the global concurrency semaphore + retry logic — isolated via catch so one job's throw can never escape to the scheduler or another job. `forceReplace` is true for a `replaceSchedule` tick. `extra` carries `runNow`'s one-off params/allowMassDelete (Slice R5b) — undefined for a normal tick. */
+  private fire(runtime: JobRuntime, forceReplace: boolean, extra?: RunNowExtra): Promise<void> {
     runtime.running = true;
     const abortController = new AbortController();
     runtime.abortController = abortController;
 
-    const promise: Promise<void> = this.executeOnce(runtime, abortController.signal, forceReplace)
+    const promise: Promise<void> = this.executeOnce(runtime, abortController.signal, forceReplace, extra)
       .catch((err) => {
         this.options.logger.error("job_run_threw", { jobId: runtime.job.id, error: err instanceof Error ? err.message : String(err) });
       })
@@ -319,13 +325,34 @@ export class JobScheduler {
   }
 
   /** Waits for a global concurrency slot (queued, not refused), then drives the job with retry. */
-  private async executeOnce(runtime: JobRuntime, signal: AbortSignal, forceReplace: boolean): Promise<void> {
+  private async executeOnce(runtime: JobRuntime, signal: AbortSignal, forceReplace: boolean, extra?: RunNowExtra): Promise<void> {
     const release = await this.semaphore.acquire();
     try {
-      await this.executeWithRetry(runtime, signal, forceReplace);
+      await this.executeWithRetry(runtime, signal, forceReplace, extra);
     } finally {
       release();
     }
+  }
+
+  /**
+   * TaskRunner's `run_now` action (Slice R5b, docs/plans/agent-canvas-
+   * integration.md B.7): starts this job right now through the exact
+   * same lock (`runtime.running`), concurrency semaphore, and state-
+   * recording/run-report path (`executeWithRetry` -> `recordRunOutcome`)
+   * as a scheduled tick — refused synchronously, without touching
+   * anything, if a run for this job (a scheduled tick or an earlier
+   * `runNow`) is already in flight, or if this job isn't known to the
+   * scheduler at all. Fire-and-forget: returns the instant the run is
+   * accepted, never waiting for it to finish, so a caller can report
+   * "started" immediately — the run's own outcome surfaces later
+   * through the normal run report, exactly like any other tick.
+   */
+  runNow(jobId: string, forceReplace: boolean, extra?: RunNowExtra): { ok: true } | { ok: false; error: string } {
+    const runtime = this.runtimes.get(jobId);
+    if (!runtime) return { ok: false, error: "job not found" };
+    if (runtime.running) return { ok: false, error: "already running" };
+    void this.fire(runtime, forceReplace, extra);
+    return { ok: true };
   }
 
   /**
@@ -335,7 +362,7 @@ export class JobScheduler {
    * as a clean stop (no failure recorded); and otherwise recording a
    * failure and waiting for the job's next scheduled tick.
    */
-  private async executeWithRetry(runtime: JobRuntime, signal: AbortSignal, forceReplace: boolean): Promise<void> {
+  private async executeWithRetry(runtime: JobRuntime, signal: AbortSignal, forceReplace: boolean, extra?: RunNowExtra): Promise<void> {
     const { job } = runtime;
     const dir = this.options.dir;
     let attempt = 0;
@@ -349,7 +376,7 @@ export class JobScheduler {
 
       let outcome: SchedulerJobOutcome;
       try {
-        outcome = await this.options.runJob(job, signal, forceReplace);
+        outcome = await this.options.runJob(job, signal, forceReplace, extra);
       } catch (err) {
         outcome = { ok: false, kind: "other", error: err instanceof Error ? err.message : String(err) };
       }

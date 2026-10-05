@@ -21,12 +21,19 @@ export interface AgentConnectionReport {
  * Slice C1 — one task delivered by the bridge in a check-in response,
  * flattened from its internal `AgentTask` shape (services/agent-bridge/
  * src/app.ts's check-in handler: `{id, kind, localConnectionId}`).
+ *
+ * Slice R5b adds `run_now`/`pause`/`resume`/`test_job` — these act on a
+ * platform-managed job (found locally by `agentSetupId`, which is that
+ * job's own id — SetupManager uses the setup id as the job id directly)
+ * instead of a connection, and carry a `payload` instead of a flat
+ * `localConnectionId` (services/agent-bridge/src/app.ts's check-in
+ * handler: `{id, kind, agentSetupId, payload}`). `payload` is `{}` for
+ * pause/resume/test_job, and `{params?, fullReload?, allowMassDelete?}`
+ * for run_now (supabase/migrations/0074_agent_setup_actions.sql).
  */
-export interface AgentTask {
-  id: string;
-  kind: "test_connection" | "list_tables";
-  localConnectionId: string;
-}
+export type AgentTask =
+  | { id: string; kind: "test_connection" | "list_tables"; localConnectionId: string }
+  | { id: string; kind: "run_now" | "pause" | "resume" | "test_job"; agentSetupId: string; payload: Record<string, unknown> };
 
 /**
  * Slice L2 (docs/plans/agent-canvas-integration.md B.3): "Isolated behind
