@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import { TestRequest, IntrospectRequest, type ReadContext } from "@nia/schemas";
+import { TestRequest, IntrospectRequest, ExecuteRequest, WriteRequest, type ReadContext } from "@nia/schemas";
 import { withServiceRole } from "@nia/db";
 import { dbPool } from "./db.js";
 import { verifyReadContext, HttpError } from "./writeSignature.js";
@@ -57,11 +57,36 @@ type ResolvedAgentConnection = {
 const ONLINE_THRESHOLD_MS = 90_000;
 
 const TASK_TIMEOUT_MS: Record<"test_connection" | "list_tables", number> = {
-  // Both strictly shorter than apps/api's 15000ms dispatch timeout so the
-  // bridge always answers before the caller gives up waiting.
+  // test_connection stays strictly shorter than apps/api's 15000ms /test
+  // dispatch timeout so the bridge always answers before the caller gives
+  // up waiting. list_tables raised to 45s (Slice R1, requirement 6) to
+  // match apps/api's introspect timeout (now 60s, see connectorDispatch.ts)
+  // having room to browse a large catalog.
   test_connection: 8_000,
-  list_tables: 10_000,
+  list_tables: 45_000,
 };
+
+// Slice R1, requirement 4 — planometry-table and https-endpoint are
+// destinations whose manifest.service also points at this same bridge
+// (reusing the one internal listener rather than standing up a new
+// microservice), but neither is actually deliverable through an agent:
+// their /test and /introspect are answered directly by apps/api
+// (connections.ts), and nothing in this codebase yet drives real agent-
+// relayed reads/writes for them. /execute and /write below look the
+// connection's connector_id up and refuse early with a message distinct
+// from the generic "not implemented yet" 501 every other connector_id
+// gets, so a caller can tell "this will never work for this destination"
+// apart from "this isn't built yet".
+const AGENT_DELIVERED_CONNECTOR_IDS = new Set(["planometry-table", "https-endpoint"]);
+
+async function getConnectorId(connectionId: string): Promise<string | null> {
+  return withServiceRole(dbPool, async (db) => {
+    const { rows } = await db.query<{ connector_id: string }>(`select connector_id from public.connections where id = $1`, [
+      connectionId,
+    ]);
+    return rows[0]?.connector_id ?? null;
+  });
+}
 
 /**
  * Resolution rule (plan point 3): never trusts an agentId/agentConnectionId
@@ -210,8 +235,26 @@ export function buildInternalApp() {
   // No connector in this codebase implements /execute yet (confirmed in
   // connectorDispatch.ts's own comment) — registered now so the route
   // exists, but refuses immediately: no task created, no agent contacted.
-  app.post("/execute", async () => {
+  app.post("/execute", async (req) => {
+    const { credential } = ExecuteRequest.parse(req.body);
+    const connectorId = await getConnectorId(credential.connectionId);
+    if (connectorId && AGENT_DELIVERED_CONNECTOR_IDS.has(connectorId)) {
+      throw new HttpError(501, "this destination is delivered by an agent");
+    }
     throw new HttpError(501, "reading through the agent is not available yet");
+  });
+
+  // Slice R1, requirement 4 — no connector in this codebase writes through
+  // an agent yet either; this route didn't exist before this slice.
+  // Registered now, same posture as /execute: no task created, no agent
+  // contacted, every connector_id refuses immediately.
+  app.post("/write", async (req) => {
+    const { credential } = WriteRequest.parse(req.body);
+    const connectorId = await getConnectorId(credential.connectionId);
+    if (connectorId && AGENT_DELIVERED_CONNECTOR_IDS.has(connectorId)) {
+      throw new HttpError(501, "this destination is delivered by an agent");
+    }
+    throw new HttpError(501, "writing through the agent is not available yet");
   });
 
   return app;

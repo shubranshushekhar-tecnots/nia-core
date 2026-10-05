@@ -25,12 +25,16 @@ function buildReadContext(route: "test" | "introspect" | "invalidate", connectio
   return { issuedAt, signature };
 }
 
-// Mirrors apps/worker/src/lib/connectorClient.ts's DEFAULT_TEST_TIMEOUT_MS /
-// DEFAULT_INTROSPECT_TIMEOUT_MS exactly — this file had no timeout at all
-// before (a pre-existing gap vs. the worker's equivalent client), so a hung
-// connector service could block a /test or /introspect request forever.
+// Mirrors apps/worker/src/lib/connectorClient.ts's DEFAULT_TEST_TIMEOUT_MS
+// exactly — this file had no timeout at all before (a pre-existing gap vs.
+// the worker's equivalent client), so a hung connector service could block
+// a /test request forever.
 const DEFAULT_TEST_TIMEOUT_MS = 15000;
-const DEFAULT_INTROSPECT_TIMEOUT_MS = 15000;
+// Slice R1, requirement 6 — raised from 15s to 60s so browsing a large
+// catalog (e.g. a wide warehouse table list) has room to finish; this now
+// diverges from apps/worker's constant on purpose, introspection is a
+// browse-time-only operation the worker never performs.
+const DEFAULT_INTROSPECT_TIMEOUT_MS = 60_000;
 
 function baseUrl(manifest: ConnectorManifest): string {
   // manifest.service.{host,port} is the Docker-internal-network address

@@ -17,6 +17,8 @@ import { getSecretStore, toSecretScope } from "../lib/secretStore.js";
 import { getCachedSchema, setCachedSchema, invalidateCachedSchema } from "../lib/schemaCache.js";
 import { runSchemaRefreshJob } from "../lib/schemaRefreshQueue.js";
 import { runProfileJob } from "../lib/profileQueue.js";
+import { assertAddressSafe } from "../lib/addressSafety.js";
+import { checkPlanometryConnection, getPlanometrySchema } from "../lib/planometryClient.js";
 import type { WithUser } from "../lib/withUser.js";
 
 function isUniqueViolation(err: unknown): err is { code: string; message: string } {
@@ -225,6 +227,11 @@ export async function createConnection(
   scope: WorkspaceScope,
   ownerUserId: string,
   input: { connectorId: string; displayName: string; fields: Record<string, unknown> },
+  // Slice R1, requirement 3: injectable so a test can point a manifest's
+  // `address` field at a local stub without needing a real HTTPS,
+  // publicly-resolvable hostname. Defaults to the real, strict check in
+  // production — see addressSafety.ts's header comment.
+  deps: { assertAddressSafe?: (address: string) => Promise<void> } = {},
 ): Promise<Connection> {
   const manifest = getConnectorManifest(input.connectorId);
   if (!manifest) throw new AppError(400, "UNKNOWN_CONNECTOR", `No manifest for connector "${input.connectorId}".`);
@@ -245,6 +252,16 @@ export async function createConnection(
 
   const { config, secret } = splitFields(manifest.configSchema, input.fields);
   await assertAgentConnectionScope(withUser, scope, manifest.id, config);
+
+  // Requirement 3 — any manifest with an `address` field (today:
+  // planometry-table, https-endpoint) gets the HTTPS-only + no-private-
+  // range guard at create time, once, rather than re-checked on every
+  // dispatch (updateConnection never lets `address` change without going
+  // back through this same createConnection-shaped validation).
+  if (typeof config.address === "string") {
+    const checkAddress = deps.assertAddressSafe ?? assertAddressSafe;
+    await checkAddress(config.address);
+  }
 
   const vaultRef = await getSecretStore(withUser).put(secret, toSecretScope(scope));
 
@@ -572,19 +589,46 @@ export async function testConnection(
     vaultRef: data.vault_secret_ref,
   };
 
-  const result = await dispatchTest(manifest, credential, data.config);
+  // Requirement 1/2 — these two types never dispatch through the generic
+  // signed internal-service contract: planometry-table's "test" is apps/api
+  // calling Planometry's own HTTPS API directly (see planometryClient.ts);
+  // https-endpoint has no platform-side test at all.
+  let result: { ok: boolean; latencyMs?: number; error?: { message: string; details: string } };
+  if (manifest.id === "planometry-table") {
+    const address = typeof data.config.address === "string" ? data.config.address : "";
+    const secret = await getSecretStore(withUser).get(data.vault_secret_ref);
+    const pushKey = typeof secret?.pushKey === "string" ? secret.pushKey : "";
+    const check = await checkPlanometryConnection(address, pushKey);
+    result = check.ok
+      ? { ok: true, latencyMs: check.latencyMs }
+      : { ok: false, error: { message: check.error, details: check.error } };
 
-  // Mirrors connector-mysql's fixed /test probe (services/connector-mysql/
-  // src/index.ts) — the only query this connector's /test ever runs.
-  await logExecutionAudit(withUser, {
-    connectionId: data.id,
-    connectionOwnerUserId: data.owner_user_id,
-    connectorId: data.connector_id,
-    handle: data.handle,
-    operation: "test",
-    query: "SELECT 1",
-    actorUserId,
-  });
+    await logExecutionAudit(withUser, {
+      connectionId: data.id,
+      connectionOwnerUserId: data.owner_user_id,
+      connectorId: data.connector_id,
+      handle: data.handle,
+      operation: "test",
+      query: `GET ${address}`,
+      actorUserId,
+    });
+  } else if (manifest.id === "https-endpoint") {
+    result = { ok: true };
+  } else {
+    result = await dispatchTest(manifest, credential, data.config);
+
+    // Mirrors connector-mysql's fixed /test probe (services/connector-mysql/
+    // src/index.ts) — the only query this connector's /test ever runs.
+    await logExecutionAudit(withUser, {
+      connectionId: data.id,
+      connectionOwnerUserId: data.owner_user_id,
+      connectorId: data.connector_id,
+      handle: data.handle,
+      operation: "test",
+      query: "SELECT 1",
+      actorUserId,
+    });
+  }
 
   await withUser((db) =>
     db.query(`update connections set last_test_status = $1, last_test_latency_ms = $2, last_test_at = $3 where id = $4`, [
@@ -595,7 +639,12 @@ export async function testConnection(
     ]),
   );
 
-  return { ok: result.ok, latencyMs: result.latencyMs, error: result.error?.message, details: result.error?.details };
+  return {
+    ok: result.ok,
+    latencyMs: result.latencyMs,
+    error: result.error?.message,
+    details: manifest.id === "https-endpoint" ? "Checked when a job is published." : result.error?.details,
+  };
 }
 
 /**
@@ -633,6 +682,27 @@ export async function getConnectionSchema(withUser: WithUser, scope: WorkspaceSc
 
   const cached = getCachedSchema(credential);
   if (cached) return cached;
+
+  // Requirement 1/2 — same split as testConnection: planometry-table's
+  // "browse" is apps/api reading Planometry's own /schema directly;
+  // https-endpoint has no browse at all (per its manifest's header
+  // comment, the mapping editor falls back to manual field entry when
+  // entities is empty).
+  if (manifest.id === "planometry-table") {
+    const address = typeof data.config.address === "string" ? data.config.address : "";
+    const secret = await getSecretStore(withUser).get(data.vault_secret_ref);
+    const pushKey = typeof secret?.pushKey === "string" ? secret.pushKey : "";
+    const schema = await getPlanometrySchema(address, pushKey);
+    if (!schema.ok) throw new AppError(502, "INTROSPECT_FAILED", schema.error, schema.error);
+
+    setCachedSchema(credential, schema.value);
+    return schema.value;
+  }
+  if (manifest.id === "https-endpoint") {
+    const value: IntrospectResponse = { entities: [] };
+    setCachedSchema(credential, value);
+    return value;
+  }
 
   const result = await dispatchIntrospect(manifest, credential, data.config);
   if (!result.ok) throw new AppError(502, "INTROSPECT_FAILED", result.error.message, result.error.details);

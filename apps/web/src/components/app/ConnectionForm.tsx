@@ -224,6 +224,39 @@ export default function ConnectionForm({
             </div>
           );
         }
+        // Slice R1, requirement 5 — https-endpoint's sign-in method is the
+        // first fixed-choice (non agent-picker) select field; AGENT_PICKER_KEYS
+        // above still owns sqlserver-agent's two dynamic (DB-backed) selects,
+        // this branch only handles a manifest's own static `options` list.
+        if (field.type === 'select') {
+          return (
+            <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label htmlFor={`${idPrefix}-field-${field.key}`} style={nxModalLabelStyle}>
+                {field.label}
+              </label>
+              <select
+                id={`${idPrefix}-field-${field.key}`}
+                name={field.key}
+                required={field.required}
+                defaultValue=""
+                ref={(el) => {
+                  fieldRefs.current[field.key] = el as unknown as HTMLInputElement | null;
+                }}
+                className="nx-modal-field"
+                style={nxModalFieldStyle(false)}
+              >
+                <option value="" disabled>
+                  Select…
+                </option>
+                {(field.options ?? []).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          );
+        }
         return (
           <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label htmlFor={`${idPrefix}-field-${field.key}`} style={nxModalLabelStyle}>

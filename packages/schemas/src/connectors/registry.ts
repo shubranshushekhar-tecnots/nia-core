@@ -1,6 +1,8 @@
 import type { ConnectorManifest } from "../manifest.js";
+import { httpsEndpointManifest } from "./https_endpoint.js";
 import { mongodbManifest } from "./mongodb.js";
 import { mysqlManifest } from "./mysql.js";
+import { planometryTableManifest } from "./planometry_table.js";
 import { postgresManifest } from "./postgres.js";
 import { sqlserverAgentManifest } from "./sqlserver_agent.js";
 import { supabaseManifest } from "./supabase.js";
@@ -18,6 +20,8 @@ export const CONNECTOR_MANIFESTS: Record<string, ConnectorManifest> = {
   [supabaseManifest.id]: supabaseManifest,
   [postgresManifest.id]: postgresManifest,
   [sqlserverAgentManifest.id]: sqlserverAgentManifest,
+  [planometryTableManifest.id]: planometryTableManifest,
+  [httpsEndpointManifest.id]: httpsEndpointManifest,
 };
 
 export function getConnectorManifest(connectorId: string): ConnectorManifest | undefined {

@@ -1,7 +1,8 @@
+import { createServer } from "node:http";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { WithUser } from "../lib/withUser.js";
 import { CURRENT_KEY_VERSION, decryptSecret, encryptSecret, parseMasterKey } from "@nia/secrets";
-import { createConnection, updateConnection } from "./connections.js";
+import { createConnection, getConnectionSchema, testConnection, updateConnection } from "./connections.js";
 
 // getSecretStore (../lib/secretStore.js) does real envelope encryption
 // against NIA_SECRET_MASTER_KEY (fixed test value from vitest.config.ts) —
@@ -305,5 +306,202 @@ describe("createConnection — Item 6.1 NAME_TAKEN", () => {
         fields: { host: "db.example.com", port: 3306, database: "sandbox", user: "nia_ro", password: "pw" },
       }),
     ).rejects.toMatchObject({ statusCode: 409, code: "NAME_TAKEN" });
+  });
+});
+
+/**
+ * Slice R1 — planometry-table's Test/Browse never go through
+ * connectorDispatch.ts (see connections.ts's testConnection/
+ * getConnectionSchema header comments); this exercises the real
+ * createConnection -> testConnection -> getConnectionSchema path end to
+ * end against a tiny in-process stub standing in for Planometry's own
+ * HTTPS API — never importing anything from apps/agent, which owns the
+ * real wire client this stub's shape is modeled on (see
+ * apps/api/src/lib/planometryClient.ts's header comment).
+ */
+describe("Slice R1 — planometry-table", () => {
+  const PUSH_KEY = "test-push-key-do-not-leak";
+
+  /**
+   * Same fake-withUser shape as createFakeWithUser above, but general
+   * enough for a brand-new connection (createConnection's insert) rather
+   * than pre-seeding an existing one for updateConnection — this fake
+   * backs createConnection, testConnection, AND getConnectionSchema in the
+   * same test, all against one in-memory connections/nia_secrets table.
+   */
+  function createFakePlanometryWithUser() {
+    const queries: { text: string; params: readonly unknown[] }[] = [];
+    const secretRows = new Map<string, Record<string, unknown>>();
+    const connectionRows = new Map<string, Record<string, unknown>>();
+    let nextSecretId = 1;
+
+    const withUser: WithUser = (async (fn) =>
+      fn({
+        query: async (text: string, params: readonly unknown[] = []) => {
+          queries.push({ text, params });
+          if (text.includes("from connector_installs")) return { rows: [{ count: 1 }] } as never;
+          if (text.includes("insert into nia_secrets")) {
+            const [ciphertext, encrypted_data_key, iv, auth_tag, algorithm, key_version] = params;
+            const id = `secret-${nextSecretId++}`;
+            secretRows.set(id, { ciphertext, encrypted_data_key, iv, auth_tag, algorithm, key_version });
+            return { rows: [{ id }] } as never;
+          }
+          if (text.includes("from nia_secrets where id")) {
+            const id = params[0] as string;
+            const stored = secretRows.get(id);
+            return { rows: stored ? [{ id, ...stored }] : [] } as never;
+          }
+          if (text.includes("insert into connections")) {
+            const [, , connectorId, handle, displayName, ownerUserId, config, vaultRef] = params;
+            // ExecutionAuditInput (testConnection's audit call) requires a
+            // real uuid for connectionId, not a readable fixture string
+            // like the other fakes in this file use — those never exercise
+            // the audit path.
+            const id = crypto.randomUUID();
+            const row = {
+              id,
+              connector_id: connectorId,
+              handle,
+              display_name: displayName,
+              owner_user_id: ownerUserId,
+              config,
+              vault_secret_ref: vaultRef,
+              cred_version: 1,
+              last_test_status: null,
+              last_test_latency_ms: null,
+              last_test_at: null,
+              last_used_at: null,
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            };
+            connectionRows.set(id, row);
+            return { rows: [row] } as never;
+          }
+          if (text.includes("from connections where id")) {
+            const id = params[0] as string;
+            const row = connectionRows.get(id);
+            return { rows: row ? [row] : [] } as never;
+          }
+          if (text.includes("update connections set")) {
+            const id = params[params.length - 1] as string;
+            const row = connectionRows.get(id) as Record<string, unknown> | undefined;
+            if (row) {
+              row.last_test_status = params[0];
+              row.last_test_latency_ms = params[1];
+              row.last_test_at = params[2];
+            }
+            return { rows: [] } as never;
+          }
+          if (text.includes("log_execution_audit")) return { rows: [] } as never;
+          throw new Error(`unexpected query in fake: ${text}`);
+        },
+      })) as WithUser;
+    return { withUser, queries };
+  }
+
+  // Lets the stub's plain-http loopback address past createConnection's
+  // real HTTPS/private-range check — the one override point
+  // addressSafety.ts's header comment calls out for tests.
+  const allowAnyAddress = { assertAddressSafe: async () => {} };
+
+  it("Allowed: a planometry_table connection tests ok and browsing returns the table's columns with key flags", async () => {
+    const server = createServer((req, res) => {
+      if (req.headers.authorization !== `Bearer ${PUSH_KEY}`) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ success: false, message: "bad push key" }));
+        return;
+      }
+      if (req.url === "/schema") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            success: true,
+            data: {
+              dataSourceId: "ds-1",
+              dataSourceName: "Revenue",
+              columns: [
+                { name: "id", type: "Number", isKey: true },
+                { name: "amount", type: "Number", isKey: false },
+              ],
+              keyColumns: ["id"],
+            },
+          }),
+        );
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          success: true,
+          data: { status: "ok", dataSourceId: "ds-1", dataSourceName: "Revenue", serverTime: new Date().toISOString() },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = address && typeof address === "object" ? address.port : 0;
+    const url = `http://127.0.0.1:${port}`;
+
+    try {
+      const { withUser } = createFakePlanometryWithUser();
+
+      // Real uuids (not the readable "user-1"/"actor-1" fixtures the other
+      // describe blocks use) — testConnection's logExecutionAudit call
+      // validates both as uuids (ExecutionAuditInput), and none of those
+      // other blocks exercise that audit path.
+      const ownerUserId = "00000000-0000-0000-0000-000000000001";
+      const actorUserId = "00000000-0000-0000-0000-00000000000a";
+
+      const connection = await createConnection(
+        withUser,
+        { orgId: "org-A" },
+        ownerUserId,
+        { connectorId: "planometry-table", displayName: "Revenue table", fields: { address: url, pushKey: PUSH_KEY } },
+        allowAnyAddress,
+      );
+      // The push key is a secret field -> split into nia_secrets, never
+      // part of the connection row/config this (or any) API response
+      // returns.
+      expect(connection.config).not.toHaveProperty("pushKey");
+      expect(JSON.stringify(connection)).not.toContain(PUSH_KEY);
+
+      const testResult = await testConnection(withUser, { orgId: "org-A" }, connection.id, actorUserId);
+      expect(testResult.ok).toBe(true);
+      expect(typeof testResult.latencyMs).toBe("number");
+      expect(JSON.stringify(testResult)).not.toContain(PUSH_KEY);
+
+      const schema = await getConnectionSchema(withUser, { orgId: "org-A" }, connection.id);
+      expect(schema.entities).toHaveLength(1);
+      expect(schema.entities[0]!.name).toBe("Revenue");
+      expect(schema.entities[0]!.fields.map((f) => f.name)).toEqual(["id", "amount"]);
+      expect(schema.entities[0]!.primaryKey).toBe("id");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("Refused: a non-HTTPS or private address is rejected at create, and the push key never appears in any API response", async () => {
+    const { withUser, queries } = createFakePlanometryWithUser();
+
+    const plainHttp = createConnection(withUser, { orgId: "org-A" }, "user-1", {
+      connectorId: "planometry-table",
+      displayName: "Plain HTTP",
+      fields: { address: "http://example.com/push/abc", pushKey: PUSH_KEY },
+    });
+    await expect(plainHttp).rejects.toMatchObject({ statusCode: 400, code: "UNSAFE_ADDRESS" });
+    await plainHttp.catch((err) => expect(String(err)).not.toContain(PUSH_KEY));
+
+    const privateHttps = createConnection(withUser, { orgId: "org-A" }, "user-1", {
+      connectorId: "planometry-table",
+      displayName: "Private HTTPS",
+      fields: { address: "https://127.0.0.1/push/abc", pushKey: PUSH_KEY },
+    });
+    await expect(privateHttps).rejects.toMatchObject({ statusCode: 400, code: "UNSAFE_ADDRESS" });
+    await privateHttps.catch((err) => expect(String(err)).not.toContain(PUSH_KEY));
+
+    // The address check runs before getSecretStore(...).put(...) in
+    // createConnection — neither rejection above ever reached nia_secrets,
+    // so the push key was never persisted anywhere it could later leak from.
+    expect(queries.some((q) => q.text.includes("insert into nia_secrets"))).toBe(false);
   });
 });
