@@ -62,6 +62,7 @@ import NodeContextMenu, { type MenuAction } from './NodeContextMenu';
 import { useToasts, ToastStack } from './Toast';
 import DeleteConnectionDialog from './DeleteConnectionDialog';
 import AgentPublishDialog from './AgentPublishDialog';
+import AgentJobPanel from './AgentJobPanel';
 import EditConnectionDialog from '@/components/app/EditConnectionDialog';
 import { nxBreadcrumbSepStyle } from '@/components/app/styles';
 import {
@@ -1203,6 +1204,15 @@ function CanvasInner({
         onToggleCopilot={toggleCopilot}
         readOnly={readOnly}
       />
+
+      {isAgentDelivered && agentSetupStateQuery.data && agentSetupStateQuery.data.state !== 'unpublished' && (
+        <AgentJobPanel
+          workflowId={workflow.id}
+          jobState={agentSetupStateQuery.data.jobState}
+          readOnly={readOnly}
+          onActionDone={() => void agentSetupStateQuery.refetch()}
+        />
+      )}
 
       <div style={canvasShellRowStyle}>
         <Sidebar orgId={orgId} role={role} projects={sidebarProjects} />

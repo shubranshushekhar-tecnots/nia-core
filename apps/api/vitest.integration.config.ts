@@ -46,6 +46,7 @@ export default defineConfig({
       "src/services/agents.integration.test.ts",
       "src/services/connections.agentScope.integration.test.ts",
       "src/services/agentSetups.integration.test.ts",
+      "src/services/agentSetupActions.integration.test.ts",
     ],
     env: {
       SUPABASE_URL: "http://localhost:54321",

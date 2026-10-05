@@ -37,12 +37,21 @@ async function parseError(res: Response): Promise<never> {
 
 export type AgentSetupState = 'unpublished' | 'waiting' | 'applied' | 'rejected';
 
+/** Slice R5a — the agent's own latest-reported run state for a platform job (apps/api's AgentSetupJobState). */
+export type AgentSetupJobState = {
+  state: 'ok' | 'failing' | 'paused';
+  errorClass: string | null;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+};
+
 export type AgentSetupStateResult = {
   state: AgentSetupState;
   wantedVersion: number;
   appliedVersion: number;
   publishedAt: string | null;
   rejectionReason: string | null;
+  jobState: AgentSetupJobState | null;
 };
 
 /** Read-only, available to viewers — no capability gate on the route. */
@@ -110,4 +119,60 @@ export async function unpublishAgentSetup(workflowId: string): Promise<AgentSetu
   });
   if (!res.ok) await parseError(res);
   return res.json() as Promise<AgentSetupPublication>;
+}
+
+/**
+ * Slice R5a (docs/plans/agent-canvas-integration.md B.7/B.8) — actions and
+ * run history for an agent-delivered workflow
+ * (apps/api/src/services/agentSetupActions.ts). Actions are gated server-side
+ * by workflows.run (excludes viewer); run history is a plain read, same as
+ * getAgentSetupState above.
+ */
+export type AgentSetupActionKind = 'test' | 'run_now' | 'full_reload' | 'pause' | 'resume' | 'allow_mass_delete';
+
+export type AgentSetupActionInput = {
+  kind: AgentSetupActionKind;
+  /** run_now only — one-off parameter values for this run. */
+  params?: Record<string, string>;
+  /** allow_mass_delete only — explicit confirmation the UI must show before sending. */
+  confirm?: boolean;
+};
+
+export type AgentActionTask = {
+  id: string;
+  kind: 'run_now' | 'pause' | 'resume' | 'test_job';
+  agentSetupId: string;
+};
+
+export async function requestAgentSetupAction(workflowId: string, input: AgentSetupActionInput): Promise<AgentActionTask> {
+  const res = await fetch(`/api/backend/workflows/${workflowId}/agent-setup/actions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) await parseError(res);
+  return res.json() as Promise<AgentActionTask>;
+}
+
+export type AgentSetupRun = {
+  id: string;
+  runId: string;
+  status: 'ok' | 'failed';
+  rowsSent: number;
+  rowsDeleted: number;
+  mode: string | null;
+  durationMs: number;
+  errorClass: string | null;
+  startedAt: string;
+  finishedAt: string;
+};
+
+/** Last 50 runs — readable by anyone who can see the workflow, viewers included. */
+export async function listAgentSetupRuns(workflowId: string): Promise<AgentSetupRun[]> {
+  const res = await fetch(`/api/backend/workflows/${workflowId}/agent-setup/runs`, {
+    method: 'GET',
+    headers: { Accept: 'application/json', ...(await authHeaders()) },
+  });
+  if (!res.ok) await parseError(res);
+  return res.json() as Promise<AgentSetupRun[]>;
 }

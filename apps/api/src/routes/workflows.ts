@@ -20,6 +20,7 @@ import { proposeCleaningForWorkflow } from "../services/cleanPropose.js";
 import { previewWorkflowDestination } from "../services/preview.js";
 import { getLatestConversationForWorkflow, listMessages } from "../services/chat.js";
 import { previewPublishAgentSetup, publishAgentSetup, unpublishAgentSetup, getAgentSetupState } from "../services/agentSetups.js";
+import { requestAgentSetupAction, listAgentSetupRuns, type AgentSetupActionKind } from "../services/agentSetupActions.js";
 
 export const workflowsRouter: ExpressRouter = Router();
 
@@ -379,6 +380,42 @@ workflowsRouter.post(
   asyncHandler(async (req, res) => {
     if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
     const data = await unpublishAgentSetup(req.withUser, scopeFromActor(req.actor), req.params.id!);
+    res.json(data);
+  }),
+);
+
+const ACTION_KINDS: AgentSetupActionKind[] = ["test", "run_now", "full_reload", "pause", "resume", "allow_mass_delete"];
+
+const agentSetupActionBodySchema = z.object({
+  kind: z.enum(ACTION_KINDS as [AgentSetupActionKind, ...AgentSetupActionKind[]]),
+  params: z.record(z.string()).optional(),
+  confirm: z.boolean().optional(),
+});
+
+// Agent-Canvas integration, Slice R5a (B.7/B.8) — test, run now, full
+// reload, pause, resume, allow-one-large-delete. Gated by
+// workflows.run (excludes viewer, packages/schemas/src/can.ts), same
+// posture as POST /:id/checks above; services/agentSetupActions.ts's RPC
+// call re-checks authorization server-side regardless.
+workflowsRouter.post(
+  "/:id/agent-setup/actions",
+  requireCapability("workflows.run"),
+  validate({ params: workflowParamsSchema, body: agentSetupActionBodySchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await requestAgentSetupAction(req.withUser, scopeFromActor(req.actor), req.params.id!, req.body);
+    res.status(201).json(data);
+  }),
+);
+
+// Slice R5a — "readable by anyone who can see the workflow": plain read,
+// no requireCapability gate, same posture as GET /:id/agent-setup above.
+workflowsRouter.get(
+  "/:id/agent-setup/runs",
+  validate({ params: workflowParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await listAgentSetupRuns(req.withUser, scopeFromActor(req.actor), req.params.id!);
     res.json(data);
   }),
 );

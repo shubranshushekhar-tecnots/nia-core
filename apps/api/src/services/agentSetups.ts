@@ -26,10 +26,11 @@ type PublishedRow = {
   published_at: string | null;
   unpublished_at: string | null;
   rejection_reason: string | null;
+  platform_job_state: Record<string, unknown> | null;
 };
 
 const PUBLISHED_SELECT =
-  "id, workflow_id, agent_id, wanted_version, applied_version, published_setup, published_at, unpublished_at, rejection_reason";
+  "id, workflow_id, agent_id, wanted_version, applied_version, published_setup, published_at, unpublished_at, rejection_reason, platform_job_state";
 
 async function getPublishedRow(withUser: WithUser, workflowId: string): Promise<PublishedRow | null> {
   const { rows } = await withUser((db) =>
@@ -246,19 +247,52 @@ export async function unpublishAgentSetup(
  */
 export type AgentSetupState = "unpublished" | "waiting" | "applied" | "rejected";
 
+/**
+ * Slice R5a — the agent's own latest-reported run state for a platform
+ * job, distinct from AgentSetupState above (which is about publish/apply
+ * sync, not execution). Sourced from agent_setups.platform_job_state,
+ * written by services/agent-bridge's check-in handler from the same
+ * LocalJobEntry-shaped report apps/agent sends for any job (platform or
+ * local) — see app.ts's LocalJobEntry zod schema for the field list.
+ */
+export type AgentSetupJobState = {
+  state: "ok" | "failing" | "paused";
+  errorClass: string | null;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+};
+
 export type AgentSetupStateResult = {
   state: AgentSetupState;
   wantedVersion: number;
   appliedVersion: number;
   publishedAt: string | null;
   rejectionReason: string | null;
+  jobState: AgentSetupJobState | null;
 };
+
+function toJobState(raw: Record<string, unknown> | null): AgentSetupJobState | null {
+  if (!raw) return null;
+  const state = raw["state"];
+  if (state !== "ok" && state !== "failing" && state !== "paused") return null;
+  return {
+    state,
+    errorClass: typeof raw["errorClass"] === "string" ? (raw["errorClass"] as string) : null,
+    lastRunAt: typeof raw["lastRunAt"] === "string" ? (raw["lastRunAt"] as string) : null,
+    nextRunAt: typeof raw["nextRunAt"] === "string" ? (raw["nextRunAt"] as string) : null,
+  };
+}
 
 function toState(row: PublishedRow | null): AgentSetupStateResult {
   if (!row || row.unpublished_at) {
-    return { state: "unpublished", wantedVersion: 0, appliedVersion: 0, publishedAt: null, rejectionReason: null };
+    return { state: "unpublished", wantedVersion: 0, appliedVersion: 0, publishedAt: null, rejectionReason: null, jobState: null };
   }
-  const base = { wantedVersion: row.wanted_version, appliedVersion: row.applied_version, publishedAt: row.published_at };
+  const base = {
+    wantedVersion: row.wanted_version,
+    appliedVersion: row.applied_version,
+    publishedAt: row.published_at,
+    jobState: toJobState(row.platform_job_state),
+  };
   if (row.wanted_version <= row.applied_version) {
     return { ...base, state: "applied", rejectionReason: null };
   }

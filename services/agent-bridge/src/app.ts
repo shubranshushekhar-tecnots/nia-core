@@ -48,6 +48,11 @@ const LocalJobEntry = z.object({
   lastRunAt: z.string().optional(),
   nextRunAt: z.string().optional(),
   consecutiveFailures: z.number(),
+  // Slice R5a (apps/agent's SetupManager — LocalJobReport.setupId) — set
+  // only for a platform-managed job (platformManaged.setupId), absent for
+  // a genuine CLI-local job. Present/absent, not a separate "source" enum,
+  // mirrors the rest of this check-in body's own absent-vs-empty discipline.
+  setupId: z.string().uuid().optional(),
 });
 
 const RunReportEntry = z.object({
@@ -64,6 +69,9 @@ const RunReportEntry = z.object({
   isRealtimeAggregate: z.boolean().optional(),
   periodStart: z.string().optional(),
   periodEnd: z.string().optional(),
+  // Slice R5a — same platformManaged tag as LocalJobEntry.setupId above
+  // (RecordRunInput.setupId / RunReport.setupId on apps/agent's side).
+  setupId: z.string().uuid().optional(),
 });
 
 // Slice C1 — same allow-list discipline as LocalJobEntry above: never host/
@@ -256,8 +264,20 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
       // agent build doesn't report jobs; never treat that as "zero jobs".
       // Only an actually-present (possibly empty) array drives upsert +
       // soft-remove.
+      //
+      // Slice R5a — a platform-managed job (entry.setupId set) is reported
+      // through this same array, but it is never stored as a source='local'
+      // row: it already has a source='platform' agent_setups row (created
+      // by publish_agent_setup), and that row's own id is what apps/agent's
+      // SetupManager uses as the job's local id, so entry.id === entry.setupId
+      // for these. Only its platform_job_state is updated; the true-local
+      // upsert/soft-remove below is scoped to the remaining entries so it
+      // never touches these ids.
       if (localJobs !== undefined) {
-        for (const job of localJobs) {
+        const trueLocalJobs = localJobs.filter((job) => job.setupId === undefined);
+        const platformJobs = localJobs.filter((job) => job.setupId !== undefined);
+
+        for (const job of trueLocalJobs) {
           await db.query(
             `insert into public.agent_setups (agent_id, local_job_id, source, local_job_report, removed_at, updated_at)
              values ($1, $2, 'local', $3::jsonb, null, now())
@@ -266,7 +286,7 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
             [agent.id, job.id, JSON.stringify(job)],
           );
         }
-        const reportedIds = localJobs.map((j) => j.id);
+        const reportedIds = trueLocalJobs.map((j) => j.id);
         await db.query(
           `update public.agent_setups
              set removed_at = now()
@@ -274,6 +294,15 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
              and local_job_id <> all($2::text[])`,
           [agent.id, reportedIds],
         );
+
+        for (const job of platformJobs) {
+          await db.query(
+            `update public.agent_setups
+               set platform_job_state = $3::jsonb, updated_at = now()
+             where agent_id = $1 and source = 'platform' and id = $2`,
+            [agent.id, job.setupId, JSON.stringify(job)],
+          );
+        }
       }
 
       // Slice C1 — same absent-vs-empty-array discipline as localJobs above.
@@ -301,10 +330,18 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
 
       const acknowledgedRunIds: string[] = [];
       for (const report of runReports ?? []) {
+        // Slice R5a — a run report carrying setupId attaches directly to
+        // that source='platform' row; a plain CLI-local report (no
+        // setupId) still resolves via local_job_id as before. Exactly one
+        // of the two `target` branches ever matches for a given report.
         const { rows: inserted } = await db.query<{ run_id: string }>(
           `with target as (
              select id from public.agent_setups
-             where agent_id = $1 and source = 'local' and local_job_id = $2
+             where agent_id = $1
+               and (
+                 (source = 'platform' and id = $15)
+                 or (source = 'local' and local_job_id = $2)
+               )
            )
            insert into public.agent_setup_runs
              (agent_setup_id, run_id, status, rows_sent, rows_deleted, parts, mode, error_class, started_at, finished_at, is_realtime_aggregate, period_start, period_end)
@@ -327,6 +364,7 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
             report.isRealtimeAggregate ?? false,
             report.periodStart ?? null,
             report.periodEnd ?? null,
+            report.setupId ?? null,
           ],
         );
         // Acknowledge regardless of whether this insert was new or a no-op
@@ -354,11 +392,21 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
     // Flatten to exactly what the agent's taskRunner needs — the platform's
     // own connections.id (connectionId) is never exposed to the agent, only
     // the agent's own local_connection_id that connection resolves to.
-    const tasks = delivered.map((task) => ({
-      id: task.id,
-      kind: task.kind,
-      localConnectionId: task.payload.localConnectionId,
-    }));
+    //
+    // Slice R5a — run_now/pause/resume/test_job act on an agent_setups row
+    // instead of a connection. agentSetupId is exposed as-is (not
+    // translated, unlike localConnectionId above) because a platform-
+    // managed job's local id already IS the setup's own platform id (see
+    // the localJobs handling above) — no separate local/platform id
+    // mapping exists for setups the way it does for connections. payload
+    // carries the action's own one-off fields (run_now's params/
+    // fullReload/allowMassDelete); always {} for pause/resume/test_job.
+    const tasks = delivered.map((task) => {
+      if (task.kind === "test_connection" || task.kind === "list_tables") {
+        return { id: task.id, kind: task.kind, localConnectionId: task.payload.localConnectionId };
+      }
+      return { id: task.id, kind: task.kind, agentSetupId: task.agentSetupId, payload: task.payload };
+    });
 
     // Slice R3a (B.4) — queried fresh AFTER the hold (not before), so a
     // publish/unpublish that arrives mid-hold and wakes this check-in via

@@ -18,8 +18,13 @@ import { taskBus } from "./taskBus.js";
  */
 export interface AgentTask {
   id: string;
-  kind: "test_connection" | "list_tables";
-  connectionId: string;
+  kind: "test_connection" | "list_tables" | "run_now" | "pause" | "resume" | "test_job";
+  // Exactly one of connectionId/agentSetupId is set, matching
+  // 0074_agent_setup_actions.sql's agent_tasks_connection_xor_setup check —
+  // test_connection/list_tables carry connectionId, the Slice R5a action
+  // kinds carry agentSetupId.
+  connectionId: string | null;
+  agentSetupId: string | null;
   payload: Record<string, unknown>;
 }
 
@@ -29,9 +34,11 @@ export interface AgentTransport {
 
 type PendingTaskRow = {
   id: string;
-  kind: "test_connection" | "list_tables";
-  connection_id: string;
-  local_connection_id: string;
+  kind: AgentTask["kind"];
+  connection_id: string | null;
+  agent_setup_id: string | null;
+  payload: Record<string, unknown>;
+  local_connection_id: string | null;
 };
 
 export class DbAgentTransport implements AgentTransport {
@@ -55,17 +62,34 @@ export class DbAgentTransport implements AgentTransport {
          )
          returning t.id, t.kind,
            t.connection_id,
+           t.agent_setup_id,
+           t.payload,
            (select conn.config->>'agentConnectionId' from public.connections conn
             where conn.id = t.connection_id) as local_connection_id`,
         [agentId],
       ),
     );
-    return rows.map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      connectionId: row.connection_id,
-      payload: { localConnectionId: row.local_connection_id },
-    }));
+    return rows.map((row) => {
+      if (row.kind === "test_connection" || row.kind === "list_tables") {
+        return {
+          id: row.id,
+          kind: row.kind,
+          connectionId: row.connection_id,
+          agentSetupId: null,
+          payload: { localConnectionId: row.local_connection_id },
+        };
+      }
+      // Slice R5a — run_now/pause/resume/test_job: payload is whatever
+      // create_agent_setup_action_task stored (always {} for pause/resume/
+      // test_job; run_now's own params/fullReload/allowMassDelete).
+      return {
+        id: row.id,
+        kind: row.kind,
+        connectionId: null,
+        agentSetupId: row.agent_setup_id,
+        payload: row.payload ?? {},
+      };
+    });
   }
 
   async waitForTasks(agentId: string, timeoutMs: number): Promise<AgentTask[]> {
