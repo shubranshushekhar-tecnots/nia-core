@@ -11,10 +11,22 @@ if docker ps -a --format '{{.Names}}' | grep -qx "$NIA_EXTRACT_MSSQL_CONTAINER";
 fi
 
 echo "Starting $NIA_EXTRACT_MSSQL_CONTAINER (amd64, emulated — no arm64 image exists)..."
+# NIA_EXTRACT_MSSQL_NO_MEMORY_LIMIT=1 drops the --memory cap entirely, for
+# one-off manual verification runs on a machine where 3g has been observed
+# to make SQL Server flaky to boot — never set by default, so CI/the e2e
+# suite's own usage is unaffected.
+memory_flag="--memory=3g"
+if [ "${NIA_EXTRACT_MSSQL_NO_MEMORY_LIMIT:-}" = "1" ]; then
+  memory_flag=""
+fi
+# Intentionally unquoted: $memory_flag is always either empty or exactly
+# one flag with no spaces/globs to mis-split — macOS's system bash (3.2)
+# mishandles `"${arr[@]}"` for an empty array under `set -u`, so a plain
+# string beats an array here.
 docker run -d \
   --platform linux/amd64 \
   --name "$NIA_EXTRACT_MSSQL_CONTAINER" \
-  --memory=3g \
+  $memory_flag \
   -e "ACCEPT_EULA=Y" \
   -e "MSSQL_SA_PASSWORD=$NIA_EXTRACT_MSSQL_PASSWORD" \
   -e "MSSQL_PID=Developer" \
