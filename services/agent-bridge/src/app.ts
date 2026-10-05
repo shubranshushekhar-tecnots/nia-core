@@ -29,6 +29,11 @@ const CheckInBody = z
   .object({
     agentVersion: z.string().optional(),
     hostName: z.string().optional(),
+    // Set true only on the agent's first check-in after `start` (see
+    // apps/agent/src/link/checkInLoop.ts) so the link is confirmed (or
+    // refused as revoked) within a second or two instead of waiting out
+    // the full hold below. Every later check-in holds as before.
+    noHold: z.boolean().optional(),
   })
   .optional();
 
@@ -121,7 +126,7 @@ export function buildApp(transport: AgentTransport = new LongPollTransport()) {
     const agentKey = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
     if (!agentKey) throw new HttpError(401, "missing agent key");
 
-    const { agentVersion, hostName } = CheckInBody.parse(req.body) ?? {};
+    const { agentVersion, hostName, noHold } = CheckInBody.parse(req.body) ?? {};
     const agentKeyHash = sha256Hex(agentKey);
 
     const { rows } = await withServiceRole(dbPool, (db) =>
@@ -138,7 +143,7 @@ export function buildApp(transport: AgentTransport = new LongPollTransport()) {
     const agent = rows[0];
     if (!agent) throw new HttpError(401, "agent key is invalid or revoked");
 
-    const tasks = await transport.waitForTasks(agent.id, CHECK_IN_HOLD_MS);
+    const tasks = await transport.waitForTasks(agent.id, noHold ? 0 : CHECK_IN_HOLD_MS);
     return { tasks };
   });
 

@@ -89,4 +89,26 @@ describe("CheckInLoop", () => {
     await loop.stop();
     await scheduler.stop();
   });
+
+  it("asks the bridge to skip the hold only on the first check-in after start()", async () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    const checkIn = vi.fn(async (): Promise<CheckInResponse> => ({ tasks: [] }));
+    const loop = new CheckInLoop({ transport: { checkIn }, agentVersion: "1.0.0", logger });
+
+    // start() -> tick() calls transport.checkIn synchronously (before any
+    // await settles), so the first call is observable with no timer
+    // advance at all — advancing here would also flush the success
+    // branch's scheduleNext(0) and race the second call into view too.
+    loop.start();
+    expect(checkIn).toHaveBeenCalledTimes(1);
+    expect(checkIn.mock.calls[0]![0]).toMatchObject({ noHold: true });
+
+    // A success re-ticks immediately (delay 0) — the second call must not ask for noHold.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(checkIn).toHaveBeenCalledTimes(2);
+    expect(checkIn.mock.calls[1]![0]).not.toHaveProperty("noHold");
+
+    await loop.stop();
+  });
 });

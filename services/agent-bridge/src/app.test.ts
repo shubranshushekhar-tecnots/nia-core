@@ -42,4 +42,23 @@ describe("agent-bridge /check-in (route-level)", () => {
     expect(params[1]).toBe("1.0.0");
     expect(params[2]).toBe("test-host");
   });
+
+  it("a check-in with noHold:true skips the hold entirely", async () => {
+    const buildApp = await freshApp();
+
+    mockQuery.mockResolvedValue({ rows: [{ id: "agent-1", status: "active" }] });
+
+    const waitForTasks = vi.fn(async () => []);
+    const app = buildApp({ waitForTasks });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/agent-api/check-in",
+      headers: { authorization: "Bearer test-agent-key" },
+      payload: { agentVersion: "1.0.0", hostName: "test-host", noHold: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(waitForTasks).toHaveBeenCalledWith("agent-1", 0);
+  });
 });

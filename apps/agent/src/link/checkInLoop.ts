@@ -44,6 +44,7 @@ export class CheckInLoop {
   private stopped = true;
   private revoked = false;
   private inFlight?: Promise<void>;
+  private firstCheckIn = true;
 
   constructor(private readonly options: CheckInLoopOptions) {
     this.hostName = options.hostName ?? os.hostname();
@@ -77,9 +78,15 @@ export class CheckInLoop {
   }
 
   private async checkInOnce(signal: AbortSignal): Promise<void> {
+    // Only the very first check-in after start() asks the bridge to skip
+    // its hold (B item 1a) — every later one (including a retry of this
+    // same first attempt) holds as before, so flip the flag now, before
+    // the request goes out, not inside the success branch below.
+    const noHold = this.firstCheckIn;
+    this.firstCheckIn = false;
     try {
       const response = await this.options.transport.checkIn(
-        { agentVersion: this.options.agentVersion, hostName: this.hostName },
+        { agentVersion: this.options.agentVersion, hostName: this.hostName, ...(noHold ? { noHold: true } : {}) },
         signal,
       );
       if (this.stopped) return;

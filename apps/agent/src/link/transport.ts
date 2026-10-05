@@ -12,6 +12,8 @@ import { resolveProxyUrl } from "../planometry/network.js";
 export interface CheckInRequest {
   agentVersion: string;
   hostName: string;
+  /** True only on the first check-in after `start` (CheckInLoop) — asks the bridge to skip its usual hold so the link is confirmed (or refused as revoked) within a second or two. */
+  noHold?: boolean;
 }
 
 export interface CheckInResponse {
