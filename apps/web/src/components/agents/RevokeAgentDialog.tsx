@@ -31,18 +31,25 @@ export default function RevokeAgentDialog({
   hiddenFields,
   action,
   onClose,
+  onSuccess,
 }: {
   title: string;
   message: string;
   hiddenFields: Record<string, string>;
   action: (prevState: ActionState, formData: FormData) => Promise<ActionState>;
   onClose: () => void;
+  onSuccess?: () => void;
 }) {
   const [state, formAction, pending] = useActionState(action, initialState);
 
   useEffect(() => {
-    if (state?.success) onClose();
-  }, [state, onClose]);
+    if (state?.success) {
+      // Refresh the list immediately rather than waiting for the next
+      // ~15s poll (AgentsClient.tsx) so a revoke is reflected right away.
+      onSuccess?.();
+      onClose();
+    }
+  }, [state, onClose, onSuccess]);
 
   return (
     <div style={nxModalOverlayStyle} onClick={onClose}>

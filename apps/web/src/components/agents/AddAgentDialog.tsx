@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useRef, useState, type CSSProperties } from 'react';
+import { useActionState, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { pairAgentAction, type AgentActionState } from '@/lib/agents/actions';
 import { useModalA11y } from '@/lib/a11y/useModalDialog';
 import {
@@ -35,12 +35,26 @@ const initialState: AgentActionState = null;
 // itself on `state?.success` — it has to stay mounted to show the command.
 // Closing the dialog (Cancel/overlay/Esc) discards all local state,
 // including `state.code`, for good — nothing here persists it anywhere.
-export default function AddAgentDialog({ onClose }: { onClose: () => void }) {
+export default function AddAgentDialog({
+  onClose,
+  onSuccess,
+}: {
+  onClose: () => void;
+  onSuccess?: () => void;
+}) {
   const [state, formAction, pending] = useActionState(pairAgentAction, initialState);
   const dialogRef = useModalA11y<HTMLDivElement>(onClose);
   const [copied, setCopied] = useState(false);
   const [copyFallback, setCopyFallback] = useState(false);
   const commandRef = useRef<HTMLSpanElement>(null);
+
+  // Refresh the list immediately rather than waiting for the next ~15s
+  // poll (AgentsClient.tsx). A successful pair only creates a pairing
+  // code, not a platform_agents row yet (that happens once the CLI
+  // actually consumes it), but this keeps both actions consistent.
+  useEffect(() => {
+    if (state?.success) onSuccess?.();
+  }, [state, onSuccess]);
 
   // platformUrl comes from the server (AGENT_PLATFORM_URL, falling back to
   // SITE_URL — see lib/agents/actions.ts), never window.location.origin:

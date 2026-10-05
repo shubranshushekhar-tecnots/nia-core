@@ -57,15 +57,17 @@ export default function AgentsClient({
   const [addOpen, setAddOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<PlatformAgent | null>(null);
 
+  function refreshAgents() {
+    listAgentsClient()
+      .then(setAgents)
+      .catch(() => {
+        // Transient poll/refresh failure — keep showing the last known
+        // list rather than clearing it; the next tick will try again.
+      });
+  }
+
   useEffect(() => {
-    const interval = setInterval(() => {
-      listAgentsClient()
-        .then(setAgents)
-        .catch(() => {
-          // Transient poll failure — keep showing the last known list rather
-          // than clearing it; the next tick will try again.
-        });
-    }, POLL_INTERVAL_MS);
+    const interval = setInterval(refreshAgents, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, []);
 
@@ -121,14 +123,21 @@ export default function AgentsClient({
             <span />
           </div>
           {agents.map((agent) => {
-            const canRevoke = canManageAgent(callerRole, callerUserId, agent.createdByUserId);
+            const revoked = agent.status === 'revoked';
+            const canRevoke = !revoked && canManageAgent(callerRole, callerUserId, agent.createdByUserId);
+            // A revoked agent's row is never removed from the list — the API
+            // never deletes platform_agents rows on revoke (revoke_agent only
+            // flips status to 'revoked', see apps/api/src/services/agents.ts)
+            // — so the list shows "Revoked" here instead, consistent with
+            // what listAgents()/listAgentsClient() keep returning.
+            const badgeLabel = revoked ? 'Revoked' : agent.online ? 'Online' : 'Offline';
             return (
               <div key={agent.id} style={nxAgentsRowStyle}>
                 <div style={nxAgentsAvatarStyle}>{agent.displayName.slice(0, 1).toUpperCase() || '?'}</div>
                 <span style={nxAgentsNameStyle}>{agent.displayName}</span>
-                <span style={nxAgentsStatusBadgeStyle(agent.online)}>
-                  <span style={nxAgentsStatusDotStyle(agent.online)} />
-                  {agent.online ? 'Online' : 'Offline'}
+                <span style={nxAgentsStatusBadgeStyle(agent.online && !revoked)}>
+                  <span style={nxAgentsStatusDotStyle(agent.online && !revoked)} />
+                  {badgeLabel}
                 </span>
                 <span style={nxAgentsMetaCellStyle}>{formatDate(agent.lastCheckInAt)}</span>
                 <span style={nxAgentsMetaCellStyle}>{agent.agentVersion ?? '\u2014'}</span>
@@ -146,7 +155,7 @@ export default function AgentsClient({
         </>
       )}
 
-      {addOpen && <AddAgentDialog onClose={() => setAddOpen(false)} />}
+      {addOpen && <AddAgentDialog onClose={() => setAddOpen(false)} onSuccess={refreshAgents} />}
       {revokeTarget && (
         <RevokeAgentDialog
           title={`Revoke ${revokeTarget.displayName}?`}
@@ -154,6 +163,7 @@ export default function AgentsClient({
           hiddenFields={{ agentId: revokeTarget.id }}
           action={revokeAgentAction}
           onClose={() => setRevokeTarget(null)}
+          onSuccess={refreshAgents}
         />
       )}
     </>
