@@ -1,5 +1,7 @@
 import { Agent, ProxyAgent, request, type Dispatcher } from "undici";
 import { resolveProxyUrl } from "../planometry/network.js";
+import type { LocalJobReport } from "./localJobReports.js";
+import type { RunReport } from "./runReportOutbox.js";
 
 /**
  * Slice L2 (docs/plans/agent-canvas-integration.md B.3): "Isolated behind
@@ -14,10 +16,16 @@ export interface CheckInRequest {
   hostName: string;
   /** True only on the first check-in after `start` (CheckInLoop) — asks the bridge to skip its usual hold so the link is confirmed (or refused as revoked) within a second or two. */
   noHold?: boolean;
+  /** Slice L4 (B.11) — every locally-defined job's current summary. Omitted entirely (not an empty array) means "this agent build doesn't report jobs" — the bridge must never treat an absent key as "zero jobs". */
+  localJobs?: LocalJobReport[];
+  /** Slice L4 (B.7) — every un-acknowledged run report in the agent's outbox. */
+  runReports?: RunReport[];
 }
 
 export interface CheckInResponse {
   tasks: unknown[];
+  /** Slice L4 (B.7) — run ids the bridge has durably stored; the agent removes them from its outbox. */
+  acknowledgedRunIds?: string[];
 }
 
 export interface AgentTransport {

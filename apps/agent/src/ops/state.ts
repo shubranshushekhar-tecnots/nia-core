@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defaultHomeDir, jobStateDir, stateFilePath } from "../config/paths.js";
+import type { RunSyncFailureKind } from "../sync/runSync.js";
 
 /**
  * v4 migration slice B2 (docs/plans/planometry-v4-migration.md §8, §10
@@ -231,6 +232,19 @@ export function jobHealthState(state: JobState): JobHealth {
   if (state.paused) return "paused";
   if ((state.consecutiveFailures ?? 0) > 0) return "failing";
   return "ok";
+}
+
+/**
+ * §10(B2) item 3: these — and only these — pause a job until `job
+ * resume`. Exported here (moved from scheduler/jobScheduler.ts, which
+ * now imports this instead of keeping its own copy) so the new manual
+ * `job run` CLI path (ops/recordRun.ts) classifies pause-vs-fail
+ * identically to the scheduler, without duplicating the set.
+ */
+const PAUSE_KINDS: ReadonlySet<RunSyncFailureKind> = new Set(["config", "schemaDrift", "typeMismatch", "nullKey", "massDelete"]);
+
+export function isPauseKind(kind: RunSyncFailureKind): boolean {
+  return PAUSE_KINDS.has(kind);
 }
 
 /** Top-level agent state (just `startedAt` now — per-connection/per-job fields moved to the per-job files above). */

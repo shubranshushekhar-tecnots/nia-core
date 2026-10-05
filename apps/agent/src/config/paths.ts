@@ -51,3 +51,8 @@ export function jobStateDir(dir = defaultHomeDir()): string {
 export function linkStateFilePath(dir = defaultHomeDir()): string {
   return path.join(dir, "link-state.json");
 }
+
+/** Slice L4 (ops/link/runReportOutbox.ts) — the check-in loop's outbound run-report queue + in-progress realtime aggregation buckets. Separate from every other state file so a bookkeeping failure here can never touch job execution or link state. */
+export function runReportOutboxFilePath(dir = defaultHomeDir()): string {
+  return path.join(dir, "run-report-outbox.json");
+}

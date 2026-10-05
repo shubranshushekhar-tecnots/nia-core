@@ -2,6 +2,8 @@ import { runJob as runJobCommand } from "./cli/runJobCommand.js";
 import { defaultHomeDir, defaultLogDir } from "./config/paths.js";
 import { findConnection, loadConfig } from "./config/store.js";
 import { CheckInLoop } from "./link/checkInLoop.js";
+import { buildLocalJobReports } from "./link/localJobReports.js";
+import * as runReportOutbox from "./link/runReportOutbox.js";
 import { HttpAgentTransport } from "./link/transport.js";
 import { Logger } from "./ops/logger.js";
 import { buildMonitoringHeartbeatPayload, MonitoringHeartbeatScheduler, type JobHeartbeatSource } from "./ops/monitoringHeartbeat.js";
@@ -66,7 +68,12 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
         transport,
         agentVersion: options.agentVersion,
         logger,
-        onSuccess: () => recordCheckInSuccess(dir),
+        buildLocalJobs: () => buildLocalJobReports(dir),
+        buildRunReports: () => runReportOutbox.pendingReports(dir, logger),
+        onSuccess: (response) => {
+          recordCheckInSuccess(dir);
+          runReportOutbox.acknowledge(dir, response.acknowledgedRunIds ?? []);
+        },
         onRevoked: () => recordRevoked(dir),
       });
       checkInLoop.start();
@@ -131,6 +138,15 @@ function loadJobHeartbeatSources(dir: string): JobHeartbeatSource[] {
 
 async function runSchedulerJob(job: SchedulerJob, signal: AbortSignal, forceReplace: boolean, dir: string): Promise<SchedulerJobOutcome> {
   const outcome = await runJobCommand(job.id, { signal, replace: forceReplace }, dir);
-  if (outcome.ok) return { ok: true, rowsSent: outcome.rowsSent ?? 0, durationMs: outcome.durationMs ?? 0, empty: outcome.empty };
+  if (outcome.ok)
+    return {
+      ok: true,
+      rowsSent: outcome.rowsSent ?? 0,
+      durationMs: outcome.durationMs ?? 0,
+      empty: outcome.empty,
+      rowsDeleted: outcome.rowsDeleted,
+      parts: outcome.parts,
+      mode: outcome.mode,
+    };
   return { ok: false, kind: outcome.kind ?? "other", error: outcome.error ?? "job run failed", consoleMessage: outcome.consoleMessage };
 }

@@ -203,6 +203,105 @@ export const nxAgentsEmptyTextStyle: CSSProperties = {
   color: 'var(--nx-ink-2)',
 };
 
+// ---- Slice L4: local-job expand panel --------------------------------------
+
+export const nxAgentsExpandToggleStyle: CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  cursor: 'pointer',
+  color: 'var(--nx-ink-3)',
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 14,
+};
+
+export const nxAgentsExpandPanelStyle: CSSProperties = {
+  gridColumn: '1 / -1',
+  padding: '16px 24px 24px 84px',
+  borderBottom: '1px solid var(--nx-line-inner)',
+  background: 'var(--nx-raised)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 18,
+};
+
+export const nxAgentsExpandSectionLabelStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  fontSize: 12,
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
+};
+
+export const nxAgentsLocalTagStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  height: 18,
+  padding: '0 6px',
+  marginLeft: 8,
+  fontFamily: 'var(--nx-font-mono)',
+  fontSize: 9.5,
+  letterSpacing: '0.05em',
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
+  border: '1px solid var(--nx-line)',
+};
+
+const jobGridCols = 'minmax(0, 1fr) minmax(0, 1fr) 90px 100px 110px 120px 120px';
+
+export const nxAgentsJobsHeaderRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: jobGridCols,
+  gap: 12,
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  fontSize: 11,
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
+  padding: '0 0 6px 0',
+};
+
+export const nxAgentsJobRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: jobGridCols,
+  gap: 12,
+  alignItems: 'center',
+  minHeight: 36,
+};
+
+const runGridCols = 'minmax(0, 1fr) 90px 90px 90px 70px 150px 150px';
+
+export const nxAgentsRunsHeaderRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: runGridCols,
+  gap: 12,
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  fontSize: 11,
+  textTransform: 'uppercase',
+  color: 'var(--nx-ink-3)',
+  padding: '0 0 6px 0',
+};
+
+export const nxAgentsRunRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: runGridCols,
+  gap: 12,
+  alignItems: 'center',
+  minHeight: 32,
+};
+
+export const nxAgentsEmptyJobsTextStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 12,
+  color: 'var(--nx-ink-3)',
+};
+
 // ---- Add-agent dialog: reveal-once command card ---------------------------
 
 export const nxAgentsCreatedCardStyle: CSSProperties = {

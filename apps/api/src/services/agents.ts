@@ -68,6 +68,136 @@ export async function listAgents(withUser: WithUser): Promise<PlatformAgent[]> {
   return rows.map(toAgent);
 }
 
+/**
+ * Slice L4 (B.11) — the agent's self-reported snapshot for a local (CLI-
+ * defined) job, stored verbatim in `agent_setups.local_job_report` by the
+ * bridge. Field set is the allow-list enforced server-side by the
+ * bridge's zod schema (services/agent-bridge/src/app.ts) — nothing beyond
+ * these fields can ever be stored, so no further filtering is needed here.
+ */
+export type LocalJobSummary = {
+  id: string;
+  name: string;
+  connectionName: string;
+  sourceTable: string;
+  destinationType: string;
+  destinationHost: string;
+  mode: string;
+  schedule?: string;
+  state: "ok" | "failing" | "paused";
+  errorClass?: string;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  consecutiveFailures: number;
+};
+
+export type AgentSetup = {
+  id: string;
+  source: "platform" | "local";
+  localJob: LocalJobSummary | null;
+};
+
+export type AgentSetupRun = {
+  id: string;
+  agentSetupId: string;
+  status: "ok" | "failed";
+  rowsSent: number;
+  rowsDeleted: number;
+  parts: number;
+  mode: string | null;
+  errorClass: string | null;
+  startedAt: string;
+  finishedAt: string;
+  isRealtimeAggregate: boolean;
+  periodStart: string | null;
+  periodEnd: string | null;
+};
+
+type AgentSetupRow = {
+  id: string;
+  source: "platform" | "local";
+  local_job_report: LocalJobSummary | null;
+};
+
+type AgentSetupRunRow = {
+  id: string;
+  agent_setup_id: string;
+  status: "ok" | "failed";
+  rows_sent: number;
+  rows_deleted: number;
+  parts: number;
+  mode: string | null;
+  error_class: string | null;
+  started_at: string;
+  finished_at: string;
+  is_realtime_aggregate: boolean;
+  period_start: string | null;
+  period_end: string | null;
+};
+
+/**
+ * RLS (agent_setups_select_members / agent_setup_runs_select_members)
+ * scopes both selects to the caller — same posture as listAgents, never a
+ * 403. Removed local jobs (Change 4) are excluded by `removed_at is null`;
+ * their runs are intentionally not fetched either, since there's no
+ * visible row on the page for them to attach to. `rows_sent`/`rows_deleted`
+ * arrive as JS numbers already (packages/db/src/pool.ts's global bigint
+ * parser) — no extra conversion needed.
+ */
+export async function listAgentSetups(
+  withUser: WithUser,
+  agentId: string,
+): Promise<{ setups: AgentSetup[]; runs: AgentSetupRun[] }> {
+  const { rows: setupRows } = await withUser((db) =>
+    db.query<AgentSetupRow>(
+      `select id, source, local_job_report
+       from agent_setups
+       where agent_id = $1 and removed_at is null
+       order by updated_at desc`,
+      [agentId],
+    ),
+  );
+
+  const setups: AgentSetup[] = setupRows.map((row) => ({
+    id: row.id,
+    source: row.source,
+    localJob: row.local_job_report,
+  }));
+
+  if (setups.length === 0) return { setups, runs: [] };
+
+  const setupIds = setups.map((s) => s.id);
+  const { rows: runRows } = await withUser((db) =>
+    db.query<AgentSetupRunRow>(
+      `select id, agent_setup_id, status, rows_sent, rows_deleted, parts, mode, error_class,
+              started_at, finished_at, is_realtime_aggregate, period_start, period_end
+       from agent_setup_runs
+       where agent_setup_id = any($1::uuid[])
+       order by started_at desc
+       limit 50`,
+      [setupIds],
+    ),
+  );
+
+  const runs: AgentSetupRun[] = runRows.map((row) => ({
+    id: row.id,
+    agentSetupId: row.agent_setup_id,
+    status: row.status,
+    rowsSent: row.rows_sent,
+    rowsDeleted: row.rows_deleted,
+    parts: row.parts,
+    mode: row.mode,
+    errorClass: row.error_class,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    isRealtimeAggregate: row.is_realtime_aggregate,
+    periodStart: row.period_start,
+    periodEnd: row.period_end,
+  }));
+
+  return { setups, runs };
+}
+
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // excludes 0/O/1/I (B.12)
 
 function generatePairingCode(): string {

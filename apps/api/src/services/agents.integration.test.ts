@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { withActingUser, withServiceRole } from "@nia/db";
 import { dbPool } from "../lib/dbPool.js";
-import { createPairingCode, listAgents, revokeAgent } from "./agents.js";
+import { createPairingCode, listAgents, listAgentSetups, revokeAgent } from "./agents.js";
 
 /**
  * docs/plans/agent-canvas-integration.md Slice 1 ("Link") — platform side.
@@ -115,6 +115,113 @@ async function simulatePair(
     ),
   );
   return { agentId: agentRows[0]!.id, agentKey };
+}
+
+type LocalJobInput = {
+  id: string;
+  name: string;
+  connectionName: string;
+  sourceTable: string;
+  destinationType: string;
+  destinationHost: string;
+  mode: string;
+  schedule?: string;
+  state: "ok" | "failing" | "paused";
+  errorClass?: string;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  consecutiveFailures: number;
+};
+
+type RunReportInput = {
+  runId: string;
+  jobId: string;
+  mode?: string;
+  startedAt: string;
+  finishedAt: string;
+  status: "ok" | "failed";
+  rowsSent: number;
+  rowsDeleted: number;
+  parts: number;
+  errorClass?: string;
+  isRealtimeAggregate?: boolean;
+  periodStart?: string;
+  periodEnd?: string;
+};
+
+/**
+ * Stands in for the bridge's /agent-api/check-in handler's localJobs/
+ * runReports branch (services/agent-bridge/src/app.ts) — same SQL, same
+ * withServiceRole connection, since this test process never spins up the
+ * bridge itself (same posture as simulatePair above).
+ */
+async function simulateCheckIn(
+  agentId: string,
+  body: { localJobs?: LocalJobInput[]; runReports?: RunReportInput[] },
+): Promise<{ acknowledgedRunIds: string[] }> {
+  return withServiceRole(dbPool, async (db) => {
+    if (body.localJobs !== undefined) {
+      for (const job of body.localJobs) {
+        await db.query(
+          `insert into public.agent_setups (agent_id, local_job_id, source, local_job_report, removed_at, updated_at)
+           values ($1, $2, 'local', $3::jsonb, null, now())
+           on conflict (agent_id, local_job_id) do update
+             set local_job_report = excluded.local_job_report, removed_at = null, updated_at = now()`,
+          [agentId, job.id, JSON.stringify(job)],
+        );
+      }
+      const reportedIds = body.localJobs.map((j) => j.id);
+      await db.query(
+        `update public.agent_setups
+           set removed_at = now()
+         where agent_id = $1 and source = 'local' and removed_at is null
+           and local_job_id <> all($2::text[])`,
+        [agentId, reportedIds],
+      );
+    }
+
+    const acknowledgedRunIds: string[] = [];
+    for (const report of body.runReports ?? []) {
+      const { rows: inserted } = await db.query<{ run_id: string }>(
+        `with target as (
+           select id from public.agent_setups
+           where agent_id = $1 and source = 'local' and local_job_id = $2
+         )
+         insert into public.agent_setup_runs
+           (agent_setup_id, run_id, status, rows_sent, rows_deleted, parts, mode, error_class, started_at, finished_at, is_realtime_aggregate, period_start, period_end)
+         select target.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+         from target
+         on conflict (run_id) do nothing
+         returning run_id`,
+        [
+          agentId,
+          report.jobId,
+          report.runId,
+          report.status,
+          report.rowsSent,
+          report.rowsDeleted,
+          report.parts,
+          report.mode ?? null,
+          report.errorClass ?? null,
+          report.startedAt,
+          report.finishedAt,
+          report.isRealtimeAggregate ?? false,
+          report.periodStart ?? null,
+          report.periodEnd ?? null,
+        ],
+      );
+      if (inserted.length > 0) {
+        acknowledgedRunIds.push(report.runId);
+      } else {
+        const { rows: exists } = await db.query<{ run_id: string }>(
+          `select run_id from public.agent_setup_runs where run_id = $1`,
+          [report.runId],
+        );
+        if (exists.length > 0) acknowledgedRunIds.push(report.runId);
+      }
+    }
+    return { acknowledgedRunIds };
+  });
 }
 
 describe("platform_agents / agent_pairing_codes — real Postgres", () => {
@@ -261,6 +368,111 @@ describe("platform_agents / agent_pairing_codes — real Postgres", () => {
       await revokeAgent(withUserFor(ownerId), "owner", ownerId, agentId);
     } finally {
       await dropOrg(orgId);
+    }
+  });
+});
+
+describe("agent_setups / agent_setup_runs — real Postgres (Slice L4)", () => {
+  it("a completed run is reported, acknowledged, and sending it twice creates exactly one run row", async () => {
+    const ownerId = await fixtureUserId("canvas-e2e-a@nia.dev");
+    const orgId = await makeOrg(ownerId);
+
+    try {
+      const { pairingCodeId, code } = await createPairingCode(withUserFor(ownerId), { orgId });
+      const { agentId } = await simulatePair(pairingCodeId, code);
+
+      const job: LocalJobInput = {
+        id: "job-1",
+        name: "nightly replace",
+        connectionName: "mysql-prod",
+        sourceTable: "orders",
+        destinationType: "https",
+        destinationHost: "planometry.example.com",
+        mode: "replace",
+        state: "ok",
+        consecutiveFailures: 0,
+      };
+      const report: RunReportInput = {
+        runId: "11111111-1111-1111-1111-111111111111",
+        jobId: "job-1",
+        mode: "replace",
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        status: "ok",
+        rowsSent: 100,
+        rowsDeleted: 0,
+        parts: 1,
+      };
+
+      const first = await simulateCheckIn(agentId, { localJobs: [job], runReports: [report] });
+      expect(first.acknowledgedRunIds).toEqual([report.runId]);
+
+      // Resend the same run_id — must be acknowledged again (so the agent
+      // drops it) but must not create a second row.
+      const second = await simulateCheckIn(agentId, { runReports: [report] });
+      expect(second.acknowledgedRunIds).toEqual([report.runId]);
+
+      const { rows } = await dbPool.query<{ count: string }>(
+        `select count(*)::text as count from public.agent_setup_runs r
+         join public.agent_setups s on s.id = r.agent_setup_id
+         where s.agent_id = $1 and r.run_id = $2`,
+        [agentId, report.runId],
+      );
+      expect(rows[0]?.count).toBe("1");
+
+      const { setups } = await listAgentSetups(withUserFor(ownerId), agentId);
+      expect(setups.find((s) => s.localJob?.id === "job-1")?.localJob?.name).toBe("nightly replace");
+    } finally {
+      await dropOrg(orgId);
+    }
+  });
+
+  it("a viewer in the agent's org can read its jobs/runs; a member of another org cannot", async () => {
+    const ownerId = await fixtureUserId("canvas-e2e-a@nia.dev");
+    const viewerId = await fixtureUserId("canvas-e2e-b@nia.dev");
+    const orgId = await makeOrg(ownerId);
+    const otherOrgOwnerId = await fixtureUserId("canvas-e2e-c@nia.dev");
+    const otherOrgId = await makeOrg(otherOrgOwnerId);
+
+    try {
+      await addMember(orgId, viewerId, "viewer");
+
+      const { pairingCodeId, code } = await createPairingCode(withUserFor(ownerId), { orgId });
+      const { agentId } = await simulatePair(pairingCodeId, code);
+
+      const job: LocalJobInput = {
+        id: "job-rls",
+        name: "rls test job",
+        connectionName: "mysql-prod",
+        sourceTable: "orders",
+        destinationType: "https",
+        destinationHost: "planometry.example.com",
+        mode: "replace",
+        state: "ok",
+        consecutiveFailures: 0,
+      };
+      const report: RunReportInput = {
+        runId: "22222222-2222-2222-2222-222222222222",
+        jobId: "job-rls",
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        status: "ok",
+        rowsSent: 5,
+        rowsDeleted: 0,
+        parts: 1,
+      };
+      await simulateCheckIn(agentId, { localJobs: [job], runReports: [report] });
+
+      const viewerResult = await listAgentSetups(withUserFor(viewerId), agentId);
+      expect(viewerResult.setups.find((s) => s.localJob?.id === "job-rls")).toBeDefined();
+      expect(viewerResult.runs.find((r) => r.id)).toBeDefined();
+
+      const otherOrgResult = await listAgentSetups(withUserFor(otherOrgOwnerId), agentId);
+      expect(otherOrgResult.setups).toHaveLength(0);
+      expect(otherOrgResult.runs).toHaveLength(0);
+    } finally {
+      await dropOrg(orgId);
+      await dropOrg(otherOrgId);
     }
   });
 });

@@ -47,6 +47,12 @@ export interface RunJobOutcome {
   /** Present on every success — lets the scheduler record rows/duration without parsing `summary`. */
   rowsSent?: number;
   durationMs?: number;
+  /** Slice L4 (B.7 run reports) — additive. The push mode ("replace"/"upsert"/"realtime") actually used this run. */
+  mode?: string;
+  /** Slice L4 — additive. Parts the push was split into. */
+  parts?: number;
+  /** Slice L4 — additive. Key-reconciliation + soft-delete deletes sent this run, combined. */
+  rowsDeleted?: number;
   /** `strategy: "realtime"` only (§1.3/E1): true when a tick's `readChangedRows`/delete detection found nothing to send, so no request was made — the scheduler (scheduler/jobScheduler.ts) skips writing this run to the log file, per spec, while still recording it in job state. */
   empty?: boolean;
   /** Safe to log — never a raw server message. */
@@ -377,6 +383,9 @@ function outcomeFromResult(result: RunSyncResult, resolvedParams: Record<string,
       summary: `${result.mode}: sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms${planometrySuffix}${watermarkSuffix}${reconciliationSuffix}${softDeleteSuffix}${paramsSuffix}`,
       rowsSent: result.rowsSent,
       durationMs: result.durationMs,
+      mode: result.mode,
+      parts: result.parts,
+      rowsDeleted: (result.reconciliation?.deletesSent ?? 0) + (result.softDelete?.deletesSent ?? 0),
     };
   }
   return { ok: false, error: result.error, consoleMessage: result.consoleMessage, kind: result.kind };
@@ -386,13 +395,16 @@ function outcomeFromResult(result: RunSyncResult, resolvedParams: Record<string,
 function outcomeFromRealtimeTickResult(result: RealtimeTickResult): RunJobOutcome {
   if (result.outcome === "completed") {
     if (result.empty) {
-      return { ok: true, summary: "realtime tick: empty — nothing to send", rowsSent: 0, durationMs: 0, empty: true };
+      return { ok: true, summary: "realtime tick: empty — nothing to send", rowsSent: 0, durationMs: 0, empty: true, mode: "realtime", parts: 0, rowsDeleted: 0 };
     }
     const reconciliationSuffix = result.reconciled !== undefined ? ` — key reconciliation ${result.reconciled ? "ran" : "skipped"} this tick` : "";
     return {
       ok: true,
       summary: `realtime: sent ${result.rowsUpserted} upsert(s) + ${result.rowsDeleted} delete(s) in ${result.parts} part(s)${reconciliationSuffix} — watermark -> ${result.watermarkAfter}`,
       rowsSent: result.rowsUpserted + result.rowsDeleted,
+      mode: "realtime",
+      parts: result.parts,
+      rowsDeleted: result.rowsDeleted,
     };
   }
   return { ok: false, error: result.error, consoleMessage: result.consoleMessage, kind: result.kind };

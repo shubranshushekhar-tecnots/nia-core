@@ -25,6 +25,45 @@ const PairBody = z.object({
   code: z.string().min(1),
 });
 
+// Slice L4 (B.11/B.7) — these two schemas ARE the server-side allow-list:
+// zod's default `.strip()` behavior drops any unknown key, so nothing
+// outside this exact field set can ever reach storage even if a future
+// agent build sent more (e.g. row values, param values, a Planometry
+// rejection message). Mirrors apps/agent/src/link/localJobReports.ts's
+// `LocalJobReport` and apps/agent/src/link/runReportOutbox.ts's
+// `RunReport` exactly.
+const LocalJobEntry = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  connectionName: z.string(),
+  sourceTable: z.string(),
+  destinationType: z.string(),
+  destinationHost: z.string(),
+  mode: z.string(),
+  schedule: z.string().optional(),
+  state: z.enum(["ok", "failing", "paused"]),
+  errorClass: z.string().optional(),
+  lastRunAt: z.string().optional(),
+  nextRunAt: z.string().optional(),
+  consecutiveFailures: z.number(),
+});
+
+const RunReportEntry = z.object({
+  runId: z.string().uuid(),
+  jobId: z.string().min(1),
+  mode: z.string().optional(),
+  startedAt: z.string(),
+  finishedAt: z.string(),
+  status: z.enum(["ok", "failed"]),
+  rowsSent: z.number(),
+  rowsDeleted: z.number(),
+  parts: z.number(),
+  errorClass: z.string().optional(),
+  isRealtimeAggregate: z.boolean().optional(),
+  periodStart: z.string().optional(),
+  periodEnd: z.string().optional(),
+});
+
 const CheckInBody = z
   .object({
     agentVersion: z.string().optional(),
@@ -34,6 +73,11 @@ const CheckInBody = z
     // refused as revoked) within a second or two instead of waiting out
     // the full hold below. Every later check-in holds as before.
     noHold: z.boolean().optional(),
+    // Slice L4 — omitted entirely (not an empty array) means "this agent
+    // build doesn't report jobs yet"; must never be treated as "zero
+    // jobs" (see the handler below).
+    localJobs: z.array(LocalJobEntry).optional(),
+    runReports: z.array(RunReportEntry).optional(),
   })
   .optional();
 
@@ -126,11 +170,11 @@ export function buildApp(transport: AgentTransport = new LongPollTransport()) {
     const agentKey = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
     if (!agentKey) throw new HttpError(401, "missing agent key");
 
-    const { agentVersion, hostName, noHold } = CheckInBody.parse(req.body) ?? {};
+    const { agentVersion, hostName, noHold, localJobs, runReports } = CheckInBody.parse(req.body) ?? {};
     const agentKeyHash = sha256Hex(agentKey);
 
-    const { rows } = await withServiceRole(dbPool, (db) =>
-      db.query<AgentRow>(
+    const { rows, acknowledgedRunIds } = await withServiceRole(dbPool, async (db) => {
+      const { rows } = await db.query<AgentRow>(
         `update public.platform_agents
            set last_check_in_at = now(),
                agent_version = coalesce($2, agent_version),
@@ -138,13 +182,87 @@ export function buildApp(transport: AgentTransport = new LongPollTransport()) {
          where agent_key_hash = $1 and status <> 'revoked'
          returning id, status`,
         [agentKeyHash, agentVersion ?? null, hostName ?? null],
-      ),
-    );
+      );
+      const agent = rows[0];
+      if (!agent) return { rows, acknowledgedRunIds: [] as string[] };
+
+      // Slice L4 (B.11, Change 4) — an *absent* localJobs key means this
+      // agent build doesn't report jobs; never treat that as "zero jobs".
+      // Only an actually-present (possibly empty) array drives upsert +
+      // soft-remove.
+      if (localJobs !== undefined) {
+        for (const job of localJobs) {
+          await db.query(
+            `insert into public.agent_setups (agent_id, local_job_id, source, local_job_report, removed_at, updated_at)
+             values ($1, $2, 'local', $3::jsonb, null, now())
+             on conflict (agent_id, local_job_id) do update
+               set local_job_report = excluded.local_job_report, removed_at = null, updated_at = now()`,
+            [agent.id, job.id, JSON.stringify(job)],
+          );
+        }
+        const reportedIds = localJobs.map((j) => j.id);
+        await db.query(
+          `update public.agent_setups
+             set removed_at = now()
+           where agent_id = $1 and source = 'local' and removed_at is null
+             and local_job_id <> all($2::text[])`,
+          [agent.id, reportedIds],
+        );
+      }
+
+      const acknowledgedRunIds: string[] = [];
+      for (const report of runReports ?? []) {
+        const { rows: inserted } = await db.query<{ run_id: string }>(
+          `with target as (
+             select id from public.agent_setups
+             where agent_id = $1 and source = 'local' and local_job_id = $2
+           )
+           insert into public.agent_setup_runs
+             (agent_setup_id, run_id, status, rows_sent, rows_deleted, parts, mode, error_class, started_at, finished_at, is_realtime_aggregate, period_start, period_end)
+           select target.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+           from target
+           on conflict (run_id) do nothing
+           returning run_id`,
+          [
+            agent.id,
+            report.jobId,
+            report.runId,
+            report.status,
+            report.rowsSent,
+            report.rowsDeleted,
+            report.parts,
+            report.mode ?? null,
+            report.errorClass ?? null,
+            report.startedAt,
+            report.finishedAt,
+            report.isRealtimeAggregate ?? false,
+            report.periodStart ?? null,
+            report.periodEnd ?? null,
+          ],
+        );
+        // Acknowledge regardless of whether this insert was new or a no-op
+        // (on-conflict) — a resend of an already-stored run_id must still
+        // be dropped from the agent's outbox. Only a report whose
+        // agent_setup wasn't found (target empty) is left unacknowledged,
+        // so the agent retries it once the matching localJobs upsert lands.
+        if (inserted.length > 0) {
+          acknowledgedRunIds.push(report.runId);
+        } else {
+          const { rows: exists } = await db.query<{ run_id: string }>(
+            `select run_id from public.agent_setup_runs where run_id = $1`,
+            [report.runId],
+          );
+          if (exists.length > 0) acknowledgedRunIds.push(report.runId);
+        }
+      }
+
+      return { rows, acknowledgedRunIds };
+    });
     const agent = rows[0];
     if (!agent) throw new HttpError(401, "agent key is invalid or revoked");
 
     const tasks = await transport.waitForTasks(agent.id, noHold ? 0 : CHECK_IN_HOLD_MS);
-    return { tasks };
+    return { tasks, acknowledgedRunIds };
   });
 
   return app;

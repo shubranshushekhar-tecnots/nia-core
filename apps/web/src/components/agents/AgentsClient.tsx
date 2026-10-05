@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { canManageAgent, type ActorRole } from '@nia/schemas';
-import type { PlatformAgent } from '@/lib/agents/types';
-import { listAgentsClient } from '@/lib/api/agentsClient';
+import type { AgentSetup, AgentSetupRun, PlatformAgent } from '@/lib/agents/types';
+import { listAgentsClient, listAgentSetupsClient } from '@/lib/api/agentsClient';
 import { revokeAgentAction } from '@/lib/agents/actions';
 import AddAgentDialog from './AddAgentDialog';
 import RevokeAgentDialog from './RevokeAgentDialog';
@@ -11,17 +11,26 @@ import {
   nxAgentsAddBtnStyle,
   nxAgentsAvatarStyle,
   nxAgentsColumnHeaderRowStyle,
+  nxAgentsEmptyJobsTextStyle,
   nxAgentsEmptyPanelStyle,
   nxAgentsEmptyStepNumStyle,
   nxAgentsEmptyStepStyle,
   nxAgentsEmptyTextStyle,
+  nxAgentsExpandPanelStyle,
+  nxAgentsExpandSectionLabelStyle,
+  nxAgentsExpandToggleStyle,
   nxAgentsEyebrowStyle,
   nxAgentsH1Style,
   nxAgentsHeaderRowStyle,
+  nxAgentsJobRowStyle,
+  nxAgentsJobsHeaderRowStyle,
+  nxAgentsLocalTagStyle,
   nxAgentsMetaCellStyle,
   nxAgentsNameStyle,
   nxAgentsRevokeBtnStyle,
   nxAgentsRowStyle,
+  nxAgentsRunRowStyle,
+  nxAgentsRunsHeaderRowStyle,
   nxAgentsStatusBadgeStyle,
   nxAgentsStatusDotStyle,
   nxAgentsSubtitleStyle,
@@ -30,7 +39,7 @@ import {
 
 const POLL_INTERVAL_MS = 15_000;
 
-function formatDate(iso: string | null): string {
+function formatDate(iso: string | null | undefined): string {
   return iso ? new Date(iso).toLocaleString() : '\u2014';
 }
 
@@ -56,6 +65,10 @@ export default function AgentsClient({
   const [agents, setAgents] = useState(initialAgents);
   const [addOpen, setAddOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<PlatformAgent | null>(null);
+  const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
+  const [setupsByAgent, setSetupsByAgent] = useState<
+    Record<string, { setups: AgentSetup[]; runs: AgentSetupRun[] }>
+  >({});
 
   function refreshAgents() {
     listAgentsClient()
@@ -70,6 +83,19 @@ export default function AgentsClient({
     const interval = setInterval(refreshAgents, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, []);
+
+  // Slice L4 — lazily load an agent's local jobs/runs the first time its
+  // row is expanded, same shape as the existing poll-on-mount pattern.
+  function toggleExpanded(agentId: string) {
+    setExpandedAgentId((current) => (current === agentId ? null : agentId));
+    if (!setupsByAgent[agentId]) {
+      listAgentSetupsClient(agentId)
+        .then((result) => setSetupsByAgent((prev) => ({ ...prev, [agentId]: result })))
+        .catch(() => {
+          // Leave the panel showing "no jobs" rather than erroring the page.
+        });
+    }
+  }
 
   return (
     <>
@@ -131,23 +157,121 @@ export default function AgentsClient({
             // — so the list shows "Revoked" here instead, consistent with
             // what listAgents()/listAgentsClient() keep returning.
             const badgeLabel = revoked ? 'Revoked' : agent.online ? 'Online' : 'Offline';
+            const expanded = expandedAgentId === agent.id;
+            const loaded = setupsByAgent[agent.id];
+            const localJobs = (loaded?.setups ?? [])
+              .map((s) => s.localJob)
+              .filter((j): j is NonNullable<typeof j> => j !== null);
+            const runs = loaded?.runs ?? [];
+            const jobNameById = new Map(
+              (loaded?.setups ?? []).map((s) => [s.id, s.localJob?.name ?? '\u2014'] as const),
+            );
             return (
-              <div key={agent.id} style={nxAgentsRowStyle}>
-                <div style={nxAgentsAvatarStyle}>{agent.displayName.slice(0, 1).toUpperCase() || '?'}</div>
-                <span style={nxAgentsNameStyle}>{agent.displayName}</span>
-                <span style={nxAgentsStatusBadgeStyle(agent.online && !revoked)}>
-                  <span style={nxAgentsStatusDotStyle(agent.online && !revoked)} />
-                  {badgeLabel}
-                </span>
-                <span style={nxAgentsMetaCellStyle}>{formatDate(agent.lastCheckInAt)}</span>
-                <span style={nxAgentsMetaCellStyle}>{agent.agentVersion ?? '\u2014'}</span>
-                <span style={nxAgentsMetaCellStyle}>{agent.hostName ?? '\u2014'}</span>
-                <span style={nxAgentsMetaCellStyle}>{memberNames[agent.createdByUserId] ?? agent.createdByUserId}</span>
-                <span style={nxAgentsMetaCellStyle}>{formatDate(agent.createdAt)}</span>
-                {canRevoke && (
-                  <button type="button" style={nxAgentsRevokeBtnStyle} onClick={() => setRevokeTarget(agent)}>
-                    Revoke
+              <div key={agent.id}>
+                <div style={nxAgentsRowStyle}>
+                  <button
+                    type="button"
+                    style={{ ...nxAgentsExpandToggleStyle, ...nxAgentsAvatarStyle }}
+                    onClick={() => toggleExpanded(agent.id)}
+                    aria-expanded={expanded}
+                    aria-label={expanded ? 'Collapse agent jobs' : 'Expand agent jobs'}
+                  >
+                    {agent.displayName.slice(0, 1).toUpperCase() || '?'}
                   </button>
+                  <span style={nxAgentsNameStyle}>{agent.displayName}</span>
+                  <span style={nxAgentsStatusBadgeStyle(agent.online && !revoked)}>
+                    <span style={nxAgentsStatusDotStyle(agent.online && !revoked)} />
+                    {badgeLabel}
+                  </span>
+                  <span style={nxAgentsMetaCellStyle}>{formatDate(agent.lastCheckInAt)}</span>
+                  <span style={nxAgentsMetaCellStyle}>{agent.agentVersion ?? '\u2014'}</span>
+                  <span style={nxAgentsMetaCellStyle}>{agent.hostName ?? '\u2014'}</span>
+                  <span style={nxAgentsMetaCellStyle}>{memberNames[agent.createdByUserId] ?? agent.createdByUserId}</span>
+                  <span style={nxAgentsMetaCellStyle}>{formatDate(agent.createdAt)}</span>
+                  {canRevoke && (
+                    <button type="button" style={nxAgentsRevokeBtnStyle} onClick={() => setRevokeTarget(agent)}>
+                      Revoke
+                    </button>
+                  )}
+                </div>
+                {expanded && (
+                  <div style={nxAgentsExpandPanelStyle}>
+                    <div>
+                      <span style={nxAgentsExpandSectionLabelStyle}>Jobs set up on the agent machine</span>
+                      {localJobs.length === 0 ? (
+                        <p style={nxAgentsEmptyJobsTextStyle}>
+                          {loaded ? 'No local jobs reported by this agent yet.' : 'Loading\u2026'}
+                        </p>
+                      ) : (
+                        <>
+                          <div style={nxAgentsJobsHeaderRowStyle}>
+                            <span>Name</span>
+                            <span>Source / destination</span>
+                            <span>Mode</span>
+                            <span>Schedule</span>
+                            <span>State</span>
+                            <span>Last run</span>
+                            <span>Next run</span>
+                          </div>
+                          {localJobs.map((job) => (
+                            <div key={job.id} style={nxAgentsJobRowStyle}>
+                              <span style={nxAgentsNameStyle}>
+                                {job.name}
+                                <span style={nxAgentsLocalTagStyle}>Local</span>
+                              </span>
+                              <span style={nxAgentsMetaCellStyle}>
+                                {job.sourceTable} &rarr; {job.destinationType}://{job.destinationHost}
+                              </span>
+                              <span style={nxAgentsMetaCellStyle}>{job.mode}</span>
+                              <span style={nxAgentsMetaCellStyle}>{job.schedule ?? '\u2014'}</span>
+                              <span style={nxAgentsStatusBadgeStyle(job.state === 'ok')}>
+                                <span style={nxAgentsStatusDotStyle(job.state === 'ok')} />
+                                {job.state}
+                                {job.errorClass ? ` (${job.errorClass})` : ''}
+                              </span>
+                              <span style={nxAgentsMetaCellStyle}>{formatDate(job.lastRunAt)}</span>
+                              <span style={nxAgentsMetaCellStyle}>{formatDate(job.nextRunAt)}</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                    <div>
+                      <span style={nxAgentsExpandSectionLabelStyle}>Recent runs</span>
+                      {runs.length === 0 ? (
+                        <p style={nxAgentsEmptyJobsTextStyle}>
+                          {loaded ? 'No runs reported yet.' : 'Loading\u2026'}
+                        </p>
+                      ) : (
+                        <>
+                          <div style={nxAgentsRunsHeaderRowStyle}>
+                            <span>Job</span>
+                            <span>Status</span>
+                            <span>Rows sent</span>
+                            <span>Deleted</span>
+                            <span>Parts</span>
+                            <span>Started</span>
+                            <span>Finished</span>
+                          </div>
+                          {runs.map((run) => (
+                            <div key={run.id} style={nxAgentsRunRowStyle}>
+                              <span style={nxAgentsMetaCellStyle}>{jobNameById.get(run.agentSetupId) ?? '\u2014'}</span>
+                              <span style={nxAgentsStatusBadgeStyle(run.status === 'ok')}>
+                                <span style={nxAgentsStatusDotStyle(run.status === 'ok')} />
+                                {run.status}
+                                {run.errorClass ? ` (${run.errorClass})` : ''}
+                              </span>
+                              <span style={nxAgentsMetaCellStyle}>{run.rowsSent}</span>
+                              <span style={nxAgentsMetaCellStyle}>{run.rowsDeleted}</span>
+                              <span style={nxAgentsMetaCellStyle}>{run.parts}</span>
+                              <span style={nxAgentsMetaCellStyle}>{formatDate(run.startedAt)}</span>
+                              <span style={nxAgentsMetaCellStyle}>{formatDate(run.finishedAt)}</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             );

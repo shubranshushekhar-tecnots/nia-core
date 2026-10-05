@@ -1,6 +1,7 @@
 import { ensureBearerToken } from '@/lib/auth/browserSession';
 import { mapAgents } from '@/lib/agents/mapAgent';
-import type { PlatformAgent } from '@/lib/agents/types';
+import { mapAgentSetupsResponse } from '@/lib/agents/mapLocalJob';
+import type { AgentSetup, AgentSetupRun, PlatformAgent } from '@/lib/agents/types';
 
 /**
  * Browser-side poll for the Agents list — AgentsClient.tsx re-fetches this
@@ -46,4 +47,25 @@ export async function listAgentsClient(): Promise<PlatformAgent[]> {
   }
   const raw = (await res.json()) as unknown[];
   return mapAgents(raw);
+}
+
+// Slice L4 (B.11) — read-only; called lazily when an agent row is expanded.
+export async function listAgentSetupsClient(
+  agentId: string,
+): Promise<{ setups: AgentSetup[]; runs: AgentSetupRun[] }> {
+  const res = await fetch(`/api/backend/agents/${agentId}/setups`, {
+    method: 'GET',
+    headers: { Accept: 'application/json', ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new AgentsApiError(
+      res.status,
+      body?.error?.code ?? 'UNKNOWN',
+      body?.error?.message ?? res.statusText,
+      body?.error?.details,
+    );
+  }
+  const raw = await res.json();
+  return mapAgentSetupsResponse(raw);
 }

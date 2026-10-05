@@ -12,10 +12,11 @@ import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
 import { listPausedJobs, runDoctor, runJobDoctor } from "./cli/doctorCommand.js";
 import { runHealthcheck } from "./cli/healthcheckCommand.js";
 import { jobHealthState, getStatus } from "./ops/state.js";
+import { recordRunOutcome } from "./ops/recordRun.js";
 import { getSpoolUsage } from "./ops/spoolUsage.js";
 import { installGracefulShutdown } from "./ops/shutdown.js";
 import { versionString } from "./cli/versionCommand.js";
-import { loadConfig } from "./config/store.js";
+import { findJob, loadConfig } from "./config/store.js";
 import { defaultSpoolDir } from "./config/paths.js";
 import { runAgentLoop } from "./agentLoop.js";
 import { AGENT_VERSION } from "./generated/version.js";
@@ -608,12 +609,32 @@ async function main(argv: string[]): Promise<void> {
     const controller = new AbortController();
     const uninstall = installGracefulShutdown(controller);
     try {
+      const job = findJob(loadConfig(), id);
+      const startedAt = new Date().toISOString();
       const result = await runJob(id, {
         replace: values.replace as boolean | undefined,
         signal: controller.signal,
         paramOverrides,
         allowMassDelete: values["allow-mass-delete"] as boolean | undefined,
       });
+      if (job) {
+        const isRealtime = job.pollIntervalSeconds !== undefined;
+        if (result.ok) {
+          recordRunOutcome(
+            id,
+            { ok: true, rowsSent: result.rowsSent ?? 0, durationMs: result.durationMs ?? 0, rowsDeleted: result.rowsDeleted, parts: result.parts, mode: result.mode, empty: result.empty },
+            startedAt,
+            { isRealtime },
+          );
+        } else {
+          recordRunOutcome(
+            id,
+            { ok: false, kind: result.kind ?? "other", error: result.error ?? "job run failed", consoleMessage: result.consoleMessage },
+            startedAt,
+            { isRealtime },
+          );
+        }
+      }
       if (result.ok) {
         console.log(result.summary);
       } else {

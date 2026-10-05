@@ -1,5 +1,7 @@
 import os from "node:os";
 import type { Logger } from "../ops/logger.js";
+import type { LocalJobReport } from "./localJobReports.js";
+import type { RunReport } from "./runReportOutbox.js";
 import { LinkRevokedError, LinkTransientError, type AgentTransport, type CheckInResponse } from "./transport.js";
 
 const DEFAULT_INITIAL_DELAY_MS = 1_000;
@@ -14,6 +16,10 @@ export interface CheckInLoopOptions {
   onRevoked?: () => void;
   initialDelayMs?: number;
   maxDelayMs?: number;
+  /** Slice L4 (B.11) — called fresh on every check-in so a job added/changed/removed between check-ins is always reported current. */
+  buildLocalJobs?: () => LocalJobReport[];
+  /** Slice L4 (B.7) — called fresh on every check-in to collect the current outbox contents (also flushes any overdue realtime bucket). */
+  buildRunReports?: () => RunReport[];
 }
 
 /**
@@ -85,8 +91,16 @@ export class CheckInLoop {
     const noHold = this.firstCheckIn;
     this.firstCheckIn = false;
     try {
+      const localJobs = this.options.buildLocalJobs?.();
+      const runReports = this.options.buildRunReports?.();
       const response = await this.options.transport.checkIn(
-        { agentVersion: this.options.agentVersion, hostName: this.hostName, ...(noHold ? { noHold: true } : {}) },
+        {
+          agentVersion: this.options.agentVersion,
+          hostName: this.hostName,
+          ...(noHold ? { noHold: true } : {}),
+          ...(localJobs !== undefined ? { localJobs } : {}),
+          ...(runReports !== undefined ? { runReports } : {}),
+        },
         signal,
       );
       if (this.stopped) return;

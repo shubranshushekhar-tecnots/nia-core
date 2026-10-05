@@ -1,5 +1,6 @@
 import type { Logger } from "../ops/logger.js";
-import { isJobPaused, pauseJobState, readJobState, recordJobFailure, recordJobRunStarted, recordJobSkipped, recordJobSuccess, recordNextRunAt } from "../ops/state.js";
+import { isJobPaused, isPauseKind, readJobState, recordJobRunStarted, recordJobSkipped, recordNextRunAt } from "../ops/state.js";
+import { recordRunOutcome } from "../ops/recordRun.js";
 import { Semaphore } from "../sync/concurrency.js";
 import type { RunSyncFailureKind } from "../sync/runSync.js";
 import { nextOccurrence } from "./cronSchedule.js";
@@ -29,7 +30,17 @@ export interface SchedulerJob {
 }
 
 export type SchedulerJobOutcome =
-  | { ok: true; rowsSent: number; durationMs: number; /** `strategy: "realtime"` only (§1.3/E1): true for a tick that made no request — the scheduler skips writing it to the log file. */ empty?: boolean }
+  | {
+      ok: true;
+      rowsSent: number;
+      durationMs: number;
+      /** `strategy: "realtime"` only (§1.3/E1): true for a tick that made no request — the scheduler skips writing it to the log file. */
+      empty?: boolean;
+      /** Slice L4 (B.7 run reports) — additive, non-conflicting with the task's own usage of this outcome above. */
+      rowsDeleted?: number;
+      parts?: number;
+      mode?: string;
+    }
   | {
       ok: false;
       kind: RunSyncFailureKind;
@@ -39,8 +50,6 @@ export type SchedulerJobOutcome =
       consoleMessage?: string;
     };
 
-/** §10(B2) item 3: these — and only these — pause a job until `job resume`. */
-const PAUSE_KINDS: ReadonlySet<RunSyncFailureKind> = new Set(["config", "schemaDrift", "typeMismatch", "nullKey", "massDelete"]);
 /** §10(B2) item 2: these retry with backoff instead of pausing or waiting for the next tick. */
 const RETRY_KINDS: ReadonlySet<RunSyncFailureKind> = new Set(["transient", "diskSpace"]);
 /** 1, 5, 15 minutes. */
@@ -331,8 +340,11 @@ export class JobScheduler {
     const dir = this.options.dir;
     let attempt = 0;
 
+    const isRealtime = job.pollIntervalSeconds !== undefined;
+
     while (true) {
       if (signal.aborted) return;
+      const startedAt = new Date().toISOString();
       recordJobRunStarted(job.id, dir);
 
       let outcome: SchedulerJobOutcome;
@@ -343,7 +355,7 @@ export class JobScheduler {
       }
 
       if (outcome.ok) {
-        recordJobSuccess(job.id, { rowsSent: outcome.rowsSent, durationMs: outcome.durationMs }, dir);
+        recordRunOutcome(job.id, outcome, startedAt, { isRealtime, logger: this.options.logger }, dir);
         // Realtime (§1.3/E1): an empty tick (nothing to send, no request made) is still recorded in job state above, but isn't written to the log file — only a tick that sent something or failed is.
         if (!outcome.empty) {
           this.options.logger.info("job_run_completed", { jobId: job.id, rowsSent: outcome.rowsSent });
@@ -362,9 +374,8 @@ export class JobScheduler {
         return;
       }
 
-      if (PAUSE_KINDS.has(outcome.kind)) {
-        recordJobFailure(job.id, { errorClass: outcome.kind, message: outcome.error, consoleMessage: outcome.consoleMessage }, dir);
-        pauseJobState(job.id, outcome.error, dir);
+      if (isPauseKind(outcome.kind)) {
+        recordRunOutcome(job.id, outcome, startedAt, { isRealtime, logger: this.options.logger }, dir);
         this.options.logger.warn("job_paused", { jobId: job.id, kind: outcome.kind });
         return;
       }
@@ -377,7 +388,7 @@ export class JobScheduler {
         continue;
       }
 
-      recordJobFailure(job.id, { errorClass: outcome.kind, message: outcome.error, consoleMessage: outcome.consoleMessage }, dir);
+      recordRunOutcome(job.id, outcome, startedAt, { isRealtime, logger: this.options.logger }, dir);
       this.options.logger.warn("job_run_failed", { jobId: job.id, kind: outcome.kind, error: outcome.error });
       return;
     }

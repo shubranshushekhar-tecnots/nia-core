@@ -8,7 +8,7 @@ import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { AppError } from "../lib/appError.js";
 import { scopeFromActor } from "../lib/workspaceScope.js";
-import { listAgents, createPairingCode, revokeAgent } from "../services/agents.js";
+import { listAgents, createPairingCode, revokeAgent, listAgentSetups } from "../services/agents.js";
 
 // Mounted at /agents — docs/plans/agent-canvas-integration.md B.1/B.3.
 export const agentsRouter: ExpressRouter = Router();
@@ -39,6 +39,18 @@ agentsRouter.post(
 );
 
 const agentParamsSchema = z.object({ agentId: z.string().uuid() });
+
+// Slice L4 (B.11) — read-only; "agents.view" (same capability as the list
+// above) already covers viewers, no new capability needed.
+agentsRouter.get(
+  "/:agentId/setups",
+  requireCapability("agents.view"),
+  validate({ params: agentParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.withUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    res.json(await listAgentSetups(req.withUser, req.params.agentId!));
+  }),
+);
 
 // No requireCapability here (deliberately): the "pairing member may also
 // revoke" exception (B.1) can't be expressed as a flat matrix check —
