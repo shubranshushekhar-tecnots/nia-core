@@ -4,7 +4,7 @@ import { CATALOG_ORDER, CONNECTOR_CATALOG_META, catalogIndexLabel } from "./cata
 describe("catalogIndexLabel", () => {
   it("returns a stable two-digit label matching CATALOG_ORDER position", () => {
     expect(catalogIndexLabel("mysql")).toBe("01");
-    expect(catalogIndexLabel("s3")).toBe("12");
+    expect(catalogIndexLabel("s3")).toBe(String(CATALOG_ORDER.indexOf("s3") + 1).padStart(2, "0"));
   });
 
   it("returns an empty string for an id not in CATALOG_ORDER", () => {
@@ -21,8 +21,10 @@ describe("CONNECTOR_CATALOG_META", () => {
     }
   });
 
-  it("only marks the 4 real connectors as not comingSoon", () => {
+  it("only marks the 7 real connectors as not comingSoon", () => {
     const live = CATALOG_ORDER.filter((id) => !CONNECTOR_CATALOG_META[id]?.comingSoon);
-    expect(live.sort()).toEqual(["mongodb", "mysql", "postgres", "supabase"].sort());
+    expect(live.sort()).toEqual(
+      ["mongodb", "mysql", "postgres", "supabase", "sqlserver-agent", "planometry-table", "https-endpoint"].sort(),
+    );
   });
 });
