@@ -28,7 +28,7 @@ describe("agent-bridge /check-in (route-level)", () => {
 
     const response = await app.inject({
       method: "POST",
-      url: "/check-in",
+      url: "/agent-api/check-in",
       headers: { authorization: "Bearer test-agent-key" },
       payload: { agentVersion: "1.0.0", hostName: "test-host" },
     });

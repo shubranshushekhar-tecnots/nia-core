@@ -23,6 +23,13 @@ const API_ORIGIN = process.env.API_INTERNAL_URL ?? 'http://localhost:4001';
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  // Playwright's own webServer (apps/web/playwright.config.ts) sets this
+  // when it has to build its own throwaway dev server — isolates its
+  // build cache from the default `.next` folder owned by whichever other
+  // `next dev` process is already running, so the two never corrupt each
+  // other's build. Unset (the common case: reusing an already-running
+  // dev server) falls back to Next's own default.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // Next's dev-mode corner badge otherwise overlaps the hero canvas's own
   // fullscreen chrome (status bar / tool rail) during local dev.
   devIndicators: false,

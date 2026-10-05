@@ -11,6 +11,7 @@ node_modules/
 # build outputs
 dist/
 .next/
+.next-e2e/
 .turbo/
 *.tsbuildinfo
 

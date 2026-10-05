@@ -1,6 +1,35 @@
 import { defineConfig, devices } from '@playwright/test';
+import { execSync } from 'node:child_process';
 
-const PORT = process.env.PORT ?? '3100';
+const DEFAULT_PORT = process.env.PORT ?? '3100';
+
+/**
+ * True when something is already answering on the project's standard dev
+ * port. A plain TCP/HTTP probe (not Nia IDE's own dev-server tracking API
+ * — this config has to work for any caller, not just inside that IDE) —
+ * `curl`'s own connect timeout keeps this bounded even if the port is
+ * firewalled rather than simply closed.
+ */
+function isAlreadyRunning(port: string): boolean {
+  try {
+    execSync(`curl -s -o /dev/null -m 2 http://localhost:${port}`, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// A `next dev` process already running on the standard port owns
+// apps/web/.next's build cache; starting a second `next dev` against that
+// same folder (even on a different port) corrupts it — two processes
+// writing the same on-disk build concurrently. So: reuse that server
+// as-is when one is running (no webServer block at all — Playwright just
+// points baseURL at it); otherwise build Playwright's own, on a different
+// port AND a different distDir (next.config.mjs's NEXT_DIST_DIR), so it
+// can never collide with that shared folder even if the other server
+// starts later.
+const reusingRunningServer = isAlreadyRunning(DEFAULT_PORT);
+const PORT = reusingRunningServer ? DEFAULT_PORT : '3177';
 const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({
@@ -39,10 +68,17 @@ export default defineConfig({
     { name: 'setup', testMatch: /.*\.setup\.ts/, fullyParallel: false },
     { name: 'chromium', use: { ...devices['Desktop Chrome'] }, dependencies: ['setup'] },
   ],
-  webServer: {
-    command: `next dev -p ${PORT}`,
-    url: BASE_URL,
-    reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
-  },
+  // Omitted entirely when reusing an already-running server — see
+  // `reusingRunningServer` above. Playwright treats a missing webServer as
+  // "assume baseURL is already serving," which is exactly what's wanted
+  // here.
+  webServer: reusingRunningServer
+    ? undefined
+    : {
+        command: `next dev -p ${PORT}`,
+        url: BASE_URL,
+        env: { NEXT_DIST_DIR: '.next-e2e' },
+        reuseExistingServer: false,
+        timeout: 60_000,
+      },
 });

@@ -68,7 +68,13 @@ export function buildApp(transport: AgentTransport = new LongPollTransport()) {
   // wrong attempts per-row without the lookup itself being a guessable
   // oracle), the code is the one-time secret, hashed here before ever
   // reaching Postgres (consume_agent_pairing_code only ever sees the hash).
-  app.post("/pair", async (req) => {
+  //
+  // Routes live under /agent-api so the path is identical in dev (the CLI
+  // calls this service directly, e.g. http://localhost:4040/agent-api/pair
+  // — see apps/agent/src/link/pairing.ts) and in production (deploy/nginx/
+  // nginx.conf's /agent-api/ location passes the path through unchanged,
+  // no rewrite).
+  app.post("/agent-api/pair", async (req) => {
     const { pairingCodeId, code } = PairBody.parse(req.body);
     const codeHash = sha256Hex(code);
 
@@ -110,7 +116,7 @@ export function buildApp(transport: AgentTransport = new LongPollTransport()) {
 
   // Authenticated by the agent key itself (Bearer), not a user session —
   // see 0069_platform_agents.sql's header comment ("no acting user").
-  app.post("/check-in", async (req) => {
+  app.post("/agent-api/check-in", async (req) => {
     const authHeader = req.headers.authorization ?? "";
     const agentKey = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
     if (!agentKey) throw new HttpError(401, "missing agent key");
