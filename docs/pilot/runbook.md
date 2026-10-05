@@ -39,7 +39,7 @@ few classes also get fast automatic retries, noted below).
 | `lockTaken` | Another sync against the same database server was already running (the agent only runs one query at a time per server, by design). | No | Nothing — it tries again on the next scheduled run. |
 | `rejected` | The destination flatly rejected the request (a bad-request response, not a temporary one). | No | Check the job's destination settings; if unclear, contact Nia support with the job ID and timestamp. |
 | `mismatch` | The destination reported back a different row count than what the agent sent. | No | Usually transient. If it recurs for the same job, contact Nia support. |
-| `emptyReplace` | A full-reload run found zero rows to send, and the job isn't configured to allow that (a safeguard against accidentally wiping the destination from an empty source read). | No | Confirm the source table actually has data. If zero rows is genuinely expected sometimes, re-run with `--allow-empty-replace`. |
+| `emptyReplace` | A full-reload run found zero rows to send, and the job isn't configured to allow that (a safeguard against accidentally wiping the destination from an empty source read). | No | Confirm the source table actually has data. If zero rows is genuinely expected sometimes, run `nia-agent job update <id> --allow-empty-replace` once, then re-run the job. |
 | `aborted` | The run was stopped mid-way — for example the agent service was restarted. Not a real failure. | No | Nothing — it runs again on schedule. |
 | `other` | Anything that doesn't fall into one of the classes above. | No | Check `nia-agent status` for the error message; contact Nia support if it recurs. |
 
