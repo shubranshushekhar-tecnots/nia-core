@@ -25,10 +25,11 @@ type PublishedRow = {
   published_setup: unknown;
   published_at: string | null;
   unpublished_at: string | null;
+  rejection_reason: string | null;
 };
 
 const PUBLISHED_SELECT =
-  "id, workflow_id, agent_id, wanted_version, applied_version, published_setup, published_at, unpublished_at";
+  "id, workflow_id, agent_id, wanted_version, applied_version, published_setup, published_at, unpublished_at, rejection_reason";
 
 async function getPublishedRow(withUser: WithUser, workflowId: string): Promise<PublishedRow | null> {
   const { rows } = await withUser((db) =>
@@ -233,4 +234,46 @@ export async function unpublishAgentSetup(
     if (err instanceof AppError) throw err;
     throw new AppError(403, "UNPUBLISH_REFUSED", err instanceof Error ? err.message : String(err));
   }
+}
+
+/**
+ * Slice R4 (docs/plans/agent-canvas-integration.md B.7, item 6) — "the
+ * workflow then shows its state: waiting for the agent, applied with its
+ * version, or rejected with the agent's reason." R3a's publish/unpublish
+ * routes never had a plain read route, so this is that one: read-only,
+ * never writes, available to a viewer (unlike publish/unpublish — gated
+ * only by workflow scope, not requireCapability).
+ */
+export type AgentSetupState = "unpublished" | "waiting" | "applied" | "rejected";
+
+export type AgentSetupStateResult = {
+  state: AgentSetupState;
+  wantedVersion: number;
+  appliedVersion: number;
+  publishedAt: string | null;
+  rejectionReason: string | null;
+};
+
+function toState(row: PublishedRow | null): AgentSetupStateResult {
+  if (!row || row.unpublished_at) {
+    return { state: "unpublished", wantedVersion: 0, appliedVersion: 0, publishedAt: null, rejectionReason: null };
+  }
+  const base = { wantedVersion: row.wanted_version, appliedVersion: row.applied_version, publishedAt: row.published_at };
+  if (row.wanted_version <= row.applied_version) {
+    return { ...base, state: "applied", rejectionReason: null };
+  }
+  if (row.rejection_reason) {
+    return { ...base, state: "rejected", rejectionReason: row.rejection_reason };
+  }
+  return { ...base, state: "waiting", rejectionReason: null };
+}
+
+export async function getAgentSetupState(
+  withUser: WithUser,
+  scope: WorkspaceScope,
+  workflowId: string,
+): Promise<AgentSetupStateResult> {
+  await assertWorkflowInScope(withUser, scope, workflowId);
+  const row = await getPublishedRow(withUser, workflowId);
+  return toState(row);
 }

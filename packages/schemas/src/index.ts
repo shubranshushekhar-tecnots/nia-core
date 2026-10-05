@@ -59,3 +59,4 @@ export * from "./connectionErrorMessages.js";
 export * from "./appErrorMessages.js";
 export * from "./help/content.js";
 export * from "./agentJobSetup.js";
+export * from "./agentJobSetupFromGraph.js";

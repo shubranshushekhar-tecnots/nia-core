@@ -19,7 +19,7 @@ import { proposeMappingForWorkflow } from "../services/mappings.js";
 import { proposeCleaningForWorkflow } from "../services/cleanPropose.js";
 import { previewWorkflowDestination } from "../services/preview.js";
 import { getLatestConversationForWorkflow, listMessages } from "../services/chat.js";
-import { previewPublishAgentSetup, publishAgentSetup, unpublishAgentSetup } from "../services/agentSetups.js";
+import { previewPublishAgentSetup, publishAgentSetup, unpublishAgentSetup, getAgentSetupState } from "../services/agentSetups.js";
 
 export const workflowsRouter: ExpressRouter = Router();
 
@@ -308,6 +308,18 @@ workflowsRouter.post(
       req.actor.userId,
     );
     res.status(201).json(data);
+  }),
+);
+
+// Slice R4 (B.7, item 6) — "Viewers see state only": plain read, no
+// requireCapability gate, same posture as GET /:id/graph above.
+workflowsRouter.get(
+  "/:id/agent-setup",
+  validate({ params: workflowParamsSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+    const data = await getAgentSetupState(req.withUser, scopeFromActor(req.actor), req.params.id!);
+    res.json(data);
   }),
 );
 

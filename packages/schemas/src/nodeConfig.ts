@@ -146,6 +146,62 @@ export type EntityRef = z.infer<typeof EntityRef>;
 export const DestinationWriteMode = z.enum(["staged", "direct"]);
 export type DestinationWriteMode = z.infer<typeof DestinationWriteMode>;
 
+/**
+ * Agent-Canvas integration, Slice R4 (docs/plans/agent-canvas-integration.md
+ * B.7, item 1) — a selected source column for an agent-delivered workflow's
+ * "Local database (via agent)" source node, carrying the type/key-ness the
+ * drawer already has on hand from the connection's introspected schema at
+ * selection time. Structurally identical to agentJobSetup.ts's
+ * `AgentJobSetupColumn` (deliberately — agentJobSetupFromGraph.ts copies
+ * these across field-by-field) but kept as its own schema here rather than
+ * imported, since agentJobSetup.ts already imports FilterCondition from
+ * this file and a reverse import would cycle.
+ */
+export const SourceAgentColumn = z.object({
+  name: z.string().min(1),
+  type: z.string().min(1),
+  isKey: z.boolean().default(false),
+});
+export type SourceAgentColumn = z.infer<typeof SourceAgentColumn>;
+
+/** Mirrors agentJobSetup.ts's AgentJobSetupMode — kept local for the same reason SourceAgentColumn is (see its comment). */
+export const AgentDeliveryMode = z.enum(["replace", "upsertDelta", "realtime"]);
+export type AgentDeliveryMode = z.infer<typeof AgentDeliveryMode>;
+
+/** Mirrors agentJobSetup.ts's AgentJobSetupDeleteMode. */
+export const AgentDeliveryDeleteMode = z.enum(["none", "reconciliation", "softDelete"]);
+export type AgentDeliveryDeleteMode = z.infer<typeof AgentDeliveryDeleteMode>;
+
+/**
+ * Agent-Canvas integration, Slice R4 (B.7, item 4) — the destination node's
+ * "Delivery" section for an agent-delivered workflow: everything about how
+ * the agent pushes rows, as opposed to `mapping`/`upsertKeys` above (what
+ * gets pushed). Destination-only, optional and additive like every other
+ * field on this shared schema. `agentJobSetupFromGraph.ts` is the only
+ * reader that turns this into the R3a `AgentJobSetup` sent to `publish`.
+ */
+export const AgentDeliveryConfig = z.object({
+  mode: AgentDeliveryMode.optional(),
+  /** `mode: "upsertDelta"` or `"realtime"` only — the date-time watermark ("last-modified") column. */
+  watermarkColumn: z.string().optional(),
+  deleteMode: AgentDeliveryDeleteMode.optional(),
+  /** `deleteMode: "softDelete"` only. */
+  softDeleteColumn: z.string().optional(),
+  /** `deleteMode: "reconciliation"` only. */
+  maxDeletePercent: z.number().min(0).max(100).optional(),
+  /** What a null/empty-string key value does to a run — absent means "stop" (agent-side default, apps/agent/src/config/types.ts's OnNullKey). */
+  onNullKey: z.enum(["stop", "skip"]).optional(),
+  /** Whether a zero-row `replace` is allowed to go through instead of being refused. Absent means false (agent-side default). */
+  allowEmptyReplace: z.boolean().optional(),
+  /** 5-field cron expression for the delta/tick cadence. */
+  schedule: z.string().optional(),
+  /** A separate cron expression for a periodic full `replace`. */
+  replaceSchedule: z.string().optional(),
+  /** `mode: "realtime"` only — tick interval in seconds. */
+  pollIntervalSeconds: z.number().int().positive().optional(),
+});
+export type AgentDeliveryConfig = z.infer<typeof AgentDeliveryConfig>;
+
 export const SourceDestConfig = z.object({
   operation: Operation.default("read"),
   mapping: FieldMapping.optional(),
@@ -153,6 +209,12 @@ export const SourceDestConfig = z.object({
   upsertKeys: z.array(z.string()).optional(),
   writeMode: DestinationWriteMode.optional(),
   contractHash: z.string().optional(),
+  /** Source-only (Slice R4, B.7 item 1): the agent-delivered source's selected columns. */
+  columns: z.array(SourceAgentColumn).optional(),
+  /** Source-only (Slice R4, B.7 item 1): saved named-parameter values — a literal value or a relative-date token (today / today±Nd / startOfMonth[-Nm] / startOfYear[-Ny]), always stored as raw strings, resolved only by the agent at run time. */
+  params: z.record(z.string(), z.string()).optional(),
+  /** Destination-only (Slice R4, B.7 item 4): see AgentDeliveryConfig's doc comment. */
+  delivery: AgentDeliveryConfig.optional(),
 });
 export type SourceDestConfig = z.infer<typeof SourceDestConfig>;
 

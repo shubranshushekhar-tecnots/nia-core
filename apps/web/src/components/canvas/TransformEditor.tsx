@@ -47,6 +47,7 @@ export default function TransformEditor({
   manifestId,
   workflowId,
   nodeId,
+  restrictToFilterOnly,
   onChange,
 }: {
   config: TransformConfig;
@@ -55,6 +56,16 @@ export default function TransformEditor({
   /** Both required only for Step 7's "Propose cleaning" call — the node's own id (clean_plans binds to a transform node) and its workflow. */
   workflowId: string;
   nodeId: string;
+  /**
+   * Slice R4 (B.7, item 2) — "the existing filter step is allowed...
+   * Every other transform step is disabled on this kind of workflow".
+   * Set by NodeDrawer.tsx when the nearest upstream source is a "Local
+   * database (via agent)" connection (packages/schemas/src/connectors/
+   * sqlserver_agent.ts) — that source can only ever be read through the
+   * agent bridge, so every workflow built on it is agent-delivered by
+   * construction, regardless of which agent destination it ends at.
+   */
+  restrictToFilterOnly?: boolean;
   onChange: (next: TransformConfig) => void;
 }) {
   const { data: schema } = useQuery({
@@ -136,11 +147,32 @@ export default function TransformEditor({
 
   return (
     <div>
+      {restrictToFilterOnly && (
+        <div
+          style={{
+            fontSize: 12.5,
+            color: 'var(--nx-warn)',
+            background: 'var(--nx-raised)',
+            border: '1px solid var(--nx-line)',
+            borderRadius: 8,
+            padding: '8px 10px',
+            marginBottom: 10,
+          }}
+        >
+          Only a filter step is allowed here — this source is delivered by the agent. Other destinations go through Nia Core.
+        </div>
+      )}
+
       {config.steps.map((step, i) => {
         const entry = OP_EDITOR_REGISTRY[step.kind];
         const Editor = entry.Component;
+        const disallowed = restrictToFilterOnly && step.kind !== 'filter';
         return (
-          <div key={i} style={stepCardStyle} data-testid={`transform-step-${step.kind}`}>
+          <div
+            key={i}
+            style={disallowed ? { ...stepCardStyle, borderColor: 'var(--nx-warn)' } : stepCardStyle}
+            data-testid={`transform-step-${step.kind}`}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--nx-ink-3)', textTransform: 'uppercase', letterSpacing: '.03em' }}>
                 {entry.label}
@@ -149,17 +181,32 @@ export default function TransformEditor({
                 {'\u2715'}
               </button>
             </div>
+            {disallowed && (
+              <div style={{ fontSize: 11.5, color: 'var(--nx-warn)', marginBottom: 6 }}>
+                Not allowed on an agent-delivered workflow — remove it, or add it after a destination that goes through Nia Core.
+              </div>
+            )}
             <Editor step={step as never} fields={fields} onChange={(next) => updateStep(i, next as TransformStep)} />
           </div>
         );
       })}
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
-        {(Object.keys(OP_EDITOR_REGISTRY) as TransformStep['kind'][]).map((kind) => (
-          <button key={kind} type="button" onClick={() => addStep(kind)} style={addStepBtnStyle}>
-            + {OP_EDITOR_REGISTRY[kind].label}
-          </button>
-        ))}
+        {(Object.keys(OP_EDITOR_REGISTRY) as TransformStep['kind'][]).map((kind) => {
+          const disabled = restrictToFilterOnly && kind !== 'filter';
+          return (
+            <button
+              key={kind}
+              type="button"
+              onClick={() => !disabled && addStep(kind)}
+              disabled={disabled}
+              title={disabled ? 'Other destinations go through Nia Core.' : undefined}
+              style={disabled ? { ...addStepBtnStyle, opacity: 0.45, cursor: 'not-allowed' } : addStepBtnStyle}
+            >
+              + {OP_EDITOR_REGISTRY[kind].label}
+            </button>
+          );
+        })}
       </div>
 
       {config.steps.length > 0 && (

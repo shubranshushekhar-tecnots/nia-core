@@ -74,6 +74,7 @@ export default function CanvasHeader({
   runInFlight,
   runTooltip,
   onRun,
+  agentPublish,
   copilotOpen,
   onToggleCopilot,
   readOnly,
@@ -91,6 +92,25 @@ export default function CanvasHeader({
   runInFlight: boolean;
   runTooltip: string;
   onRun: () => void;
+  /**
+   * Slice R4 (B.7, item 6) — "Publish, in place of Run for these
+   * workflows". Set (non-null) only when FlowCanvas.tsx's
+   * isAgentDeliveredWorkflow() is true; everything else about the header
+   * (checks button, tabs, etc.) stays exactly as it is for every other
+   * workflow.
+   */
+  agentPublish?: {
+    state: 'unpublished' | 'waiting' | 'applied' | 'rejected';
+    wantedVersion: number;
+    appliedVersion: number;
+    rejectionReason: string | null;
+    publishEnabled: boolean;
+    publishTooltip: string;
+    publishing: boolean;
+    unpublishing: boolean;
+    onPublish: () => void;
+    onUnpublish: () => void;
+  } | null;
   copilotOpen: boolean;
   onToggleCopilot: () => void;
   readOnly: boolean;
@@ -281,7 +301,71 @@ export default function CanvasHeader({
         </button>
       )}
 
-      {runEnabled ? (
+      {agentPublish ? (
+        <>
+          <span
+            title={
+              agentPublish.state === 'rejected'
+                ? agentPublish.rejectionReason ?? 'Rejected by the agent.'
+                : agentPublish.state === 'applied'
+                  ? `Applied — version ${agentPublish.appliedVersion}`
+                  : agentPublish.state === 'waiting'
+                    ? `Waiting for the agent — version ${agentPublish.wantedVersion}`
+                    : 'Not published'
+            }
+            style={{
+              flex: 'none',
+              whiteSpace: 'nowrap',
+              fontSize: 12,
+              fontWeight: 600,
+              padding: '3px 8px',
+              borderRadius: 'var(--nx-radius)',
+              border: '1px solid var(--nx-line)',
+              color:
+                agentPublish.state === 'rejected'
+                  ? 'var(--nx-danger-text)'
+                  : agentPublish.state === 'applied'
+                    ? 'var(--nx-success-text, var(--nx-ink))'
+                    : 'var(--nx-ink-3)',
+              background:
+                agentPublish.state === 'rejected' ? 'var(--nx-danger-tint)' : 'transparent',
+            }}
+          >
+            {agentPublish.state === 'unpublished' && 'Not published'}
+            {agentPublish.state === 'waiting' && 'Waiting for agent…'}
+            {agentPublish.state === 'applied' && `Applied · v${agentPublish.appliedVersion}`}
+            {agentPublish.state === 'rejected' && 'Rejected'}
+          </span>
+          {agentPublish.state !== 'unpublished' && !readOnly && (
+            <button
+              type="button"
+              onClick={agentPublish.onUnpublish}
+              disabled={agentPublish.unpublishing}
+              className={agentPublish.unpublishing ? 'nx-wipe nx-row-disabled' : 'nx-wipe'}
+              style={headerRunChecksCellStyle}
+            >
+              {agentPublish.unpublishing ? 'Unpublishing…' : 'Unpublish'}
+            </button>
+          )}
+          {agentPublish.publishEnabled ? (
+            <button
+              type="button"
+              onClick={agentPublish.onPublish}
+              title={agentPublish.publishTooltip}
+              className="nx-wipe"
+              style={{ ...headerRunCellStyle(true, agentPublish.publishing), '--wipe-fill': 'var(--nx-ink)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>Publish</span>
+              <RunArrowIcon size={11} />
+            </button>
+          ) : (
+            <button type="button" disabled title={agentPublish.publishTooltip} style={headerRunCellStyle(false, agentPublish.publishing)}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{agentPublish.publishing ? 'Publishing…' : 'Publish'}</span>
+              <RunArrowIcon size={11} />
+            </button>
+          )}
+        </>
+      ) : runEnabled ? (
         <button
           type="button"
           onClick={onRun}

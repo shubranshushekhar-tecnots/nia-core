@@ -17,7 +17,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, friendlyConnectionError, type ActorRole, type EntityRef, type GraphNodeType, type Plan, type PlanDiff } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, deriveAgentJobSetupFromGraph, friendlyConnectionError, type ActorRole, type EntityRef, type GraphNodeType, type Plan, type PlanDiff } from '@nia/schemas';
 import type { SidebarProject, WorkflowDetail } from '@/lib/dashboard/types';
 import type { Connection, ConnectorInstall } from '@/lib/connections/types';
 import {
@@ -43,6 +43,8 @@ import { getWorkflowGraph, putWorkflowGraph, GraphApiError, type WorkflowGraphRe
 import { applyPlan, applyPlanDiff, listAppliedPlans, revertPlan, CopilotApiError } from '@/lib/api/copilotClient';
 import { runWorkflowChecks, getLatestCheckRun, listCheckRuns, ChecksApiError } from '@/lib/api/checksClient';
 import { startWorkflowRun, streamRun, cancelWorkflowRun, RunApiError } from '@/lib/api/runsClient';
+import { getAgentSetupState, unpublishAgentSetup, AgentSetupApiError } from '@/lib/api/agentSetupClient';
+import { isAgentDeliveredWorkflow } from '@/lib/canvas/agentDelivery';
 import { useCanvasStore } from '@/lib/canvas/store';
 import { useChatSession } from '@/lib/chat/useChatSession';
 import { buildActivityFeed, type ActivityItem } from '@/lib/canvas/activityFeed';
@@ -59,6 +61,7 @@ import CanvasHeader from './CanvasHeader';
 import NodeContextMenu, { type MenuAction } from './NodeContextMenu';
 import { useToasts, ToastStack } from './Toast';
 import DeleteConnectionDialog from './DeleteConnectionDialog';
+import AgentPublishDialog from './AgentPublishDialog';
 import EditConnectionDialog from '@/components/app/EditConnectionDialog';
 import { nxBreadcrumbSepStyle } from '@/components/app/styles';
 import {
@@ -825,6 +828,50 @@ function CanvasInner({
     [destinationNodes, ctx.connectionsById],
   );
 
+  // Slice R4 (B.7, item 6) — "Publish, in place of Run for these
+  // workflows." isAgentDeliveredWorkflow is a cheap existence check for
+  // header-level gating; deriveAgentJobSetupFromGraph (packages/schemas,
+  // also the server's source of truth) does the real connected-path /
+  // flat-filter / mapped-keys validation and is what actually decides
+  // whether Publish is clickable.
+  const isAgentDelivered = useMemo(() => isAgentDeliveredWorkflow(nodes), [nodes]);
+  const derivedAgentSetup = useMemo(() => {
+    if (!isAgentDelivered) return null;
+    const graph = flowToGraph(nodes, edges, parkedLegacyTriggers.current);
+    return deriveAgentJobSetupFromGraph(graph);
+  }, [isAgentDelivered, nodes, edges]);
+
+  const agentSetupStateQuery = useQuery({
+    queryKey: ['agent-setup-state', workflow.id],
+    queryFn: () => getAgentSetupState(workflow.id),
+    enabled: isAgentDelivered,
+    // Polls while a published job is waiting for the agent to pick it up
+    // or apply it — stops once applied/rejected/unpublished.
+    refetchInterval: (query) => (query.state.data?.state === 'waiting' ? 4000 : false),
+  });
+
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [unpublishing, setUnpublishing] = useState(false);
+
+  const publishEnabled = !readOnly && isAgentDelivered && derivedAgentSetup?.ok === true;
+  const publishTooltip = readOnly
+    ? 'You have view-only access — ask an admin or owner for edit access to publish this workflow.'
+    : derivedAgentSetup && !derivedAgentSetup.ok
+      ? derivedAgentSetup.problems[0] ?? 'This workflow cannot be published as configured.'
+      : 'Ready to publish.';
+
+  const handleUnpublish = useCallback(async () => {
+    setUnpublishing(true);
+    try {
+      await unpublishAgentSetup(workflow.id);
+      await agentSetupStateQuery.refetch();
+    } catch (err) {
+      pushToast('error', err instanceof AgentSetupApiError ? err.message : "Couldn't unpublish. Try again.");
+    } finally {
+      setUnpublishing(false);
+    }
+  }, [workflow.id, agentSetupStateQuery, pushToast]);
+
   // Wires one destNodeId/runId pair into the live SSE status stream —
   // pulled out of handleRun's loop body so the Copilot agent's start_run
   // tool (which starts the run server-side itself, via the exact same
@@ -1136,6 +1183,22 @@ function CanvasInner({
         runInFlight={runInFlight}
         runTooltip={runTooltip}
         onRun={handleRun}
+        agentPublish={
+          isAgentDelivered
+            ? {
+                state: agentSetupStateQuery.data?.state ?? 'unpublished',
+                wantedVersion: agentSetupStateQuery.data?.wantedVersion ?? 0,
+                appliedVersion: agentSetupStateQuery.data?.appliedVersion ?? 0,
+                rejectionReason: agentSetupStateQuery.data?.rejectionReason ?? null,
+                publishEnabled,
+                publishTooltip,
+                publishing: publishDialogOpen,
+                unpublishing,
+                onPublish: () => setPublishDialogOpen(true),
+                onUnpublish: handleUnpublish,
+              }
+            : null
+        }
         copilotOpen={copilotOpen}
         onToggleCopilot={toggleCopilot}
         readOnly={readOnly}
@@ -1511,6 +1574,21 @@ function CanvasInner({
             setDeleteConnectionTarget(null);
             pushToast('success', 'Connection deleted');
             await refreshConnectionsAndRemap();
+          }}
+        />
+      )}
+
+      {publishDialogOpen && derivedAgentSetup?.ok && (
+        <AgentPublishDialog
+          workflowId={workflow.id}
+          sourceConnectionId={derivedAgentSetup.setup.sourceConnectionId}
+          destinationConnectionId={derivedAgentSetup.setup.destinationConnectionId}
+          setup={derivedAgentSetup.setup}
+          onClose={() => setPublishDialogOpen(false)}
+          onPublished={() => {
+            setPublishDialogOpen(false);
+            pushToast('success', 'Published');
+            void agentSetupStateQuery.refetch();
           }}
         />
       )}

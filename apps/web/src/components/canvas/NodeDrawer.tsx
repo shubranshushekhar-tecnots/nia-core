@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildDropRoleStatementText, buildGrantStatementText, can, friendlyAppError, friendlyConnectionError, parseNodeConfig, transformOutputFields, type ActorRole, type CheckResult, type EntityRef, type HelpSqlValues, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
+import { CONNECTOR_MANIFESTS, WRITE_OPERATIONS, buildDropRoleStatementText, buildGrantStatementText, can, friendlyAppError, friendlyConnectionError, parseNodeConfig, transformOutputFields, type ActorRole, type AgentDeliveryConfig, type AgentDeliveryMode, type CheckResult, type EntityRef, type HelpSqlValues, type Operation, type SourceDestConfig, type TransformConfig } from '@nia/schemas';
 import type { CanvasNode } from '@/lib/canvas/mapping';
 import { resolveTableFieldState } from '@/lib/canvas/tableFieldState';
 import { filterEntities } from '@/lib/canvas/entityFiltering';
 import { useCanvasStore } from '@/lib/canvas/store';
+import { isAgentSourceManifest, isAgentDestinationManifest } from '@/lib/canvas/agentDelivery';
 import {
   confirmWriteGrant,
   ConnectionsApiError,
@@ -834,6 +835,392 @@ function NewTargetInputs({
   );
 }
 
+/**
+ * Agent-Canvas integration, Slice R4 (B.7, item 1) — shares the schema
+ * query (`['connection-schema', connectionId]`) with useConnectionEntities
+ * above, so this never double-fetches: it just reads the full field list
+ * (name+type) for whichever entity is already selected, which
+ * useConnectionEntities' own stripped-down return type doesn't carry.
+ */
+function useEntityFields(connectionId: string | undefined, entity: EntityRef | undefined): { name: string; type: string }[] {
+  const { data: schema } = useQuery({
+    queryKey: ['connection-schema', connectionId],
+    queryFn: () => getConnectionSchema(connectionId!),
+    enabled: !!connectionId,
+    staleTime: 5 * 60_000,
+  });
+  return useMemo(() => {
+    if (!schema || !entity) return [];
+    const match = schema.entities.find((e) => e.namespace === entity.namespace && e.name === entity.name);
+    return match?.fields.map((f) => ({ name: f.name, type: f.type })) ?? [];
+  }, [schema, entity]);
+}
+
+const ROLLING_DATE_TOKENS = ['today', 'today-Nd', 'startOfMonth', 'startOfMonth-Nm', 'startOfYear', 'startOfYear-Ny'];
+
+/**
+ * Agent-Canvas integration, Slice R4 (B.7, item 1) — the agent-delivered
+ * source's column selection + saved parameters, rendered only once a table
+ * is selected on a "Local database (via agent)" source node. Reads/writes
+ * SourceDestConfig.columns/params straight through the same onChange prop
+ * every other section of this drawer already uses — no new persistence
+ * path. A saved parameter's value is a plain string either way (a literal,
+ * or one of the rolling-date tokens typed as literal text, e.g.
+ * "today-7d") — resolved only by the agent at run time (see
+ * SourceDestConfig.params' doc comment); a filter condition elsewhere on
+ * this workflow references one of these by simply using the same name as
+ * its value (deriveAgentJobSetupFromGraph.test.ts's "Allowed" case).
+ */
+function AgentSourceColumnsPanel({
+  connectionId,
+  entity,
+  config,
+  onChange,
+}: {
+  connectionId?: string;
+  entity?: EntityRef;
+  config: SourceDestConfig;
+  onChange: (next: SourceDestConfig) => void;
+}) {
+  const fields = useEntityFields(connectionId, entity);
+  const columns = config.columns ?? [];
+  const params = config.params ?? {};
+
+  function toggleColumn(field: { name: string; type: string }) {
+    const existing = columns.find((c) => c.name === field.name);
+    const next = existing ? columns.filter((c) => c.name !== field.name) : [...columns, { name: field.name, type: field.type, isKey: false }];
+    onChange({ ...config, columns: next });
+  }
+
+  function toggleKey(name: string) {
+    onChange({ ...config, columns: columns.map((c) => (c.name === name ? { ...c, isKey: !c.isKey } : c)) });
+  }
+
+  function setParamValue(name: string, value: string) {
+    onChange({ ...config, params: { ...params, [name]: value } });
+  }
+
+  function removeParam(name: string) {
+    const next = { ...params };
+    delete next[name];
+    onChange({ ...config, params: next });
+  }
+
+  function addParam() {
+    let name = 'param';
+    let i = 1;
+    while (name in params) name = `param${i++}`;
+    onChange({ ...config, params: { ...params, [name]: '' } });
+  }
+
+  function renameParam(oldName: string, newName: string) {
+    if (!newName || newName === oldName || newName in params) return;
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(params)) next[k === oldName ? newName : k] = v;
+    onChange({ ...config, params: next });
+  }
+
+  if (!entity) return null;
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={configPanelDividerStyle} />
+      <div style={configPanelGroupStyle}>
+        <span style={configPanelGroupLabelStyle}>Columns</span>
+        {fields.length === 0 ? (
+          <span style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)' }}>Loading columns…</span>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+            {fields.map((field) => {
+              const selected = columns.find((c) => c.name === field.name);
+              return (
+                <div key={field.name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--nx-ink)', cursor: 'pointer', flex: 1 }}>
+                    <input type="checkbox" checked={!!selected} onChange={() => toggleColumn(field)} />
+                    <span style={{ fontFamily: 'var(--nx-font-mono)' }}>{field.name}</span>
+                    <span style={{ color: 'var(--nx-ink-disabled)', fontSize: 11 }}>{field.type}</span>
+                  </label>
+                  {selected && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--nx-ink-disabled)' }}>
+                      <input type="checkbox" checked={selected.isKey} onChange={() => toggleKey(field.name)} />
+                      Key
+                    </label>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div style={configPanelDividerStyle} />
+
+      <div style={configPanelGroupStyle}>
+        <span style={configPanelGroupLabelStyle}>Saved parameters</span>
+        <span style={{ fontSize: 11, color: 'var(--nx-ink-disabled)', marginBottom: 6, display: 'block' }}>
+          Reference by name as a filter condition&apos;s value below. Value is a literal, or a rolling date token: {ROLLING_DATE_TOKENS.join(', ')}.
+        </span>
+        {Object.entries(params).map(([name, value]) => (
+          <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <input
+              value={name}
+              onChange={(e) => renameParam(name, e.target.value)}
+              placeholder="name"
+              style={{ ...configPanelSelectStyle, width: 110, fontFamily: 'var(--nx-font-mono)' }}
+            />
+            <input
+              value={value}
+              onChange={(e) => setParamValue(name, e.target.value)}
+              placeholder="value or token"
+              style={{ ...configPanelSelectStyle, flex: 1, fontFamily: 'var(--nx-font-mono)' }}
+            />
+            <button
+              type="button"
+              aria-label={`Remove ${name}`}
+              onClick={() => removeParam(name)}
+              style={{ border: 'none', background: 'none', color: 'var(--nx-danger)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+            >
+              {'\u2715'}
+            </button>
+          </div>
+        ))}
+        <button type="button" onClick={addParam} style={grantButtonStyle}>
+          + Add parameter
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Slice R4 (B.7, item 4) — mode labels/options differ per destination manifest even though AgentDeliveryMode's underlying enum values are shared (nodeConfig.ts's AgentDeliveryMode doc comment: it mirrors agentJobSetup.ts's AgentJobSetupMode exactly). */
+const AGENT_DELIVERY_MODE_OPTIONS: Record<string, { value: AgentDeliveryMode; label: string }[]> = {
+  'planometry-table': [
+    { value: 'replace', label: 'Replace' },
+    { value: 'upsertDelta', label: 'Upsert' },
+    { value: 'realtime', label: 'Real time' },
+  ],
+  'https-endpoint': [
+    { value: 'replace', label: 'Send all' },
+    { value: 'upsertDelta', label: 'Send changed' },
+  ],
+};
+
+const CRON_PRESETS: { label: string; cron: string }[] = [
+  { label: 'Every 5 minutes', cron: '*/5 * * * *' },
+  { label: 'Every 15 minutes', cron: '*/15 * * * *' },
+  { label: 'Every 30 minutes', cron: '*/30 * * * *' },
+  { label: 'Hourly', cron: '0 * * * *' },
+  { label: 'Every 6 hours', cron: '0 */6 * * *' },
+  { label: 'Daily at midnight', cron: '0 0 * * *' },
+];
+const CUSTOM_CRON_SENTINEL = '__custom__';
+
+/** A friendly-presets-plus-custom-cron picker (B.7 item 4's "schedule with a few friendly presets") — shared by Delivery.schedule and .replaceSchedule below. */
+function CronScheduleField({
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  value: string | undefined;
+  onChange: (next: string | undefined) => void;
+}) {
+  const matchedPreset = CRON_PRESETS.find((p) => p.cron === value);
+  const [customMode, setCustomMode] = useState(!!value && !matchedPreset);
+  return (
+    <div style={configPanelGroupStyle}>
+      <span style={configPanelGroupLabelStyle}>{label}</span>
+      <select
+        value={customMode ? CUSTOM_CRON_SENTINEL : (matchedPreset?.cron ?? '')}
+        onChange={(e) => {
+          if (e.target.value === CUSTOM_CRON_SENTINEL) {
+            setCustomMode(true);
+            return;
+          }
+          setCustomMode(false);
+          onChange(e.target.value || undefined);
+        }}
+        style={configPanelSelectStyle}
+      >
+        <option value="">Not scheduled</option>
+        {CRON_PRESETS.map((p) => (
+          <option key={p.cron} value={p.cron}>
+            {p.label}
+          </option>
+        ))}
+        <option value={CUSTOM_CRON_SENTINEL}>Custom…</option>
+      </select>
+      {customMode && (
+        <input
+          value={value ?? ''}
+          onChange={(e) => onChange(e.target.value || undefined)}
+          placeholder="5-field cron expression"
+          style={{ ...configPanelSelectStyle, fontFamily: 'var(--nx-font-mono)', marginTop: 6 }}
+        />
+      )}
+      {hint && <span style={{ fontSize: 10.5, color: 'var(--nx-ink-disabled)', marginTop: 4, display: 'block' }}>{hint}</span>}
+    </div>
+  );
+}
+
+/**
+ * Agent-Canvas integration, Slice R4 (B.7, item 4) — the agent-delivered
+ * destination's "Delivery" section: everything about how the agent pushes
+ * rows (SourceDestConfig.delivery), as opposed to the Field mapping tab's
+ * "what gets pushed". Rendered only for a Planometry table or HTTPS
+ * endpoint destination node. Shows only the fields valid for the chosen
+ * destination manifest + mode, per the task's "show only the options valid
+ * for the chosen destination and mode."
+ */
+function AgentDeliverySection({
+  manifestId,
+  config,
+  onChange,
+}: {
+  manifestId: string;
+  config: SourceDestConfig;
+  onChange: (next: SourceDestConfig) => void;
+}) {
+  const delivery: AgentDeliveryConfig = config.delivery ?? {};
+  const modeOptions = AGENT_DELIVERY_MODE_OPTIONS[manifestId] ?? [];
+  const mode = delivery.mode;
+
+  function set(patch: Partial<AgentDeliveryConfig>) {
+    onChange({ ...config, delivery: { ...delivery, ...patch } });
+  }
+
+  const showWatermark = mode === 'upsertDelta' || mode === 'realtime';
+  const showSchedule = mode === 'replace' || mode === 'upsertDelta';
+  const showReplaceSchedule = mode === 'upsertDelta' || mode === 'realtime';
+  const showPollInterval = mode === 'realtime';
+  const showAllowEmptyReplace = mode === 'replace';
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={configPanelDividerStyle} />
+      <span style={{ ...configPanelGroupLabelStyle, display: 'block', marginBottom: 8 }}>Delivery</span>
+
+      <div style={configPanelGroupStyle}>
+        <span style={configPanelGroupLabelStyle}>Mode</span>
+        <select
+          value={mode ?? ''}
+          onChange={(e) => set({ mode: (e.target.value || undefined) as AgentDeliveryMode | undefined })}
+          style={configPanelSelectStyle}
+        >
+          <option value="">Choose a mode…</option>
+          {modeOptions.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {showWatermark && (
+        <div style={configPanelGroupStyle}>
+          <span style={configPanelGroupLabelStyle}>Last-modified column</span>
+          <input
+            value={delivery.watermarkColumn ?? ''}
+            onChange={(e) => set({ watermarkColumn: e.target.value || undefined })}
+            placeholder="e.g. updated_at"
+            style={{ ...configPanelSelectStyle, fontFamily: 'var(--nx-font-mono)' }}
+          />
+        </div>
+      )}
+
+      <div style={configPanelGroupStyle}>
+        <span style={configPanelGroupLabelStyle}>Delete method</span>
+        <select
+          value={delivery.deleteMode ?? 'none'}
+          onChange={(e) => set({ deleteMode: e.target.value as AgentDeliveryConfig['deleteMode'] })}
+          style={configPanelSelectStyle}
+        >
+          <option value="none">None</option>
+          <option value="reconciliation">Reconciliation</option>
+          <option value="softDelete">Soft delete</option>
+        </select>
+      </div>
+
+      {delivery.deleteMode === 'softDelete' && (
+        <div style={configPanelGroupStyle}>
+          <span style={configPanelGroupLabelStyle}>Soft-delete flag column</span>
+          <input
+            value={delivery.softDeleteColumn ?? ''}
+            onChange={(e) => set({ softDeleteColumn: e.target.value || undefined })}
+            placeholder="e.g. is_deleted"
+            style={{ ...configPanelSelectStyle, fontFamily: 'var(--nx-font-mono)' }}
+          />
+        </div>
+      )}
+
+      {delivery.deleteMode === 'reconciliation' && (
+        <div style={configPanelGroupStyle}>
+          <span style={configPanelGroupLabelStyle}>Maximum delete percent</span>
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={delivery.maxDeletePercent ?? ''}
+            onChange={(e) => set({ maxDeletePercent: e.target.value === '' ? undefined : Number(e.target.value) })}
+            style={{ ...configPanelSelectStyle, width: 100 }}
+          />
+        </div>
+      )}
+
+      <div style={configPanelGroupStyle}>
+        <span style={configPanelGroupLabelStyle}>Empty keys</span>
+        <select
+          value={delivery.onNullKey ?? 'stop'}
+          onChange={(e) => set({ onNullKey: e.target.value as AgentDeliveryConfig['onNullKey'] })}
+          style={configPanelSelectStyle}
+        >
+          <option value="stop">Stop the run</option>
+          <option value="skip">Skip the row</option>
+        </select>
+      </div>
+
+      {showAllowEmptyReplace && (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--nx-ink)', marginTop: 4, cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!delivery.allowEmptyReplace} onChange={(e) => set({ allowEmptyReplace: e.target.checked })} />
+          Allow an empty full load
+        </label>
+      )}
+
+      {showSchedule && (
+        <CronScheduleField
+          label={mode === 'replace' ? 'Schedule' : 'Delta schedule'}
+          value={delivery.schedule}
+          onChange={(next) => set({ schedule: next })}
+        />
+      )}
+
+      {showReplaceSchedule && (
+        <CronScheduleField
+          label="Full-reload schedule"
+          hint="A periodic full replace, independent of the delta schedule above."
+          value={delivery.replaceSchedule}
+          onChange={(next) => set({ replaceSchedule: next })}
+        />
+      )}
+
+      {showPollInterval && (
+        <div style={configPanelGroupStyle}>
+          <span style={configPanelGroupLabelStyle}>Check interval (seconds)</span>
+          <input
+            type="number"
+            min={1}
+            value={delivery.pollIntervalSeconds ?? ''}
+            onChange={(e) => set({ pollIntervalSeconds: e.target.value === '' ? undefined : Number(e.target.value) })}
+            style={{ ...configPanelSelectStyle, width: 100 }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function NodeDrawer({
   node,
   role,
@@ -1004,6 +1391,23 @@ export default function NodeDrawer({
                 onChange={(next) => onConfigChange(next)}
               />
             </div>
+
+            {data.graphNodeType === 'source' && isAgentSourceManifest(data.manifestId) && sourceDestConfig && (
+              <AgentSourceColumnsPanel
+                connectionId={data.connectionId}
+                entity={sourceDestConfig.entity}
+                config={sourceDestConfig}
+                onChange={(next) => onConfigChange(next)}
+              />
+            )}
+
+            {data.graphNodeType === 'destination' && isAgentDestinationManifest(data.manifestId) && sourceDestConfig && (
+              <AgentDeliverySection
+                manifestId={data.manifestId!}
+                config={sourceDestConfig}
+                onChange={(next) => onConfigChange(next)}
+              />
+            )}
           </>
         )}
 
@@ -1034,6 +1438,7 @@ export default function NodeDrawer({
             manifestId={upstreamSource?.manifestId}
             workflowId={workflowId}
             nodeId={node.id}
+            restrictToFilterOnly={isAgentSourceManifest(upstreamSource?.manifestId)}
             onChange={(next) => onConfigChange(next)}
           />
         )}

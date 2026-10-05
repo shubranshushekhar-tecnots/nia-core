@@ -67,6 +67,14 @@ export const AgentJobSetup = z.object({
   maxDeletePercent: z.number().min(0).max(100).optional(),
   /** `deleteMode: "softDelete"` only: a boolean source column, read even when not in `mapping`. */
   softDeleteColumn: z.string().optional(),
+  /**
+   * Slice R4 (docs/plans/agent-canvas-integration.md B.7, item 4) — mirrors
+   * apps/agent/src/config/types.ts's SyncJobEntry.onNullKey/allowEmptyReplace
+   * exactly. Both additive/optional like every other field here; absent
+   * means the agent's own default (onNullKey: "stop", allowEmptyReplace: false).
+   */
+  onNullKey: z.enum(["stop", "skip"]).optional(),
+  allowEmptyReplace: z.boolean().optional(),
 });
 export type AgentJobSetup = z.infer<typeof AgentJobSetup>;
 
