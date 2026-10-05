@@ -251,13 +251,14 @@ async function main(argv: string[]): Promise<void> {
         "replace-schedule": { type: "string" },
         "delete-mode": { type: "string" },
         "max-delete-percent": { type: "string" },
+        "soft-delete-column": { type: "string" },
       },
     });
     const connectionId = values.connection as string | undefined;
     const table = values.table as string | undefined;
     const targetUrl = values["target-url"] as string | undefined;
     if (!connectionId || !table || !targetUrl) {
-      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation] [--max-delete-percent <n>] [--yes]");
+      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation|softDelete] [--max-delete-percent <n>] [--soft-delete-column <col>] [--yes]");
       process.exitCode = 1;
       return;
     }
@@ -282,7 +283,7 @@ async function main(argv: string[]): Promise<void> {
     }
     const deleteMode = parseDeleteMode(values["delete-mode"] as string | undefined);
     if (deleteMode === undefined && values["delete-mode"] !== undefined) {
-      console.error(`--delete-mode must be "none" or "reconciliation", got ${JSON.stringify(values["delete-mode"])}`);
+      console.error(`--delete-mode must be "none", "reconciliation", or "softDelete", got ${JSON.stringify(values["delete-mode"])}`);
       process.exitCode = 1;
       return;
     }
@@ -328,6 +329,7 @@ async function main(argv: string[]): Promise<void> {
       replaceSchedule: values["replace-schedule"] as string | undefined,
       deleteMode,
       maxDeletePercent,
+      softDeleteColumn: values["soft-delete-column"] as string | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -343,6 +345,7 @@ async function main(argv: string[]): Promise<void> {
     if (result.ok) {
       console.log(`added job ${result.job!.id} (${result.job!.name})`);
       if (result.watermarkReport) printWatermarkReport(result.watermarkReport);
+      for (const warning of result.warnings ?? []) console.log(`warning: ${warning}`);
     } else {
       for (const error of result.errors ?? []) console.error(`error: ${error}`);
       process.exitCode = 1;
@@ -436,10 +439,11 @@ async function main(argv: string[]): Promise<void> {
         "replace-schedule": { type: "string" },
         "delete-mode": { type: "string" },
         "max-delete-percent": { type: "string" },
+        "soft-delete-column": { type: "string" },
       },
     });
     if (!id) {
-      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation] [--max-delete-percent <n>]");
+      console.error("usage: nia-agent job update <id> [--name <text>] [--target-url <url>] [--rekey] [--map source=target ...] [--unmap target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation|softDelete] [--max-delete-percent <n>] [--soft-delete-column <col>]");
       process.exitCode = 1;
       return;
     }
@@ -464,7 +468,7 @@ async function main(argv: string[]): Promise<void> {
     }
     const deleteMode = parseDeleteMode(values["delete-mode"] as string | undefined);
     if (deleteMode === undefined && values["delete-mode"] !== undefined) {
-      console.error(`--delete-mode must be "none" or "reconciliation", got ${JSON.stringify(values["delete-mode"])}`);
+      console.error(`--delete-mode must be "none", "reconciliation", or "softDelete", got ${JSON.stringify(values["delete-mode"])}`);
       process.exitCode = 1;
       return;
     }
@@ -510,6 +514,7 @@ async function main(argv: string[]): Promise<void> {
       replaceSchedule: values["replace-schedule"] as string | undefined,
       deleteMode,
       maxDeletePercent,
+      softDeleteColumn: values["soft-delete-column"] as string | undefined,
     }, {
       onPlan: (plan) => {
         console.log("mapping:");
@@ -520,6 +525,7 @@ async function main(argv: string[]): Promise<void> {
     if (result.ok) {
       console.log(`updated job ${result.job!.id}`);
       if (result.watermarkReport) printWatermarkReport(result.watermarkReport);
+      for (const warning of result.warnings ?? []) console.log(`warning: ${warning}`);
     } else {
       for (const error of result.errors ?? []) console.error(`error: ${error}`);
       process.exitCode = 1;
@@ -616,8 +622,8 @@ function parseStrategy(value: string | undefined): "replace" | "upsertDelta" | u
   return undefined;
 }
 
-function parseDeleteMode(value: string | undefined): "none" | "reconciliation" | undefined {
-  if (value === "none" || value === "reconciliation") return value;
+function parseDeleteMode(value: string | undefined): "none" | "reconciliation" | "softDelete" | undefined {
+  if (value === "none" || value === "reconciliation" || value === "softDelete") return value;
   return undefined;
 }
 

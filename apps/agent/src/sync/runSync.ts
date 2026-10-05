@@ -21,6 +21,7 @@ import {
 import { acquireReplaceLock, ReplaceLockTakenError } from "./replaceLock.js";
 import { replaceLoad } from "./replaceLoad.js";
 import { readReplaceSpool, removeReplaceSpool, ReplaceSpoolWriter } from "./replaceSpool.js";
+import { isSoftDeletedRow } from "./softDelete.js";
 import { upsertPush } from "./upsertPush.js";
 import { computeNextWatermark } from "./watermark.js";
 
@@ -109,6 +110,21 @@ export interface RunSyncOptions {
     maxDeletePercent: number;
     allowMassDelete: boolean;
   };
+  /**
+   * `job.deleteMode === "softDelete"` only (§1.2/§10, slice D2). The
+   * caller (cli/runJobCommand.ts) sets this for an upsertDelta job
+   * regardless of whether this run is a param-override run — unlike
+   * reconciliation, a `--param` override run still classifies a flagged
+   * row as a delete here (§1.2 groups "delta run and --param override
+   * run" together). On an "upsert" push, a row whose raw
+   * `sourceRow[column] === true` is queued as a key-only delete instead
+   * of an upsert. On a "replace" push, such a row is excluded entirely
+   * (defense-in-depth — cli/runJobCommand.ts also excludes it at the SQL
+   * level for an actual replace, via sync/softDelete.ts's
+   * `softDeleteExclusionFilter`, but this module never trusts that alone).
+   * No mass-delete guard applies to this mode, and no new stored state.
+   */
+  softDelete?: { column: string };
 }
 
 /**
@@ -153,6 +169,8 @@ export type RunSyncResult =
       watermarkAfter?: string;
       /** Set only when key reconciliation actually ran (an upsert-mode delta run with `options.reconciliation` set). */
       reconciliation?: { deletesSent: number; duplicateKeyCount: number };
+      /** Set only when `options.softDelete` was active and at least one flagged row was queued as a delete on an upsert-mode run (slice D2). */
+      softDelete?: { deletesSent: number };
     }
   | { outcome: "failed"; error: string; consoleMessage?: string; kind: RunSyncFailureKind };
 
@@ -335,12 +353,20 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     const spool = new ReplaceSpoolWriter(spoolDir, runId, options.masterKey);
     await spool.prepare();
 
+    // Soft delete (§1.2/§10, slice D2): only an "upsert" push ever queues
+    // flagged rows as deletes — a "replace" push excludes them entirely
+    // instead (see the row loop below), so its spool is never created.
+    const softDeleteRunId = `${runId}-softdelete`;
+    const softDeleteSpool = options.softDelete && pushMode === "upsert" ? new ReplaceSpoolWriter(spoolDir, softDeleteRunId, options.masterKey) : undefined;
+    if (softDeleteSpool) await softDeleteSpool.prepare();
+
     // Step (c.0): free-disk-space pre-flight, before any row is read.
     try {
       await assertDiskSpace(spoolDir, options.minFreeBytes);
     } catch (err) {
       if (err instanceof InsufficientDiskSpaceError) {
         await removeReplaceSpool(spoolDir, runId);
+        await removeReplaceSpool(spoolDir, softDeleteRunId);
         return { outcome: "failed", error: err.message, kind: "diskSpace" };
       }
       throw err;
@@ -367,6 +393,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     // needs a third pass over this run's own rows.
     const trackUpsertedKeys = options.reconciliation !== undefined && pushMode === "upsert";
     const upsertedKeysThisRun = new Set<string>();
+    let softDeleteCount = 0;
 
     try {
       await options.readSourceRows((sourceRow) => {
@@ -377,6 +404,13 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
             maxSeenWatermark = raw;
           }
         }
+        // Soft delete (§1.2, slice D2): a "replace" push excludes a
+        // flagged row entirely — never written anywhere, never counted —
+        // this is defense-in-depth even though cli/runJobCommand.ts also
+        // excludes it at the SQL level for an actual replace.
+        if (options.softDelete && pushMode === "replace" && isSoftDeletedRow(sourceRow, options.softDelete.column)) {
+          return;
+        }
         const wireRow = buildWireRow(formatters, sourceRow);
         const hasNullKey = keyTargets.some((k) => wireRow[k] === null || wireRow[k] === "");
         if (hasNullKey) {
@@ -385,6 +419,15 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
             stopOnNullKey = true;
             internalController.abort();
           }
+          return;
+        }
+        // Soft delete, upsert push (§1.2): a flagged row is queued as a
+        // key-only delete instead of an upsert — pushed after the main
+        // upsert request, in step (e.5) below ("upserts first, then
+        // deletes", same ordering as key reconciliation's D1 delete push).
+        if (options.softDelete && pushMode === "upsert" && softDeleteSpool && isSoftDeletedRow(sourceRow, options.softDelete.column)) {
+          softDeleteSpool.write(buildKeyRow(formatters, sourceRow, keyTargets));
+          softDeleteCount += 1;
           return;
         }
         if (trackUpsertedKeys) {
@@ -402,6 +445,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
 
     try {
       await spool.finish();
+      if (softDeleteSpool) await softDeleteSpool.finish();
     } catch (err) {
       extractionError = extractionError ?? err;
     }
@@ -409,10 +453,12 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     // Step (d): guards, before any push request is made.
     if (options.signal?.aborted) {
       await removeReplaceSpool(spoolDir, runId);
+      await removeReplaceSpool(spoolDir, softDeleteRunId);
       return { outcome: "failed", error: "run aborted", kind: "aborted" };
     }
     if (stopOnNullKey) {
       await removeReplaceSpool(spoolDir, runId);
+      await removeReplaceSpool(spoolDir, softDeleteRunId);
       return {
         outcome: "failed",
         error: `${nullKeyCount} row(s) had a null or empty-string key value; stopping the run (onNullKey: stop)`,
@@ -421,6 +467,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     }
     if (extractionError) {
       await removeReplaceSpool(spoolDir, runId);
+      await removeReplaceSpool(spoolDir, softDeleteRunId);
       return toFailure(extractionError);
     }
     // An empty table is only refused for a replace-style push — zero changed
@@ -428,6 +475,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
     // "Zero changed rows is a success with no request").
     if (totalRows === 0 && pushMode !== "upsert" && !job.allowEmptyReplace) {
       await removeReplaceSpool(spoolDir, runId);
+      await removeReplaceSpool(spoolDir, softDeleteRunId);
       return {
         outcome: "failed",
         error: "the source table returned zero rows; refusing an empty replace (use --allow-empty-replace to proceed)",
@@ -516,6 +564,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
 
     if (reconciliationFailure) {
       await removeReplaceSpool(spoolDir, runId);
+      await removeReplaceSpool(spoolDir, softDeleteRunId);
       if (reconciliationFailure.outcome === "failed") {
         options.logger.error("key_reconciliation_failed", { kind: reconciliationFailure.kind, error: reconciliationFailure.error });
       }
@@ -588,8 +637,33 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
       }
     }
 
+    // Step (e.6): push this run's soft-delete rows (§1.2/§10, slice D2) —
+    // upserts are pushed first (step e, above), deletes after, same
+    // ordering as key reconciliation's own delete push just above. Only
+    // runs on an upsert-mode push that actually queued at least one
+    // flagged row — a zero-count run, or a replace (which never queues
+    // any), sends no delete request at all.
+    let softDeleteInfo: { deletesSent: number } | undefined;
+    let softDeleteFailure: RunSyncResult | undefined;
+    if (result.outcome === "completed" && options.softDelete && pushMode === "upsert" && softDeleteCount > 0) {
+      const deleteResult = await deletePush({
+        tableUrl: job.targetUrl,
+        pushKey: options.pushKey,
+        rows: readReplaceSpool(spoolDir, softDeleteRunId, options.masterKey),
+        schemaAtStart,
+        logger: options.logger,
+        signal: options.signal,
+      });
+      if (deleteResult.outcome === "failed") {
+        softDeleteFailure = { outcome: "failed", error: deleteResult.error, consoleMessage: deleteResult.consoleMessage, kind: deleteResult.kind };
+      } else {
+        softDeleteInfo = { deletesSent: deleteResult.rowsSent };
+      }
+    }
+
     // Step (f): the spool is removed on success, failure and abort alike.
     await removeReplaceSpool(spoolDir, runId);
+    await removeReplaceSpool(spoolDir, softDeleteRunId);
 
     if (result.outcome === "failed") {
       options.logger.error("push_failed", { mode: pushMode, error: result.error });
@@ -600,6 +674,12 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
         options.logger.error("key_reconciliation_failed", { kind: reconciliationFailure.kind, error: reconciliationFailure.error });
       }
       return reconciliationFailure;
+    }
+    if (softDeleteFailure) {
+      if (softDeleteFailure.outcome === "failed") {
+        options.logger.error("soft_delete_failed", { kind: softDeleteFailure.kind, error: softDeleteFailure.error });
+      }
+      return softDeleteFailure;
     }
 
     // Step (g): watermark persistence and the key-list commit happen
@@ -651,6 +731,7 @@ export async function runSync(options: RunSyncOptions): Promise<RunSyncResult> {
       watermarkBefore: delta?.savedWatermark,
       watermarkAfter,
       reconciliation: reconciliationInfo,
+      softDelete: softDeleteInfo,
     };
   } finally {
     releaseLock?.();

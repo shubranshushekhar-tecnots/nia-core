@@ -149,15 +149,18 @@ export async function checkWatermarkColumn(pool: ConnectionPool, tableName: stri
  * The job's "delta definition" — the pieces of an `upsertDelta` job that a
  * saved watermark is only valid against (task item 1 — the fingerprint
  * rule): source table, filter, saved parameters, mapping, watermark
- * column, target URL. A saved watermark computed against one fingerprint
- * must never be reused once any of these changes — `cli/runJobCommand.ts`
- * computes this fresh on every run and compares it against the
- * fingerprint stored alongside the saved watermark (`ops/state.ts`'s
- * `lastWatermarkFingerprint`) before trusting it. `job update` no longer
- * needs to clear the saved watermark itself; a changed fingerprint makes
- * the stale watermark naturally unusable on the next run.
+ * column, target URL, delete mode, and (slice D2) the soft-delete column.
+ * A saved watermark computed against one fingerprint must never be reused
+ * once any of these changes — `cli/runJobCommand.ts` computes this fresh
+ * on every run and compares it against the fingerprint stored alongside
+ * the saved watermark (`ops/state.ts`'s `lastWatermarkFingerprint`) before
+ * trusting it. `job update` no longer needs to clear the saved watermark
+ * itself; a changed fingerprint makes the stale watermark naturally
+ * unusable on the next run (forcing a replace).
  */
-export function computeJobFingerprint(job: Pick<SyncJobEntry, "sourceTable" | "filter" | "params" | "mapping" | "watermarkColumn" | "targetUrl">): string {
+export function computeJobFingerprint(
+  job: Pick<SyncJobEntry, "sourceTable" | "filter" | "params" | "mapping" | "watermarkColumn" | "targetUrl" | "deleteMode" | "softDeleteColumn">,
+): string {
   const canonical = {
     sourceTable: job.sourceTable,
     filter: job.filter,
@@ -166,6 +169,8 @@ export function computeJobFingerprint(job: Pick<SyncJobEntry, "sourceTable" | "f
     mapping: [...job.mapping].map((m) => ({ source: m.source, target: m.target })).sort((a, b) => a.target.localeCompare(b.target)),
     watermarkColumn: job.watermarkColumn,
     targetUrl: job.targetUrl,
+    deleteMode: job.deleteMode ?? "none",
+    softDeleteColumn: job.softDeleteColumn,
   };
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }

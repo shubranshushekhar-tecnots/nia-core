@@ -24,22 +24,38 @@ import { buildMapping, type RawMappingPair } from "./jobMapping.js";
 
 const DEFAULT_MAX_DELETE_PERCENT = 20;
 
+/** `deleteMode: "softDelete"` only (§1.2/§10, slice D2): a non-fatal reminder returned via `JobCommandResult.warnings` — this mode only ever removes a row whose flag column is true; a row that instead simply leaves the job's filter (e.g. no longer matches a date range) is never removed by it. */
+const SOFT_DELETE_FILTER_WARNING =
+  'deleteMode "softDelete" only removes rows whose flag column is true — a row that leaves the job\'s filter for any other reason is not removed; add a replaceSchedule (periodic full replace) to also catch those.';
+
 /**
- * `deleteMode: "reconciliation"` validation shared by `addJob`/`updateJob`
- * (plan §1.2/§7/§10 D1): reconciliation only makes sense for an
- * `upsertDelta` job; `maxDeletePercent` (if given) must be in (0, 100].
- * Mirrors `validateUpsertDelta`'s error style.
+ * `deleteMode` validation shared by `addJob`/`updateJob` (plan §1.2/§7/
+ * §10, slices D1/D2): any non-"none" mode requires `strategy ===
+ * "upsertDelta"`. "reconciliation": `maxDeletePercent` (if given) must be
+ * in (0, 100]. "softDelete": a `softDeleteColumn` is required, must exist
+ * in the live source catalog, and must be a boolean (SQL Server `bit`)
+ * column. Mirrors `validateUpsertDelta`'s error style.
  */
 function validateDeleteMode(
   strategy: JobStrategy,
   deleteMode: DeleteMode | undefined,
   maxDeletePercent: number | undefined,
+  softDeleteColumn: string | undefined,
+  table: CatalogTable,
 ): { ok: true } | { ok: false; error: string } {
   if (deleteMode === undefined || deleteMode === "none") return { ok: true };
-  if (strategy !== "upsertDelta") return { ok: false, error: `deleteMode "reconciliation" requires strategy "upsertDelta"` };
-  if (maxDeletePercent !== undefined && !(maxDeletePercent > 0 && maxDeletePercent <= 100)) {
-    return { ok: false, error: `maxDeletePercent must be greater than 0 and at most 100` };
+  if (strategy !== "upsertDelta") return { ok: false, error: `deleteMode "${deleteMode}" requires strategy "upsertDelta"` };
+  if (deleteMode === "reconciliation") {
+    if (maxDeletePercent !== undefined && !(maxDeletePercent > 0 && maxDeletePercent <= 100)) {
+      return { ok: false, error: `maxDeletePercent must be greater than 0 and at most 100` };
+    }
+    return { ok: true };
   }
+  // deleteMode === "softDelete"
+  if (!softDeleteColumn) return { ok: false, error: `deleteMode "softDelete" requires a softDeleteColumn` };
+  const column = table.columns.find((c) => c.name === softDeleteColumn);
+  if (!column) return { ok: false, error: `soft-delete column "${softDeleteColumn}" was not found in the catalog` };
+  if (column.type !== "boolean") return { ok: false, error: `soft-delete column "${softDeleteColumn}" is type ${column.type}, not boolean` };
   return { ok: true };
 }
 
@@ -160,6 +176,8 @@ export interface JobCommandResult {
   errors?: string[];
   /** `strategy: "upsertDelta"` only — the null-count/clock-skew report from `sync/watermark.ts`'s `checkWatermarkColumn`. */
   watermarkReport?: WatermarkColumnReport;
+  /** Non-fatal advisories, e.g. `deleteMode: "softDelete"`'s filter-exclusion reminder (§1.2/§10, slice D2). */
+  warnings?: string[];
 }
 
 export interface AddJobInput {
@@ -192,6 +210,8 @@ export interface AddJobInput {
   deleteMode?: DeleteMode;
   /** `deleteMode: "reconciliation"` only — default 20 when unset. */
   maxDeletePercent?: number;
+  /** `deleteMode: "softDelete"` only — required then. */
+  softDeleteColumn?: string;
 }
 
 /**
@@ -257,7 +277,7 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     watermarkReport = check.report;
   }
 
-  const deleteModeCheck = validateDeleteMode(strategy, input.deleteMode, input.maxDeletePercent);
+  const deleteModeCheck = validateDeleteMode(strategy, input.deleteMode, input.maxDeletePercent, input.softDeleteColumn, catalogResult.table);
   if (!deleteModeCheck.ok) return { ok: false, errors: [deleteModeCheck.error] };
 
   const pairs: JobMappingColumn[] = plan.pairs;
@@ -291,10 +311,12 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
     deleteMode: strategy === "upsertDelta" ? input.deleteMode : undefined,
     maxDeletePercent:
       strategy === "upsertDelta" && input.deleteMode === "reconciliation" ? input.maxDeletePercent ?? DEFAULT_MAX_DELETE_PERCENT : undefined,
+    softDeleteColumn: strategy === "upsertDelta" && input.deleteMode === "softDelete" ? input.softDeleteColumn : undefined,
   };
 
   saveConfig(upsertJob(config, job), dir);
-  return { ok: true, job, sentAsNull: plan.sentAsNull, watermarkReport };
+  const warnings = strategy === "upsertDelta" && input.deleteMode === "softDelete" ? [SOFT_DELETE_FILTER_WARNING] : undefined;
+  return { ok: true, job, sentAsNull: plan.sentAsNull, watermarkReport, warnings };
 }
 
 export interface TestJobResult {
@@ -462,6 +484,8 @@ export interface UpdateJobInput {
   deleteMode?: DeleteMode;
   /** Undefined leaves it unchanged (or defaults to 20 if `deleteMode` is being newly set to "reconciliation"). */
   maxDeletePercent?: number;
+  /** Undefined leaves it unchanged (or is required if `deleteMode` is being newly set to "softDelete"). */
+  softDeleteColumn?: string;
 }
 
 /**
@@ -536,6 +560,7 @@ export async function updateJob(
   const deleteMode = input.deleteMode ?? (strategy === job.strategy ? job.deleteMode : undefined);
   const maxDeletePercent =
     input.maxDeletePercent ?? (deleteMode === "reconciliation" ? job.maxDeletePercent ?? DEFAULT_MAX_DELETE_PERCENT : undefined);
+  const softDeleteColumn = input.softDeleteColumn ?? (deleteMode === "softDelete" ? job.softDeleteColumn : undefined);
 
   let watermarkReport: WatermarkColumnReport | undefined;
   if (strategy === "upsertDelta") {
@@ -544,7 +569,7 @@ export async function updateJob(
     watermarkReport = check.report;
   }
 
-  const deleteModeCheck = validateDeleteMode(strategy, deleteMode, maxDeletePercent);
+  const deleteModeCheck = validateDeleteMode(strategy, deleteMode, maxDeletePercent, softDeleteColumn, catalogResult.table);
   if (!deleteModeCheck.ok) return { ok: false, errors: [deleteModeCheck.error] };
 
   const preview: JobMappingPreview = { pairs: plan.pairs, sentAsNull: plan.sentAsNull };
@@ -572,6 +597,7 @@ export async function updateJob(
     replaceSchedule: strategy === "upsertDelta" ? replaceSchedule : undefined,
     deleteMode: strategy === "upsertDelta" ? deleteMode : undefined,
     maxDeletePercent: strategy === "upsertDelta" && deleteMode === "reconciliation" ? maxDeletePercent : undefined,
+    softDeleteColumn: strategy === "upsertDelta" && deleteMode === "softDelete" ? softDeleteColumn : undefined,
   };
 
   saveConfig(upsertJob(config, updated), dir);
@@ -584,7 +610,8 @@ export async function updateJob(
   // naturally treats the now-stale saved watermark as absent on the next
   // run, without this command having to clear anything itself.
 
-  return { ok: true, job: updated, sentAsNull: plan.sentAsNull, watermarkReport };
+  const warnings = strategy === "upsertDelta" && deleteMode === "softDelete" ? [SOFT_DELETE_FILTER_WARNING] : undefined;
+  return { ok: true, job: updated, sentAsNull: plan.sentAsNull, watermarkReport, warnings };
 }
 
 type ReadSourceTableResult = { ok: true; table: CatalogTable } | { ok: false; error: string };

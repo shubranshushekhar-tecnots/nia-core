@@ -10,6 +10,7 @@ import { getLastWatermark, getLastWatermarkFingerprint } from "../ops/state.js";
 import { resolveJobFilter } from "../planometry/parameters.js";
 import { KeyedSemaphore } from "../sync/concurrency.js";
 import { runSync, type RunSyncFailureKind, type RunSyncResult } from "../sync/runSync.js";
+import { softDeleteExclusionFilter } from "../sync/softDelete.js";
 import { computeJobFingerprint, readServerClock, resolveSavedWatermark } from "../sync/watermark.js";
 
 /** One process-wide semaphore (per target table URL) — a second concurrent `job run` in the same process is queued, not just refused cross-process (sync/replaceLock.ts handles that). */
@@ -197,20 +198,36 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
       // Fingerprint rule (task item 1): a saved watermark is only trusted
       // when it was computed against the job's current delta definition
       // (source table, filter, saved params, mapping, watermark column,
-      // target URL) — a mismatch (including "never saved one") resolves
-      // to undefined, same as a first run, which forces a replace below.
+      // target URL, delete mode, soft-delete column) — a mismatch
+      // (including "never saved one") resolves to undefined, same as a
+      // first run, which forces a replace below.
       const fingerprint = computeJobFingerprint(job);
       const savedWatermark = isParamOverride
         ? undefined
         : resolveSavedWatermark({ watermark: getLastWatermark(job.id, dir), fingerprint: getLastWatermarkFingerprint(job.id, dir) }, fingerprint);
       const serverClockAtStart = await readServerClock(pool);
 
+      // Soft delete (§1.2/§10, slice D2): the flag column is extracted in
+      // addition to the mapped columns (never sent) for any pass whose
+      // rows runSync must classify as upsert-or-delete — i.e. every pass
+      // except a true replace, which instead excludes flagged rows at
+      // the SQL level below and has no need to read the column at all.
+      const softDeleteColumn = isUpsertDelta && job.deleteMode === "softDelete" ? job.softDeleteColumn : undefined;
+      const extractColumnsForUpsert =
+        softDeleteColumn && !extractColumns.includes(softDeleteColumn) ? [...extractColumns, softDeleteColumn] : extractColumns;
+
       if (isParamOverride || forceReplace || savedWatermark === undefined) {
-        passes = [makeSinglePassReader(extractColumns, resolvedFilter.filter)];
+        const isTrueReplace = !isParamOverride;
+        if (isTrueReplace && softDeleteColumn) {
+          const replaceFilter: FilterCondition[] = [...resolvedFilter.filter, softDeleteExclusionFilter(softDeleteColumn)];
+          passes = [makeSinglePassReader(extractColumns, replaceFilter)];
+        } else {
+          passes = [makeSinglePassReader(extractColumnsForUpsert, resolvedFilter.filter)];
+        }
       } else {
         const gteFilter: FilterCondition[] = [...resolvedFilter.filter, { column: watermarkColumn, operator: "gte", value: savedWatermark }];
         const isNullFilter: FilterCondition[] = [...resolvedFilter.filter, { column: watermarkColumn, operator: "isNull" }];
-        passes = [makeSinglePassReader(extractColumns, gteFilter), makeSinglePassReader(extractColumns, isNullFilter)];
+        passes = [makeSinglePassReader(extractColumnsForUpsert, gteFilter), makeSinglePassReader(extractColumnsForUpsert, isNullFilter)];
       }
 
       delta = { watermarkColumn, overlapSeconds: job.overlapSeconds ?? 300, savedWatermark, forceReplace, isParamOverride, serverClockAtStart, fingerprint };
@@ -238,6 +255,13 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
       }
     };
 
+    // Soft delete (§1.2/§10, slice D2): set for every upsertDelta run of
+    // a `deleteMode: "softDelete"` job, including a `--param` override
+    // run (unlike reconciliation, this mode applies to it too — §1.2
+    // groups "delta run and --param override run" together).
+    const softDelete: Parameters<typeof runSync>[0]["softDelete"] =
+      isUpsertDelta && job.deleteMode === "softDelete" && job.softDeleteColumn ? { column: job.softDeleteColumn } : undefined;
+
     const result = await runSync({
       job,
       pushKey: pushKeySecret.pushKey,
@@ -251,6 +275,7 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
       readSourceRows,
       delta,
       reconciliation,
+      softDelete,
     });
 
     return outcomeFromResult(result, resolvedFilter.resolvedParams);
@@ -274,9 +299,10 @@ function outcomeFromResult(result: RunSyncResult, resolvedParams: Record<string,
           result.reconciliation.duplicateKeyCount > 0 ? ` (WARNING: ${result.reconciliation.duplicateKeyCount} duplicate key(s) seen)` : ""
         }`
       : "";
+    const softDeleteSuffix = result.softDelete ? ` — soft delete: ${result.softDelete.deletesSent} delete(s) sent` : "";
     return {
       ok: true,
-      summary: `${result.mode}: sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms${planometrySuffix}${watermarkSuffix}${reconciliationSuffix}${paramsSuffix}`,
+      summary: `${result.mode}: sent ${result.rowsSent} row(s) (${result.rowsSkipped} skipped) in ${result.parts} part(s), ${result.durationMs}ms${planometrySuffix}${watermarkSuffix}${reconciliationSuffix}${softDeleteSuffix}${paramsSuffix}`,
       rowsSent: result.rowsSent,
       durationMs: result.durationMs,
     };

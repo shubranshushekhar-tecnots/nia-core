@@ -58,12 +58,16 @@ export interface TargetSchemaSnapshot {
 export type OnNullKey = "stop" | "skip";
 
 /**
- * `strategy: "upsertDelta"` only (§1.2, slice D1): "none" (default) never
- * removes rows; "reconciliation" keeps a saved key list and, on every
+ * `strategy: "upsertDelta"` only (§1.2): "none" (default) never removes
+ * rows; "reconciliation" (slice D1) keeps a saved key list and, on every
  * delta run, deletes keys that disappeared from the source or left the
- * job's filter, guarded by `maxDeletePercent`/`--allow-mass-delete`.
+ * job's filter, guarded by `maxDeletePercent`/`--allow-mass-delete`;
+ * "softDelete" (slice D2) treats a boolean source column as "this row is
+ * deleted" — a delta/param-override run sends a flagged row as a delete
+ * instead of an upsert, a replace excludes flagged rows entirely. No
+ * mass-delete guard applies to "softDelete".
  */
-export type DeleteMode = "none" | "reconciliation";
+export type DeleteMode = "none" | "reconciliation" | "softDelete";
 
 export interface SyncJobEntry {
   id: string;
@@ -94,10 +98,12 @@ export interface SyncJobEntry {
   overlapSeconds?: number;
   /** A separate cron expression (same format/timezone as `schedule`) for a periodic full `replace`, independent of `schedule`'s delta cadence (§2, §8). Required when the job's filter uses a relative-date parameter. */
   replaceSchedule?: string;
-  /** `strategy: "upsertDelta"` only (§1.2, slice D1): default "none". "reconciliation" requires `strategy === "upsertDelta"`. */
+  /** `strategy: "upsertDelta"` only (§1.2): default "none". Any non-"none" value requires `strategy === "upsertDelta"`. */
   deleteMode?: DeleteMode;
   /** `deleteMode: "reconciliation"` only: mass-delete guard threshold, percent of the saved key list (§7/D1). Default 20, applied where read, not stored as a literal default here. */
   maxDeletePercent?: number;
+  /** `deleteMode: "softDelete"` only (§1.2, slice D2): a boolean source column, read even when not in `mapping` and never sent to Planometry — `true` means the row is deleted. */
+  softDeleteColumn?: string;
 }
 
 /**
