@@ -58,6 +58,23 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v === "" ? undefined : v)),
+  /**
+   * Dev-only bypass for addressSafety.ts's HTTPS-only + no-private-range
+   * guard on a connection's `address` field (planometry-table,
+   * https-endpoint). Lets local/e2e work point those connectors at a
+   * plain http://127.0.0.1 stub instead of a real HTTPS, publicly-
+   * resolvable host. Same `z.enum(["true","false"])` + transform pattern
+   * as CONSOLE_ENABLED (not `z.coerce.boolean()`, for the same
+   * "false" !== Boolean("false") reason); refused outright when
+   * NODE_ENV=production via the `.refine()` below, same reasoning as
+   * CONNECTOR_DEV_HOST's — a prod apps/api silently accepting unsafe
+   * addresses is a bad, quiet failure mode.
+   */
+  CONNECTION_ADDRESS_DEV_BYPASS: z
+    .enum(["true", "false"])
+    .optional()
+    .default("false")
+    .transform((v) => v === "true"),
   /** BullMQ producer + chat-event pub/sub subscriber, same as apps/worker. */
   REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
   /**
@@ -258,6 +275,10 @@ const EnvSchema = z.object({
   message:
     "CONNECTOR_DEV_HOST must not be set when NODE_ENV=production — it overrides the connector service host to a dev-only address.",
   path: ["CONNECTOR_DEV_HOST"],
+}).refine((e) => !(e.NODE_ENV === "production" && e.CONNECTION_ADDRESS_DEV_BYPASS), {
+  message:
+    "CONNECTION_ADDRESS_DEV_BYPASS must not be set when NODE_ENV=production — it disables the HTTPS/private-address guard on connection addresses.",
+  path: ["CONNECTION_ADDRESS_DEV_BYPASS"],
 }).superRefine((e, ctx) => {
   if (!e.PAYMENTS_ENABLED) return;
   const required = [

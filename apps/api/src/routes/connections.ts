@@ -9,6 +9,7 @@ import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { AppError } from "../lib/appError.js";
 import { scopeFromActor } from "../lib/workspaceScope.js";
+import { env } from "../env.js";
 import {
   listConnections,
   getConnection,
@@ -61,7 +62,12 @@ connectionsRouter.post(
   validate({ body: createBodySchema }),
   asyncHandler(async (req, res) => {
     if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    const data = await createConnection(req.withUser, scopeFromActor(req.actor), req.actor.userId, req.body);
+    // Dev-only: CONNECTION_ADDRESS_DEV_BYPASS (env.ts, refused when
+    // NODE_ENV=production) skips the HTTPS/private-address guard so a
+    // local stub (e.g. a fake Planometry server on http://127.0.0.1) can
+    // be used as a connection's `address` field.
+    const deps = env.CONNECTION_ADDRESS_DEV_BYPASS ? { assertAddressSafe: async () => {} } : {};
+    const data = await createConnection(req.withUser, scopeFromActor(req.actor), req.actor.userId, req.body, deps);
     res.status(201).json(data);
   }),
 );
