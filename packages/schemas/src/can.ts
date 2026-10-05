@@ -52,7 +52,10 @@ export type OrgAction =
   | "connections.test"
   | "grants.create"
   | "grants.confirm"
-  | "grants.revoke";
+  | "grants.revoke"
+  | "agents.pair"
+  | "agents.view"
+  | "agents.revoke";
 
 /**
  * Single declarative capability matrix — the source of truth for "which
@@ -132,6 +135,24 @@ export type OrgAction =
  * this matrix (fast 403), `private.is_admin()` in the write_grants RPCs
  * (0059_write_grants_admin_owner_only.sql), and the Canvas UI showing a
  * read-only panel to non-admin/owner org members.
+ *
+ * DECISION-G (Agent-Canvas integration, Slice 1 — "Link"): `agents.pair` is
+ * an ordinary work action (DECISION-C bucket — any member, not viewer;
+ * mirrors `private.is_write_member`'s "any member, not viewer" gate on
+ * `create_agent_pairing_code`, 0069_platform_agents.sql). `agents.view` is
+ * the "everyone including viewer can read" baseline, same shape as
+ * `org.view`/`billing.view`. `agents.revoke` starts from the same
+ * admin/owner/individual base as DECISION-F's write-grants carve-out
+ * (revoking an agent is credential-adjacent — it kills a long-lived key),
+ * but the base matrix alone is NOT sufficient here: per
+ * docs/plans/agent-canvas-integration.md B.1, the specific member who
+ * paired the agent may also revoke it even though `member` is excluded
+ * from the base `agents.revoke` entry. That row-ownership exception can't
+ * be expressed as a flat role list, so it's layered on top via
+ * `canManageAgent()` below — mirrors `private.can_manage_agent` in
+ * 0069_platform_agents.sql exactly (admin/owner-of-org OR personal owner
+ * OR `created_by_user_id = caller`), the same two-layer pattern
+ * `canManageMember()` already uses for the owner invariants above.
  */
 const CAPABILITY_MATRIX = {
   "org.view": ["individual", "member", "admin", "owner", "viewer"],
@@ -161,6 +182,9 @@ const CAPABILITY_MATRIX = {
   "grants.create": ["individual", "admin", "owner"],
   "grants.confirm": ["individual", "admin", "owner"],
   "grants.revoke": ["individual", "admin", "owner"],
+  "agents.pair": ["individual", "member", "admin", "owner"],
+  "agents.view": ["individual", "member", "admin", "owner", "viewer"],
+  "agents.revoke": ["individual", "admin", "owner"],
 } as const satisfies Record<OrgAction, readonly ActorRole[]>;
 
 export type PermissionErrorCode = "NOT_AUTHENTICATED" | "INSUFFICIENT_ROLE" | "OWNER_PROTECTED";
@@ -232,6 +256,41 @@ export function assertCanManageMember(
     throw new PermissionError(
       "OWNER_PROTECTED",
       "Only an owner can change or remove another owner, or promote someone to owner.",
+    );
+  }
+}
+
+/**
+ * Row-ownership guard for revoking a specific agent. Mirrors
+ * `private.can_manage_agent` in 0069_platform_agents.sql exactly: the base
+ * `agents.revoke` matrix entry (admin/owner/individual) covers the
+ * org-governance and personal-workspace cases, and this layers on the one
+ * exception the matrix can't express — the specific member who paired the
+ * agent may also revoke it, even though `member` is excluded from the base
+ * entry (B.1).
+ */
+export function canManageAgent(
+  actorRole: ActorRole | null | undefined,
+  actorUserId: string,
+  createdByUserId: string,
+): boolean {
+  if (can(actorRole, "agents.revoke")) return true;
+  return actorRole === "member" && actorUserId === createdByUserId;
+}
+
+/** Throwing variant of canManageAgent() for server actions/routes. */
+export function assertCanManageAgent(
+  actorRole: ActorRole | null | undefined,
+  actorUserId: string,
+  createdByUserId: string,
+): void {
+  if (!actorRole) {
+    throw new PermissionError("NOT_AUTHENTICATED", "You must be signed in.");
+  }
+  if (!canManageAgent(actorRole, actorUserId, createdByUserId)) {
+    throw new PermissionError(
+      "INSUFFICIENT_ROLE",
+      "Only an admin, owner, or the member who paired this agent may revoke it.",
     );
   }
 }

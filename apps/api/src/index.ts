@@ -11,6 +11,7 @@ import { workflowsRouter } from "./routes/workflows.js";
 import { connectorsRouter } from "./routes/connectors.js";
 import { connectionsRouter } from "./routes/connections.js";
 import { grantsRouter } from "./routes/grants.js";
+import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
 import { runsRouter } from "./routes/runs.js";
 import { copilotAgentRouter } from "./routes/copilotAgent.js";
@@ -93,6 +94,12 @@ app.use("/workflows", workflowsRouter);
 app.use("/connectors", connectorsRouter);
 app.use("/connections", connectionsRouter);
 app.use("/connections/:connectionId/grants", grantsRouter);
+
+// Agent-canvas integration, Slice 1 ("Link") — pairing-code creation, agent
+// listing, revocation. The agent's own traffic (pair/check-in) never
+// reaches apps/api at all; it goes straight to services/agent-bridge via
+// niacore-proxy's /agent-api/ route (deploy/nginx/nginx.conf).
+app.use("/agents", agentsRouter);
 
 // Authenticated billing routes (upgrade preview, checkout creation,
 // subscription-status polling). The public webhook counterpart is mounted

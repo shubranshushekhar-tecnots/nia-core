@@ -54,6 +54,8 @@ services:
     depends_on:
       niacore-web:
         condition: service_healthy
+      niacore-agent-bridge:
+        condition: service_healthy
 
   niacore-api:
     image: ${API_IMAGE_VERSION:?API_IMAGE_VERSION is not set in .env}
@@ -252,6 +254,41 @@ services:
 
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4030/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Agent-canvas integration, Slice 1 ("Link") — public listener for the
+  # desktop agent (docs/plans/agent-canvas-integration.md B.2/B.3). Routed
+  # to from niacore-proxy's /agent-api/ location (deploy/nginx/nginx.conf),
+  # never reached directly by a browser.
+  niacore-agent-bridge:
+    image: ${AGENT_BRIDGE_IMAGE_VERSION:?AGENT_BRIDGE_IMAGE_VERSION is not set in .env}
+    container_name: niacore-agent-bridge
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      - NODE_ENV=production
+      - PORT=4040
+
+      # Node DNS Fix
+      - NODE_OPTIONS=--dns-result-order=ipv4first
+
+      # Database
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
+
+    # Alias is required: niacore-proxy calls this service as "agent-bridge"
+    networks:
+      niacore-network:
+        aliases:
+          - agent-bridge
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4040/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -112,6 +112,27 @@ services:
       - nia-internal
       - default
 
+  # Agent-canvas integration, Slice 1 ("Link") — public listener for the
+  # desktop agent (services/agent-bridge/README has none yet; see
+  # docs/plans/agent-canvas-integration.md B.2/B.3). Unlike the connectors
+  # above, it never touches nia_secrets or write-dispatch signing, so it
+  # only needs PORT/DATABASE_URL.
+  agent-bridge:
+    build:
+      context: .
+      dockerfile: services/agent-bridge/Dockerfile
+    environment:
+      PORT: 4040
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4040:4040"   # exposed for local curl; internal-network-only in prod
+    networks:
+      - nia-internal
+      - default
+
   # --- scratch databases to develop connectors against ---
   dev-mysql:
     image: mysql:8.4
