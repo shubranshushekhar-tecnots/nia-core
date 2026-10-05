@@ -13,7 +13,7 @@ import type { AgentTask } from "./transport.js";
 // "finishes late" relative to the bridge's own give-up point.
 const TASK_TIMEOUT_MS: Record<AgentTask["kind"], number> = {
   test_connection: 8_000,
-  list_tables: 10_000,
+  list_tables: 45_000,
 };
 
 // Small fixed pool (plan §3 point 1) — local task execution never

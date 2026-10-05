@@ -59,6 +59,34 @@ export interface TargetSchemaSnapshot {
 export type OnNullKey = "stop" | "skip";
 
 /**
+ * Slice R2 (docs/plans/agent-canvas-integration.md §B.7): which
+ * `Destination` a job pushes through. Unset means "planometry" —
+ * every job saved before this slice is unaffected.
+ */
+export type DestinationType = "planometry" | "https";
+
+/** `destinationType: "https"` only (task item 2's "sign-in" rule). */
+export type HttpsAuthMethod = "none" | "bearer" | "apiKey" | "basic";
+
+/**
+ * `destinationType: "https"` only — the non-secret extras for that
+ * destination type. The secret itself (bearer token / API key value /
+ * basic password) is stored via the job's existing `pushKeyRef`, reused
+ * rather than adding a second secret-ref field; unset for `authMethod:
+ * "none"`. The address is the job's existing `targetUrl`, and the field
+ * mapping is the job's existing `mapping` — both reused as-is.
+ */
+export interface HttpsDestinationConfig {
+  authMethod: HttpsAuthMethod;
+  /** `authMethod: "apiKey"` only — the header name the secret is sent under. */
+  headerName?: string;
+  /** `authMethod: "basic"` only — non-secret; the password is the pushKeyRef secret. */
+  username?: string;
+  /** Unset sends a bare JSON array of rows; set sends `{ [rowsField]: rows }`. */
+  rowsField?: string;
+}
+
+/**
  * `strategy: "upsertDelta"` or `"realtime"` only (§1.2): "none" (default)
  * never removes rows; "reconciliation" (slice D1) keeps a saved key list
  * and, on every delta run (or, for `realtime`, every tick where the
@@ -78,10 +106,18 @@ export interface SyncJobEntry {
   connectionId: string;
   /** Catalog-exact source table/view name (e.g. "dbo.vw_salesdata"). */
   sourceTable: string;
-  /** Planometry Internal Table push URL. */
+  /** Planometry Internal Table push URL (`destinationType: "https"`: the destination address instead — same field, reused). */
   targetUrl: string;
-  /** Ref into the local secret store for `{ pushKey }`. */
-  pushKeyRef: string;
+  /**
+   * Ref into the local secret store — `{ pushKey }` for Planometry;
+   * for HTTPS, the auth secret alone (bearer token / API key value /
+   * basic password), or unset entirely for `https.authMethod: "none"`.
+   */
+  pushKeyRef?: string;
+  /** Slice R2: unset means "planometry" (back-compat — every job saved before this slice). */
+  destinationType?: DestinationType;
+  /** `destinationType: "https"` only. */
+  https?: HttpsDestinationConfig;
   strategy: JobStrategy;
   mapping: JobMappingColumn[];
   targetSchemaSnapshot: TargetSchemaSnapshot;

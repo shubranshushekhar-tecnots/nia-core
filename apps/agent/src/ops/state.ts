@@ -71,6 +71,13 @@ export interface JobState {
    * reconcile (same as the interval having already elapsed).
    */
   lastRealtimeReconciledAt?: string;
+  /**
+   * Generic HTTPS destination only (destinations/httpsDestination.ts,
+   * task item 2's "run number" header). Incremented once per `job run`
+   * (not per batch) via `getNextHttpsRunNumber` — unset means "never
+   * run yet", so the first run is 1.
+   */
+  httpsRunNumber?: number;
 }
 
 function emptyJobState(): JobState {
@@ -202,6 +209,15 @@ export function setLastRealtimeReconciledAt(jobId: string, value: string | undef
   const state = readJobState(jobId, dir);
   state.lastRealtimeReconciledAt = value;
   writeJobState(jobId, state, dir);
+}
+
+/** Generic HTTPS destination only — see `JobState.httpsRunNumber`'s doc comment. */
+export function getNextHttpsRunNumber(jobId: string, dir = defaultHomeDir()): number {
+  const state = readJobState(jobId, dir);
+  const next = (state.httpsRunNumber ?? 0) + 1;
+  state.httpsRunNumber = next;
+  writeJobState(jobId, state, dir);
+  return next;
 }
 
 export function recordNextRunAt(jobId: string, nextRunAt: Date | undefined, dir = defaultHomeDir()): void {

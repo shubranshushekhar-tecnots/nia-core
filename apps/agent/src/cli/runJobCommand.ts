@@ -13,6 +13,10 @@ import { realtimeTick, type RealtimeTickResult } from "../sync/realtimeTick.js";
 import { runSync, type RunSyncFailureKind, type RunSyncResult } from "../sync/runSync.js";
 import { softDeleteExclusionFilter } from "../sync/softDelete.js";
 import { computeJobFingerprint, readServerClock, resolveSavedWatermark } from "../sync/watermark.js";
+import type { Destination } from "../destinations/destination.js";
+import { PlanometryDestination } from "../destinations/planometryDestination.js";
+import { HttpsDestination } from "../destinations/httpsDestination.js";
+import { validateHttpsAddress } from "../destinations/httpsAddress.js";
 
 /** One process-wide semaphore (per target table URL) — a second concurrent `job run` in the same process is queued, not just refused cross-process (sync/replaceLock.ts handles that). */
 const tableSemaphore = new KeyedSemaphore(1);
@@ -93,8 +97,36 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
 
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
-  const pushKeySecret = secrets.get<{ pushKey: string }>(job.pushKeyRef);
-  if (!pushKeySecret) return { ok: false, error: `push key for job ${id} is missing from the secret store`, kind: "other" };
+
+  // Slice R2: destination resolution. `planometryPushKey` stays
+  // undefined for an https job — safe, since `addJob` refuses
+  // `strategy: "realtime"` for that destination type, so the realtime
+  // branch below (the only other reader of it) is unreachable for one.
+  let destination: Destination;
+  let planometryPushKey: string | undefined;
+  if (job.destinationType === "https") {
+    const httpsConfig = job.https;
+    if (!httpsConfig) return { ok: false, error: `job ${id} has destinationType "https" but no https config`, kind: "config" };
+    const addressCheck = validateHttpsAddress(job.targetUrl);
+    if (!addressCheck.ok) return { ok: false, error: addressCheck.error, kind: "config" };
+    let secret: string | undefined;
+    if (httpsConfig.authMethod !== "none") {
+      const secretRecord = job.pushKeyRef ? secrets.get<{ secret: string }>(job.pushKeyRef) : null;
+      if (!secretRecord) return { ok: false, error: `auth secret for job ${id} is missing from the secret store`, kind: "other" };
+      secret = secretRecord.secret;
+    }
+    destination = new HttpsDestination({
+      address: job.targetUrl,
+      rowsField: httpsConfig.rowsField,
+      auth: { method: httpsConfig.authMethod, secret, headerName: httpsConfig.headerName, username: httpsConfig.username },
+    });
+  } else {
+    const pushKeySecret = secrets.get<{ pushKey: string }>(job.pushKeyRef!);
+    if (!pushKeySecret) return { ok: false, error: `push key for job ${id} is missing from the secret store`, kind: "other" };
+    planometryPushKey = pushKeySecret.pushKey;
+    destination = new PlanometryDestination(planometryPushKey, tableSemaphore);
+  }
+
   const credentials = secrets.get<{ user: string; password: string }>(connection.credentialRef);
   if (!credentials) return { ok: false, error: `credentials for connection ${connection.id} are missing from the secret store`, kind: "other" };
 
@@ -270,7 +302,7 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
 
         const tickResult = await realtimeTick({
           job,
-          pushKey: pushKeySecret.pushKey,
+          pushKey: planometryPushKey!,
           sourceColumnTypes,
           sourceTimeZone: connection.sourceTimeZone,
           dir,
@@ -340,14 +372,12 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
     const softDelete: Parameters<typeof runSync>[0]["softDelete"] =
       isDeltaStrategy && job.deleteMode === "softDelete" && job.softDeleteColumn ? { column: job.softDeleteColumn } : undefined;
 
-    const result = await runSync({
+    const result = await destination.run({
       job,
-      pushKey: pushKeySecret.pushKey,
       sourceColumnTypes,
       sourceTimeZone: connection.sourceTimeZone,
       dir,
       masterKey,
-      tableSemaphore,
       logger,
       signal: options.signal,
       readSourceRows,

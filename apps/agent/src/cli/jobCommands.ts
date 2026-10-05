@@ -10,7 +10,17 @@ import {
   saveConfig,
   upsertJob,
 } from "../config/store.js";
-import type { ConnectionEntry, DeleteMode, JobMappingColumn, JobStrategy, OnNullKey, SyncJobEntry, TargetSchemaSnapshot } from "../config/types.js";
+import type {
+  ConnectionEntry,
+  DeleteMode,
+  DestinationType,
+  HttpsAuthMethod,
+  JobMappingColumn,
+  JobStrategy,
+  OnNullKey,
+  SyncJobEntry,
+  TargetSchemaSnapshot,
+} from "../config/types.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { PlanometryClient } from "../planometry/client.js";
@@ -20,7 +30,8 @@ import { pauseJobState, resumeJobState } from "../ops/state.js";
 import { InvalidCronScheduleError, validateCronExpression } from "../scheduler/cronSchedule.js";
 import { removeKeyList } from "../sync/keyReconciliation.js";
 import { checkWatermarkColumn, type WatermarkColumnReport } from "../sync/watermark.js";
-import { buildMapping, type RawMappingPair } from "./jobMapping.js";
+import { validateHttpsAddress } from "../destinations/httpsAddress.js";
+import { buildHttpsMapping, buildMapping, type RawMappingPair } from "./jobMapping.js";
 
 const DEFAULT_MAX_DELETE_PERCENT = 20;
 /** `strategy: "realtime"` only (§1.3/E1): tick interval default/minimum, seconds. */
@@ -206,14 +217,28 @@ export interface JobCommandResult {
   warnings?: string[];
 }
 
+/** `destinationType: "https"` only (slice R2) — the sign-in config + secret for `addJob`. The secret is the bearer token / API key value / basic password, absent for `authMethod: "none"`. */
+export interface AddJobHttpsInput {
+  authMethod: HttpsAuthMethod;
+  headerName?: string;
+  username?: string;
+  secret?: string;
+  rowsField?: string;
+}
+
 export interface AddJobInput {
   id?: string;
   name: string;
   connectionId: string;
   sourceTable: string;
   targetUrl: string;
-  pushKey: string;
+  /** Required when `destinationType` is unset or `"planometry"`; unused for `"https"`. */
+  pushKey?: string;
   mapOverrides: RawMappingPair[];
+  /** Unset means `"planometry"` (back-compat). */
+  destinationType?: DestinationType;
+  /** `destinationType: "https"` only — required then. */
+  https?: AddJobHttpsInput;
   /** §7: default "stop". */
   onNullKey?: OnNullKey;
   /** §7: default false. */
@@ -256,9 +281,22 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
   const connection = findConnection(config, input.connectionId);
   if (!connection) return { ok: false, errors: [`no connection with id ${JSON.stringify(input.connectionId)}`] };
 
+  if (input.destinationType === "https") {
+    // Checked before touching the source connection: a bad address is a
+    // pure input-validation failure, and should fail fast without a live
+    // SQL Server round trip (also what lets this be tested without a DB).
+    const addressCheck = validateHttpsAddress(input.targetUrl);
+    if (!addressCheck.ok) return { ok: false, errors: [addressCheck.error] };
+  }
+
   const catalogResult = await readSourceTable(connection, input.sourceTable, dir);
   if (!catalogResult.ok) return { ok: false, errors: [catalogResult.error] };
 
+  if (input.destinationType === "https") {
+    return addHttpsJob(input, connection, catalogResult.table, options, dir, config);
+  }
+
+  if (!input.pushKey) return { ok: false, errors: ['pushKey is required for destinationType "planometry"'] };
   const client = new PlanometryClient({ tableUrl: input.targetUrl, pushKey: input.pushKey });
   let schema: TableSchema;
   try {
@@ -362,6 +400,128 @@ export async function addJob(input: AddJobInput, options: JobCommandOptions = {}
   return { ok: true, job, sentAsNull: plan.sentAsNull, watermarkReport, warnings };
 }
 
+/**
+ * `destinationType: "https"` branch of `addJob` (slice R2, task items 2/3).
+ * There is no live target schema, so: mapping is explicit-only
+ * (`buildHttpsMapping`), `targetSchemaSnapshot` is an empty placeholder,
+ * and `strategy: "realtime"`/any `deleteMode` other than "none" are
+ * refused outright (both are refused for this destination type by the
+ * task spec). The sign-in secret (bearer token / API key value / basic
+ * password) is stored via the job's existing `pushKeyRef`, reused rather
+ * than adding a second secret-ref field; unset entirely for
+ * `authMethod: "none"`.
+ */
+async function addHttpsJob(
+  input: AddJobInput,
+  connection: ConnectionEntry,
+  table: CatalogTable,
+  options: JobCommandOptions,
+  dir: string,
+  config: ReturnType<typeof loadConfig>,
+): Promise<JobCommandResult> {
+  const addressCheck = validateHttpsAddress(input.targetUrl);
+  if (!addressCheck.ok) return { ok: false, errors: [addressCheck.error] };
+
+  const strategy: JobStrategy = input.strategy ?? "replace";
+  if (strategy === "realtime") return { ok: false, errors: ['destinationType "https" does not support strategy "realtime"'] };
+  if (input.deleteMode !== undefined && input.deleteMode !== "none") {
+    return { ok: false, errors: [`destinationType "https" does not support deleteMode "${input.deleteMode}"`] };
+  }
+
+  const https = input.https;
+  if (!https) return { ok: false, errors: ['destinationType "https" requires an https config'] };
+  if (https.authMethod === "apiKey" && !https.headerName) {
+    return { ok: false, errors: ['https authMethod "apiKey" requires a headerName'] };
+  }
+  if (https.authMethod === "basic" && !https.username) {
+    return { ok: false, errors: ['https authMethod "basic" requires a username'] };
+  }
+  if (https.authMethod !== "none" && !https.secret) {
+    return { ok: false, errors: [`https authMethod "${https.authMethod}" requires a secret`] };
+  }
+
+  const mappingPlan = buildHttpsMapping(table, input.mapOverrides);
+  if (mappingPlan.errors.length > 0) return { ok: false, errors: mappingPlan.errors };
+
+  const filter = input.filter ?? [];
+  const params = input.params ?? {};
+  try {
+    resolveJobFilter(filter, columnTypesOf(table), params, undefined, connection.sourceTimeZone);
+  } catch (err) {
+    return { ok: false, errors: [describeError(err)] };
+  }
+
+  if (input.schedule !== undefined) {
+    try {
+      validateCronExpression(input.schedule);
+    } catch (err) {
+      if (err instanceof InvalidCronScheduleError) return { ok: false, errors: [err.message] };
+      throw err;
+    }
+  }
+
+  let watermarkReport: WatermarkColumnReport | undefined;
+  if (strategy === "upsertDelta") {
+    const check = await validateUpsertDelta(
+      strategy,
+      connection,
+      table,
+      input.sourceTable,
+      input.watermarkColumn,
+      filter,
+      params,
+      input.replaceSchedule,
+      dir,
+    );
+    if (!check.ok) return { ok: false, errors: [check.error] };
+    watermarkReport = check.report;
+  }
+
+  const preview: JobMappingPreview = { pairs: mappingPlan.pairs, sentAsNull: [] };
+  options.onPlan?.(preview);
+  const confirmed = await (options.confirm?.(preview) ?? true);
+  if (!confirmed) return { ok: false, errors: ["aborted: not confirmed"] };
+
+  const masterKey = loadOrCreateMasterKey(dir);
+  const secrets = new LocalSecretStore(masterKey, dir);
+  const pushKeyRef = https.authMethod === "none" ? undefined : secrets.put({ secret: https.secret });
+
+  const job: SyncJobEntry = {
+    id: input.id ?? randomUUID(),
+    name: input.name,
+    connectionId: input.connectionId,
+    sourceTable: input.sourceTable,
+    targetUrl: input.targetUrl,
+    pushKeyRef,
+    destinationType: "https",
+    https: {
+      authMethod: https.authMethod,
+      headerName: https.authMethod === "apiKey" ? https.headerName : undefined,
+      username: https.authMethod === "basic" ? https.username : undefined,
+      rowsField: https.rowsField,
+    },
+    strategy,
+    mapping: mappingPlan.pairs,
+    targetSchemaSnapshot: { columns: [], keyColumns: [] },
+    onNullKey: input.onNullKey ?? "stop",
+    allowEmptyReplace: input.allowEmptyReplace ?? false,
+    filter,
+    params,
+    schedule: input.schedule,
+    watermarkColumn: strategy === "upsertDelta" ? input.watermarkColumn : undefined,
+    overlapSeconds: strategy === "upsertDelta" ? input.overlapSeconds : undefined,
+    replaceSchedule: strategy === "upsertDelta" ? input.replaceSchedule : undefined,
+    deleteMode: undefined,
+    maxDeletePercent: undefined,
+    softDeleteColumn: undefined,
+    pollIntervalSeconds: undefined,
+    reconciliationIntervalSeconds: undefined,
+  };
+
+  saveConfig(upsertJob(config, job), dir);
+  return { ok: true, job, sentAsNull: [], watermarkReport };
+}
+
 export interface TestJobResult {
   ok: boolean;
   errors: string[];
@@ -384,9 +544,11 @@ export async function testJob(id: string, dir = defaultHomeDir()): Promise<TestJ
   const connection = findConnection(config, job.connectionId);
   if (!connection) return { ok: false, errors: [`no connection with id ${JSON.stringify(job.connectionId)}`] };
 
+  if (job.destinationType === "https") return testHttpsJob(job, connection, dir);
+
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
-  const pushKeySecret = secrets.get<{ pushKey: string }>(job.pushKeyRef);
+  const pushKeySecret = secrets.get<{ pushKey: string }>(job.pushKeyRef!);
   if (!pushKeySecret) return { ok: false, errors: [`push key for job ${id} is missing from the secret store`] };
 
   const errors: string[] = [];
@@ -465,6 +627,52 @@ export async function testJob(id: string, dir = defaultHomeDir()): Promise<TestJ
   return { ok: errors.length === 0, errors, job, watermarkReport };
 }
 
+/**
+ * `destinationType: "https"` branch of `testJob` (slice R2): there is no
+ * live target schema/connection check to make (an HTTPS destination
+ * exposes no `/schema`-equivalent endpoint), so this re-validates only
+ * what `testJob` can for Planometry without a network round trip to the
+ * destination itself: the address shape, the mapped source columns still
+ * existing, the filter still resolving, and (for `strategy:
+ * "upsertDelta"`) the watermark column report.
+ */
+async function testHttpsJob(job: SyncJobEntry, connection: ConnectionEntry, dir: string): Promise<TestJobResult> {
+  const errors: string[] = [];
+  const addressCheck = validateHttpsAddress(job.targetUrl);
+  if (!addressCheck.ok) errors.push(addressCheck.error);
+
+  let watermarkReport: WatermarkColumnReport | undefined;
+  const catalogResult = await readSourceTable(connection, job.sourceTable, dir);
+  if (!catalogResult.ok) {
+    errors.push(catalogResult.error);
+  } else {
+    const sourceNames = new Set(catalogResult.table.columns.map((c) => c.name));
+    for (const pair of job.mapping) {
+      if (!sourceNames.has(pair.source)) errors.push(`source column "${pair.source}" no longer exists in the catalog`);
+    }
+
+    try {
+      resolveJobFilter(job.filter, columnTypesOf(catalogResult.table), job.params, undefined, connection.sourceTimeZone);
+    } catch (err) {
+      errors.push(describeError(err));
+    }
+
+    if (job.strategy === "upsertDelta" && job.watermarkColumn) {
+      if (!sourceNames.has(job.watermarkColumn)) {
+        errors.push(`watermark column "${job.watermarkColumn}" no longer exists in the catalog`);
+      } else {
+        try {
+          watermarkReport = await withConnectedPool(connection, dir, (pool) => checkWatermarkColumn(pool, job.sourceTable, job.watermarkColumn!));
+        } catch (err) {
+          errors.push(describeError(err));
+        }
+      }
+    }
+  }
+
+  return { ok: errors.length === 0, errors, job, watermarkReport };
+}
+
 /** `nia-agent job list`: non-secret summary only — never the push key. */
 export function listJobs(dir = defaultHomeDir()): SyncJobEntry[] {
   return loadConfig(dir).jobs;
@@ -478,7 +686,7 @@ export async function removeJob(id: string, dir = defaultHomeDir()): Promise<boo
 
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
-  secrets.delete(job.pushKeyRef);
+  if (job.pushKeyRef) secrets.delete(job.pushKeyRef);
   await removeKeyList(dir, id);
 
   saveConfig(removeFromConfig(config, id), dir);
@@ -550,12 +758,15 @@ export async function updateJob(
   const config = loadConfig(dir);
   const job = findJob(config, id);
   if (!job) return { ok: false, errors: [`no job with id ${JSON.stringify(id)}`] };
+  if (job.destinationType === "https") {
+    return { ok: false, errors: ['job update is not yet supported for destinationType "https" — remove and re-add the job instead'] };
+  }
   const connection = findConnection(config, job.connectionId);
   if (!connection) return { ok: false, errors: [`no connection with id ${JSON.stringify(job.connectionId)}`] };
 
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
-  const existingPushKeySecret = secrets.get<{ pushKey: string }>(job.pushKeyRef);
+  const existingPushKeySecret = secrets.get<{ pushKey: string }>(job.pushKeyRef!);
   if (!existingPushKeySecret) return { ok: false, errors: [`push key for job ${id} is missing from the secret store`] };
   const pushKey = input.rekey ?? existingPushKeySecret.pushKey;
   const targetUrl = input.targetUrl ?? job.targetUrl;
@@ -663,7 +874,7 @@ export async function updateJob(
   };
 
   saveConfig(upsertJob(config, updated), dir);
-  if (input.rekey) secrets.delete(job.pushKeyRef);
+  if (input.rekey) secrets.delete(job.pushKeyRef!);
 
   // No explicit watermark invalidation needed here (task item 1, the
   // fingerprint rule): a changed source table/filter/params/mapping/

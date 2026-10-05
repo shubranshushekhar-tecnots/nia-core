@@ -2,12 +2,13 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
-import { addJob, listJobs, pauseJob, removeJob, resumeJob, testJob, updateJob } from "./cli/jobCommands.js";
+import { addJob, listJobs, pauseJob, removeJob, resumeJob, testJob, updateJob, type AddJobHttpsInput } from "./cli/jobCommands.js";
 import type { WatermarkColumnReport } from "./sync/watermark.js";
 import { runJob } from "./cli/runJobCommand.js";
 import { parseMapOverrides } from "./cli/jobMapping.js";
 import { parseParamOverrides, type JobFilterCondition } from "./planometry/parameters.js";
 import { readSecretFromStdin } from "./cli/securePrompt.js";
+import { allowDestinationHost, listAllowedDestinationHosts, removeAllowedDestinationHost } from "./destinations/allowedHosts.js";
 import { runSqlReadonly } from "./cli/sqlReadonlyCommand.js";
 import { listPausedJobs, runDoctor, runJobDoctor } from "./cli/doctorCommand.js";
 import { runHealthcheck } from "./cli/healthcheckCommand.js";
@@ -267,16 +268,28 @@ async function main(argv: string[]): Promise<void> {
         "soft-delete-column": { type: "string" },
         "poll-interval": { type: "string" },
         "reconcile-interval": { type: "string" },
+        "destination-type": { type: "string" },
+        "https-auth": { type: "string" },
+        "https-header-name": { type: "string" },
+        "https-username": { type: "string" },
+        "https-rows-field": { type: "string" },
       },
     });
     const connectionId = values.connection as string | undefined;
     const table = values.table as string | undefined;
     const targetUrl = values["target-url"] as string | undefined;
     if (!connectionId || !table || !targetUrl) {
-      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta|realtime] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation|softDelete] [--max-delete-percent <n>] [--soft-delete-column <col>] [--poll-interval <seconds>] [--reconcile-interval <seconds>] [--yes]");
+      console.error("usage: nia-agent job add --connection <id> --table <name> --target-url <url> [--name <text>] [--map source=target ...] [--on-null-key stop|skip] [--allow-empty-replace] [--filter <json>|--filter-file <path>] [--param name=value ...] [--schedule <cron>] [--strategy replace|upsertDelta|realtime] [--watermark-column <name>] [--overlap-seconds <n>] [--replace-schedule <cron>] [--delete-mode none|reconciliation|softDelete] [--max-delete-percent <n>] [--soft-delete-column <col>] [--poll-interval <seconds>] [--reconcile-interval <seconds>] [--destination-type planometry|https] [--https-auth none|bearer|apiKey|basic] [--https-header-name <name>] [--https-username <user>] [--https-rows-field <name>] [--yes]");
       process.exitCode = 1;
       return;
     }
+    const destinationTypeRaw = values["destination-type"] as string | undefined;
+    if (destinationTypeRaw !== undefined && destinationTypeRaw !== "planometry" && destinationTypeRaw !== "https") {
+      console.error(`--destination-type must be "planometry" or "https", got ${JSON.stringify(destinationTypeRaw)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const destinationType = destinationTypeRaw as "planometry" | "https" | undefined;
     const onNullKey = parseOnNullKey(values["on-null-key"] as string | undefined);
     if (onNullKey === undefined && values["on-null-key"] !== undefined) {
       console.error(`--on-null-key must be "stop" or "skip", got ${JSON.stringify(values["on-null-key"])}`);
@@ -339,13 +352,34 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const pushKey = await readSecretFromStdin("Planometry push key: ");
+    let pushKey: string | undefined;
+    let https: AddJobHttpsInput | undefined;
+    if (destinationType === "https") {
+      const authMethodRaw = values["https-auth"] as string | undefined;
+      if (authMethodRaw !== "none" && authMethodRaw !== "bearer" && authMethodRaw !== "apiKey" && authMethodRaw !== "basic") {
+        console.error(`--https-auth must be "none", "bearer", "apiKey", or "basic", got ${JSON.stringify(authMethodRaw)}`);
+        process.exitCode = 1;
+        return;
+      }
+      const secret = authMethodRaw === "none" ? undefined : await readSecretFromStdin("HTTPS auth secret: ");
+      https = {
+        authMethod: authMethodRaw,
+        headerName: values["https-header-name"] as string | undefined,
+        username: values["https-username"] as string | undefined,
+        secret,
+        rowsField: values["https-rows-field"] as string | undefined,
+      };
+    } else {
+      pushKey = await readSecretFromStdin("Planometry push key: ");
+    }
     const result = await addJob({
       name: (values.name as string | undefined) ?? table,
       connectionId,
       sourceTable: table,
       targetUrl,
       pushKey,
+      destinationType,
+      https,
       mapOverrides: parseMapOverrides((values.map as string[] | undefined) ?? []),
       onNullKey,
       allowEmptyReplace: values["allow-empty-replace"] as boolean | undefined,
@@ -690,6 +724,35 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "destinations" && subcommand === "allow") {
+    const host = rest[0];
+    if (!host) {
+      console.error("usage: nia-agent destinations allow <host>");
+      process.exitCode = 1;
+      return;
+    }
+    allowDestinationHost(host);
+    console.log(`allowed destination host ${host}`);
+    return;
+  }
+
+  if (command === "destinations" && subcommand === "list") {
+    for (const host of listAllowedDestinationHosts()) console.log(host);
+    return;
+  }
+
+  if (command === "destinations" && subcommand === "remove") {
+    const host = rest[0];
+    if (!host) {
+      console.error("usage: nia-agent destinations remove <host>");
+      process.exitCode = 1;
+      return;
+    }
+    const removed = removeAllowedDestinationHost(host);
+    console.log(removed ? `removed destination host ${host}` : `host ${host} was not in the allowed list`);
+    return;
+  }
+
   if (command === "start") {
     const controller = new AbortController();
     const uninstall = installGracefulShutdown(controller);
@@ -702,7 +765,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   console.error(
-    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent pair --code <code> --url <platform> | nia-agent unpair | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
+    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent destinations <allow|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent pair --code <code> --url <platform> | nia-agent unpair | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
   );
   process.exitCode = 1;
 }

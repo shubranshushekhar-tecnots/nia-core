@@ -115,3 +115,40 @@ function findDuplicateTargets(pairs: RawMappingPair[]): string[] {
   for (const p of pairs) counts.set(p.target, (counts.get(p.target) ?? 0) + 1);
   return [...counts.entries()].filter(([, n]) => n > 1).map(([t]) => t);
 }
+
+export interface HttpsMappingPlan {
+  pairs: RawMappingPair[];
+  errors: string[];
+}
+
+/**
+ * `destinationType: "https"` mapping (slice R2): unlike `buildMapping`
+ * above, there is no live target schema to auto-match against or derive
+ * key columns from — every output column must be explicit via `--map
+ * source=outputName`. Refuses on a source column missing from the catalog
+ * or of an excluded type, or two overrides naming the same output column.
+ */
+export function buildHttpsMapping(sourceTable: CatalogTable, overrides: RawMappingPair[]): HttpsMappingPlan {
+  const errors: string[] = [];
+  if (overrides.length === 0) errors.push('destinationType "https" requires at least one --map source=outputName');
+
+  const duplicateTargets = findDuplicateTargets(overrides);
+  if (duplicateTargets.length > 0) {
+    errors.push(`more than one source column is mapped to the same output column: ${duplicateTargets.join(", ")}`);
+  }
+
+  const columnByName = new Map(sourceTable.columns.map((c) => [c.name, c]));
+  const excludedByName = new Map(sourceTable.excluded.map((c) => [c.name, c]));
+  for (const o of overrides) {
+    if (!columnByName.has(o.source)) {
+      const excluded = excludedByName.get(o.source);
+      errors.push(
+        excluded
+          ? `source column "${o.source}" is of an excluded type (${excluded.nativeType}): ${excluded.reason}`
+          : `source column "${o.source}" does not exist in the catalog`,
+      );
+    }
+  }
+
+  return { pairs: overrides, errors };
+}

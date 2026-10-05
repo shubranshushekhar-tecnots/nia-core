@@ -485,4 +485,29 @@ describe("job commands", () => {
       expect(jobs[0]).toEqual(job);
     });
   });
+
+  describe('destinationType: "https"', () => {
+    it("a non-HTTPS address is refused at job add (no DB touched)", async () => {
+      const result = await addJob(
+        {
+          name: "Sales",
+          connectionId: "conn-1",
+          sourceTable: "dbo.Sales",
+          targetUrl: "http://example.com/ingest",
+          destinationType: "https",
+          https: { authMethod: "none" },
+          mapOverrides: [],
+        },
+        {},
+        dir,
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.errors?.[0]).toContain("https");
+      // Refused before ever reading the source catalog — a pure input-
+      // validation failure must not require a live SQL Server round trip.
+      expect(introspectCatalogMock).not.toHaveBeenCalled();
+      expect(listJobs(dir)).toHaveLength(0);
+    });
+  });
 });

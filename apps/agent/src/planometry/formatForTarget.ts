@@ -44,11 +44,12 @@ function parseOffsetMinutes(offset: string): number {
 
 const DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?\s*(Z|[+-]\d{2}:?\d{2})?$/;
 
-interface ZoneProbe {
+/** Exported for reuse by destinations/httpsFormat.ts, which needs the same no-offset-datetime->UTC conversion for a differently-shaped target. */
+export interface ZoneProbe {
   dtf: Intl.DateTimeFormat;
 }
 
-function buildZoneProbe(timeZone: string): ZoneProbe {
+export function buildZoneProbe(timeZone: string): ZoneProbe {
   return {
     dtf: new Intl.DateTimeFormat("en-US", {
       timeZone,
@@ -108,7 +109,8 @@ function zonedWallClockToUtc(y: number, mo: number, d: number, h: number, mi: nu
   return new Date(candidate);
 }
 
-function dateOnlyFromRaw(raw: unknown): string {
+/** Exported for reuse by destinations/httpsFormat.ts (same "date" wire rule). */
+export function dateOnlyFromRaw(raw: unknown): string {
   if (raw instanceof Date) {
     if (Number.isNaN(raw.getTime())) throw new FormatForTargetError(`invalid date value: ${String(raw)}`);
     return `${pad(raw.getUTCFullYear(), 4)}-${pad(raw.getUTCMonth() + 1, 2)}-${pad(raw.getUTCDate(), 2)}`;
@@ -125,7 +127,8 @@ function dateOnlyFromRaw(raw: unknown): string {
  * only for a no-offset value — a value carrying its own offset (or "Z")
  * converts directly and ignores `zone` entirely.
  */
-function datetimeToUtcIso(raw: unknown, zone: ZoneProbe | undefined): string {
+/** Exported for reuse by destinations/httpsFormat.ts (same UTC-with-Z wire rule). */
+export function datetimeToUtcIso(raw: unknown, zone: ZoneProbe | undefined): string {
   if (raw instanceof Date) {
     if (Number.isNaN(raw.getTime())) throw new FormatForTargetError(`invalid datetime value: ${String(raw)}`);
     return raw.toISOString();
