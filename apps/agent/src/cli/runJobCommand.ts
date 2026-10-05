@@ -149,6 +149,7 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
       return async (onRow, signal) => {
         let resultColumns: { name: string; type: ExtractType }[] = [];
         let streamError: string | undefined;
+        let streamErrorObj: unknown;
 
         const writer = new NdjsonWriter((chunk) => {
           const text = chunk.trim();
@@ -174,8 +175,17 @@ export async function runJob(id: string, options: RunJobOptions = {}, dir = defa
           return true; // the {"end":true,...} trailer — nothing to do
         });
 
-        await streamExtract(pool, catalog, { table: job.sourceTable, columns, filter }, writer, { signal });
-        if (streamError) throw new Error(streamError);
+        await streamExtract(pool, catalog, { table: job.sourceTable, columns, filter }, writer, {
+          signal,
+          onError: (err) => {
+            streamErrorObj = err;
+          },
+        });
+        // Rethrow the original error object (not a new generic Error) so
+        // its class survives — e.g. `TransientExtractError` for a lock
+        // timeout or stalled read (streamExtract.ts), which runSync.ts/
+        // realtimeTick.ts's toFailure() classify as "transient".
+        if (streamError) throw streamErrorObj ?? new Error(streamError);
       };
     };
 

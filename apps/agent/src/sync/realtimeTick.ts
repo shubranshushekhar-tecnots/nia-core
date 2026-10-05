@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtractType } from "@nia/extract";
+import { TransientExtractError } from "@nia/extract/mssql";
 import type { SyncJobEntry } from "../config/types.js";
 import type { Logger } from "../ops/logger.js";
 import { pauseJobState, setLastWatermark } from "../ops/state.js";
@@ -102,6 +103,7 @@ function toFailure(err: unknown): RealtimeTickResult {
     return { outcome: "failed", error: "Planometry rejected the request (status 400)", consoleMessage: err.message, kind: "rejected" };
   }
   if (err instanceof PlanometryTransientError) return { outcome: "failed", error: `transient error: ${err.message}`, kind: "transient" };
+  if (err instanceof TransientExtractError) return { outcome: "failed", error: `transient error: ${err.message}`, kind: "transient" };
   if (err instanceof FormatForTargetError) return { outcome: "failed", error: err.message, kind: "other" };
   if (err instanceof Error) return { outcome: "failed", error: err.message, kind: "other" };
   return { outcome: "failed", error: String(err), kind: "other" };

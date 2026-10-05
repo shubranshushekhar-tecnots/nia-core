@@ -84,5 +84,6 @@ export function buildPoolConfig(config: MssqlConnectionConfig): sql.config {
  */
 export async function connect(config: MssqlConnectionConfig): Promise<sql.ConnectionPool> {
   const pool = new sql.ConnectionPool(buildPoolConfig(config));
-  return pool.connect();
+  await pool.connect();
+  return pool;
 }

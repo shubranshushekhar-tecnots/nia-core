@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import sql from "mssql";
-import { connect, introspectCatalog, streamExtract } from "./index.js";
+import { connect, introspectCatalog, streamExtract, TransientExtractError } from "./index.js";
 import { NdjsonWriter } from "../ndjsonWriter.js";
 import { UnknownColumnError, UnknownTableError } from "../catalog.js";
 import { UnknownOperatorError } from "../filterBuilder.js";
@@ -331,6 +331,58 @@ describe("mssql integration (throwaway harness)", () => {
         expect(Date.now() - started).toBeGreaterThanOrEqual(HOLD_MS);
         expect(rows).toHaveLength(3);
         expect(trailer).toEqual({ end: true, rows: 3 });
+      } finally {
+        clearTimeout(releaseTimer);
+        await tx.commit().catch(() => tx.rollback().catch(() => {}));
+      }
+    }, 30_000);
+  });
+
+  describe("SET LOCK_TIMEOUT (lock timeout is a transient failure, connection released)", () => {
+    it("a read blocked past the lock timeout fails as transient and its connection is released", async () => {
+      // A short, test-only lockTimeoutMs passed per-query (streamExtract.ts's
+      // own batch-level SET — the shared `pool` itself has no connection-
+      // level timeout set, since that doesn't survive mssql's pool
+      // acquire/release reset; see streamExtract.ts's lockTimeoutMs doc).
+      const LOCK_TIMEOUT_MS = 2_000;
+      const HOLD_MS = 6_000; // kept locked well past LOCK_TIMEOUT_MS, so a hit proves SQL Server aborted the read itself, not that the blocker just happened to release first
+
+      const tx = new sql.Transaction(pool);
+      await tx.begin();
+      await new sql.Request(tx).query("UPDATE dbo.widgets SET name = name WHERE id = 1");
+      const releaseTimer = setTimeout(() => {
+        tx.commit().catch(() => {});
+      }, HOLD_MS);
+
+      try {
+        let capturedError: unknown;
+        const chunks: string[] = [];
+        const writer = new NdjsonWriter((chunk) => {
+          chunks.push(chunk);
+        });
+
+        const started = Date.now();
+        await streamExtract(pool, catalog, { table: "dbo.widgets", columns: ["id", "name"], filter: [] }, writer, {
+          lockTimeoutMs: LOCK_TIMEOUT_MS,
+          onError: (err) => {
+            capturedError = err;
+          },
+        });
+        const elapsedMs = Date.now() - started;
+
+        // Fails as transient: the raw error streamExtract reported is a
+        // TransientExtractError, well before the blocker ever released.
+        expect(capturedError).toBeInstanceOf(TransientExtractError);
+        expect(elapsedMs).toBeGreaterThanOrEqual(LOCK_TIMEOUT_MS);
+        expect(elapsedMs).toBeLessThan(HOLD_MS);
+
+        const { trailer } = parseChunks(chunks);
+        expect(trailer && "error" in trailer ? trailer.error : undefined).toContain("Lock request time out period exceeded");
+
+        // Connection released: the same pool answers a trivial, unrelated
+        // query immediately — not left stuck behind the cancelled request.
+        const probe = await pool.request().query<{ ok: number }>("SELECT 1 AS ok");
+        expect(probe.recordset[0]?.ok).toBe(1);
       } finally {
         clearTimeout(releaseTimer);
         await tx.commit().catch(() => tx.rollback().catch(() => {}));

@@ -17,7 +17,55 @@ export interface StreamExtractOptions {
    * for a sink that never backs up (e.g. an in-memory test buffer).
    */
   onDrain?: (listener: () => void) => void;
+  /**
+   * Aborts the stream as a `TransientExtractError` if no "row" event (and
+   * no prior row) has arrived within this long since the query started or
+   * the last row, whichever is later. A query that's merely slow but
+   * genuinely making progress keeps resetting this; one that's truly
+   * stuck (and didn't hit SQL Server's own LOCK_TIMEOUT, e.g. blocked on
+   * something other than a row lock) still gets aborted eventually.
+   * Defaults to 600_000 (10 minutes).
+   */
+  noRowsTimeoutMs?: number;
+  /**
+   * `SET LOCK_TIMEOUT` (milliseconds), bounding how long this query may
+   * block waiting on a row/table lock before SQL Server itself aborts it
+   * with error 1222 ("Lock request time out period exceeded") — classified
+   * below as a `TransientExtractError`. SQL Server's own default is -1
+   * (wait indefinitely), which combined with the `requestTimeout: 0`
+   * below (disabling tedious's time-to-first-byte timer) means a blocked
+   * read would otherwise wait forever.
+   *
+   * Issued as its own statement prepended to this query's own SQL batch
+   * (not a separate request on the pool first) — `mssql`/tedious's
+   * connection pool resets session-level `SET` state on every
+   * acquire/release cycle, so a `SET` sent as a separate request never
+   * survives to the next `.query()` call on the "same" pool. Only a
+   * same-batch `SET` is reliable. Defaults to 300_000 (5 minutes).
+   */
+  lockTimeoutMs?: number;
+  /**
+   * Reports the raw `Error` for a terminal failure, synchronously, right
+   * before it's serialized to the wire via `writer.writeError`. The
+   * NDJSON wire protocol only carries a plain string, which loses the
+   * error's class (e.g. `TransientExtractError`) — a same-process caller
+   * (apps/agent) uses this to recover that identity instead of matching
+   * on message text. Never called on success or abort.
+   */
+  onError?: (err: unknown) => void;
 }
+
+/**
+ * A clean, retryable extraction failure — the request was cancelled and
+ * the connection released, not left stuck. Covers SQL Server's own
+ * `LOCK_TIMEOUT` expiring (error 1222, "Lock request time out period
+ * exceeded" — see connection.ts's `lockTimeoutMs`) and this module's own
+ * no-rows watchdog (`noRowsTimeoutMs`) tripping.
+ */
+export class TransientExtractError extends Error {}
+
+/** SQL Server's error number for a session's `LOCK_TIMEOUT` expiring mid-request. */
+const SQL_LOCK_TIMEOUT_ERROR_NUMBER = 1222;
 
 /**
  * Validates `request` against `catalog`, builds one parameterized SELECT,
@@ -35,7 +83,11 @@ export interface StreamExtractOptions {
 export async function streamExtract(pool: sql.ConnectionPool, catalog: Catalog, request: ExtractRequest, writer: NdjsonWriter, options: StreamExtractOptions = {}): Promise<void> {
   const { table, columns } = validateExtractRequest(catalog, request);
   const nativeTypes = await getColumnNativeTypes(pool, table.name);
-  const { sql: sqlText, params } = buildSelectSql(table, nativeTypes, columns, request.filter, options.limit);
+  const { sql: selectSql, params } = buildSelectSql(table, nativeTypes, columns, request.filter, options.limit);
+  // Same-batch SET (see StreamExtractOptions.lockTimeoutMs's doc comment) —
+  // a plain SELECT with no leading statement, so prepending this is safe.
+  const lockTimeoutMs = options.lockTimeoutMs ?? 300_000;
+  const sqlText = `SET LOCK_TIMEOUT ${lockTimeoutMs};\n${selectSql}`;
 
   const columnTypes = columns.map((name) => {
     const col = table.columns.find((c) => c.name === name);
@@ -68,6 +120,8 @@ export async function streamExtract(pool: sql.ConnectionPool, catalog: Catalog, 
   await new Promise<void>((resolve) => {
     let settled = false;
     let aborted = false;
+    let noRowsTimer: ReturnType<typeof setTimeout> | undefined;
+    const noRowsTimeoutMs = options.noRowsTimeoutMs ?? 600_000;
 
     const onAbort = () => {
       aborted = true;
@@ -78,8 +132,10 @@ export async function streamExtract(pool: sql.ConnectionPool, catalog: Catalog, 
     const finish = (err?: unknown) => {
       if (settled) return;
       settled = true;
+      if (noRowsTimer) clearTimeout(noRowsTimer);
       options.signal?.removeEventListener("abort", onAbort);
       if (err && !aborted) {
+        options.onError?.(err);
         writer.writeError(err instanceof Error ? err.message : String(err));
       } else if (!aborted) {
         writer.writeEnd();
@@ -90,7 +146,19 @@ export async function streamExtract(pool: sql.ConnectionPool, catalog: Catalog, 
       resolve();
     };
 
+    // No-rows watchdog (StreamExtractOptions.noRowsTimeoutMs's doc
+    // comment) — (re)armed below, right after the query is sent and on
+    // every row, so it always measures "since the last sign of progress".
+    const armNoRowsTimer = () => {
+      if (noRowsTimer) clearTimeout(noRowsTimer);
+      noRowsTimer = setTimeout(() => {
+        if (!aborted) sqlRequest.cancel();
+        finish(new TransientExtractError(`no rows received within ${noRowsTimeoutMs}ms`));
+      }, noRowsTimeoutMs);
+    };
+
     sqlRequest.on("row", (row: Record<string, unknown>) => {
+      armNoRowsTimer();
       try {
         const values = columnTypes.map((c) => serializeValue(c.type, row[c.name]));
         const ok = writer.writeRow(values);
@@ -114,10 +182,12 @@ export async function streamExtract(pool: sql.ConnectionPool, catalog: Catalog, 
       // Release the connection cleanly on any failure, not just abort/a
       // malformed row — mirrors the catch block above.
       if (!aborted) sqlRequest.cancel();
-      finish(err);
+      const isLockTimeout = err instanceof Error && (err as Error & { number?: number }).number === SQL_LOCK_TIMEOUT_ERROR_NUMBER;
+      finish(isLockTimeout ? new TransientExtractError((err as Error).message) : err);
     });
     sqlRequest.on("done", () => finish());
 
+    armNoRowsTimer();
     sqlRequest.query(sqlText);
   });
 }
