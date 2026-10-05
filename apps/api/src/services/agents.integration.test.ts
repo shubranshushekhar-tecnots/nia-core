@@ -224,4 +224,43 @@ describe("platform_agents / agent_pairing_codes — real Postgres", () => {
       await dropOrg(otherOrgId);
     }
   });
+
+  it("a same-org viewer cannot create a pairing code or revoke an agent", async () => {
+    const ownerId = await fixtureUserId("canvas-e2e-a@nia.dev");
+    const viewerId = await fixtureUserId("canvas-e2e-b@nia.dev");
+    const orgId = await makeOrg(ownerId);
+
+    try {
+      await addMember(orgId, viewerId, "viewer");
+
+      // create_agent_pairing_code's own authorization check
+      // (private.is_write_member, 0057_viewer_role_restrictions.sql)
+      // excludes viewer — createPairingCode (apps/api/src/services/
+      // agents.ts) wraps the RPC's raised exception as a 500 CREATE_FAILED.
+      await expect(createPairingCode(withUserFor(viewerId), { orgId })).rejects.toMatchObject({
+        statusCode: 500,
+        code: "CREATE_FAILED",
+        message: expect.stringContaining("not authorized"),
+      });
+
+      // A real agent, paired by the owner, for the viewer-cannot-revoke half.
+      const { pairingCodeId, code } = await createPairingCode(withUserFor(ownerId), { orgId });
+      const { agentId } = await simulatePair(pairingCodeId, code);
+
+      // The viewer CAN see the agent (agents.view includes viewer,
+      // platform_agents_select_members's RLS includes every org member) —
+      // but assertCanManageAgent (packages/schemas/src/can.ts) rejects the
+      // revoke itself, before the RPC is ever called.
+      const viewerAgents = await listAgents(withUserFor(viewerId));
+      expect(viewerAgents.find((a) => a.id === agentId)).toBeDefined();
+
+      await expect(revokeAgent(withUserFor(viewerId), "viewer", viewerId, agentId)).rejects.toMatchObject({
+        code: "INSUFFICIENT_ROLE",
+      });
+
+      await revokeAgent(withUserFor(ownerId), "owner", ownerId, agentId);
+    } finally {
+      await dropOrg(orgId);
+    }
+  });
 });

@@ -37,6 +37,7 @@ type ConsumeResult = {
   org_id: string | null;
   owner_id: string | null;
   created_by_user_id: string | null;
+  display_name: string | null;
 };
 
 const PAIR_REFUSAL_MESSAGE: Record<Exclude<ConsumeResult["status"], "ok">, string> = {
@@ -96,7 +97,7 @@ export function buildApp(transport: AgentTransport = new LongPollTransport()) {
           result.org_id,
           result.owner_id,
           result.created_by_user_id,
-          `Agent paired ${new Date().toISOString()}`,
+          result.display_name ?? `Agent paired ${new Date().toISOString()}`,
           agentKeyHash,
         ],
       ),

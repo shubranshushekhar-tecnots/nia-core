@@ -88,6 +88,7 @@ function sha256Hex(value: string): string {
 export async function createPairingCode(
   withUser: WithUser,
   scope: WorkspaceScope,
+  displayName?: string,
 ): Promise<{ pairingCodeId: string; code: string; expiresAt: string }> {
   const code = generatePairingCode();
   const codeHash = sha256Hex(code);
@@ -95,8 +96,13 @@ export async function createPairingCode(
   try {
     const { rows } = await withUser((db) =>
       db.query<{ id: string; expires_at: string }>(
-        "select id, expires_at from public.create_agent_pairing_code($1, $2, $3)",
-        ["orgId" in scope ? scope.orgId : null, "ownerId" in scope ? scope.ownerId : null, codeHash],
+        "select id, expires_at from public.create_agent_pairing_code($1, $2, $3, $4)",
+        [
+          "orgId" in scope ? scope.orgId : null,
+          "ownerId" in scope ? scope.ownerId : null,
+          codeHash,
+          displayName ?? null,
+        ],
       ),
     );
     const row = rows[0];

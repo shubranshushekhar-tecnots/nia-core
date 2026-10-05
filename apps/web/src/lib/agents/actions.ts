@@ -21,6 +21,7 @@ export type AgentActionState = {
   pairingCodeId?: string;
   code?: string;
   expiresAt?: string;
+  platformUrl?: string;
 } | null;
 
 const pairAgentSchema = z.object({
@@ -28,14 +29,24 @@ const pairAgentSchema = z.object({
 });
 
 /**
- * The `name` field is collected for the dialog's own UX only — apps/api's
- * POST /agents/pair (services/agent-bridge's /pair handler) has no name
- * parameter yet, so it is NOT sent to the server and NOT persisted; the
- * paired agent's display_name is set by agent-bridge itself
- * ("Agent paired <timestamp>"). Threading a user-supplied name through
- * would need a new agent_pairing_codes column plus agent-bridge changes,
- * which is out of this slice's "small apps/api additions" scope — flagged
- * in the slice report rather than silently built around.
+ * AGENT_PLATFORM_URL (optional, server-side only — see .env.example) is the
+ * address the paired CLI should call. Falls back to SITE_URL, this app's
+ * own public origin, which is correct in production: nginx
+ * (deploy/nginx/nginx.conf) proxies /agent-api/* on that same origin to
+ * agent-bridge. In local dev there is no such proxy in front of `next dev`
+ * (next.config.mjs has no /agent-api rewrite), so AGENT_PLATFORM_URL must
+ * be set explicitly to agent-bridge's own address (e.g.
+ * http://localhost:4040) — see .env.example's comment.
+ */
+function resolvePlatformUrl(): string {
+  return process.env.AGENT_PLATFORM_URL || process.env.SITE_URL || "";
+}
+
+/**
+ * `name` is sent to apps/api's POST /agents/pair and persisted on the
+ * pairing code (0070_agent_pairing_code_name.sql), then copied onto the
+ * platform_agents row when the bridge's /pair handler consumes the code —
+ * see services/agent-bridge/src/app.ts.
  */
 export async function pairAgentAction(_prevState: AgentActionState, formData: FormData): Promise<AgentActionState> {
   const user = await requireUser();
@@ -54,9 +65,16 @@ export async function pairAgentAction(_prevState: AgentActionState, formData: Fo
   try {
     const result = await apiFetchServer<{ pairingCodeId: string; code: string; expiresAt: string }>("/agents/pair", {
       method: "POST",
+      body: JSON.stringify({ name: parsed.data.name }),
     });
     revalidatePath("/app/agents");
-    return { success: true, pairingCodeId: result.pairingCodeId, code: result.code, expiresAt: result.expiresAt };
+    return {
+      success: true,
+      pairingCodeId: result.pairingCodeId,
+      code: result.code,
+      expiresAt: result.expiresAt,
+      platformUrl: resolvePlatformUrl(),
+    };
   } catch (err) {
     if (err instanceof ApiError) return { error: err.message };
     return { error: "Something went wrong. Try again." };

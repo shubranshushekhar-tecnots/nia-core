@@ -24,12 +24,17 @@ agentsRouter.get(
   }),
 );
 
+const pairBodySchema = z.object({ name: z.string().trim().min(1).max(120).optional() });
+
 agentsRouter.post(
   "/pair",
   requireCapability("agents.pair"),
+  validate({ body: pairBodySchema }),
   asyncHandler(async (req, res) => {
     if (!req.withUser || !req.actor) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
-    res.status(201).json(await createPairingCode(req.withUser, scopeFromActor(req.actor)));
+    res
+      .status(201)
+      .json(await createPairingCode(req.withUser, scopeFromActor(req.actor), req.body.name));
   }),
 );
 

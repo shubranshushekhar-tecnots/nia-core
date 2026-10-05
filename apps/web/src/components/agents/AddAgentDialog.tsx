@@ -42,8 +42,17 @@ export default function AddAgentDialog({ onClose }: { onClose: () => void }) {
   const [copyFallback, setCopyFallback] = useState(false);
   const commandRef = useRef<HTMLSpanElement>(null);
 
-  const platformUrl = typeof window !== 'undefined' ? window.location.origin : '';
-  const command = state?.success && state.code ? `nia-agent pair --code ${state.code} --url ${platformUrl}` : '';
+  // platformUrl comes from the server (AGENT_PLATFORM_URL, falling back to
+  // SITE_URL — see lib/agents/actions.ts), never window.location.origin:
+  // the agent-bridge address can differ from the page's own origin (local
+  // dev always; production only when not behind the nginx /agent-api proxy
+  // in front of this same origin). The CLI's pairing.ts requires BOTH
+  // halves of the composite token, dot-joined (parseCompositeCode) — code
+  // alone is not enough.
+  const command =
+    state?.success && state.code && state.pairingCodeId
+      ? `nia-agent pair --code ${state.pairingCodeId}.${state.code} --url ${state.platformUrl ?? ''}`
+      : '';
 
   async function handleCopy() {
     if (navigator.clipboard?.writeText) {
