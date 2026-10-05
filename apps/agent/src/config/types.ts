@@ -123,6 +123,18 @@ export interface MonitoringConfig {
   intervalSeconds?: number;
 }
 
+/**
+ * Slice L2 (docs/plans/agent-canvas-integration.md B.3/B.12): set only by
+ * `nia-agent pair`, cleared only by `nia-agent unpair`. The agent key
+ * itself is never stored here — only a ref into the local secret store
+ * (secrets/store.ts), same convention as `ConnectionEntry.agentKeyRef`.
+ */
+export interface LinkConfig {
+  platformUrl: string;
+  agentId: string;
+  agentKeyRef: string;
+}
+
 export interface AgentConfig {
   version: 1;
   /** Defaults under the same app-data dir as the config file itself — see paths.ts. */
@@ -131,6 +143,8 @@ export interface AgentConfig {
   monitoring?: MonitoringConfig;
   /** Global cap on simultaneously running jobs, scheduler-enforced (docs/plans/planometry-v4-migration.md §8). Default 1. */
   maxConcurrentRuns?: number;
+  /** Unset until `nia-agent pair` succeeds — see LinkConfig's doc comment. */
+  link?: LinkConfig;
   connections: ConnectionEntry[];
   jobs: SyncJobEntry[];
 }

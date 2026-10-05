@@ -1,9 +1,14 @@
 import { runJob as runJobCommand } from "./cli/runJobCommand.js";
 import { defaultHomeDir, defaultLogDir } from "./config/paths.js";
 import { findConnection, loadConfig } from "./config/store.js";
+import { CheckInLoop } from "./link/checkInLoop.js";
+import { HttpAgentTransport } from "./link/transport.js";
 import { Logger } from "./ops/logger.js";
 import { buildMonitoringHeartbeatPayload, MonitoringHeartbeatScheduler, type JobHeartbeatSource } from "./ops/monitoringHeartbeat.js";
+import { recordCheckInSuccess, recordRevoked } from "./ops/linkState.js";
 import { readJobState, recordAgentStarted } from "./ops/state.js";
+import { loadOrCreateMasterKey } from "./secrets/keyfile.js";
+import { LocalSecretStore } from "./secrets/store.js";
 import { JobScheduler, type SchedulerJob, type SchedulerJobOutcome } from "./scheduler/jobScheduler.js";
 
 export interface AgentLoopOptions {
@@ -48,6 +53,28 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
 
   if (loadConfig(dir).jobs.length === 0) logger.warn("idle_no_jobs", {});
 
+  const link = loadConfig(dir).link;
+  let checkInLoop: CheckInLoop | undefined;
+  let transport: HttpAgentTransport | undefined;
+  if (link) {
+    const masterKey = loadOrCreateMasterKey(dir);
+    const secrets = new LocalSecretStore(masterKey, dir);
+    const secret = secrets.get<{ agentKey: string }>(link.agentKeyRef);
+    if (secret) {
+      transport = new HttpAgentTransport({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
+      checkInLoop = new CheckInLoop({
+        transport,
+        agentVersion: options.agentVersion,
+        logger,
+        onSuccess: () => recordCheckInSuccess(dir),
+        onRevoked: () => recordRevoked(dir),
+      });
+      checkInLoop.start();
+    } else {
+      logger.warn("link_agent_key_missing", {});
+    }
+  }
+
   /**
    * Explicitly holds the process open until `options.signal` aborts,
    * with or without jobs. Without this, `agent start` returned almost
@@ -73,6 +100,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     clearInterval(keepAlive);
     monitoring.stop();
     await scheduler.stop();
+    await checkInLoop?.stop();
+    await transport?.close();
   }
 }
 

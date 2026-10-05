@@ -46,3 +46,8 @@ export function defaultLocksDir(dir = defaultHomeDir()): string {
 export function jobStateDir(dir = defaultHomeDir()): string {
   return path.join(dir, "job-state");
 }
+
+/** Slice L2 (ops/linkState.ts) — the check-in loop's own run state, separate from `state.json`/job-state so a corrupted/missing link file never affects job bookkeeping. */
+export function linkStateFilePath(dir = defaultHomeDir()): string {
+  return path.join(dir, "link-state.json");
+}

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { type AgentConfig, type ConnectionEntry, type MonitoringConfig, type SyncJobEntry, CURRENT_CONFIG_VERSION, emptyConfig } from "./types.js";
+import { type AgentConfig, type ConnectionEntry, type LinkConfig, type MonitoringConfig, type SyncJobEntry, CURRENT_CONFIG_VERSION, emptyConfig } from "./types.js";
 import { configFilePath, defaultHomeDir } from "./paths.js";
 
 export class ConfigValidationError extends Error {}
@@ -48,6 +48,7 @@ export function validateConfig(value: unknown): AgentConfig {
     spoolDir: typeof v.spoolDir === "string" ? v.spoolDir : undefined,
     monitoring: validateMonitoring(v.monitoring),
     maxConcurrentRuns: typeof v.maxConcurrentRuns === "number" ? v.maxConcurrentRuns : undefined,
+    link: validateLink(v.link),
     connections: v.connections as ConnectionEntry[],
     jobs: (v.jobs as SyncJobEntry[] | undefined) ?? [],
   };
@@ -60,6 +61,14 @@ function validateMonitoring(value: unknown): MonitoringConfig | undefined {
     heartbeatUrl: typeof v.heartbeatUrl === "string" ? v.heartbeatUrl : undefined,
     intervalSeconds: typeof v.intervalSeconds === "number" ? v.intervalSeconds : undefined,
   };
+}
+
+/** Unset unless all three fields are present and well-typed — a partially hand-edited `link` is treated the same as unpaired. */
+function validateLink(value: unknown): LinkConfig | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const v = value as Record<string, unknown>;
+  if (typeof v.platformUrl !== "string" || typeof v.agentId !== "string" || typeof v.agentKeyRef !== "string") return undefined;
+  return { platformUrl: v.platformUrl, agentId: v.agentId, agentKeyRef: v.agentKeyRef };
 }
 
 export function findConnection(config: AgentConfig, id: string): ConnectionEntry | undefined {

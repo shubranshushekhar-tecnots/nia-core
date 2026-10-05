@@ -19,6 +19,8 @@ import { loadConfig } from "./config/store.js";
 import { defaultSpoolDir } from "./config/paths.js";
 import { runAgentLoop } from "./agentLoop.js";
 import { AGENT_VERSION } from "./generated/version.js";
+import { InvalidPairingCodeError, InvalidPlatformUrlError, pair, PairingRejectedError, unpair } from "./link/pairing.js";
+import { readLinkState } from "./ops/linkState.js";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -52,6 +54,16 @@ async function main(argv: string[]): Promise<void> {
     const spoolDir = config.spoolDir ?? defaultSpoolDir();
     const spoolUsage = getSpoolUsage(spoolDir);
     console.log(`spool usage: ${formatBytes(spoolUsage.bytes)} across ${spoolUsage.fileCount} file(s) in ${spoolDir}`);
+
+    const link = config.link;
+    if (!link) {
+      console.log("link: not paired");
+    } else {
+      const linkState = readLinkState();
+      const lastCheckIn = linkState.lastCheckInAt ? `, last check-in ${linkState.lastCheckInAt}` : ", no successful check-in yet";
+      const revoked = linkState.revoked ? ", revoked" : "";
+      console.log(`link: paired to ${link.platformUrl} (agent ${link.agentId})${lastCheckIn}${revoked}`);
+    }
 
     const jobIds = Object.keys(status.jobs);
     if (jobIds.length === 0) {
@@ -626,6 +638,37 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "pair") {
+    const { values } = parseArgs({
+      args: argv.slice(1),
+      options: { code: { type: "string" }, url: { type: "string" } },
+      allowPositionals: false,
+    });
+    if (!values.code || !values.url) {
+      console.error("usage: nia-agent pair --code <code> --url <platform>");
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const result = await pair({ code: values.code, url: values.url });
+      console.log(`paired as agent ${result.agentId}`);
+    } catch (err) {
+      if (err instanceof InvalidPlatformUrlError || err instanceof InvalidPairingCodeError || err instanceof PairingRejectedError) {
+        console.error(err.message);
+        process.exitCode = 1;
+        return;
+      }
+      throw err;
+    }
+    return;
+  }
+
+  if (command === "unpair") {
+    const removed = unpair();
+    console.log(removed ? "unpaired" : "agent was not paired");
+    return;
+  }
+
   if (command === "start") {
     const controller = new AbortController();
     const uninstall = installGracefulShutdown(controller);
@@ -638,7 +681,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   console.error(
-    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
+    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent pair --code <code> --url <platform> | nia-agent unpair | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
   );
   process.exitCode = 1;
 }
