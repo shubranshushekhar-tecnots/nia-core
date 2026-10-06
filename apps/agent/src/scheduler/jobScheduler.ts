@@ -78,6 +78,8 @@ export interface JobSchedulerOptions {
   maxConcurrentRuns?: number;
   /** Backoff delays for "transient"/"diskSpace" failures, in order. Defaults to 1/5/15 min. */
   retryDelaysMs?: number[];
+  /** Slice: called right after a run report is written to the outbox, so a check-in in flight can be woken to send it immediately instead of waiting for its next scheduled tick. */
+  onRunRecorded?: () => void;
 }
 
 interface JobRuntime {
@@ -393,6 +395,7 @@ export class JobScheduler {
 
       if (outcome.ok) {
         recordRunOutcome(job.id, outcome, startedAt, { isRealtime, logger: this.options.logger }, dir);
+        this.options.onRunRecorded?.();
         // Realtime (§1.3/E1): an empty tick (nothing to send, no request made) is still recorded in job state above, but isn't written to the log file — only a tick that sent something or failed is.
         if (!outcome.empty) {
           this.options.logger.info("job_run_completed", { jobId: job.id, rowsSent: outcome.rowsSent });
@@ -413,6 +416,7 @@ export class JobScheduler {
 
       if (isPauseKind(outcome.kind)) {
         recordRunOutcome(job.id, outcome, startedAt, { isRealtime, logger: this.options.logger }, dir);
+        this.options.onRunRecorded?.();
         this.options.logger.warn("job_paused", { jobId: job.id, kind: outcome.kind });
         return;
       }
@@ -426,6 +430,7 @@ export class JobScheduler {
       }
 
       recordRunOutcome(job.id, outcome, startedAt, { isRealtime, logger: this.options.logger }, dir);
+      this.options.onRunRecorded?.();
       this.options.logger.warn("job_run_failed", { jobId: job.id, kind: outcome.kind, error: outcome.error });
       return;
     }

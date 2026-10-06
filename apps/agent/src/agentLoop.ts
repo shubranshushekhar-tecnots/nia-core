@@ -1,8 +1,10 @@
 import { runJob as runJobCommand } from "./cli/runJobCommand.js";
 import { defaultHomeDir, defaultLogDir } from "./config/paths.js";
 import { findConnection, loadConfig } from "./config/store.js";
+import type { LinkConfig } from "./config/types.js";
 import { buildAgentConnectionReports } from "./link/agentConnectionReports.js";
 import { CheckInLoop } from "./link/checkInLoop.js";
+import { LinkWatcher } from "./link/linkWatcher.js";
 import { buildLocalJobReports } from "./link/localJobReports.js";
 import { ReadBatchUploadClient } from "./link/readBatchUploadClient.js";
 import * as runReportOutbox from "./link/runReportOutbox.js";
@@ -42,12 +44,16 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
   const logger = options.logger ?? new Logger(defaultLogDir(dir));
   recordAgentStarted(dir);
 
+  let linkSession: LinkSession | undefined;
+
   const scheduler = new JobScheduler({
     dir,
     logger,
     loadJobs: () => loadSchedulerJobs(dir),
     runJob: (job, signal, forceReplace, extra) => runSchedulerJob(job, signal, forceReplace, dir, extra),
     maxConcurrentRuns: loadConfig(dir).maxConcurrentRuns,
+    // Slice: wake a held check-in the moment a run report lands, instead of waiting for it to finish holding on its own.
+    onRunRecorded: () => linkSession?.checkInLoop.wake(),
   });
   scheduler.start();
 
@@ -61,50 +67,30 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
 
   if (loadConfig(dir).jobs.length === 0) logger.warn("idle_no_jobs", {});
 
-  const link = loadConfig(dir).link;
-  let checkInLoop: CheckInLoop | undefined;
-  let transport: HttpAgentTransport | undefined;
-  let taskResultsClient: TaskResultsClient | undefined;
-  let setupClient: SetupClient | undefined;
-  let uploadClient: ReadBatchUploadClient | undefined;
-  if (link) {
-    const masterKey = loadOrCreateMasterKey(dir);
-    const secrets = new LocalSecretStore(masterKey, dir);
-    const secret = secrets.get<{ agentKey: string }>(link.agentKeyRef);
-    if (secret) {
-      transport = new HttpAgentTransport({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
-      taskResultsClient = new TaskResultsClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
-      uploadClient = new ReadBatchUploadClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
-      // Slice R5b — the scheduler itself satisfies TaskRunner's JobActionRunner (runNow), so run_now reuses the scheduler's own lock/semaphore/run-report path.
-      // Slice T2 — uploadClient lets TaskRunner's read_batch handler upload batches directly to the bridge.
-      const taskRunner = new TaskRunner(taskResultsClient, logger, dir, scheduler, uploadClient);
-      setupClient = new SetupClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
-      const setupManager = new SetupManager({ setupClient, logger, dir });
-      checkInLoop = new CheckInLoop({
-        transport,
-        agentVersion: options.agentVersion,
-        logger,
-        buildLocalJobs: () => buildLocalJobReports(dir),
-        buildRunReports: () => runReportOutbox.pendingReports(dir, logger),
-        buildLocalConnections: () => buildAgentConnectionReports(dir),
-        onSuccess: (response) => {
-          recordCheckInSuccess(dir);
-          runReportOutbox.acknowledge(dir, response.acknowledgedRunIds ?? []);
-          // Item 3: fire-and-forget — applying setups must never delay check-ins/scheduling.
-          if (response.setups) {
-            void setupManager.handleCheckIn(response.setups).catch((err) => {
-              logger.warn("setup_check_in_failed", { error: err instanceof Error ? err.message : String(err) });
-            });
-          }
-        },
-        onTasks: (tasks) => taskRunner.handle(tasks),
-        onRevoked: () => recordRevoked(dir),
-      });
-      checkInLoop.start();
-    } else {
-      logger.warn("link_agent_key_missing", {});
+  // Slice: `pair`/`unpair` (run from a separate `nia-agent` CLI invocation
+  // while this service is already running) used to only take effect on
+  // the next restart — the link was read from disk exactly once, here.
+  // The LinkWatcher below polls for that same change and starts/stops
+  // the check-in session live, so pair/unpair is noticed within a few
+  // seconds, no restart required.
+  async function applyLink(link: LinkConfig | undefined): Promise<void> {
+    if (linkSession) {
+      await linkSession.stop();
+      linkSession = undefined;
     }
+    if (!link) return;
+    const session = buildLinkSession(link, dir, logger, scheduler, options.agentVersion);
+    if (!session) {
+      logger.warn("link_agent_key_missing", {});
+      return;
+    }
+    linkSession = session;
+    session.checkInLoop.start();
   }
+
+  await applyLink(loadConfig(dir).link);
+  const linkWatcher = new LinkWatcher({ dir, onChange: (link) => void applyLink(link) });
+  linkWatcher.start();
 
   /**
    * Explicitly holds the process open until `options.signal` aborts,
@@ -130,13 +116,69 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
   } finally {
     clearInterval(keepAlive);
     monitoring.stop();
+    linkWatcher.stop();
     await scheduler.stop();
-    await checkInLoop?.stop();
-    await transport?.close();
-    await taskResultsClient?.close();
-    await setupClient?.close();
-    await uploadClient?.close();
+    await linkSession?.stop();
   }
+}
+
+interface LinkSession {
+  checkInLoop: CheckInLoop;
+  stop: () => Promise<void>;
+}
+
+/** Builds (but does not start) everything a paired agent needs — the check-in loop plus its task/setup/upload clients — or `undefined` if the link's agent key is missing from the local secret store. */
+function buildLinkSession(
+  link: LinkConfig,
+  dir: string,
+  logger: Logger,
+  scheduler: JobScheduler,
+  agentVersion: string,
+): LinkSession | undefined {
+  const masterKey = loadOrCreateMasterKey(dir);
+  const secrets = new LocalSecretStore(masterKey, dir);
+  const secret = secrets.get<{ agentKey: string }>(link.agentKeyRef);
+  if (!secret) return undefined;
+
+  const transport = new HttpAgentTransport({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
+  const taskResultsClient = new TaskResultsClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
+  const uploadClient = new ReadBatchUploadClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
+  // Slice R5b — the scheduler itself satisfies TaskRunner's JobActionRunner (runNow), so run_now reuses the scheduler's own lock/semaphore/run-report path.
+  // Slice T2 — uploadClient lets TaskRunner's read_batch handler upload batches directly to the bridge.
+  const taskRunner = new TaskRunner(taskResultsClient, logger, dir, scheduler, uploadClient);
+  const setupClient = new SetupClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
+  const setupManager = new SetupManager({ setupClient, logger, dir });
+  const checkInLoop = new CheckInLoop({
+    transport,
+    agentVersion,
+    logger,
+    buildLocalJobs: () => buildLocalJobReports(dir),
+    buildRunReports: () => runReportOutbox.pendingReports(dir, logger),
+    buildLocalConnections: () => buildAgentConnectionReports(dir),
+    onSuccess: (response) => {
+      recordCheckInSuccess(dir);
+      runReportOutbox.acknowledge(dir, response.acknowledgedRunIds ?? []);
+      // Item 3: fire-and-forget — applying setups must never delay check-ins/scheduling.
+      if (response.setups) {
+        void setupManager.handleCheckIn(response.setups).catch((err) => {
+          logger.warn("setup_check_in_failed", { error: err instanceof Error ? err.message : String(err) });
+        });
+      }
+    },
+    onTasks: (tasks) => taskRunner.handle(tasks),
+    onRevoked: () => recordRevoked(dir),
+  });
+
+  return {
+    checkInLoop,
+    stop: async () => {
+      await checkInLoop.stop();
+      await transport.close();
+      await taskResultsClient.close();
+      await setupClient.close();
+      await uploadClient.close();
+    },
+  };
 }
 
 /** Every job whose connection still exists, as of the current config on disk. A job referencing a since-deleted connection is skipped (defensive — `job remove`/`connection remove` shouldn't leave that state). */

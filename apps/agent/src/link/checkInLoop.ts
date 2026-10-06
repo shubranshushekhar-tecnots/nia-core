@@ -62,6 +62,7 @@ export class CheckInLoop {
   private revoked = false;
   private inFlight?: Promise<void>;
   private firstCheckIn = true;
+  private waking = false;
 
   constructor(private readonly options: CheckInLoopOptions) {
     this.hostName = options.hostName ?? os.hostname();
@@ -82,6 +83,23 @@ export class CheckInLoop {
     this.timer = undefined;
     this.abortController?.abort();
     if (this.inFlight) await this.inFlight.catch(() => {});
+  }
+
+  /**
+   * Called when fresh data (a run report, a job state change) is ready
+   * to go out — abort whichever check-in is currently in flight (it may
+   * be sitting in the bridge's ~25s hold with nothing new to say) so a
+   * new one goes out immediately with the fresh data, instead of
+   * waiting for that held request to finish on its own. A no-op if a
+   * check-in isn't the one holding things up right now (e.g. already
+   * between ticks with a zero/short delay pending).
+   */
+  wake(): void {
+    if (this.stopped || this.revoked) return;
+    if (this.abortController) {
+      this.waking = true;
+      this.abortController.abort();
+    }
   }
 
   private tick(): void {
@@ -129,7 +147,13 @@ export class CheckInLoop {
         this.options.onRevoked?.();
         return;
       }
-      if (signal.aborted) return;
+      if (signal.aborted) {
+        if (this.waking) {
+          this.waking = false;
+          this.scheduleNext(0);
+        }
+        return;
+      }
       const message = err instanceof LinkTransientError ? err.message : err instanceof Error ? err.message : String(err);
       this.options.logger.warn("link_check_in_failed", { error: message });
       const delay = this.delayMs;

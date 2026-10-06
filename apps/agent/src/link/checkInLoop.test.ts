@@ -111,4 +111,38 @@ describe("CheckInLoop", () => {
 
     await loop.stop();
   });
+
+  it("wake() cuts short a held check-in to send fresh run reports immediately, instead of waiting for it to finish on its own", async () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    // Simulates the bridge's ~25s long-poll hold: never resolves on its own, only reacts to the request being aborted — same contract as the real HttpAgentTransport (link/transport.ts), which wires the AbortSignal straight into its fetch.
+    const checkIn = vi.fn((_req: unknown, signal?: AbortSignal) => {
+      return new Promise<CheckInResponse>((resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new LinkTransientError("aborted by wake")), { once: true });
+      });
+    });
+
+    let pending = 0;
+    const buildRunReports = vi.fn(() => (pending > 0 ? [{ jobId: "job-1", pendingCount: pending }] : []));
+    const loop = new CheckInLoop({
+      transport: { checkIn: checkIn as AgentTransport["checkIn"] },
+      agentVersion: "1.0.0",
+      logger,
+      buildRunReports: buildRunReports as never,
+    });
+
+    loop.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(checkIn).toHaveBeenCalledTimes(1); // first check-in is now "held" (never resolves on its own)
+
+    // A job finishes and records a run report while the first check-in is still held.
+    pending = 1;
+    loop.wake();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(checkIn).toHaveBeenCalledTimes(2); // a fresh check-in went out immediately — did not wait for the held one to time out
+    expect(checkIn.mock.calls[1]![0]).toMatchObject({ runReports: [{ jobId: "job-1", pendingCount: 1 }] });
+
+    await loop.stop();
+  });
 });
