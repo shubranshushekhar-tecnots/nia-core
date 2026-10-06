@@ -51,6 +51,14 @@ export default defineConfig({
       "src/lib/checksQueue.timeout.test.ts",
       "src/scripts/manageStaff.atomicity.integration.test.ts",
       "src/scripts/manageStaff.resetTwoFactor.integration.test.ts",
+      // Slice L4/R5a — real-Postgres integration tests (also in
+      // vitest.integration.config.ts's include list) that were missing
+      // from this exclude list, so `pnpm test` ran them against whatever
+      // state the local sandbox DB happened to be in (e.g. a leftover
+      // agent_setup_runs row from an interrupted prior run collided with
+      // their hardcoded run_id and made the suite flaky/order-dependent).
+      "src/services/agents.integration.test.ts",
+      "src/services/agentSetupActions.integration.test.ts",
     ],
   },
 });

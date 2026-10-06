@@ -6511,3 +6511,46 @@ the only reference left was its own test file. Removed tests (all in
 - "captures the error trailer instead of a chunk rotation"
 - "ignores keep-alive lines"
 - "encrypts chunk files at rest — not readable as gzip without the master key"
+
+## Test triage (2026-10-06): 3 stale tests updated to match intentional behavior changes
+
+Three unit tests were asserting pre-change behavior and failing against
+already-shipped product code — updated the tests, not the product code:
+
+- `services/agent-bridge/src/app.test.ts` ("a check-in with a valid key
+  updates last check-in and returns an empty task list after the hold"):
+  expected `{ tasks, acknowledgedRunIds }` with no `setups` field. Commit
+  `deec997` ("Slice R3a: publish a job to an agent, platform side") added
+  a per-check-in `agent_setups` poll, so `app.ts`'s real response now
+  always includes `setups`. Updated the test's mock (it was returning the
+  same mocked row for every `db.query` call, including the new setups
+  lookup, via `mockResolvedValue` instead of `mockResolvedValueOnce`) and
+  its expected response shape.
+- `apps/web/src/lib/agents/actions.test.ts` ("pairAgentAction returns
+  success with a one-time code for a member"): expected `apiFetchServer`
+  called with no request body. Commit `5c2676d` ("Agent pairing:
+  server-side platform URL, full pairing code, persisted agent name,
+  viewer restriction test") made `pairAgentAction` send
+  `body: JSON.stringify({ name })`. Updated the assertion to include it.
+- `apps/agent/src/link/localJobReports.test.ts` ("buildLocalJobReports
+  never leaks a Planometry rejection message or console text"): the
+  field allow-list didn't include `setupId`. Commit `b98c50d` ("Slice
+  R3b: the agent applies jobs published from the platform") added
+  `setupId: job.platformManaged?.setupId` to `LocalJobReport` as an
+  intentional, non-sensitive field. Added it to the allow-list.
+
+Separately (environment, not a stale assertion): `apps/api`'s
+`vitest.config.ts` was missing two real-Postgres integration test files
+(`agents.integration.test.ts`, `agentSetupActions.integration.test.ts`)
+from its exclude list, so `pnpm test` ran them against whatever state
+the local sandbox DB happened to be in. Added them to the exclude list
+(they already belong to `vitest.integration.config.ts`). While fixing
+that, found and fixed two latent bugs in the integration suite itself:
+`agentSetupActions.integration.test.ts` hardcoded the same `run_id` as
+`agents.integration.test.ts`, colliding on `agent_setup_runs`' unique
+constraint when both ran in the same process; and `dropOrg()`'s trigger
+disable/enable is a global (non-session-scoped) DDL toggle that raced
+across concurrently-run integration test files, intermittently raising
+"Cannot remove or demote the last owner of an organization". Fixed by
+giving the second file a distinct `run_id` and setting
+`fileParallelism: false` in `vitest.integration.config.ts`.

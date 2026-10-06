@@ -19,7 +19,10 @@ describe("agent-bridge /check-in (route-level)", () => {
   it("a check-in with a valid key updates last check-in and returns an empty task list after the hold", async () => {
     const buildApp = await freshApp();
 
-    mockQuery.mockResolvedValue({ rows: [{ id: "agent-1", status: "active" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: "agent-1", status: "active" }] });
+    // Slice R3a (commit deec997) added a setups poll to every check-in —
+    // this agent has none published, so the lookup returns no rows.
+    mockQuery.mockResolvedValue({ rows: [] });
 
     // Injected transport stands in for the real 25s hold (LongPollTransport)
     // — buildApp's factory signature (src/app.ts) accepts any AgentTransport.
@@ -34,7 +37,7 @@ describe("agent-bridge /check-in (route-level)", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ tasks: [], acknowledgedRunIds: [] });
+    expect(response.json()).toEqual({ tasks: [], acknowledgedRunIds: [], setups: [] });
     expect(waitForTasks).toHaveBeenCalledWith("agent-1", 25_000);
 
     const [sql, params] = mockQuery.mock.calls[0]!;

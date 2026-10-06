@@ -88,6 +88,7 @@ describe("local job / run report payload allow-list", () => {
       "lastRunAt",
       "nextRunAt",
       "consecutiveFailures",
+      "setupId",
     ]);
     for (const key of Object.keys(report!)) {
       expect(allowedKeys.has(key)).toBe(true);

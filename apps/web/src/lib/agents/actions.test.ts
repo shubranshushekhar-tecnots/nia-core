@@ -59,7 +59,10 @@ describe("Allowed: a member adds an agent and the pairing command is shown once"
     expect(result?.code).toBe("abc123secret");
     expect(result?.expiresAt).toBe("2026-10-06T00:00:00.000Z");
     expect(apiFetchServer).toHaveBeenCalledTimes(1);
-    expect(apiFetchServer).toHaveBeenCalledWith("/agents/pair", { method: "POST" });
+    expect(apiFetchServer).toHaveBeenCalledWith("/agents/pair", {
+      method: "POST",
+      body: JSON.stringify({ name: "laptop-etl" }),
+    });
   });
 });
 

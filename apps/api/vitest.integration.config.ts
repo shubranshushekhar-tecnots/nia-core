@@ -55,5 +55,14 @@ export default defineConfig({
       NIA_SECRET_MASTER_KEY: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
     },
     testTimeout: 15_000,
+    // Several of these tests' dropOrg() helper disables/re-enables the
+    // organization_members_protect_last_super_admin trigger via a plain
+    // (non-transactional) ALTER TABLE — that's a global DB-catalog toggle,
+    // not scoped to a session, so two test files racing on it concurrently
+    // can have one file's "enable" fire mid-flight through another file's
+    // delete, raising "Cannot remove or demote the last owner of an
+    // organization" nondeterministically. All 17 files share one real
+    // Postgres instance, so run them serially.
+    fileParallelism: false,
   },
 });

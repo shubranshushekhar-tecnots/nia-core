@@ -248,7 +248,13 @@ describe("agent_setup actions/run history — real Postgres (Slice R5a)", () => 
       expect(taskRows[0]!.payload).toMatchObject({ params: { since: "2024-01-01" } });
 
       await simulateRunReport(agentId, setupId, {
-        runId: "11111111-1111-1111-1111-111111111111",
+        // Distinct from agents.integration.test.ts's own hardcoded run_id
+        // ("1111...1111") — both files ran in the same vitest.integration.config.ts
+        // suite against the same real Postgres, and run_id has a UNIQUE
+        // constraint (agent_setup_runs_run_id_key), so sharing the literal
+        // caused whichever file ran second to silently no-op its insert via
+        // ON CONFLICT DO NOTHING.
+        runId: "66666666-6666-6666-6666-666666666666",
         status: "ok",
         rowsSent: 42,
         rowsDeleted: 3,
