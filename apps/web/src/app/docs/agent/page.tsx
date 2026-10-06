@@ -1,0 +1,33 @@
+import { AGENT_GUIDES } from '@/components/docs/guides';
+import {
+  nxDocsBodyStyle,
+  nxDocsEyebrowStyle,
+  nxDocsH1Style,
+  nxDocsHeaderStyle,
+  nxDocsIndexDescStyle,
+  nxDocsIndexListStyle,
+  nxDocsIndexRowStyle,
+  nxDocsIndexTitleStyle,
+  nxDocsPageStyle,
+} from '@/components/docs/styles';
+
+export default function AgentDocsIndexPage() {
+  return (
+    <div style={nxDocsPageStyle}>
+      <header style={nxDocsHeaderStyle}>
+        <span style={nxDocsEyebrowStyle}>Nia Core Agent</span>
+        <h1 style={nxDocsH1Style}>Documentation</h1>
+      </header>
+      <div style={nxDocsBodyStyle}>
+        <div style={nxDocsIndexListStyle}>
+          {AGENT_GUIDES.map((guide) => (
+            <a key={guide.slug} href={`/docs/agent/${guide.slug}`} style={nxDocsIndexRowStyle}>
+              <h2 style={nxDocsIndexTitleStyle}>{guide.title}</h2>
+              <p style={nxDocsIndexDescStyle}>{guide.description}</p>
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

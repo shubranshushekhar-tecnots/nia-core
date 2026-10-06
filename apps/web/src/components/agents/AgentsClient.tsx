@@ -178,6 +178,10 @@ export default function AgentsClient({
             <a href="/downloads" style={{ color: 'var(--nx-ink)' }}>
               Download Nia Core Agent
             </a>
+            . New to it? Read the{' '}
+            <a href="/docs/agent/getting-started" style={{ color: 'var(--nx-ink)' }}>
+              getting started guide
+            </a>
             .
           </p>
         </div>
