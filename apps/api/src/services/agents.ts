@@ -1,5 +1,5 @@
 import { randomInt, createHash } from "node:crypto";
-import { assertCanManageAgent, type ActorRole } from "@nia/schemas";
+import { assertCanManageAgent, isAgentVersionTooOld, MIN_AGENT_VERSION, type ActorRole } from "@nia/schemas";
 import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 import type { WithUser } from "../lib/withUser.js";
@@ -24,6 +24,7 @@ export type PlatformAgent = {
   createdByUserId: string;
   createdAt: string;
   online: boolean;
+  updateRequired: boolean;
 };
 
 type AgentRow = {
@@ -43,6 +44,7 @@ const AGENTS_SELECT =
 function toAgent(row: AgentRow): PlatformAgent {
   const online =
     row.last_check_in_at !== null && Date.now() - new Date(row.last_check_in_at).getTime() < ONLINE_THRESHOLD_MS;
+  const updateRequired = row.agent_version !== null && isAgentVersionTooOld(row.agent_version, MIN_AGENT_VERSION);
   return {
     id: row.id,
     displayName: row.display_name,
@@ -53,6 +55,7 @@ function toAgent(row: AgentRow): PlatformAgent {
     createdByUserId: row.created_by_user_id,
     createdAt: row.created_at,
     online,
+    updateRequired,
   };
 }
 

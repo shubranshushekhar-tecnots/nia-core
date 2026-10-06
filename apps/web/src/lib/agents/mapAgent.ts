@@ -21,6 +21,7 @@ export function mapAgent(raw: unknown): PlatformAgent {
     createdByUserId: String(row.createdByUserId ?? ""),
     createdAt: String(row.createdAt ?? ""),
     online: Boolean(row.online),
+    updateRequired: Boolean(row.updateRequired),
   };
 }
 

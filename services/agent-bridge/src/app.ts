@@ -3,7 +3,7 @@ import { z } from "zod";
 import { gunzipSync } from "node:zlib";
 import { withServiceRole } from "@nia/db";
 import { decryptSecret, parseMasterKey, type EncryptedSecret } from "@nia/secrets";
-import { Column, StructuredQueryCursor } from "@nia/schemas";
+import { Column, StructuredQueryCursor, isAgentVersionTooOld, MIN_AGENT_VERSION } from "@nia/schemas";
 import { dbPool } from "./db.js";
 import { generateAgentKey, sha256Hex } from "./crypto.js";
 import { DbAgentTransport, type AgentTransport } from "./transport.js";
@@ -280,6 +280,23 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
     const { agentVersion, hostName, noHold, localJobs, runReports, agentConnections } =
       CheckInBody.parse(req.body) ?? {};
     const agentKeyHash = sha256Hex(agentKey);
+
+    // Slice E — refuse the check-in outright for an agent build older than
+    // MIN_AGENT_VERSION, but still record the reported version so the
+    // Agents page can show "update required" without a DB migration
+    // (agent_version already existed on platform_agents).
+    if (agentVersion !== undefined && isAgentVersionTooOld(agentVersion, MIN_AGENT_VERSION)) {
+      await withServiceRole(dbPool, (db) =>
+        db.query(
+          `update public.platform_agents set agent_version = $2 where agent_key_hash = $1 and status <> 'revoked'`,
+          [agentKeyHash, agentVersion],
+        ),
+      );
+      throw new HttpError(
+        426,
+        `agent version ${agentVersion} is older than the minimum supported version ${MIN_AGENT_VERSION} — update the agent to continue checking in.`,
+      );
+    }
 
     const { rows, acknowledgedRunIds } = await withServiceRole(dbPool, async (db) => {
       const { rows } = await db.query<AgentRow>(

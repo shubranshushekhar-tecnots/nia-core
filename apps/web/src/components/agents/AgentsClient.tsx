@@ -156,7 +156,14 @@ export default function AgentsClient({
             // flips status to 'revoked', see apps/api/src/services/agents.ts)
             // — so the list shows "Revoked" here instead, consistent with
             // what listAgents()/listAgentsClient() keep returning.
-            const badgeLabel = revoked ? 'Revoked' : agent.online ? 'Online' : 'Offline';
+            const badgeLabel = revoked
+              ? 'Revoked'
+              : agent.updateRequired
+                ? 'Update required'
+                : agent.online
+                  ? 'Online'
+                  : 'Offline';
+            const badgeOk = agent.online && !revoked && !agent.updateRequired;
             const expanded = expandedAgentId === agent.id;
             const loaded = setupsByAgent[agent.id];
             const localJobs = (loaded?.setups ?? [])
@@ -179,8 +186,8 @@ export default function AgentsClient({
                     {agent.displayName.slice(0, 1).toUpperCase() || '?'}
                   </button>
                   <span style={nxAgentsNameStyle}>{agent.displayName}</span>
-                  <span style={nxAgentsStatusBadgeStyle(agent.online && !revoked)}>
-                    <span style={nxAgentsStatusDotStyle(agent.online && !revoked)} />
+                  <span style={nxAgentsStatusBadgeStyle(badgeOk)}>
+                    <span style={nxAgentsStatusDotStyle(badgeOk)} />
                     {badgeLabel}
                   </span>
                   <span style={nxAgentsMetaCellStyle}>{formatDate(agent.lastCheckInAt)}</span>

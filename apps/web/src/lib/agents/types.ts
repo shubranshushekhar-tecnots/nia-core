@@ -9,6 +9,7 @@ export type PlatformAgent = {
   createdByUserId: string;
   createdAt: string;
   online: boolean;
+  updateRequired: boolean;
 };
 
 // Slice L4 — mirrors apps/api/src/services/agents.ts's LocalJobSummary
