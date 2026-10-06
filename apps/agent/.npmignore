@@ -1,2 +1,14 @@
-# Intentionally empty — see packages/extract/.npmignore for why this file
-# must exist (even empty) for `pnpm deploy` to include dist/ output.
+# See packages/extract/.npmignore for why this file must exist (even
+# near-empty) for `pnpm deploy` to include dist/ output: an absent
+# .npmignore falls back to the root .gitignore's blanket `dist/` rule,
+# which would silently drop the build output.
+#
+# packaging/ is excluded explicitly: it holds this package's own build
+# scripts and (once built) their dist/ output — macOS/Windows SEA
+# binaries, zips, and the Linux tarball itself — none of which belong
+# inside a deploy of @nia/agent's runtime. Root .gitignore's `dist/` rule
+# would normally keep packaging/*/dist out, but that rule doesn't apply
+# here (see above), so without this line a deploy recursively bundles
+# every previously-built platform package — this is what took the Linux
+# tarball from ~13 MB to ~180 MB.
+packaging/
