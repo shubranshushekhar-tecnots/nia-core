@@ -21,6 +21,10 @@ apps/worker/eval-reports/
 # generated at build/test time (apps/agent/scripts/generate-version.mjs)
 apps/agent/src/generated/
 
+# generated release manifest (apps/agent/packaging/generate-manifest.mjs) —
+# checksums of locally-built packages, not something to version
+apps/agent/packaging/manifest.json
+
 # env
 .env
 .env.local

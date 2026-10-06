@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { canManageAgent, type ActorRole } from '@nia/schemas';
 import type { AgentSetup, AgentSetupRun, PlatformAgent } from '@/lib/agents/types';
 import { listAgentsClient, listAgentSetupsClient } from '@/lib/api/agentsClient';
@@ -21,6 +21,7 @@ import {
   nxAgentsExpandToggleStyle,
   nxAgentsEyebrowStyle,
   nxAgentsH1Style,
+  nxAgentsHeaderLeftColStyle,
   nxAgentsHeaderRowStyle,
   nxAgentsJobRowStyle,
   nxAgentsJobsHeaderRowStyle,
@@ -31,8 +32,12 @@ import {
   nxAgentsRowStyle,
   nxAgentsRunRowStyle,
   nxAgentsRunsHeaderRowStyle,
+  nxAgentsStatCellStyle,
+  nxAgentsStatLabelStyle,
+  nxAgentsStatsGridStyle,
   nxAgentsStatusBadgeStyle,
   nxAgentsStatusDotStyle,
+  nxAgentsStatValueStyle,
   nxAgentsSubtitleStyle,
   nxAgentsTitleColStyle,
 } from './styles';
@@ -97,23 +102,57 @@ export default function AgentsClient({
     }
   }
 
+  const onlineCount = agents.filter((a) => a.online && a.status !== 'revoked').length;
+  const revokedCount = agents.filter((a) => a.status === 'revoked').length;
+  const loadedSetups = Object.values(setupsByAgent);
+  const localJobsCount = loadedSetups.length
+    ? loadedSetups.reduce((sum, { setups }) => sum + setups.filter((s) => s.localJob !== null).length, 0)
+    : null;
+
   return (
     <>
-      <div style={nxAgentsHeaderRowStyle}>
-        <div style={nxAgentsTitleColStyle}>
-          <span style={nxAgentsEyebrowStyle}>Platform</span>
-          <h1 style={nxAgentsH1Style}>Agents</h1>
-          <p style={nxAgentsSubtitleStyle}>Machines paired to run jobs for this workspace.</p>
+      <div className="nx-fade-up" style={nxAgentsHeaderRowStyle}>
+        <div style={nxAgentsHeaderLeftColStyle}>
+          <div style={nxAgentsTitleColStyle}>
+            <span className="nx-clip-line" style={nxAgentsEyebrowStyle}>Platform</span>
+            <h1 className="nx-clip-line" style={{ ...nxAgentsH1Style, animationDelay: '80ms' }}>Agents</h1>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+            <p style={nxAgentsSubtitleStyle}>Machines paired to run jobs for this workspace.</p>
+            {canPair && (
+              <button
+                type="button"
+                className="nx-wipe"
+                style={{ ...nxAgentsAddBtnStyle(false), '--wipe-fill': 'var(--nx-ink)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
+                onClick={() => setAddOpen(true)}
+              >
+                Add agent
+              </button>
+            )}
+          </div>
         </div>
-        {canPair && (
-          <button type="button" style={nxAgentsAddBtnStyle(false)} onClick={() => setAddOpen(true)}>
-            Add agent
-          </button>
-        )}
+        <div style={nxAgentsStatsGridStyle}>
+          <div style={nxAgentsStatCellStyle(false)}>
+            <span style={nxAgentsStatLabelStyle}>Agents</span>
+            <span style={nxAgentsStatValueStyle}>{agents.length}</span>
+          </div>
+          <div style={nxAgentsStatCellStyle(true)}>
+            <span style={nxAgentsStatLabelStyle}>Online</span>
+            <span style={nxAgentsStatValueStyle}>{onlineCount}</span>
+          </div>
+          <div style={nxAgentsStatCellStyle(false)}>
+            <span style={nxAgentsStatLabelStyle}>Local jobs</span>
+            <span style={nxAgentsStatValueStyle}>{localJobsCount ?? '\u2014'}</span>
+          </div>
+          <div style={nxAgentsStatCellStyle(false)}>
+            <span style={nxAgentsStatLabelStyle}>Revoked</span>
+            <span style={nxAgentsStatValueStyle}>{revokedCount}</span>
+          </div>
+        </div>
       </div>
 
       {agents.length === 0 ? (
-        <div style={nxAgentsEmptyPanelStyle}>
+        <div className="nx-fade-up nx-halftone" style={nxAgentsEmptyPanelStyle}>
           <div style={nxAgentsEmptyStepStyle}>
             <span style={nxAgentsEmptyStepNumStyle}>1</span>
             <p style={nxAgentsEmptyTextStyle}>
@@ -134,6 +173,13 @@ export default function AgentsClient({
               Run that command on the machine. Once it checks in, it will show up here as online.
             </p>
           </div>
+          <p style={nxAgentsEmptyTextStyle}>
+            Don&apos;t have the agent installed yet?{' '}
+            <a href="/downloads" style={{ color: 'var(--nx-ink)' }}>
+              Download Nia Core Agent
+            </a>
+            .
+          </p>
         </div>
       ) : (
         <>
@@ -178,7 +224,13 @@ export default function AgentsClient({
                 <div style={nxAgentsRowStyle}>
                   <button
                     type="button"
-                    style={{ ...nxAgentsExpandToggleStyle, ...nxAgentsAvatarStyle }}
+                    className="nx-wipe"
+                    style={{
+                      ...nxAgentsExpandToggleStyle,
+                      ...nxAgentsAvatarStyle,
+                      '--wipe-fill': 'var(--nx-blue-panel)',
+                      '--wipe-on': 'var(--nx-blue-panel-text)',
+                    } as CSSProperties}
                     onClick={() => toggleExpanded(agent.id)}
                     aria-expanded={expanded}
                     aria-label={expanded ? 'Collapse agent jobs' : 'Expand agent jobs'}
@@ -196,7 +248,12 @@ export default function AgentsClient({
                   <span style={nxAgentsMetaCellStyle}>{memberNames[agent.createdByUserId] ?? agent.createdByUserId}</span>
                   <span style={nxAgentsMetaCellStyle}>{formatDate(agent.createdAt)}</span>
                   {canRevoke && (
-                    <button type="button" style={nxAgentsRevokeBtnStyle} onClick={() => setRevokeTarget(agent)}>
+                    <button
+                      type="button"
+                      className="nx-wipe"
+                      style={{ ...nxAgentsRevokeBtnStyle, '--wipe-fill': 'var(--nx-danger)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
+                      onClick={() => setRevokeTarget(agent)}
+                    >
                       Revoke
                     </button>
                   )}

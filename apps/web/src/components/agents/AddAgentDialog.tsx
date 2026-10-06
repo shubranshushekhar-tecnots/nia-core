@@ -119,6 +119,13 @@ export default function AddAgentDialog({
                 />
                 {state?.fieldErrors?.name && <span style={nxModalErrorStyle}>{state.fieldErrors.name[0]}</span>}
                 {state?.error && <span style={nxModalErrorStyle}>{state.error}</span>}
+                <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--nx-ink-3)' }}>
+                  Haven&apos;t installed the agent yet?{' '}
+                  <a href="/downloads" style={{ color: 'var(--nx-ink-2)' }}>
+                    Download Nia Core Agent
+                  </a>
+                  .
+                </p>
               </>
             )}
 

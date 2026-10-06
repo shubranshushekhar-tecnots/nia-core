@@ -439,6 +439,39 @@ mutually exclusive.
   is sufficient as-is, or point `REDIS_URL` at a managed Redis instead and
   drop the `redis` service from the compose file.
 
+## Agent downloads
+
+The public Download Nia Core Agent page (`/downloads` on `niacore-web`) and
+the Agents page link to it, read package metadata from one place at
+request time: `apps/agent/packaging/manifest.json` (version, and per file
+its name, OS, size, and SHA-256 — written by `pnpm --filter @nia/agent
+generate-manifest` after building all three platform packages). It is
+never committed to the repo (gitignored, like every other build output).
+
+`niacore-web`'s `AGENT_DOWNLOADS_BASE_URL` env var is the one setting that
+decides where both the manifest and the files themselves come from
+(`apps/web/src/lib/downloads/manifest.ts`):
+- **Unset** (local dev) — served by a dev-only route straight out of
+  `apps/agent/packaging/{windows,macos,linux}/dist/`, refusing any
+  request for a file name not listed in `manifest.json`.
+- **Set** (production) — points at the address `niacore-proxy`'s
+  `/downloads/agent/` location (`deploy/nginx/nginx.conf`) serves,
+  e.g. `https://<public host>/downloads/agent`.
+
+At release time, after running each platform's `build-bundle`/
+`build-installer` script and `pnpm --filter @nia/agent generate-manifest`,
+copy these four files into the directory mounted at nginx's
+`/usr/share/nginx/agent-downloads/` (the target of the `alias` in
+`deploy/nginx/nginx.conf`):
+- `apps/agent/packaging/manifest.json`
+- `apps/agent/packaging/windows/dist/NiaCoreAgent-Setup-<version>.exe`
+- `apps/agent/packaging/windows/dist/nia-agent-windows-<version>.zip` (advanced/portable download)
+- `apps/agent/packaging/macos/dist/nia-agent-macos-arm64-<version>.zip`
+- `apps/agent/packaging/linux/dist/nia-agent-linux-<version>.tar.gz`
+
+Set `AGENT_DOWNLOADS_BASE_URL` on `niacore-web` to that same public
+`/downloads/agent` address and redeploy.
+
 ## Network requirement: static outbound IP for connectors
 
 `connector-mysql`, `connector-mongodb`, and `connector-supabase` make

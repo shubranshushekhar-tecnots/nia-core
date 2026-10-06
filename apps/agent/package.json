@@ -8,6 +8,7 @@
   },
   "scripts": {
     "generate-version": "node scripts/generate-version.mjs",
+    "generate-manifest": "node packaging/generate-manifest.mjs",
     "build": "pnpm run generate-version && tsc -p tsconfig.json",
     "dev": "pnpm run generate-version && tsx src/index.ts",
     "start": "node dist/index.js",
