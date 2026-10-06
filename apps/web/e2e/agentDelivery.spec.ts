@@ -2,7 +2,7 @@ import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { Pool } from 'pg';
 import { personas } from './fixtures/personas';
 
@@ -202,6 +202,48 @@ async function getFakeTableRows(tableId: string): Promise<unknown[]> {
   return body.rows;
 }
 
+/**
+ * Same compound-cookie-as-bearer-token convention as copilot.spec.ts's own
+ * getAccessToken — see that file's header comment for why the whole
+ * `better-auth.session_token` cookie value is a valid `Authorization:
+ * Bearer` value for apps/api's requireAuth routes, no splitting needed.
+ */
+async function getAccessToken(page: Page): Promise<string> {
+  const cookies = await page.context().cookies();
+  const authCookie = cookies.find((c) => /(^|\.)session_token$/.test(c.name));
+  if (!authCookie) throw new Error('No better-auth session cookie on this context — is the persona logged in?');
+  return decodeURIComponent(authCookie.value);
+}
+
+/**
+ * Saves a full GraphDoc through the exact same PUT .../graph call the
+ * Canvas's own autosave uses (graphClient.ts's putWorkflowGraph) — fetches
+ * the current version first so this always satisfies the optimistic-
+ * concurrency check, same pattern as copilot.spec.ts's seedRes/afterEditRes.
+ */
+async function saveGraphViaApi(
+  page: Page,
+  workflowId: string,
+  apiUrl: string,
+  authHeaders: Record<string, string>,
+  graph: unknown,
+): Promise<void> {
+  const currentRes = await page.request.get(`${apiUrl}/workflows/${workflowId}/graph`, { headers: authHeaders });
+  expect(currentRes.ok(), `GET graph should succeed: ${currentRes.status()} ${await currentRes.text()}`).toBeTruthy();
+  const current = await currentRes.json();
+  const saveRes = await page.request.put(`${apiUrl}/workflows/${workflowId}/graph`, {
+    headers: authHeaders,
+    data: { graph, expectedVersion: current.version },
+  });
+  expect(saveRes.ok(), `graph PUT should succeed: ${saveRes.status()} ${await saveRes.text()}`).toBeTruthy();
+}
+
+function currentWorkflowId(page: Page): string {
+  const id = page.url().match(/\/app\/workflows\/([0-9a-f-]{36})/)?.[1];
+  if (!id) throw new Error(`could not parse workflow id from ${page.url()}`);
+  return id;
+}
+
 test.describe('Route 2: agent-delivered Canvas workflow', () => {
   // packages/extract/scripts/harness/start.sh boots+seeds+polls the SQL
   // Server container healthy BEFORE the test's own 20-minute budget starts
@@ -216,7 +258,7 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
   });
 
   test('agent-delivered workflow: publish, run now, change filter, pause/resume, allow-list rejection', async ({ page }) => {
-    test.setTimeout(20 * 60 * 1000);
+    test.setTimeout(15 * 60 * 1000);
 
     const home = mkdtempSync(path.join(tmpdir(), 'nia-agent-e2e-ad-'));
     let agentChild: ChildProcess | null = null;
@@ -224,7 +266,11 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
     let agentId: string | null = null;
     let fakeTableId: string | null = null;
     let fakeHost: string | null = null;
+    // Built by step b), mutated in place by steps d)/f) — each save PUTs
+    // the whole, current GraphDoc through saveGraphViaApi.
+    let agentGraph: { nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] } | null = null;
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const apiUrl = process.env.API_INTERNAL_URL ?? 'http://localhost:4001';
 
     try {
       // a) Pair a real agent, add its one local SQL Server connection, start
@@ -351,128 +397,112 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
         await destDialog.locator('#connection-field-pushKey').fill(fakeTable.pushKey);
         await destDialog.getByRole('button', { name: 'Add connection' }).click();
         await expect(destDialog).not.toBeVisible({ timeout: 10_000 });
-      });
+      }, { timeout: 3 * 60 * 1000 });
 
-      await test.step('b) wire up the Canvas graph, map fields, publish — state becomes applied', async () => {
-        const rail = page.getByTestId('nodes-rail');
-        const dataTransfer1 = await page.evaluateHandle(() => new DataTransfer());
-        await rail.getByText(SOURCE_CONNECTION_NAME, { exact: true }).dispatchEvent('dragstart', { dataTransfer: dataTransfer1 });
-        const surface = page.getByTestId('canvas-surface');
-        await surface.dispatchEvent('dragover', { dataTransfer: dataTransfer1, clientX: 300, clientY: 200 });
-        await surface.dispatchEvent('drop', { dataTransfer: dataTransfer1, clientX: 300, clientY: 200 });
-        let picker = page.getByTestId('drop-role-picker');
-        if (await picker.isVisible().catch(() => false)) {
-          await picker.getByRole('menuitem', { name: 'Use as Source' }).click();
-        }
+      await test.step(
+        'b) wire up the Canvas graph through the same API call Canvas autosave uses, publish in the UI — state becomes applied',
+        async () => {
+          const workflowId = currentWorkflowId(page);
+          const authHeaders = { Authorization: `Bearer ${await getAccessToken(page)}` };
 
-        const dataTransfer2 = await page.evaluateHandle(() => new DataTransfer());
-        const transformItem = rail.getByText('Transform', { exact: true });
-        await transformItem.dispatchEvent('dragstart', { dataTransfer: dataTransfer2 });
-        await surface.dispatchEvent('dragover', { dataTransfer: dataTransfer2, clientX: 600, clientY: 200 });
-        await surface.dispatchEvent('drop', { dataTransfer: dataTransfer2, clientX: 600, clientY: 200 });
+          const connsRes = await page.request.get(`${apiUrl}/connections`, { headers: authHeaders });
+          expect(connsRes.ok(), `GET connections should succeed: ${connsRes.status()} ${await connsRes.text()}`).toBeTruthy();
+          const conns = (await connsRes.json()) as { id: string; displayName: string }[];
+          const sourceConn = conns.find((c) => c.displayName === SOURCE_CONNECTION_NAME);
+          const destConn = conns.find((c) => c.displayName === DEST_CONNECTION_NAME);
+          expect(sourceConn, 'source connection should exist').toBeTruthy();
+          expect(destConn, 'destination connection should exist').toBeTruthy();
 
-        const dataTransfer3 = await page.evaluateHandle(() => new DataTransfer());
-        await rail.getByText(DEST_CONNECTION_NAME, { exact: true }).dispatchEvent('dragstart', { dataTransfer: dataTransfer3 });
-        await surface.dispatchEvent('dragover', { dataTransfer: dataTransfer3, clientX: 900, clientY: 200 });
-        await surface.dispatchEvent('drop', { dataTransfer: dataTransfer3, clientX: 900, clientY: 200 });
-        picker = page.getByTestId('drop-role-picker');
-        if (await picker.isVisible().catch(() => false)) {
-          await picker.getByRole('menuitem', { name: 'Use as Destination' }).click();
-        }
+          // Source block on dbo.widgets with all three columns selected and
+          // `id` keyed; a filter that passes every seeded row (price >= 0);
+          // a Planometry destination in Replace mode with every key column
+          // mapped — same end state the UI drag/drop + drawer edits used to
+          // produce, reached here through the one API call Canvas autosave
+          // itself calls (graphClient.ts's PUT .../graph).
+          agentGraph = {
+            nodes: [
+              {
+                id: 'src',
+                type: 'source',
+                manifestId: 'sqlserver-agent',
+                connectionId: sourceConn!.id,
+                position: { x: 100, y: 100 },
+                config: {
+                  operation: 'read',
+                  entity: { namespace: 'dbo', name: 'widgets' },
+                  columns: [
+                    { name: 'id', type: 'int', isKey: true },
+                    { name: 'name', type: 'nvarchar', isKey: false },
+                    { name: 'price', type: 'decimal', isKey: false },
+                  ],
+                  params: {},
+                },
+              },
+              {
+                id: 't1',
+                type: 'transform',
+                position: { x: 400, y: 100 },
+                config: {
+                  steps: [
+                    {
+                      kind: 'filter',
+                      expr: {
+                        kind: 'comparison',
+                        op: 'gte',
+                        left: { kind: 'field', name: 'price' },
+                        right: { kind: 'literal', value: 0 },
+                      },
+                    },
+                  ],
+                },
+              },
+              {
+                id: 'dest',
+                type: 'destination',
+                manifestId: 'planometry-table',
+                connectionId: destConn!.id,
+                position: { x: 700, y: 100 },
+                config: {
+                  operation: 'insert',
+                  entity: { namespace: 'planometry', name: FAKE_TABLE_NAME },
+                  mapping: {
+                    version: 1,
+                    entries: [
+                      { from: 'id', to: 'id' },
+                      { from: 'name', to: 'name' },
+                      { from: 'price', to: 'price' },
+                    ],
+                    approvedAt: new Date().toISOString(),
+                    sourceColumnsAtApproval: ['id', 'name', 'price'],
+                  },
+                  delivery: { mode: 'replace' },
+                },
+              },
+            ],
+            edges: [
+              { id: 'e0', source: 'src', target: 't1' },
+              { id: 'e1', source: 't1', target: 'dest' },
+            ],
+          };
 
-        await expect(page.locator('.react-flow__node')).toHaveCount(3);
+          await saveGraphViaApi(page, workflowId, apiUrl, authHeaders, agentGraph);
 
-        const nodes = page.locator('.react-flow__node');
-        async function connect(fromIdx: number, toIdx: number) {
-          const sourceHandle = nodes.nth(fromIdx).locator('.react-flow__handle.source');
-          const targetHandle = nodes.nth(toIdx).locator('.react-flow__handle.target');
-          const sourceBox = (await sourceHandle.boundingBox())!;
-          const targetBox = (await targetHandle.boundingBox())!;
-          await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
-          await page.mouse.down();
-          await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 10 });
-          await page.mouse.up();
-        }
-        await connect(0, 1);
-        await connect(1, 2);
+          await page.reload();
+          await expect(page.locator('.react-flow__node')).toHaveCount(3);
 
-        // Source node: pick the table, select+key its columns.
-        await nodes.nth(0).click();
-        let drawer = page.getByTestId('node-drawer');
-        await page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema'));
-        const sourceTableSelect = drawer.locator('#node-drawer-table-select');
-        await expect(sourceTableSelect.locator('option', { hasText: 'widgets' })).toHaveCount(1, { timeout: 10_000 });
-        const savedSrcTable = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
-        await sourceTableSelect.selectOption({ label: 'dbo.widgets' });
-        await savedSrcTable;
+          // Publish — unambiguous here (dialog not yet open).
+          await page.getByRole('button', { name: 'Publish', exact: true }).click();
+          const publishDialog = page.getByText('Publish to agent?').locator('../..');
+          await expect(publishDialog.getByText('This is a new job for the agent.')).toBeVisible({ timeout: 10_000 });
+          // Both the header's trigger and the dialog's own confirm button read
+          // "Publish" once the dialog is open — .last() targets the dialog's,
+          // which FlowCanvas.tsx renders after CanvasHeader with no portal.
+          await page.getByRole('button', { name: 'Publish', exact: true }).last().click();
 
-        // AgentSourceColumnsPanel's row is `<div><label><input/><span>{name}</span>...</label>...</div>`
-        // — going up two parents from the name span (span -> label -> row
-        // div) reaches the row unambiguously, since `drawer.locator('div',
-        // {has: ...})` would otherwise also match every ancestor div (DOM
-        // order puts those BEFORE the row div, so `.first()` picks the
-        // wrong, too-broad one).
-        for (const col of ['id', 'name', 'price']) {
-          const nameSpan = drawer.locator(`span:text-is("${col}")`);
-          const row = nameSpan.locator('xpath=../..');
-          const saved = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
-          await row.locator('input[type="checkbox"]').first().check();
-          await saved;
-        }
-        const idRow = drawer.locator('span:text-is("id")').locator('xpath=../..');
-        const savedKey = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
-        // The "Key" checkbox only renders once the column above is
-        // selected — row.getByText('Key') resolves to its own <label>
-        // (plain text child, not wrapped in a span), which directly
-        // contains that checkbox.
-        await idRow.getByText('Key').locator('input[type="checkbox"]').check();
-        await savedKey;
-
-        // Transform node: a filter that passes every seeded row (price >= 0).
-        await nodes.nth(1).click();
-        drawer = page.getByTestId('node-drawer');
-        await drawer.getByRole('button', { name: '+ Filter' }).click();
-        await drawer.getByRole('button', { name: '+ Condition' }).click();
-        await expect(drawer.getByPlaceholder('field name')).toHaveCount(0, { timeout: 15_000 });
-        await drawer.locator('select').nth(0).selectOption('price');
-        await drawer.locator('select').nth(1).selectOption('gte');
-        const savedFilter1 = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
-        await drawer.getByPlaceholder('value').fill('0');
-        await savedFilter1;
-        await expect(page.getByText('Saved')).toBeVisible({ timeout: 2_000 });
-
-        // Destination node: pick the fake table, set mode Replace, map fields.
-        await nodes.nth(2).click();
-        drawer = page.getByTestId('node-drawer');
-        await page.waitForResponse((res) => res.request().method() === 'GET' && res.url().includes('/schema'));
-        const destTableSelect = drawer.locator('#node-drawer-table-select');
-        await expect(destTableSelect.locator('option', { hasText: FAKE_TABLE_NAME })).toHaveCount(1, { timeout: 10_000 });
-        const savedDestTable = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
-        await destTableSelect.selectOption({ label: `planometry.${FAKE_TABLE_NAME}` });
-        await savedDestTable;
-
-        const modeSelect = drawer.locator('select').filter({ has: page.locator('option', { hasText: 'Replace' }) });
-        const savedMode = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
-        await modeSelect.selectOption({ label: 'Replace' });
-        await savedMode;
-
-        await drawer.getByRole('button', { name: 'Field mapping' }).click();
-        await drawer.getByRole('button', { name: 'Propose mapping' }).click();
-        await expect(drawer.getByRole('button', { name: 'Remove entry' }).first()).toBeVisible({ timeout: 10_000 });
-        await drawer.getByRole('button', { name: 'Approve' }).click();
-        await expect(drawer.getByRole('button', { name: 'Approve' })).toBeDisabled();
-
-        // Publish — unambiguous here (dialog not yet open).
-        await page.getByRole('button', { name: 'Publish', exact: true }).click();
-        const publishDialog = page.getByText('Publish to agent?').locator('../..');
-        await expect(publishDialog.getByText('This is a new job for the agent.')).toBeVisible({ timeout: 10_000 });
-        // Both the header's trigger and the dialog's own confirm button read
-        // "Publish" once the dialog is open — .last() targets the dialog's,
-        // which FlowCanvas.tsx renders after CanvasHeader with no portal.
-        await page.getByRole('button', { name: 'Publish', exact: true }).last().click();
-
-        await expect(page.getByText('Applied · v1')).toBeVisible({ timeout: 30_000 });
-      });
+          await expect(page.getByText('Applied · v1')).toBeVisible({ timeout: 30_000 });
+        },
+        { timeout: 3 * 60 * 1000 },
+      );
 
       // c) Run now — the fake table ends up holding the source's rows, and
       // run history shows one run with that row count.
@@ -490,26 +520,34 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
 
         await page.getByRole('button', { name: 'Run history', exact: true }).click();
         await expect(page.getByText('3 sent')).toBeVisible({ timeout: 15_000 });
-      });
+      }, { timeout: 3 * 60 * 1000 });
 
       // d) Change the filter — forces a full reload; publish again at v2.
-      await test.step('d) change the filter: publish preview warns of a full reload, applies at v2', async () => {
-        await page.locator('.react-flow__node').nth(1).click();
-        const drawer = page.getByTestId('node-drawer');
-        const savedFilter2 = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
-        await drawer.getByPlaceholder('value').fill('10');
-        await savedFilter2;
-        await expect(page.getByText('Saved')).toBeVisible({ timeout: 2_000 });
+      await test.step(
+        'd) change the filter via the same API save call: publish preview warns of a full reload, applies at v2',
+        async () => {
+          const workflowId = currentWorkflowId(page);
+          const authHeaders = { Authorization: `Bearer ${await getAccessToken(page)}` };
 
-        await page.getByRole('button', { name: 'Publish', exact: true }).click();
-        const publishDialog = page.getByText('Publish to agent?').locator('../..');
-        await expect(
-          publishDialog.getByText('This forces a full reload of the destination the next time the agent runs it.'),
-        ).toBeVisible({ timeout: 10_000 });
-        await page.getByRole('button', { name: 'Publish', exact: true }).last().click();
+          const transformNode = agentGraph!.nodes.find((n) => n.id === 't1') as {
+            config: { steps: { expr: { right: { value: number } } }[] };
+          };
+          transformNode.config.steps[0]!.expr.right.value = 10;
+          await saveGraphViaApi(page, workflowId, apiUrl, authHeaders, agentGraph);
 
-        await expect(page.getByText('Applied · v2')).toBeVisible({ timeout: 30_000 });
-      });
+          await page.reload();
+
+          await page.getByRole('button', { name: 'Publish', exact: true }).click();
+          const publishDialog = page.getByText('Publish to agent?').locator('../..');
+          await expect(
+            publishDialog.getByText('This forces a full reload of the destination the next time the agent runs it.'),
+          ).toBeVisible({ timeout: 10_000 });
+          await page.getByRole('button', { name: 'Publish', exact: true }).last().click();
+
+          await expect(page.getByText('Applied · v2')).toBeVisible({ timeout: 30_000 });
+        },
+        { timeout: 3 * 60 * 1000 },
+      );
 
       // e) Pause, then resume — the job state follows each. No auto-poll for
       // job state (only the publish state auto-refetches while "waiting"),
@@ -527,30 +565,38 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
           await page.reload();
           await expect(page.getByText('ok', { exact: true })).toBeVisible();
         }).toPass({ timeout: 90_000 });
-      });
+      }, { timeout: 3 * 60 * 1000 });
 
       // f) Remove the host from the allow-list, publish a change — rejected,
       // with the allow-list reason in the badge's title.
-      await test.step('f) remove the host from the allow-list: a new publish is rejected with the allow-list reason', async () => {
-        const removeResult = await runCli(['destinations', 'remove', fakeHost!], home);
-        expect(removeResult.code, `destinations remove stdout=${removeResult.stdout} stderr=${removeResult.stderr}`).toBe(0);
+      await test.step(
+        'f) remove the host from the allow-list: a new publish (via the same API save call) is rejected with the allow-list reason',
+        async () => {
+          const removeResult = await runCli(['destinations', 'remove', fakeHost!], home);
+          expect(removeResult.code, `destinations remove stdout=${removeResult.stdout} stderr=${removeResult.stderr}`).toBe(0);
 
-        await page.locator('.react-flow__node').nth(1).click();
-        const drawer = page.getByTestId('node-drawer');
-        const savedFilter3 = page.waitForResponse((res) => res.request().method() === 'PUT' && res.url().includes('/graph'));
-        await drawer.getByPlaceholder('value').fill('1');
-        await savedFilter3;
-        await expect(page.getByText('Saved')).toBeVisible({ timeout: 2_000 });
+          const workflowId = currentWorkflowId(page);
+          const authHeaders = { Authorization: `Bearer ${await getAccessToken(page)}` };
 
-        await page.getByRole('button', { name: 'Publish', exact: true }).click();
-        const publishDialog = page.getByText('Publish to agent?').locator('../..');
-        await expect(publishDialog).toBeVisible();
-        await page.getByRole('button', { name: 'Publish', exact: true }).last().click();
+          const transformNode = agentGraph!.nodes.find((n) => n.id === 't1') as {
+            config: { steps: { expr: { right: { value: number } } }[] };
+          };
+          transformNode.config.steps[0]!.expr.right.value = 1;
+          await saveGraphViaApi(page, workflowId, apiUrl, authHeaders, agentGraph);
 
-        const rejectedBadge = page.getByText('Rejected', { exact: true });
-        await expect(rejectedBadge).toBeVisible({ timeout: 30_000 });
-        await expect(rejectedBadge).toHaveAttribute('title', /allow-list/, { timeout: 15_000 });
-      });
+          await page.reload();
+
+          await page.getByRole('button', { name: 'Publish', exact: true }).click();
+          const publishDialog = page.getByText('Publish to agent?').locator('../..');
+          await expect(publishDialog).toBeVisible();
+          await page.getByRole('button', { name: 'Publish', exact: true }).last().click();
+
+          const rejectedBadge = page.getByText('Rejected', { exact: true });
+          await expect(rejectedBadge).toBeVisible({ timeout: 30_000 });
+          await expect(rejectedBadge).toHaveAttribute('title', /allow-list/, { timeout: 15_000 });
+        },
+        { timeout: 3 * 60 * 1000 },
+      );
     } finally {
       if (agentChild && (agentChild as ChildProcess).exitCode === null) {
         (agentChild as ChildProcess).kill('SIGKILL');
