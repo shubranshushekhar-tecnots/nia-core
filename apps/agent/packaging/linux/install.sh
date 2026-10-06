@@ -51,11 +51,24 @@ if [[ "$SERVICE_WAS_RUNNING" == true ]]; then
   systemctl start nia-agent
   echo "upgraded and restarted nia-agent"
 else
-  cat <<EOF
-installed. Next steps:
-  sudo -u nia-agent node $INSTALL_DIR/dist/index.js connection add ...
+  echo "installed."
+  if [[ -t 0 && -t 1 ]]; then
+    read -r -p "Run guided setup now? [Y/n] " REPLY
+    if [[ -z "$REPLY" || "$REPLY" =~ ^[Yy] ]]; then
+      sudo -u nia-agent node "$INSTALL_DIR/dist/index.js" setup
+    else
+      cat <<EOF
+Skipped. Run it later with:
+  sudo -u nia-agent node $INSTALL_DIR/dist/index.js setup
+EOF
+    fi
+  else
+    cat <<EOF
+Next steps:
+  sudo -u nia-agent node $INSTALL_DIR/dist/index.js setup
   sudo -u nia-agent node $INSTALL_DIR/dist/index.js doctor
   systemctl start nia-agent
   systemctl status nia-agent
 EOF
+  fi
 fi

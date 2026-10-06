@@ -82,9 +82,24 @@ if [[ "$SERVICE_WAS_LOADED" == true ]]; then
   echo "upgraded and restarted $LABEL"
 else
   cat <<EOF
-installed and started $LABEL (runs at login/boot going forward). Next steps:
-  NIA_AGENT_HOME="$HOME_DIR" "$EXE_PATH" connection add ...
+installed and started $LABEL (runs at login/boot going forward).
+EOF
+  if [[ -t 0 && -t 1 ]]; then
+    read -r -p "Run guided setup now? [Y/n] " REPLY
+    if [[ -z "$REPLY" || "$REPLY" =~ ^[Yy] ]]; then
+      NIA_AGENT_HOME="$HOME_DIR" "$EXE_PATH" setup
+    else
+      cat <<EOF
+Skipped. Run it later with:
+  NIA_AGENT_HOME="$HOME_DIR" "$EXE_PATH" setup
+EOF
+    fi
+  else
+    cat <<EOF
+Next steps:
+  NIA_AGENT_HOME="$HOME_DIR" "$EXE_PATH" setup
   NIA_AGENT_HOME="$HOME_DIR" "$EXE_PATH" doctor
   launchctl print $DOMAIN/$LABEL
 EOF
+  fi
 fi
