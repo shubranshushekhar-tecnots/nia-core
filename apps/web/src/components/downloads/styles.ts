@@ -83,6 +83,8 @@ export const nxDownloadsCardsGridStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
   maxWidth: 1080,
+  borderTop: '1px solid var(--nx-line)',
+  borderLeft: '1px solid var(--nx-line)',
 };
 
 export function nxDownloadsCardStyle(highlight: boolean): CSSProperties {
