@@ -259,7 +259,13 @@ export default function TransformEditor({
               </button>
             </div>
           )}
-          {!fragmentText && <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)' }}>Nothing pushes down for this connection yet.</div>}
+          {!fragmentText && (
+            <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)' }}>
+              {restrictToFilterOnly
+                ? 'The filter above is applied by the agent at the source, before any data leaves your network.'
+                : 'Nothing pushes down for this connection yet.'}
+            </div>
+          )}
         </div>
       )}
 

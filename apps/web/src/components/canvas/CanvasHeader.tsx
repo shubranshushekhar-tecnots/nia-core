@@ -45,6 +45,19 @@ import { EditIcon, NxSearchIcon, RunArrowIcon } from './navIcons';
 const LOGO_CELL_WORDMARK_MIN_WIDTH = 120;
 
 /**
+ * Polish pass — agent-delivered workflows (B.7) fail "Run checks" on two
+ * checks that aren't real problems here: a write grant (agent-delivered
+ * destinations don't use write grants) and "connection is missing agent
+ * configuration" (that connection is configured by the agent itself, not
+ * through this UI). Rather than special-case those two check ids, this
+ * job is checked automatically when published and again by the agent on
+ * every run — so manual "Run checks" is disabled outright for these
+ * workflows, with this tooltip explaining why.
+ */
+export const AGENT_RUN_CHECKS_DISABLED_TITLE =
+  "Not available for agent-delivered workflows — this job is checked when it's published, and again by the agent before each run.";
+
+/**
  * 64px cell-based header for the workflow canvas — rebuilt to match
  * TopBar.tsx's shell exactly (same nxTopBarStyle row, same bordered-cell
  * primitives) instead of the old 52px flex-row-with-gaps layout, so the
@@ -70,6 +83,7 @@ export default function CanvasHeader({
   onReloadAfterConflict,
   checksRunning,
   onRunChecks,
+  agentDelivered,
   runEnabled,
   runInFlight,
   runTooltip,
@@ -88,6 +102,8 @@ export default function CanvasHeader({
   onReloadAfterConflict: () => void;
   checksRunning: boolean;
   onRunChecks: () => void;
+  /** True for agent-delivered workflows (B.7) — disables Run checks, see AGENT_RUN_CHECKS_DISABLED_TITLE above. */
+  agentDelivered: boolean;
   runEnabled: boolean;
   runInFlight: boolean;
   runTooltip: string;
@@ -293,8 +309,9 @@ export default function CanvasHeader({
         <button
           type="button"
           onClick={onRunChecks}
-          disabled={checksRunning}
-          className={checksRunning ? 'nx-wipe nx-row-disabled' : 'nx-wipe'}
+          disabled={checksRunning || agentDelivered}
+          title={agentDelivered ? AGENT_RUN_CHECKS_DISABLED_TITLE : undefined}
+          className={checksRunning || agentDelivered ? 'nx-wipe nx-row-disabled' : 'nx-wipe'}
           style={headerRunChecksCellStyle}
         >
           {checksRunning ? 'Running…' : 'Run checks'}

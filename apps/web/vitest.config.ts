@@ -2,16 +2,19 @@ import { defineConfig } from "vitest/config";
 import path from "node:path";
 
 // Scoped to lib/** plus a handful of app/** and components/** server-safe,
-// plain-function, non-JSX files (see below): today that's
+// plain-function, non-JSX files, plus a small set of .test.tsx files that
+// actually render canvas components under jsdom (Agent-delivered-workflow
+// polish pass, see docs/plans/agent-canvas-integration.md): today that's
 // lib/canvas/mapping.ts's pure GraphDoc<->React Flow round-trip tests,
-// app/console/layout.test.ts, and navGroups.test.ts (Slice 10). Nothing
-// here touches Next's App Router rendering or JSX — every file above is a
-// plain function in a .ts (not .tsx) module called directly, not rendered
-// — so no jsdom/next-test-env setup is needed yet; add one if/when a test
-// needs to actually render a component (tsconfig.json's "jsx": "preserve"
-// means vite's default esbuild transform can't parse a .tsx file anyway,
-// so keep test-covered logic that doesn't need JSX in plain .ts modules).
+// app/console/layout.test.ts, navGroups.test.ts (Slice 10), and
+// components/canvas/*.test.tsx. This project's Vite (8.x) uses the
+// Rolldown/oxc transform pipeline, not classic esbuild, so the usual
+// `esbuild.jsx` option is silently ignored (oxc wins and esbuild options
+// are dropped) — the equivalent oxc option below is required instead, since
+// it otherwise inherits tsconfig.json's "jsx": "preserve" (Next's own
+// setting, for its downstream compiler) and errors on raw JSX without it.
 export default defineConfig({
+  oxc: { jsx: { runtime: "automatic" } },
   resolve: {
     // Mirrors tsconfig.json's "@/*" -> "./src/*" path alias (Next's own
     // resolver honors tsconfig paths automatically; vitest doesn't, so any
@@ -29,6 +32,17 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/lib/**/*.test.ts", "src/app/console/**/*.test.ts", "src/components/console/**/*.test.ts"],
+    include: [
+      "src/lib/**/*.test.ts",
+      "src/app/console/**/*.test.ts",
+      "src/components/console/**/*.test.ts",
+      "src/components/canvas/**/*.test.tsx",
+    ],
+    // `environmentMatchGlobs` (older Vitest) doesn't exist in this project's
+    // Vitest 5 — there's no per-glob environment switch anymore, so the
+    // whole suite runs under jsdom. The plain .ts files above are pure
+    // function calls with no Node-only API conflicts, so this is safe.
+    environment: "jsdom",
+    setupFiles: ["./vitest.setup.ts"],
   },
 });

@@ -142,7 +142,7 @@ function RunHistoryList({ workflowId, open }: { workflowId: string; open: boolea
           <span>{run.mode ?? '—'}</span>
           <span>{run.rowsSent.toLocaleString()} sent</span>
           <span>{run.rowsDeleted.toLocaleString()} deleted</span>
-          <span>{(run.durationMs / 1000).toFixed(1)}s</span>
+          <span>{run.durationMs < 1000 ? 'under 1s' : `${(run.durationMs / 1000).toFixed(1)}s`}</span>
           <span style={run.status === 'failed' ? { color: 'var(--nx-danger-text)' } : undefined}>{runResultLabel(run)}</span>
         </div>
       ))}
@@ -181,17 +181,17 @@ function RunNowDialog({ onClose, onConfirm }: { onClose: () => void; onConfirm: 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 20 }}>
             <span style={nxModalTitleStyle}>Run now?</span>
             <p style={{ ...nxModalBodyTextStyle, margin: 0 }}>
-              The agent runs this job on its next check-in. Optionally override one-off parameter values below, one <code>key=value</code>{' '}
-              per line.
+              The agent runs this job on its next check-in. Leave the box below empty to run with its saved parameters, or override one-off
+              values, one <code>key=value</code> per line.
             </p>
             <div style={nxModalFieldRowStackedStyle}>
-              <span style={nxModalLabelStyle}>Parameter overrides (optional)</span>
+              <span style={nxModalLabelStyle}>Parameter overrides — leave empty to use saved values</span>
               <textarea
                 value={paramsText}
                 onChange={(e) => setParamsText(e.target.value)}
                 rows={4}
                 style={{ fontFamily: 'var(--nx-font-mono)', fontSize: 12.5, padding: 8, border: '1px solid var(--nx-line)', borderRadius: 'var(--nx-radius)', background: 'var(--nx-bg)', color: 'var(--nx-ink)' }}
-                placeholder="since=2024-01-01"
+                placeholder="Example: since=2024-01-01"
               />
             </div>
             {error && <span style={nxModalErrorStyle}>{error}</span>}

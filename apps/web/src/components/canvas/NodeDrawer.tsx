@@ -616,7 +616,13 @@ function SourceDestForm({
   const selectedKey = config.entity ? entityKey(config.entity) : '';
   const selectedEntity = config.entity ? entities.find((e) => entityKey(e) === selectedKey) : undefined;
   const namespace = config.entity?.namespace;
-  const grantCovers = namespace !== undefined && grantedNamespaces.has(namespace);
+  // Planometry table / HTTPS endpoint destinations are agent-delivered: the
+  // write-grant guardrail (confirmed DB-level grant unlocking a verb) only
+  // applies to connectors Nia Core writes to directly. These two never go
+  // through that path, so treat them as always "covered" and skip the grant
+  // UI entirely rather than showing a lock that can never be satisfied.
+  const grantExempt = isAgentDestinationManifest(manifestId);
+  const grantCovers = grantExempt || (namespace !== undefined && grantedNamespaces.has(namespace));
   const pendingGrant =
     namespace !== undefined
       ? grants.find((g) => !g.revokedAt && !g.confirmedAt && grantScopeHasNamespace(g, namespace))
@@ -643,7 +649,7 @@ function SourceDestForm({
   }, [slot, operations.join(','), config.operation]);
 
   if (slot === 'detail') {
-    if (nodeType !== 'destination' || !connectionId || namespace === undefined) return null;
+    if (nodeType !== 'destination' || !connectionId || namespace === undefined || grantExempt) return null;
     if (!grantCovers) {
       return <GrantAccessPanel connectionId={connectionId} connectorId={manifestId} namespace={namespace} pendingGrant={pendingGrant} role={role} />;
     }
@@ -920,13 +926,36 @@ function AgentSourceColumnsPanel({
     onChange({ ...config, params: next });
   }
 
+  function selectAllColumns() {
+    onChange({ ...config, columns: fields.map((f) => ({ name: f.name, type: f.type, isKey: columns.find((c) => c.name === f.name)?.isKey ?? false })) });
+  }
+
+  function clearColumns() {
+    onChange({ ...config, columns: [] });
+  }
+
   if (!entity) return null;
 
   return (
     <div style={{ marginTop: 12 }}>
       <div style={configPanelDividerStyle} />
       <div style={configPanelGroupStyle}>
-        <span style={configPanelGroupLabelStyle}>Columns</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+          <span style={configPanelGroupLabelStyle}>Columns</span>
+          {fields.length > 0 && (
+            <span style={{ display: 'flex', gap: 10 }}>
+              <button type="button" onClick={selectAllColumns} style={{ border: 'none', background: 'none', color: 'var(--nx-ink-3)', cursor: 'pointer', fontSize: 11, padding: 0 }}>
+                Select all
+              </button>
+              <button type="button" onClick={clearColumns} style={{ border: 'none', background: 'none', color: 'var(--nx-ink-3)', cursor: 'pointer', fontSize: 11, padding: 0 }}>
+                Clear
+              </button>
+            </span>
+          )}
+        </div>
+        <span style={{ fontSize: 11, color: 'var(--nx-ink-disabled)', marginBottom: 6, display: 'block' }}>
+          Unticked columns are left behind at the source — they are never read or sent.
+        </span>
         {fields.length === 0 ? (
           <span style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)' }}>Loading columns…</span>
         ) : (
@@ -958,7 +987,8 @@ function AgentSourceColumnsPanel({
       <div style={configPanelGroupStyle}>
         <span style={configPanelGroupLabelStyle}>Saved parameters</span>
         <span style={{ fontSize: 11, color: 'var(--nx-ink-disabled)', marginBottom: 6, display: 'block' }}>
-          Reference by name as a filter condition&apos;s value below. Value is a literal, or a rolling date token: {ROLLING_DATE_TOKENS.join(', ')}.
+          Give a parameter a name here, then use that name as a filter condition&apos;s value. A value can be fixed (e.g. <code style={{ fontFamily: 'var(--nx-font-mono)' }}>status = active</code>) or a
+          rolling date that moves with each run (e.g. <code style={{ fontFamily: 'var(--nx-font-mono)' }}>today-7d</code> for &quot;7 days ago&quot;). Rolling tokens: {ROLLING_DATE_TOKENS.join(', ')}.
         </span>
         {Object.entries(params).map(([name, value]) => (
           <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
@@ -1428,7 +1458,18 @@ export default function NodeDrawer({
         )}
 
         {showProfileTab && activeTab === 'profile' && data.connectionId && sourceDestConfig?.entity && (
-          <ProfileTab connectionId={data.connectionId} entity={sourceDestConfig.entity} />
+          isAgentSourceManifest(data.manifestId) ? (
+            // "Local database (via agent)" source — this entity is only ever
+            // introspected over the agent-bridge's connector adapters at
+            // run/test time, not through this UI's own profiler query path
+            // (no supported query dialect), so calling it here would just
+            // worker-timeout. Skip the call entirely and say so plainly.
+            <div style={{ fontSize: 12, color: 'var(--nx-ink-disabled)' }}>
+              Column profiling is not available yet for local databases.
+            </div>
+          ) : (
+            <ProfileTab connectionId={data.connectionId} entity={sourceDestConfig.entity} />
+          )
         )}
 
         {data.resolved && data.graphNodeType === 'transform' && !parsed.unrecognized && (

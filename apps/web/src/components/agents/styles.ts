@@ -10,13 +10,24 @@ import type { CSSProperties } from 'react';
 
 // ---- Header / hero -------------------------------------------------------
 
+// Precision Dark redesign parity pass: Members-style 220px two-column header
+// (left: eyebrow/H1/subtitle, right: 2x2 "at a glance" stats grid) instead of
+// the old single flex row — see members/styles.ts:15-97 for the precedent
+// this mirrors exactly.
 export const nxAgentsHeaderRowStyle: CSSProperties = {
   flexShrink: 0,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '28px 40px',
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1fr)',
+  minHeight: 220,
   borderBottom: '1px solid var(--nx-line)',
+};
+
+export const nxAgentsHeaderLeftColStyle: CSSProperties = {
+  padding: '28px 40px',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'space-between',
+  borderRight: '1px solid var(--nx-line)',
 };
 
 export const nxAgentsTitleColStyle: CSSProperties = {
@@ -38,8 +49,8 @@ export const nxAgentsEyebrowStyle: CSSProperties = {
 export const nxAgentsH1Style: CSSProperties = {
   margin: 0,
   fontFamily: 'var(--font-inter-tight), var(--nx-font-ui)',
-  fontSize: 56,
-  lineHeight: '56px',
+  fontSize: 88,
+  lineHeight: '80px',
   fontWeight: 500,
   letterSpacing: '-0.05em',
 };
@@ -50,13 +61,17 @@ export const nxAgentsSubtitleStyle: CSSProperties = {
   color: 'var(--nx-ink-2)',
 };
 
+// Add-agent CTA now uses the shared .nx-wipe hover idiom (transparent/
+// outlined at rest, ink fill only on hover) instead of being permanently
+// filled — matches every other primary action in the app (e.g.
+// AddAgentDialog's own submit button already does this).
 export function nxAgentsAddBtnStyle(pending: boolean): CSSProperties {
   return {
     height: 40,
     padding: '0 18px',
     border: '1px solid var(--nx-line)',
-    background: 'var(--nx-ink)',
-    color: 'var(--nx-bg)',
+    background: 'transparent',
+    color: 'var(--nx-ink)',
     fontFamily: 'var(--nx-font-mono)',
     fontSize: 12,
     letterSpacing: '0.06em',
@@ -65,6 +80,45 @@ export function nxAgentsAddBtnStyle(pending: boolean): CSSProperties {
     opacity: pending ? 0.6 : 1,
   };
 }
+
+// ---- Stats grid (2x2, mirrors members/styles.ts:62-97) --------------------
+
+export const nxAgentsStatsGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gridTemplateRows: 'repeat(2, minmax(0, 1fr))',
+};
+
+export function nxAgentsStatCellStyle(highlight: boolean): CSSProperties {
+  return {
+    padding: '16px 20px',
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    borderBottom: '1px solid var(--nx-line-inner)',
+    borderRight: '1px solid var(--nx-line-inner)',
+    background: highlight ? 'var(--nx-blue-panel)' : 'transparent',
+    color: highlight ? 'var(--nx-blue-panel-text)' : 'var(--nx-ink)',
+  };
+}
+
+export const nxAgentsStatLabelStyle: CSSProperties = {
+  fontFamily: 'var(--nx-font-condensed)',
+  fontStretch: '62.5%',
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  fontSize: 14,
+  textTransform: 'uppercase',
+  opacity: 0.8,
+};
+
+export const nxAgentsStatValueStyle: CSSProperties = {
+  fontFamily: 'var(--font-inter-tight), var(--nx-font-ui)',
+  fontSize: 40,
+  lineHeight: '40px',
+  fontWeight: 500,
+  letterSpacing: '-0.04em',
+};
 
 // ---- List -----------------------------------------------------------------
 
@@ -121,9 +175,18 @@ export const nxAgentsNameStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+// Fixed: --nx-success-text was never defined in theme.css, so this always
+// silently fell back to a hardcoded bright green (#2e7d32) that matched
+// nothing else in the palette. --nx-success is the real, already-themed
+// token used everywhere else "ok" status renders (e.g. home/WorkflowsTable's
+// quiet grey "succeeded" glyph).
 export function nxAgentsStatusBadgeStyle(online: boolean): CSSProperties {
   return {
-    alignSelf: 'flex-start',
+    // Every caller places this inside a grid row whose own `alignItems:
+    // 'center'` centers plain-text cells vertically (nxAgentsRowStyle,
+    // nxAgentsJobRowStyle, nxAgentsRunRowStyle) — `alignSelf: 'flex-start'`
+    // here pinned just this cell to the row's top instead, visibly
+    // misaligning the Online/Offline/Revoked badge against its row.
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
@@ -133,7 +196,7 @@ export function nxAgentsStatusBadgeStyle(online: boolean): CSSProperties {
     fontSize: 10.5,
     letterSpacing: '0.05em',
     textTransform: 'uppercase',
-    color: online ? 'var(--nx-success-text, #2e7d32)' : 'var(--nx-ink-3)',
+    color: online ? 'var(--nx-success)' : 'var(--nx-ink-3)',
   };
 }
 
@@ -142,7 +205,7 @@ export function nxAgentsStatusDotStyle(online: boolean): CSSProperties {
     width: 6,
     height: 6,
     borderRadius: '50%',
-    background: online ? 'var(--nx-success-text, #2e7d32)' : 'var(--nx-ink-3)',
+    background: online ? 'var(--nx-success)' : 'var(--nx-ink-3)',
   };
 }
 
@@ -169,18 +232,21 @@ export const nxAgentsRevokeBtnStyle: CSSProperties = {
 
 // ---- Empty state ------------------------------------------------------
 
+// Same halftone-texture + fade-up treatment as Home's "No runs yet" empty
+// state (HomeContent.tsx) instead of a plain disconnected box.
 export const nxAgentsEmptyPanelStyle: CSSProperties = {
   padding: '40px',
   display: 'flex',
   flexDirection: 'column',
-  gap: 16,
+  gap: 18,
   maxWidth: 560,
+  backgroundSize: '6px 6px',
 };
 
 export const nxAgentsEmptyStepStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
-  gap: 12,
+  gap: 14,
 };
 
 export const nxAgentsEmptyStepNumStyle: CSSProperties = {
@@ -222,6 +288,7 @@ export const nxAgentsExpandPanelStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 18,
+  transition: 'background 160ms var(--nx-ease)',
 };
 
 export const nxAgentsExpandSectionLabelStyle: CSSProperties = {

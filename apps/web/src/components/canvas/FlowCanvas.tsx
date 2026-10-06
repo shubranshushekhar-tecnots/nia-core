@@ -44,7 +44,7 @@ import { applyPlan, applyPlanDiff, listAppliedPlans, revertPlan, CopilotApiError
 import { runWorkflowChecks, getLatestCheckRun, listCheckRuns, ChecksApiError } from '@/lib/api/checksClient';
 import { startWorkflowRun, streamRun, cancelWorkflowRun, RunApiError } from '@/lib/api/runsClient';
 import { getAgentSetupState, unpublishAgentSetup, AgentSetupApiError } from '@/lib/api/agentSetupClient';
-import { isAgentDeliveredWorkflow } from '@/lib/canvas/agentDelivery';
+import { computePublishGate, isAgentDeliveredWorkflow, isAgentDestinationManifest } from '@/lib/canvas/agentDelivery';
 import { useCanvasStore } from '@/lib/canvas/store';
 import { useChatSession } from '@/lib/chat/useChatSession';
 import { buildActivityFeed, type ActivityItem } from '@/lib/canvas/activityFeed';
@@ -57,7 +57,7 @@ import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRa
 import NodeConfigPanel from './NodeConfigPanel';
 import ChecksDock from './ChecksDock';
 import CopilotSidebar from './CopilotSidebar';
-import CanvasHeader from './CanvasHeader';
+import CanvasHeader, { AGENT_RUN_CHECKS_DISABLED_TITLE } from './CanvasHeader';
 import NodeContextMenu, { type MenuAction } from './NodeContextMenu';
 import { useToasts, ToastStack } from './Toast';
 import DeleteConnectionDialog from './DeleteConnectionDialog';
@@ -854,12 +854,13 @@ function CanvasInner({
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [unpublishing, setUnpublishing] = useState(false);
 
-  const publishEnabled = !readOnly && isAgentDelivered && derivedAgentSetup?.ok === true;
-  const publishTooltip = readOnly
-    ? 'You have view-only access — ask an admin or owner for edit access to publish this workflow.'
-    : derivedAgentSetup && !derivedAgentSetup.ok
-      ? derivedAgentSetup.problems[0] ?? 'This workflow cannot be published as configured.'
-      : 'Ready to publish.';
+  // Require an explicit mapping approval before Publish is enabled — see
+  // computePublishGate's doc comment (agentDelivery.ts) for why.
+  const agentDestNode = useMemo(
+    () => (isAgentDelivered ? nodes.find((n) => n.data.graphNodeType === 'destination' && isAgentDestinationManifest(n.data.manifestId)) : undefined),
+    [isAgentDelivered, nodes],
+  );
+  const { publishEnabled, publishTooltip } = computePublishGate({ readOnly, isAgentDelivered, derivedAgentSetup, agentDestNode });
 
   const handleUnpublish = useCallback(async () => {
     setUnpublishing(true);
@@ -1180,6 +1181,7 @@ function CanvasInner({
         onReloadAfterConflict={reloadAfterConflict}
         checksRunning={checksRunning}
         onRunChecks={handleRunChecks}
+        agentDelivered={isAgentDelivered}
         runEnabled={runEnabled}
         runInFlight={runInFlight}
         runTooltip={runTooltip}
@@ -1393,7 +1395,13 @@ function CanvasInner({
                 >
                   <Logo size={16} showWordmark={false} />
                 </button>
-                <button type="button" onClick={handleRunChecks} disabled={checksRunning} style={headerRunChecksBtnStyle(checksRunning)}>
+                <button
+                  type="button"
+                  onClick={handleRunChecks}
+                  disabled={checksRunning || isAgentDelivered}
+                  title={isAgentDelivered ? AGENT_RUN_CHECKS_DISABLED_TITLE : undefined}
+                  style={headerRunChecksBtnStyle(checksRunning || isAgentDelivered)}
+                >
                   {checksRunning ? 'Running…' : 'Run checks'}
                 </button>
                 {runEnabled ? (
@@ -1422,9 +1430,9 @@ function CanvasInner({
             <ChecksDock
               running={checksRunning}
               error={checksError}
-              results={latestCheckRun?.results ?? null}
-              ranAt={latestCheckRun?.ranAt ?? null}
-              stale={checksStale}
+              results={isAgentDelivered ? null : latestCheckRun?.results ?? null}
+              ranAt={isAgentDelivered ? null : latestCheckRun?.ranAt ?? null}
+              stale={!isAgentDelivered && checksStale}
               nodeCount={nodes.length}
               edgeCount={edges.length}
               expanded={checksDockExpanded}
@@ -1434,6 +1442,7 @@ function CanvasInner({
               activeTab={checksDockTab}
               onTabChange={setChecksDockTab}
               logs={activityFeed}
+              agentDelivered={isAgentDelivered}
             />
 
             {Object.keys(runStates).length > 0 && (

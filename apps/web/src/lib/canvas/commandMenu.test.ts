@@ -1,3 +1,10 @@
+// @vitest-environment node
+//
+// Forced back to Node (vitest.config.ts's project-wide default is now
+// jsdom, for the canvas component tests) because this file's "no storage
+// available (SSR)" case relies on `window` being genuinely undefined —
+// defaultStorage()'s default-parameter fallback only kicks in that way;
+// under jsdom, `window.localStorage` is real and the SSR simulation breaks.
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   COMMAND_GROUP_ORDER,

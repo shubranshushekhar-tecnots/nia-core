@@ -191,6 +191,7 @@ export function ChecksDrawer({
   bodyHeight,
   dragging,
   onDragPointerDown,
+  agentDelivered,
 }: {
   running: boolean;
   error: string | null;
@@ -202,6 +203,8 @@ export function ChecksDrawer({
   bodyHeight: number;
   dragging: boolean;
   onDragPointerDown: (e: ReactPointerEvent) => void;
+  /** Agent-delivered workflows (B.7) — skip rendering `results` entirely, even if a stale/false-failing run is cached, and explain why instead. */
+  agentDelivered?: boolean;
 }) {
   const sorted = results ? sortResults(results) : null;
   return (
@@ -209,25 +212,34 @@ export function ChecksDrawer({
       <div style={dragHandleStyle('horizontal', dragging)} onPointerDown={onDragPointerDown} data-testid="checks-dock-drag-handle" />
       {activeTab === 'checks' && (
         <div style={bodyStyleFor(bodyHeight)} data-testid="checks-dock-body">
-          {running && <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>Running checks…</div>}
-          {!running && error && <div style={{ fontSize: 12.5, color: 'var(--nx-danger)' }}>{error}</div>}
-          {!running && !error && sorted && sorted.length === 0 && (
-            <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>No checks ran.</div>
-          )}
-          {!running && !error && sorted && sorted.length > 0 && (
-            <div>
-              {sorted.map((r, i) => (
-                <ResultRow key={`${r.id}-${r.nodeId ?? ''}-${i}`} result={r} onSelect={onSelectNode} />
-              ))}
-              {ranAt && (
-                <div style={{ fontSize: 10.5, color: 'var(--nx-ink-disabled)', marginTop: 8 }}>
-                  Last run {new Date(ranAt).toLocaleString()}
+          {agentDelivered ? (
+            <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>
+              This job is checked automatically when it&apos;s published, and again by the agent before each run — manual checks are
+              disabled here.
+            </div>
+          ) : (
+            <>
+              {running && <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>Running checks…</div>}
+              {!running && error && <div style={{ fontSize: 12.5, color: 'var(--nx-danger)' }}>{error}</div>}
+              {!running && !error && sorted && sorted.length === 0 && (
+                <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>No checks ran.</div>
+              )}
+              {!running && !error && sorted && sorted.length > 0 && (
+                <div>
+                  {sorted.map((r, i) => (
+                    <ResultRow key={`${r.id}-${r.nodeId ?? ''}-${i}`} result={r} onSelect={onSelectNode} />
+                  ))}
+                  {ranAt && (
+                    <div style={{ fontSize: 10.5, color: 'var(--nx-ink-disabled)', marginTop: 8 }}>
+                      Last run {new Date(ranAt).toLocaleString()}
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-          {!running && !error && !sorted && (
-            <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>No checks have run yet.</div>
+              {!running && !error && !sorted && (
+                <div style={{ fontSize: 12.5, color: 'var(--nx-ink-disabled)' }}>No checks have run yet.</div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -285,6 +297,7 @@ export function ChecksBar({
   onToggleExpanded,
   activeTab,
   onTabChange,
+  agentDelivered,
 }: {
   running: boolean;
   error: string | null;
@@ -297,6 +310,8 @@ export function ChecksBar({
   onToggleExpanded: () => void;
   activeTab: 'checks' | 'logs';
   onTabChange: (tab: 'checks' | 'logs') => void;
+  /** Agent-delivered workflows (B.7) never run manual checks — see ChecksDock's own doc comment. */
+  agentDelivered?: boolean;
 }) {
   const passCount = results?.filter((r) => r.status === 'pass').length ?? 0;
   const failCount = results?.filter((r) => r.status === 'fail').length ?? 0;
@@ -304,7 +319,10 @@ export function ChecksBar({
 
   let pillLabel: string;
   let pillTone: PillTone;
-  if (running) {
+  if (agentDelivered) {
+    pillLabel = 'Checked at publish, and by the agent';
+    pillTone = 'neutral';
+  } else if (running) {
     pillLabel = 'Running checks…';
     pillTone = 'neutral';
   } else if (error) {
@@ -401,6 +419,7 @@ export default function ChecksDock({
   onTabChange,
   logs,
   onHeightChange,
+  agentDelivered,
 }: {
   running: boolean;
   error: string | null;
@@ -419,6 +438,8 @@ export default function ChecksDock({
   logs: ActivityItem[];
   /** Reports the dock's live rendered height (collapsed 36px, or 36 + the resizable body height when expanded) so FlowCanvas.tsx can keep the viewport toolbar clear of it — see styles.ts's viewportToolbarStyle. */
   onHeightChange?: (height: number) => void;
+  /** Agent-delivered workflows (B.7) — see ChecksDrawer/ChecksBar's own doc comments. */
+  agentDelivered?: boolean;
 }) {
   const [bodyHeight, setBodyHeight] = useState(DOCK_BODY_DEFAULT_HEIGHT);
   const [dragging, setDragging] = useState(false);
@@ -497,6 +518,7 @@ export default function ChecksDock({
           bodyHeight={bodyHeight}
           dragging={dragging}
           onDragPointerDown={handleDragPointerDown}
+          agentDelivered={agentDelivered}
         />
       )}
 
@@ -512,6 +534,7 @@ export default function ChecksDock({
         onToggleExpanded={onToggleExpanded}
         activeTab={activeTab}
         onTabChange={onTabChange}
+        agentDelivered={agentDelivered}
       />
     </div>
   );

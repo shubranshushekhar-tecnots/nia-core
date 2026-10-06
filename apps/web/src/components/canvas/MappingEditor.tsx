@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   buildDestinationContract,
@@ -330,6 +330,30 @@ export default function MappingEditor({
   const upsertKeys = config.upsertKeys ?? [];
 
   /**
+   * Item 9 — Planometry already reports a verified-unique key column for
+   * each table it introspects (IntrospectResponse.entities[].primaryKey,
+   * contract.ts). For that destination type only, pre-tick it as the
+   * upsert key once it's actually mapped, instead of leaving the user to
+   * rediscover and re-tick a column Planometry already told us about.
+   * Guarded to fire only once per table (doesn't re-fire on every render,
+   * and never overwrites a key set someone picked or un-ticked by hand).
+   */
+  const { schema: destSchemaResponse } = useEntitySchema(destConnectionId);
+  const destEntityDef =
+    config.entity && destSchemaResponse
+      ? destSchemaResponse.entities.find((e) => e.namespace === config.entity!.namespace && e.name === config.entity!.name)
+      : undefined;
+  const planometryKeyColumn = destManifestId === 'planometry-table' ? destEntityDef?.primaryKey ?? undefined : undefined;
+  const mappedDestFieldsKey = mappedDestFieldsList.join(',');
+  useEffect(() => {
+    if (!planometryKeyColumn) return;
+    if (upsertKeys.length > 0) return;
+    if (!mappedDestFieldsList.includes(planometryKeyColumn)) return;
+    onChange({ ...config, upsertKeys: [planometryKeyColumn] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planometryKeyColumn, mappedDestFieldsKey]);
+
+  /**
    * Schema layer Part 4 — "the preview shows source path -> destination
    * name -> type, a fidelity badge, ... Degraded fields are highlighted."
    * Computed client-side with the same pure functions ensureDestination.ts
@@ -548,6 +572,12 @@ export default function MappingEditor({
         <div style={sectionHeaderStyle}>Upsert keys</div>
         <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', marginBottom: 8 }}>
           Destination fields a run matches existing rows on. Required to run this destination.
+          {planometryKeyColumn && (
+            <>
+              {' '}
+              <strong style={{ color: 'var(--nx-ink-3)' }}>{planometryKeyColumn}</strong> is pre-selected — Planometry reports it as this table&apos;s key.
+            </>
+          )}
         </div>
         {mappedDestFieldsList.length === 0 ? (
           <div style={{ fontSize: 11.5, color: 'var(--nx-ink-disabled)', marginBottom: 12 }}>Map at least one field first.</div>
