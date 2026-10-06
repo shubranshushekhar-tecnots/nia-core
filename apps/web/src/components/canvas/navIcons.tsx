@@ -290,6 +290,12 @@ export const NxSettingsIcon: IconComponent = ({ size = 16 }) => (
   </svg>
 );
 
+export const NxDocsIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden {...nxStroke}>
+    <path d="M4 3h8l4 4v10H4zM12 3v4h4M7 10h6M7 13h6" />
+  </svg>
+);
+
 /** Collapse/expand toggle — points left by default (collapse direction);
  * Sidebar.tsx flips it with `transform: scaleX(-1)` for the expand state. */
 export const NxCollapseIcon: IconComponent = ({ size = 16 }) => (

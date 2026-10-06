@@ -24,6 +24,7 @@ import {
   nxAgentsCreatedCardStyle,
   nxAgentsCreatedHeadingStyle,
   nxAgentsExpiryStyle,
+  nxAgentsStepsListStyle,
 } from './styles';
 
 const initialState: AgentActionState = null;
@@ -105,6 +106,17 @@ export default function AddAgentDialog({
           <div style={nxModalBodyStyle}>
             <span style={nxModalTitleStyle}>Add agent</span>
 
+            <ol style={nxAgentsStepsListStyle}>
+              <li>
+                <a href="/downloads" style={{ color: 'var(--nx-ink-2)' }}>
+                  Download and install the agent
+                </a>
+                .
+              </li>
+              <li>Copy this pairing command.</li>
+              <li>Paste it into the agent&apos;s setup.</li>
+            </ol>
+
             {!state?.success && (
               <>
                 <label htmlFor="agent-name" style={nxModalLabelStyle}>Name</label>
@@ -119,13 +131,6 @@ export default function AddAgentDialog({
                 />
                 {state?.fieldErrors?.name && <span style={nxModalErrorStyle}>{state.fieldErrors.name[0]}</span>}
                 {state?.error && <span style={nxModalErrorStyle}>{state.error}</span>}
-                <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--nx-ink-3)' }}>
-                  Haven&apos;t installed the agent yet?{' '}
-                  <a href="/downloads" style={{ color: 'var(--nx-ink-2)' }}>
-                    Download Nia Core Agent
-                  </a>
-                  .
-                </p>
               </>
             )}
 

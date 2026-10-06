@@ -73,6 +73,13 @@ export default function AgentConnectionPicker({
 
   return (
     <>
+      <p style={{ margin: '0 0 4px', fontSize: 12, color: 'var(--nx-ink-3)' }}>
+        Needs Nia Core Agent installed on a machine that can reach the database.{' '}
+        <a href="/downloads" style={{ color: 'var(--nx-ink-2)' }}>
+          Download
+        </a>
+        .
+      </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <label htmlFor={`${idPrefix}-field-agentId`} style={nxModalLabelStyle}>
           Agent

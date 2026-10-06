@@ -158,6 +158,14 @@ export default function ConnectorCard({
         <span style={nxConnectorCardNameStyle}>{meta.name}</span>
         <span style={nxConnectorCardSubtitleStyle}>{subtitle}</span>
         <span style={nxConnectorCardDescStyle}>{meta.description}</span>
+        {meta.id === 'sqlserver-agent' && (
+          <span style={{ fontSize: 11.5, color: 'var(--nx-ink-3)' }}>
+            Needs Nia Core Agent installed on a machine that can reach the database.{' '}
+            <a href="/downloads" style={{ color: 'var(--nx-ink-2)' }}>
+              Download
+            </a>
+          </span>
+        )}
         {installState?.error && (
           <span style={nxModalErrorStyle}>
             {installState.error}

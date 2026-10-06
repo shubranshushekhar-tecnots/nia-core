@@ -1,16 +1,24 @@
 import DownloadsPage from '@/components/downloads/DownloadsPage';
 import { getDownloadManifest, getDownloadUrl } from '@/lib/downloads/manifest';
+import { getSessionUser } from '@/lib/auth/session';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Page() {
+  const sessionUser = await getSessionUser();
+
   try {
     const manifest = await getDownloadManifest();
     const downloadUrls: Record<string, string> = {};
     for (const file of manifest.files) downloadUrls[file.name] = getDownloadUrl(file);
 
     return (
-      <DownloadsPage version={manifest.version} files={manifest.files} downloadUrls={downloadUrls} />
+      <DownloadsPage
+        version={manifest.version}
+        files={manifest.files}
+        downloadUrls={downloadUrls}
+        signedIn={Boolean(sessionUser)}
+      />
     );
   } catch {
     // No packages built yet in this environment (fresh dev checkout before

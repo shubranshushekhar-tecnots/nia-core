@@ -371,3 +371,15 @@ export const nxAgentsCreatedBodyStyle: CSSProperties = {
   fontSize: 12,
   color: 'var(--nx-ink-2)',
 };
+
+// ---- Add-agent dialog: ordered setup steps --------------------------------
+
+export const nxAgentsStepsListStyle: CSSProperties = {
+  margin: '4px 0 0',
+  paddingLeft: 18,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  fontSize: 12,
+  color: 'var(--nx-ink-2)',
+};

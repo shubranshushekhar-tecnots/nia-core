@@ -60,10 +60,12 @@ export default function DownloadsPage({
   version,
   files,
   downloadUrls,
+  signedIn,
 }: {
   version: string;
   files: DownloadManifestFile[];
   downloadUrls: Record<string, string>;
+  signedIn?: boolean;
 }) {
   const [visitorOs, setVisitorOs] = useState<AgentOs | null>(null);
 
@@ -93,6 +95,11 @@ export default function DownloadsPage({
           click-through steps.
         </div>
         <div style={nxDownloadsVersionRowStyle}>Version {version}</div>
+        {signedIn && (
+          <a href="/app/agents" style={{ fontSize: 12, color: 'var(--nx-ink-2)' }}>
+            Already installed? Add an agent
+          </a>
+        )}
       </header>
 
       <div style={nxDownloadsCardsGridStyle}>

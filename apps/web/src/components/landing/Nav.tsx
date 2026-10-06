@@ -68,6 +68,8 @@ export default function Nav({ navRef }: { navRef: RefObject<HTMLElement> }) {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 16 }}>
+          <a href="/downloads" className="nia-nav-link" style={navLinkStyle}>Download agent</a>
+          <a href="/docs/agent" className="nia-nav-link" style={navLinkStyle}>Docs</a>
           <a href="/login" className="nia-nav-link" style={navLinkStyle}>Sign in</a>
           <a
             href="/signup"

@@ -42,6 +42,7 @@ import {
   NxCollapseIcon,
   NxConnectionsIcon,
   NxDashboardIcon,
+  NxDocsIcon,
   NxHomeIcon,
   NxMembersIcon,
   NxProjectsIcon,
@@ -426,6 +427,21 @@ export default function Sidebar({
           <NxSettingsIcon size={20} />
           {wide && <span style={navRailBtnLabelStyle}>Settings</span>}
         </Link>
+
+        <a
+          href="/docs/agent"
+          className="nx-wipe"
+          style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
+          aria-label="Docs"
+          title={wide ? 'Docs' : undefined}
+          onMouseEnter={(e) => showHoverLabel(e, 'Docs')}
+          onMouseLeave={hideHoverLabel}
+          onFocus={(e) => showHoverLabel(e, 'Docs')}
+          onBlur={hideHoverLabel}
+        >
+          <NxDocsIcon size={20} />
+          {wide && <span style={navRailBtnLabelStyle}>Docs</span>}
+        </a>
 
         <button
           type="button"

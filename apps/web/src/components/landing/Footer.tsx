@@ -3,7 +3,7 @@ import Container from './hairline/Container';
 
 const FOOTER_COLS = [
   { title: 'Product', links: [{ label: 'Canvas', href: '#canvas' }, { label: 'Connectors', href: '#connectors' }, { label: 'Pricing', href: '#pricing' }, { label: 'Sign in', href: '/login' }] },
-  { title: 'Resources', links: [{ label: 'Docs', href: '#docs' }, { label: 'Changelog', href: '#changelog' }, { label: 'Status', href: '#status' }, { label: 'Support', href: '#support' }] },
+  { title: 'Resources', links: [{ label: 'Download agent', href: '/downloads' }, { label: 'Docs', href: '/docs/agent' }, { label: 'Changelog', href: '#changelog' }, { label: 'Status', href: '#status' }, { label: 'Support', href: '#support' }] },
   { title: 'Company', links: [{ label: 'About', href: '#about' }, { label: 'Careers', href: '#careers' }, { label: 'Privacy', href: '#privacy' }, { label: 'Terms', href: '#terms' }] },
 ];
 

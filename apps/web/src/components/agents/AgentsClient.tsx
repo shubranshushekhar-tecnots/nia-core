@@ -119,16 +119,31 @@ export default function AgentsClient({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
             <p style={nxAgentsSubtitleStyle}>Machines paired to run jobs for this workspace.</p>
-            {canPair && (
-              <button
-                type="button"
+            {/* Always visible — including to viewers and before any agent
+                exists — so there's a way to find the agent and its setup
+                guide without first needing agents.pair. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <a href="/docs/agent/getting-started" style={{ fontSize: 12, color: 'var(--nx-ink-2)' }}>
+                Setup guide
+              </a>
+              <a
+                href="/downloads"
                 className="nx-wipe"
-                style={{ ...nxAgentsAddBtnStyle(false), '--wipe-fill': 'var(--nx-ink)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
-                onClick={() => setAddOpen(true)}
+                style={{ ...nxAgentsAddBtnStyle(false), textDecoration: 'none', display: 'inline-flex', alignItems: 'center', '--wipe-fill': 'var(--nx-ink)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
               >
-                Add agent
-              </button>
-            )}
+                Download agent
+              </a>
+              {canPair && (
+                <button
+                  type="button"
+                  className="nx-wipe"
+                  style={{ ...nxAgentsAddBtnStyle(false), '--wipe-fill': 'var(--nx-ink)', '--wipe-on': 'var(--nx-bg)' } as CSSProperties}
+                  onClick={() => setAddOpen(true)}
+                >
+                  Add agent
+                </button>
+              )}
+            </div>
           </div>
         </div>
         <div style={nxAgentsStatsGridStyle}>
