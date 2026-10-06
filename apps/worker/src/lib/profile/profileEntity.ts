@@ -40,7 +40,10 @@ export async function profileEntity(job: ProfileRunJob): Promise<EntityProfile> 
     throw new Error(`Entity ${job.entity.namespace}.${job.entity.name} not found in the connection's current schema.`);
   }
 
-  const dialect = manifestDialect(connection.connectorId);
+  // Route 1 (route1-complete.md #13): a sqlserver-agent source has no
+  // manifestDialect entry (same reasoning as runEtl.ts's own ternary) —
+  // sampleEntity already has a dedicated "structured" branch.
+  const dialect = connection.connectorId === "sqlserver-agent" ? "structured" : manifestDialect(connection.connectorId);
   if (!dialect) {
     throw new Error(`Connector "${connection.connectorId}" has no supported query dialect.`);
   }

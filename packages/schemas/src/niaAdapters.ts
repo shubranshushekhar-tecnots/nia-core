@@ -247,22 +247,62 @@ export function getDialectAdapter(dialect: SourceDialect): DialectAdapter {
   return DIALECT_ADAPTERS[dialect];
 }
 
+// ---------------------------------------------------------------------------
+// Structured (agent-backed, route1) — NOT entered into DIALECT_ADAPTERS or
+// reachable through getDialectAdapter. Deliberately standalone: SourceDialect
+// (and the DIALECT_ADAPTERS/FN_PUSHABILITY tables keyed by it) stays exactly
+// mysql | postgres | mongo — widening it would force a new row onto every
+// other dialect's pushdown table for a source kind that never pushes down
+// anything. Called only from schemaFromIntrospection's "structured" branch
+// below. See docs/plans/route1-complete.md §2.
+// ---------------------------------------------------------------------------
+
+/** apps/agent's ExtractType vocabulary (link/taskRunner.ts) — the 5 column types a sqlserver-agent source ever reports. */
+function structuredToNiaType(extractType: string): { type: NiaType; fidelity: Fidelity } {
+  switch (extractType) {
+    case "text":
+      return { type: { kind: "string" }, fidelity: lossless };
+    case "number":
+      return {
+        type: { kind: "decimal" },
+        fidelity: lossy(
+          "ExtractType collapses int/decimal/float/money subtypes into one bucket; exact subtype and precision/scale are lost at this layer",
+        ),
+      };
+    case "date":
+      return { type: { kind: "date" }, fidelity: lossless };
+    case "datetime":
+      return {
+        type: { kind: "timestamp", tz: "naive" },
+        fidelity: lossy("SQL Server's datetime/datetime2/datetimeoffset all collapse to one ExtractType; timezone/offset information is not preserved at this layer"),
+      };
+    case "boolean":
+      return { type: { kind: "boolean" }, fidelity: lossless };
+    default:
+      return { type: { kind: "json" }, fidelity: lossy(`unrecognized structured ExtractType "${extractType}"`) };
+  }
+}
+
 /**
  * Declared SQL/Mongo source schemas become NiaSchemas through the
  * dialect's toNiaType() mapping. IntrospectResponse (contract.ts) carries
  * no NOT NULL constraint today (`fields: {name, type}[]`, nothing else) —
  * declared fields default to nullable: true until that's added; they
  * never carry `presence` (a declared column always structurally exists).
+ *
+ * `dialect: "structured"` (route1-complete.md #11) bypasses
+ * getDialectAdapter/DIALECT_ADAPTERS entirely, routing through
+ * structuredToNiaType() above instead — the only other caller of this
+ * function's `dialect` param is widened the same way (ensureDestination.ts).
  */
 export function schemaFromIntrospection(
   entity: { fields: { name: string; type: string }[] },
-  dialect: SourceDialect,
+  dialect: SourceDialect | "structured",
 ): { schema: NiaSchema; fidelity: Record<string, Fidelity> } {
-  const adapter = getDialectAdapter(dialect);
   const fields: Record<string, NiaField> = {};
   const fidelity: Record<string, Fidelity> = {};
   for (const f of entity.fields) {
-    const { type, fidelity: fieldFidelity } = adapter.toNiaType(f.type);
+    const { type, fidelity: fieldFidelity } = dialect === "structured" ? structuredToNiaType(f.type) : getDialectAdapter(dialect).toNiaType(f.type);
     fields[f.name] = { type, nullable: true };
     fidelity[f.name] = fieldFidelity;
   }

@@ -1351,3 +1351,90 @@ describe("runEtl — keyset query shape per dialect", () => {
     expect(query.pipeline).toEqual([{ $match: { _id: { $gt: "abc123" } } }, { $sort: { _id: 1 } }, { $limit: 10 }]);
   });
 });
+
+// Route 1 (route1-complete.md) — a "Local database (via agent)" source has
+// manifestId "sqlserver-agent", which manifestDialect doesn't recognize;
+// runEtl.ts resolves it to the "structured" pseudo-dialect instead (item
+// #1). This proves the whole read -> residual-transform -> map -> write
+// path actually works end to end for that dialect value, not just that the
+// type-checker accepts it: a single transform node (so the dialect==
+// "structured" branch of the pushdown-vs-residual split, item #2, is the
+// one under test, not the >1-transform-node degrade-to-residual path the
+// onFailure suite above already covers) with a `filter` step runs
+// residually, and the filtered/mapped rows still reach dispatchWrite.
+describe("runEtl — structured (agent-backed) source [Route 1]", () => {
+  function expr(source: string) {
+    const parsed = parseExpression(source);
+    if (!parsed.ok) throw new Error(parsed.error);
+    return parsed.expr;
+  }
+
+  function structuredFilterGraph(): GraphDoc {
+    return {
+      nodes: [
+        graph({ dialect: "sqlserver-agent" }).nodes[0]!,
+        {
+          id: "filter",
+          type: "transform",
+          position: { x: 100, y: 0 },
+          config: { steps: [{ kind: "filter", expr: expr("amount > 0"), onFailure: "fail" }] },
+        },
+        {
+          id: "dest",
+          type: "destination",
+          manifestId: "supabase",
+          connectionId: DEST_CONN,
+          position: { x: 200, y: 0 },
+          config: {
+            operation: "insert",
+            entity: { namespace: "public", name: "users_dest" },
+            mapping: { version: 1, entries: [{ from: "amount", to: "amount" }], approvedAt: "2026-01-01T00:00:00.000Z" },
+            upsertKeys: ["amount"],
+            writeMode: "direct",
+          },
+        },
+      ],
+      edges: [
+        { id: "e0", source: "src", target: "filter" },
+        { id: "e1", source: "filter", target: "dest" },
+      ],
+    };
+  }
+
+  it("runs a filter step residually over a sqlserver-agent source and writes the filtered, mapped rows", async () => {
+    resolveGraphMock.mockResolvedValueOnce(structuredFilterGraph());
+    dispatchMock.mockResolvedValueOnce(
+      tabularResult(
+        [
+          ["1", "10"],
+          ["2", "0"],
+          ["3", "5"],
+        ],
+        [
+          { name: "id", type: "string" },
+          { name: "amount", type: "string" },
+        ],
+      ),
+    );
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({ status: "done" });
+
+    // Proves the read actually went through buildEtlReadQuery's dedicated
+    // "structured" branch (queryBuilder.ts), not a SQL/Mongo one.
+    const [, query] = dispatchMock.mock.calls[0]!;
+    expect(query.kind).toBe("structured");
+
+    // The filter ran residually (dialect "structured" is never pushed
+    // down) and dropped the amount:"0" row before mapping/writing.
+    expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
+    const [, input] = dispatchWriteMock.mock.calls[0]!;
+    expect(input.entity).toEqual({ namespace: "public", name: "users_dest" });
+    expect(input.columns).toEqual(["amount"]);
+    expect(input.rows).toEqual([["10"], ["5"]]);
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "succeeded");
+  });
+});

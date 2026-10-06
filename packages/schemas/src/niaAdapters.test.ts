@@ -238,4 +238,37 @@ describe("schemaFromIntrospection", () => {
     const { schema } = schemaFromIntrospection(entity, "mongo");
     expect(schema.fields.created_at!.type).toEqual({ kind: "timestamp", tz: "utc" });
   });
+
+  // Route 1 (route1-complete.md #11/#15) — a "structured" (agent-backed,
+  // e.g. sqlserver-agent) source has no SourceDialect entry at all, so it
+  // bypasses DIALECT_ADAPTERS/getDialectAdapter entirely; this exercises
+  // the agent's five ExtractType values directly against the plan's
+  // adapter table.
+  it("converts the agent's five ExtractType values for a 'structured' entity", () => {
+    const entity = {
+      fields: [
+        { name: "name", type: "text" },
+        { name: "amount", type: "number" },
+        { name: "signup_date", type: "date" },
+        { name: "last_seen", type: "datetime" },
+        { name: "is_active", type: "boolean" },
+      ],
+    };
+    const { schema, fidelity } = schemaFromIntrospection(entity, "structured");
+
+    expect(schema.fields.name).toEqual({ type: { kind: "string" }, nullable: true });
+    expectLossless(fidelity.name!);
+
+    expect(schema.fields.amount).toEqual({ type: { kind: "decimal" }, nullable: true });
+    expectLossy(fidelity.amount!);
+
+    expect(schema.fields.signup_date).toEqual({ type: { kind: "date" }, nullable: true });
+    expectLossless(fidelity.signup_date!);
+
+    expect(schema.fields.last_seen).toEqual({ type: { kind: "timestamp", tz: "naive" }, nullable: true });
+    expectLossy(fidelity.last_seen!);
+
+    expect(schema.fields.is_active).toEqual({ type: { kind: "boolean" }, nullable: true });
+    expectLossless(fidelity.is_active!);
+  });
 });

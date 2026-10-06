@@ -325,7 +325,7 @@ function mergeFailureReports(a: StepFailureReport[], b: StepFailureReport[]): St
 async function runStatefulResidual(args: {
   scope: WorkspaceScope;
   job: EtlRunJob;
-  dialect: SourceDialect;
+  dialect: SourceDialect | "structured";
   sourceConnectionId: string;
   entity: SchemaEntity;
   cursorPushdownConfig: TransformConfig;
@@ -410,8 +410,12 @@ async function runStatefulResidual(args: {
     // function's doc comment on why the persisted checkpoint is ignored),
     // never the outer job/checkpoint cursor.
     const cursorCondition: SqlKeysetCursor | undefined =
-      dialect !== "mongo" && keyColumn && lastKey !== null ? { column: keyColumn, value: lastKey } : undefined;
-    const dialectQuery = compilePushdown(dialect, cursorPushdownConfig, cursorCondition).dialectQuery;
+      dialect !== "mongo" && dialect !== "structured" && keyColumn && lastKey !== null
+        ? { column: keyColumn, value: lastKey }
+        : undefined;
+    // Route 1 (route1-complete.md #6): no pushdown recompile possible for a
+    // structured source — every step is already residual (#2 above).
+    const dialectQuery = dialect === "structured" ? null : compilePushdown(dialect, cursorPushdownConfig, cursorCondition).dialectQuery;
     const query = buildEtlReadQuery(dialect, entity, dialectQuery, dialect === "mongo" ? undefined : keyColumn, lastKey, requestedLimit);
     const result = await dispatch(sourceConnectionId, query, scope, job.triggeredByUserId, { rowCap: requestedLimit });
     if (!result.ok) return failStaged(`Source read failed: ${result.error.message}`);
@@ -765,7 +769,15 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     entity = entityResult.entity;
   }
 
-  const dialect = manifestDialect(source.manifestId);
+  // Route 1 (route1-complete.md #1): a sqlserver-agent ("Local database via
+  // agent") source has no entry in manifestDialect's SourceDialect table —
+  // it's not a real SQL/Mongo dialect, it goes through the agent-bridge's
+  // structured-query wire protocol instead. Every downstream dialect-keyed
+  // branch below already treats `"structured"` as its own case (already
+  // shipped: queryBuilder.ts, sampleEntity.ts); this is the one place that
+  // decides which value they see.
+  const dialect: SourceDialect | "structured" | null =
+    source.manifestId === "sqlserver-agent" ? "structured" : manifestDialect(source.manifestId);
   if (!dialect) {
     return fail(scope, job.runId, job.nodeId, `Source connector "${source.manifestId ?? "unknown"}" has no supported query dialect.`);
   }
@@ -937,14 +949,18 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   let dialectQuery: DialectQuery | null = null;
   let residualSteps: TransformStep[] = [];
   let cursorPushdownConfig: TransformConfig = { steps: [] };
-  if (transforms.length === 1) {
+  // Route 1 (route1-complete.md #2): a structured source has no pushdown
+  // wiring at all (no SQL/Mongo text to target) — every transform runs
+  // residually, same degrade-to-residual boundary as the >1-transform-node
+  // case below, just keyed on dialect instead of node count.
+  if (dialect !== "structured" && transforms.length === 1) {
     const parsedTransform = parseNodeConfig("transform", transforms[0]!.config);
     const transformConfig = !parsedTransform.unrecognized && parsedTransform.type === "transform" ? parsedTransform.value : { steps: [] };
     cursorPushdownConfig = transformConfig;
     const plan = compilePushdown(dialect, transformConfig);
     dialectQuery = plan.dialectQuery;
     residualSteps = plan.residualTransforms;
-  } else if (transforms.length > 1) {
+  } else if (dialect === "structured" || transforms.length > 1) {
     for (const t of transforms) {
       const parsed = parseNodeConfig("transform", t.config);
       if (!parsed.unrecognized && parsed.type === "transform") residualSteps.push(...parsed.value.steps);
@@ -995,7 +1011,10 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
   // (the pre-check query has no chunk LIMIT), it just can't cross a
   // separate BullMQ job invocation.
   let pushedPreCheckFailures: StepFailureReport[] = [];
-  if (job.cursor === null) {
+  // Route 1 (route1-complete.md #3): a structured source never pushes
+  // anything down (#2 above), so there is never a pushed-step COUNT query
+  // to run here — compileFailurePreChecks requires a real SourceDialect.
+  if (job.cursor === null && dialect !== "structured") {
     const preChecks = compileFailurePreChecks(dialect, cursorPushdownConfig);
     for (const check of preChecks) {
       const preCheckQuery = buildFailurePreCheckQuery(dialect, entity, check.dialectQuery);
@@ -1074,7 +1093,9 @@ export async function runEtl(job: EtlRunJob, queue: Queue): Promise<RunEtlResult
     isAggregatePushdown && groupByColumns && groupByColumns.length > 0 && groupKey
       ? { columns: groupByColumns, values: groupKey }
       : undefined;
-  if (cursorCondition || groupKeyCursor) {
+  // Route 1 (route1-complete.md #4): a structured source's dialectQuery is
+  // always null (#2 above) — nothing to recompile with a folded-in cursor.
+  if (dialect !== "structured" && (cursorCondition || groupKeyCursor)) {
     dialectQuery = compilePushdown(dialect, cursorPushdownConfig, cursorCondition, groupKeyCursor).dialectQuery;
   }
   const query = buildEtlReadQuery(dialect, entity, dialectQuery, dialect === "mongo" ? undefined : keyColumn, lastKey, requestedLimit);

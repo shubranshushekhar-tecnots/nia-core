@@ -105,7 +105,10 @@ export async function proposeCleaning(workflowId: string, nodeId: string, scope:
     return { ok: false, error: { kind: "entity-not-found", message: `Entity ${sourceEntity.namespace}.${sourceEntity.name} not found in the connection's current schema.` } };
   }
 
-  const dialect = manifestDialect(connection.connectorId);
+  // Route 1 (route1-complete.md #15): same sqlserver-agent ternary as
+  // profileEntity.ts's independent manifestDialect gate — this function
+  // doesn't reuse profileEntity.ts, so it needs its own.
+  const dialect = connection.connectorId === "sqlserver-agent" ? "structured" : manifestDialect(connection.connectorId);
   if (!dialect) {
     return { ok: false, error: { kind: "no-dialect", message: `Connector "${connection.connectorId}" has no supported query dialect.` } };
   }

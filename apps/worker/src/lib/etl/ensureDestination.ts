@@ -79,7 +79,7 @@ type ContractResult =
 export function buildRuntimeContract(
   destDialect: SourceDialect,
   sourceEntity: SchemaEntity,
-  sourceDialect: SourceDialect,
+  sourceDialect: SourceDialect | "structured",
   destConfig: SourceDestConfig,
   transformSteps: TransformStep[],
 ): ContractResult {
@@ -155,7 +155,7 @@ export async function ensureDestination(
   destConnectionId: string,
   destDialect: SourceDialect,
   sourceEntity: SchemaEntity,
-  sourceDialect: SourceDialect,
+  sourceDialect: SourceDialect | "structured",
   destConfig: SourceDestConfig,
   transformSteps: TransformStep[],
   scope: WorkspaceScope,
