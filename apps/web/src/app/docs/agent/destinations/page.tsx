@@ -1,6 +1,6 @@
+import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
-  nxDocsCodeBlockStyle,
   nxDocsCodeChipStyle,
   nxDocsH2Style,
   nxDocsListStyle,
@@ -49,9 +49,11 @@ export default function DestinationsPage() {
           any HTTPS endpoint equally. A workflow can&apos;t quietly start sending your data
           somewhere new; you decide what&apos;s reachable, on the agent machine itself:
         </p>
-        <pre style={nxDocsCodeBlockStyle}>{`nia-agent destinations allow <destination-hostname>
+        <CodeBlock code={`nia-agent destinations allow <destination-hostname>
+
 nia-agent destinations list
-nia-agent destinations remove <destination-hostname>`}</pre>
+
+nia-agent destinations remove <destination-hostname>`} />
         <p style={nxDocsPStyle}>
           If a published job&apos;s destination host isn&apos;t allowed, the agent rejects it
           locally with &quot;destination not on local allow-list&quot; — visible on the{' '}

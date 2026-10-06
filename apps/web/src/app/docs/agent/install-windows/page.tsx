@@ -1,6 +1,7 @@
+import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
-  nxDocsCodeBlockStyle,
+  nxDocsButtonNameStyle,
   nxDocsCodeChipStyle,
   nxDocsH2Style,
   nxDocsListStyle,
@@ -77,8 +78,8 @@ export default function InstallWindowsPage() {
 
       <div style={nxDocsNoticeStyle}>
         This installer is not code-signed yet. Windows SmartScreen will say &quot;Windows
-        protected your PC&quot; the first time — click <strong>More info</strong>, then{' '}
-        <strong>Run anyway</strong>.
+        protected your PC&quot; the first time — click <span style={nxDocsButtonNameStyle}>More info</span>, then{' '}
+        <span style={nxDocsButtonNameStyle}>Run anyway</span>.
       </div>
 
       <section>
@@ -105,13 +106,13 @@ export default function InstallWindowsPage() {
           Everything the guided setup does can also be done by hand — useful for scripted or
           unattended installs. Install without the guided setup with:
         </p>
-        <pre style={nxDocsCodeBlockStyle}>powershell -ExecutionPolicy Bypass -File install.ps1</pre>
+        <CodeBlock code="powershell -ExecutionPolicy Bypass -File install.ps1" />
         <p style={nxDocsPStyle}>
           run as Administrator from the unzipped bundle folder. This does not start the agent —
           run <span style={nxDocsCodeChipStyle}>Start-Service nia-agent</span> afterward. Then, in
           order:
         </p>
-        <pre style={nxDocsCodeBlockStyle}>{`nia-agent sql readonly --login nia_agent --databases <your-database-name> --out nia-readonly-setup.sql
+        <CodeBlock code={`nia-agent sql readonly --login nia_agent --databases <your-database-name> --out nia-readonly-setup.sql
 
 nia-agent pair --code <pairing-code> --url <platform-address>
 
@@ -123,7 +124,7 @@ nia-agent connection add \\
 
 nia-agent destinations allow <destination-hostname>
 
-nia-agent status`}</pre>
+nia-agent status`} />
         <p style={nxDocsPStyle}>
           The read-only setup script creates one login with a placeholder password your DBA
           replaces, grants it read access plus the ability to see table/column definitions, and

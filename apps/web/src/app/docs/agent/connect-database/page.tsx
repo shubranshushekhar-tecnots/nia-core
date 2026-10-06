@@ -1,6 +1,6 @@
+import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
-  nxDocsCodeBlockStyle,
   nxDocsCodeChipStyle,
   nxDocsH2Style,
   nxDocsListStyle,
@@ -37,7 +37,7 @@ export default function ConnectDatabasePage() {
           During guided setup, leaving the username blank offers to write a setup script for your
           DBA instead. The same thing, typed directly:
         </p>
-        <pre style={nxDocsCodeBlockStyle}>nia-agent sql readonly --login nia_agent --databases &lt;your-database-name&gt; --out nia-readonly-setup.sql</pre>
+        <CodeBlock code="nia-agent sql readonly --login nia_agent --databases <your-database-name> --out nia-readonly-setup.sql" />
         <p style={nxDocsPStyle}>
           Use a comma-separated list for <span style={nxDocsCodeChipStyle}>--databases</span> if
           the agent will read more than one database on the same server. This writes a script for
@@ -62,11 +62,11 @@ export default function ConnectDatabasePage() {
           Through the guided setup (<span style={nxDocsCodeChipStyle}>nia-agent setup</span>),
           this is asked as a sequence of questions. Typed directly:
         </p>
-        <pre style={nxDocsCodeBlockStyle}>{`nia-agent connection add \\
+        <CodeBlock code={`nia-agent connection add \\
   --id <short-id> --label "<friendly name>" \\
   --host <database-server-host> --port <port> --database <database-name> \\
   --user nia_agent --password <the-password> \\
-  --source-timezone <IANA time zone, e.g. America/New_York>`}</pre>
+  --source-timezone <IANA time zone, e.g. America/New_York>`} />
         <p style={nxDocsPStyle}>
           The password is encrypted immediately and never stored in plain text. If your database
           only accepts unencrypted connections on your local network, add{' '}

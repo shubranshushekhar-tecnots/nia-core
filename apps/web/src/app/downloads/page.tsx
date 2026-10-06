@@ -25,7 +25,7 @@ export default async function Page() {
     // running apps/agent's build + generate-manifest scripts, or a
     // production AGENT_DOWNLOADS_BASE_URL that isn't reachable yet).
     return (
-      <div style={{ padding: 40, color: 'var(--nx-ink-2)' }}>
+      <div data-app-theme="" style={{ minHeight: '100vh', background: 'var(--nx-bg)', padding: 40, color: 'var(--nx-ink-2)' }}>
         Downloads are not available yet. Check back soon.
       </div>
     );

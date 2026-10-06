@@ -34,6 +34,12 @@ const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: './e2e',
+  // themeConsistency.spec.ts has its own dedicated, lighter config
+  // (playwright.theme.config.ts) — it only touches public/signed-out
+  // pages and deliberately skips this config's globalSetup/`setup`
+  // project overhead, so exclude it here to avoid requiring that infra
+  // for a static theme/font check.
+  testIgnore: /themeConsistency\.spec\.ts/,
   // Fails fast with a pointed message if apps/worker isn't running or
   // canvasC's seeded connections are missing — see globalSetup.ts's header
   // comment. Runs once, before the "setup" project's persona logins.

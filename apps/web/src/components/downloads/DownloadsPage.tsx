@@ -1,15 +1,20 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import CopyButton from '@/components/docs/CopyButton';
+import { PublicFooter, PublicHeader } from '@/components/docs/PublicChrome';
 import { buildDownloadCards } from '@/lib/downloads/buildDownloadCards';
 import type { AgentOs, DownloadManifestFile } from '@/lib/downloads/manifest';
 import {
+  nxDownloadsAddAgentLinkStyle,
   nxDownloadsAdvancedLinkStyle,
   nxDownloadsBadgeStyle,
   nxDownloadsBodyTextStyle,
+  nxDownloadsButtonNameStyle,
   nxDownloadsCardsGridStyle,
   nxDownloadsCardStyle,
   nxDownloadsCardTopRowStyle,
+  nxDownloadsChecksumRowStyle,
   nxDownloadsChecksumStyle,
   nxDownloadsCodeChipStyle,
   nxDownloadsEyebrowStyle,
@@ -23,8 +28,10 @@ import {
   nxDownloadsPageStyle,
   nxDownloadsPrimaryBtnStyle,
   nxDownloadsReqTextStyle,
+  nxDownloadsSecondaryBtnStyle,
   nxDownloadsSectionStyle,
   nxDownloadsSectionTitleStyle,
+  nxDownloadsSeeLinkStyle,
   nxDownloadsSubtitleStyle,
   nxDownloadsVersionRowStyle,
   nxDownloadsYourSystemStyle,
@@ -76,16 +83,17 @@ export default function DownloadsPage({
   const cards = buildDownloadCards(files);
 
   return (
-    <div style={nxDownloadsPageStyle}>
+    <div data-app-theme="" style={nxDownloadsPageStyle}>
+      <PublicHeader />
       <header style={nxDownloadsHeaderStyle}>
         <span style={nxDownloadsEyebrowStyle}>Nia Core Agent</span>
         <h1 style={nxDownloadsH1Style}>Download Nia Core Agent</h1>
         <p style={nxDownloadsSubtitleStyle}>
-          A small program your IT team installs on one of your own machines so it can read your
-          databases and keep Nia Core in sync — your data never leaves your network through Nia Core
-          itself.{' '}
-          <a href="/docs/agent/security" style={{ color: 'var(--nx-ink)' }}>
-            What leaves your network
+          The Nia Core Agent runs inside your own network, on a machine your team controls. It
+          reads your databases using a read-only login you create, and sends data only to the
+          destinations you explicitly allow.{' '}
+          <a href="/docs/agent/security" style={nxDownloadsSeeLinkStyle}>
+            See what leaves your network
           </a>
           .
         </p>
@@ -96,7 +104,7 @@ export default function DownloadsPage({
         </div>
         <div style={nxDownloadsVersionRowStyle}>Version {version}</div>
         {signedIn && (
-          <a href="/app/agents" style={{ fontSize: 12, color: 'var(--nx-ink-2)' }}>
+          <a href="/app/agents" style={nxDownloadsAddAgentLinkStyle}>
             Already installed? Add an agent
           </a>
         )}
@@ -115,9 +123,15 @@ export default function DownloadsPage({
               <p style={nxDownloadsReqTextStyle}>{OS_REQUIREMENT[os]}</p>
               <div style={nxDownloadsMetaRowStyle}>
                 <span>{formatSize(primary.size)}</span>
-                <span style={nxDownloadsChecksumStyle}>SHA-256: {primary.sha256}</span>
+                <div style={nxDownloadsChecksumRowStyle}>
+                  <span style={nxDownloadsChecksumStyle}>SHA-256: {primary.sha256}</span>
+                  <CopyButton text={primary.sha256} />
+                </div>
               </div>
-              <a href={downloadUrls[primary.name]} style={nxDownloadsPrimaryBtnStyle()}>
+              <a
+                href={downloadUrls[primary.name]}
+                style={isVisitorOs ? nxDownloadsPrimaryBtnStyle() : nxDownloadsSecondaryBtnStyle()}
+              >
                 Download for {OS_LABEL[os]}
               </a>
               {advanced && (
@@ -134,8 +148,8 @@ export default function DownloadsPage({
         <h3 style={nxDownloadsSectionTitleStyle}>Running an unsigned package</h3>
         <p style={nxDownloadsBodyTextStyle}>
           <strong>Windows:</strong> Microsoft SmartScreen will say &quot;Windows protected your
-          PC.&quot; Click <span style={nxDownloadsCodeChipStyle}>More info</span>, then{' '}
-          <span style={nxDownloadsCodeChipStyle}>Run anyway</span>.
+          PC.&quot; Click <span style={nxDownloadsButtonNameStyle}>More info</span>, then{' '}
+          <span style={nxDownloadsButtonNameStyle}>Run anyway</span>.
         </p>
         <p style={nxDownloadsBodyTextStyle}>
           <strong>macOS:</strong> Gatekeeper will refuse to open the app because it wasn&apos;t
@@ -167,6 +181,7 @@ export default function DownloadsPage({
           </a>
         </div>
       </section>
+      <PublicFooter />
     </div>
   );
 }

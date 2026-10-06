@@ -10,6 +10,7 @@ export const nxDownloadsPageStyle: CSSProperties = {
   minHeight: '100vh',
   background: 'var(--nx-bg)',
   color: 'var(--nx-ink)',
+  fontFamily: 'var(--nx-font-ui)',
 };
 
 export const nxDownloadsHeaderStyle: CSSProperties = {
@@ -45,14 +46,29 @@ export const nxDownloadsSubtitleStyle: CSSProperties = {
   maxWidth: 640,
 };
 
+// A callout, not just colored text — left accent bar + tint background,
+// same treatment as the docs pages' nxDocsNoticeStyle.
 export const nxDownloadsNoticeStyle: CSSProperties = {
   marginTop: 20,
   padding: '14px 16px',
-  border: '1px solid var(--nx-warn)',
-  color: 'var(--nx-warn)',
+  borderLeft: '3px solid var(--nx-warn)',
+  background: 'var(--nx-raised)',
+  color: 'var(--nx-ink-2)',
   fontSize: 13,
   lineHeight: '20px',
   maxWidth: 640,
+};
+
+export const nxDownloadsSeeLinkStyle: CSSProperties = {
+  color: 'var(--nx-ink)',
+  textDecoration: 'underline',
+};
+
+export const nxDownloadsAddAgentLinkStyle: CSSProperties = {
+  marginTop: 4,
+  fontSize: 12.5,
+  color: 'var(--nx-ink-2)',
+  textDecoration: 'underline',
 };
 
 export const nxDownloadsVersionRowStyle: CSSProperties = {
@@ -137,12 +153,18 @@ export const nxDownloadsMetaRowStyle: CSSProperties = {
   color: 'var(--nx-ink-3)',
 };
 
+export const nxDownloadsChecksumRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+};
+
 export const nxDownloadsChecksumStyle: CSSProperties = {
   overflowWrap: 'anywhere',
   wordBreak: 'break-all',
 };
 
-export function nxDownloadsPrimaryBtnStyle(): CSSProperties {
+function nxDownloadsBtnBaseStyle(): CSSProperties {
   return {
     marginTop: 'auto',
     height: 42,
@@ -150,15 +172,34 @@ export function nxDownloadsPrimaryBtnStyle(): CSSProperties {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    border: '1px solid var(--nx-ink)',
-    background: 'var(--nx-ink)',
-    color: 'var(--nx-bg)',
     fontFamily: 'var(--nx-font-mono)',
     fontSize: 12,
     letterSpacing: '0.06em',
     textTransform: 'uppercase',
     textDecoration: 'none',
     cursor: 'pointer',
+  };
+}
+
+// The visitor's own OS gets this — solid ink, same look as the app's
+// primary CTAs.
+export function nxDownloadsPrimaryBtnStyle(): CSSProperties {
+  return {
+    ...nxDownloadsBtnBaseStyle(),
+    border: '1px solid var(--nx-ink)',
+    background: 'var(--nx-ink)',
+    color: 'var(--nx-bg)',
+  };
+}
+
+// The other two OSes get this — outlined, surface background, same
+// secondary-button treatment used elsewhere in the app.
+export function nxDownloadsSecondaryBtnStyle(): CSSProperties {
+  return {
+    ...nxDownloadsBtnBaseStyle(),
+    border: '1px solid var(--nx-line)',
+    background: 'var(--nx-surface)',
+    color: 'var(--nx-ink)',
   };
 }
 
@@ -199,6 +240,20 @@ export const nxDownloadsCodeChipStyle: CSSProperties = {
   background: 'var(--nx-surface)',
   fontFamily: 'var(--nx-font-mono)',
   fontSize: 12.5,
+  color: 'var(--nx-ink)',
+};
+
+// A UI control's own name quoted in body copy ("click More info, then Run
+// anyway") — bold + uppercase so it reads as the name of a button rather
+// than a literal command, distinct from nxDownloadsCodeChipStyle above.
+export const nxDownloadsButtonNameStyle: CSSProperties = {
+  display: 'inline-block',
+  padding: '1px 7px',
+  border: '1px solid var(--nx-line)',
+  background: 'var(--nx-surface)',
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 12.5,
+  fontWeight: 600,
   color: 'var(--nx-ink)',
 };
 

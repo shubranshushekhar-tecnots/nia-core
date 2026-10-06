@@ -1,6 +1,6 @@
+import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
-  nxDocsCodeBlockStyle,
   nxDocsCodeChipStyle,
   nxDocsH2Style,
   nxDocsListStyle,
@@ -65,7 +65,7 @@ export default function InstallMacosPage() {
           <strong>System Settings &rarr; Privacy &amp; Security</strong> after the first blocked
           attempt and click <strong>Open Anyway</strong>, or run this once before installing:
         </p>
-        <pre style={nxDocsCodeBlockStyle}>xattr -d com.apple.quarantine ./nia-agent</pre>
+        <CodeBlock code="xattr -d com.apple.quarantine ./nia-agent" />
       </section>
 
       <section>
@@ -100,7 +100,7 @@ export default function InstallMacosPage() {
 
       <section>
         <h2 style={nxDocsH2Style}>Uninstall</h2>
-        <pre style={nxDocsCodeBlockStyle}>./uninstall.sh</pre>
+        <CodeBlock code="./uninstall.sh" />
         <p style={nxDocsPStyle}>
           Add <span style={nxDocsCodeChipStyle}>--purge</span> to also remove stored configuration
           and logs.
@@ -116,7 +116,7 @@ export default function InstallMacosPage() {
           service for all users, starting at boot) — it starts immediately either way. Then, in
           order:
         </p>
-        <pre style={nxDocsCodeBlockStyle}>{`nia-agent sql readonly --login nia_agent --databases <your-database-name> --out nia-readonly-setup.sql
+        <CodeBlock code={`nia-agent sql readonly --login nia_agent --databases <your-database-name> --out nia-readonly-setup.sql
 
 nia-agent pair --code <pairing-code> --url <platform-address>
 
@@ -128,7 +128,7 @@ nia-agent connection add \\
 
 nia-agent destinations allow <destination-hostname>
 
-nia-agent status`}</pre>
+nia-agent status`} />
       </section>
     </DocsLayout>
   );

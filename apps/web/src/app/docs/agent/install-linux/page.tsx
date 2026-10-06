@@ -1,6 +1,6 @@
+import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
-  nxDocsCodeBlockStyle,
   nxDocsCodeChipStyle,
   nxDocsH2Style,
   nxDocsListStyle,
@@ -40,7 +40,7 @@ export default function InstallLinuxPage() {
           </li>
           <li>
             Run, as root:
-            <pre style={nxDocsCodeBlockStyle}>sudo ./install.sh nia-agent-linux-&lt;version&gt;.tar.gz</pre>
+            <CodeBlock code="sudo ./install.sh nia-agent-linux-<version>.tar.gz" />
           </li>
           <li>
             When it asks <strong>&quot;Run guided setup now? [Y/n]&quot;</strong>, press Enter and
@@ -86,7 +86,7 @@ export default function InstallLinuxPage() {
 
       <section>
         <h2 style={nxDocsH2Style}>Uninstall</h2>
-        <pre style={nxDocsCodeBlockStyle}>sudo ./uninstall.sh</pre>
+        <CodeBlock code="sudo ./uninstall.sh" />
         <p style={nxDocsPStyle}>
           Add <span style={nxDocsCodeChipStyle}>--purge</span> to also remove stored configuration.
         </p>
@@ -100,7 +100,7 @@ export default function InstallLinuxPage() {
           <span style={nxDocsCodeChipStyle}>sudo systemctl start nia-agent</span> afterward. Then,
           in order:
         </p>
-        <pre style={nxDocsCodeBlockStyle}>{`nia-agent sql readonly --login nia_agent --databases <your-database-name> --out nia-readonly-setup.sql
+        <CodeBlock code={`nia-agent sql readonly --login nia_agent --databases <your-database-name> --out nia-readonly-setup.sql
 
 nia-agent pair --code <pairing-code> --url <platform-address>
 
@@ -112,7 +112,8 @@ nia-agent connection add \\
 
 nia-agent destinations allow <destination-hostname>
 
-nia-agent status`}</pre>
+nia-agent status`}
+        />
       </section>
     </DocsLayout>
   );

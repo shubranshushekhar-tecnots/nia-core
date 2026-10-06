@@ -1,6 +1,6 @@
+import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
-  nxDocsCodeBlockStyle,
   nxDocsCodeChipStyle,
   nxDocsH2Style,
   nxDocsListStyle,
@@ -59,7 +59,7 @@ export default function TroubleshootingPage() {
 
       <section>
         <h2 style={nxDocsH2Style}>Uninstall on macOS</h2>
-        <pre style={nxDocsCodeBlockStyle}>./uninstall.sh</pre>
+        <CodeBlock code="./uninstall.sh" />
         <p style={nxDocsPStyle}>
           Add <span style={nxDocsCodeChipStyle}>--purge</span> to also remove stored configuration
           and logs.
@@ -68,7 +68,7 @@ export default function TroubleshootingPage() {
 
       <section>
         <h2 style={nxDocsH2Style}>Uninstall on Linux</h2>
-        <pre style={nxDocsCodeBlockStyle}>sudo ./uninstall.sh</pre>
+        <CodeBlock code="sudo ./uninstall.sh" />
         <p style={nxDocsPStyle}>
           Add <span style={nxDocsCodeChipStyle}>--purge</span> to also remove stored configuration.
         </p>

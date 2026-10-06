@@ -733,6 +733,32 @@ html[data-nx-theme='light'] [data-app-theme] {
   .nx-auth-form-pad { padding: 0 24px; }
 }
 
+/* Public agent docs (/docs/agent/*) — left sidebar + content, collapsing
+   to a <details> menu below 860px. Same collapse pattern as .nx-auth-body
+   above: a desktop-only column hidden by media query, with a mobile-only
+   <details> rendered in its place (two DOM nodes, CSS picks one). */
+.nx-docs-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  align-items: start;
+}
+.nx-docs-sidebar-desktop { display: block; }
+.nx-docs-sidebar-mobile { display: none; }
+@media (max-width: 860px) {
+  .nx-docs-layout { grid-template-columns: 1fr; }
+  .nx-docs-sidebar-desktop { display: none; }
+  .nx-docs-sidebar-mobile { display: block; }
+}
+
+/* Public header (/downloads, /docs/agent/*) nav links — wrap instead of
+   overflow on narrow screens, same header chrome as AuthShell. */
+.nx-public-nav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
 /* ------------------------------------------------------------
    Nia Core App.html — auth screen theme (login/signup/forgot/reset/
    onboarding), extracted verbatim from the `const T = "..."` override
