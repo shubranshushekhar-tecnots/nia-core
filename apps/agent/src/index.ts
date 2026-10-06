@@ -33,6 +33,7 @@ import { runAgentLoop } from "./agentLoop.js";
 import { AGENT_VERSION } from "./generated/version.js";
 import { InvalidPairingCodeError, InvalidPlatformUrlError, pair, PairingRejectedError, unpair } from "./link/pairing.js";
 import { readLinkState } from "./ops/linkState.js";
+import { createConsoleSetupIO, runGuidedSetup } from "./cli/setupCommand.js";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -740,6 +741,11 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "setup") {
+    await runGuidedSetup(createConsoleSetupIO());
+    return;
+  }
+
   if (command === "destinations" && subcommand === "allow") {
     const host = rest[0];
     if (!host) {
@@ -781,7 +787,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   console.error(
-    "usage: nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent destinations <allow|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent pair --code <code> --url <platform> | nia-agent unpair | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
+    "usage: nia-agent setup | nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent destinations <allow|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent pair --code <code> --url <platform> | nia-agent unpair | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
   );
   process.exitCode = 1;
 }
