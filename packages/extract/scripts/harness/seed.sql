@@ -62,6 +62,33 @@ GO
 INSERT INTO reporting.sales (amount) VALUES (100.00), (250.50);
 GO
 
+-- Slice T2, apps/web/e2e/agentRoute1.spec.ts step a) — 10,000 rows (2,000
+-- orders x 5 line items each) with a genuine two-column composite PRIMARY
+-- KEY (order_id, line_no), to exercise packages/extract's composite-key
+-- keyset read end to end against a real multi-column cursor, not a
+-- degenerate one-column-constant stand-in. Generated set-based (fast),
+-- same L0..L4 doubling trick as dbo.big_table below.
+WITH L0 AS (SELECT 1 AS c UNION ALL SELECT 1),
+L1 AS (SELECT 1 AS c FROM L0 A CROSS JOIN L0 B),
+L2 AS (SELECT 1 AS c FROM L1 A CROSS JOIN L1 B),
+L3 AS (SELECT 1 AS c FROM L2 A CROSS JOIN L2 B),
+L4 AS (SELECT 1 AS c FROM L3 A CROSS JOIN L3 B),
+Orders AS (SELECT TOP (2000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS order_id FROM L4),
+Lines AS (SELECT TOP (5) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS line_no FROM L4)
+SELECT o.order_id, l.line_no,
+       CONCAT('item-', o.order_id, '-', l.line_no) AS item_name,
+       CAST(o.order_id * 10 + l.line_no AS DECIMAL(10,2)) AS amount
+INTO dbo.order_lines
+FROM Orders o CROSS JOIN Lines l;
+GO
+-- Same SELECT INTO nullability quirk as dbo.big_table below.
+ALTER TABLE dbo.order_lines ALTER COLUMN order_id INT NOT NULL;
+GO
+ALTER TABLE dbo.order_lines ALTER COLUMN line_no INT NOT NULL;
+GO
+ALTER TABLE dbo.order_lines ADD CONSTRAINT pk_order_lines PRIMARY KEY (order_id, line_no);
+GO
+
 -- 1M+ row table, generated set-based (fast: a few seconds, no
 -- row-by-row inserts).
 WITH L0 AS (SELECT 1 AS c UNION ALL SELECT 1),
