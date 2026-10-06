@@ -3,10 +3,19 @@ import { Agent, ProxyAgent, request, type Dispatcher } from "undici";
 import { resolveProxyUrl } from "../planometry/network.js";
 import type { StructuredQueryCursor } from "./transport.js";
 
-/** Mirrors services/agent-bridge/src/app.ts's UploadedBatchBody exactly. */
+/**
+ * Mirrors services/agent-bridge/src/app.ts's UploadedBatchBody exactly —
+ * in particular `columns[].type` is the bridge's own wire-level
+ * `ColumnType` (packages/schemas/src/tabular.ts), a 7-value enum that is
+ * NOT the same set as this package's `ExtractType` (packages/extract/
+ * src/types.ts's 5-value "text"/"number"/"date"/"datetime"/"boolean").
+ * Callers must map through `extractTypeToColumnType` (taskRunner.ts)
+ * before building this object — never pass an `ExtractType` straight
+ * through, the bridge's zod validation rejects "text"/"datetime" outright.
+ */
 export interface UploadedBatch {
   cursor: StructuredQueryCursor | null;
-  columns: { name: string; type: "text" | "number" | "date" | "datetime" | "boolean" }[];
+  columns: { name: string; type: "string" | "number" | "boolean" | "date" | "json" | "binary" | "unknown" }[];
   rows: unknown[][];
   nextCursor: StructuredQueryCursor | null;
   isLast: boolean;

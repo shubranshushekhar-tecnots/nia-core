@@ -1,5 +1,5 @@
 import { connect, extractKeysetBatch, introspectCatalog } from "@nia/extract/mssql";
-import type { ExtractRequest, FilterCondition } from "@nia/extract";
+import type { ExtractRequest, ExtractType, FilterCondition } from "@nia/extract";
 import { pauseJob, resumeJob, testJob } from "../cli/jobCommands.js";
 import { defaultHomeDir } from "../config/paths.js";
 import { findConnection, findJob, loadConfig } from "../config/store.js";
@@ -7,7 +7,7 @@ import type { ConnectionEntry } from "../config/types.js";
 import type { Logger } from "../ops/logger.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
-import { BatchTooLargeError, type ReadBatchUploadClient } from "./readBatchUploadClient.js";
+import { BatchTooLargeError, type ReadBatchUploadClient, type UploadedBatch } from "./readBatchUploadClient.js";
 import type { TaskResultsClient } from "./taskResultsClient.js";
 import type { AgentTask, StructuredQueryCursor } from "./transport.js";
 
@@ -50,6 +50,28 @@ const READ_BATCH_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 const MAX_CONCURRENT_TASKS = 3;
 
 type TaskOutcome = { status: "done"; result: unknown } | { status: "failed"; errorClass: string };
+
+type WireColumnType = UploadedBatch["columns"][number]["type"];
+
+// Slice T2 — the bridge's upload route validates columns[].type against
+// its own wire-level ColumnType (packages/schemas/src/tabular.ts), a
+// different, 7-value enum from this package's 5-value ExtractType
+// (packages/extract/src/types.ts). "datetime" has no exact counterpart
+// on the wire side, so it collapses to "date" — same lossy direction
+// Planometry's own ExtractType->ColumnType table (planometry/
+// typeCompatibility.ts) already takes for that case, just against a
+// different target enum.
+const EXTRACT_TYPE_TO_WIRE_COLUMN_TYPE: Record<ExtractType, WireColumnType> = {
+  text: "string",
+  number: "number",
+  date: "date",
+  datetime: "date",
+  boolean: "boolean",
+};
+
+function toWireColumns(columns: { name: string; type: ExtractType }[]): UploadedBatch["columns"] {
+  return columns.map((c) => ({ name: c.name, type: EXTRACT_TYPE_TO_WIRE_COLUMN_TYPE[c.type] }));
+}
 
 type ConnectionTask = Extract<AgentTask, { kind: "test_connection" | "list_tables" }>;
 type SetupActionTask = Extract<AgentTask, { kind: "run_now" | "pause" | "resume" | "test_job" }>;
@@ -222,7 +244,7 @@ async function runReadBatchTaskBody(
 
       await uploadClient.upload(
         task.id,
-        { cursor: cursorWire, columns: batch.columns, rows: batch.rows, nextCursor: nextCursorWire, isLast: last },
+        { cursor: cursorWire, columns: toWireColumns(batch.columns), rows: batch.rows, nextCursor: nextCursorWire, isLast: last },
         READ_BATCH_UPLOAD_MAX_BYTES,
       );
       uploaded += 1;
