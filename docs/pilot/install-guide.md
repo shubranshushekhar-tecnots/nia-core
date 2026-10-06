@@ -10,8 +10,9 @@ access.
 
 ## 1. What the machine needs
 
-- A Windows or Linux machine the agent can run on continuously (a small
-  server or VM is fine — it is not resource-intensive).
+- A Windows, Linux, or macOS (Apple Silicon) machine the agent can run on
+  continuously (a small server or VM is fine — it is not
+  resource-intensive).
 - Network access from that machine to your database.
 - Outbound HTTPS access to the two addresses in step 2 below. No inbound
   ports need to be opened.
@@ -117,6 +118,50 @@ To uninstall later: `powershell -ExecutionPolicy Bypass -File uninstall.ps1`
 To uninstall later: `sudo ./uninstall.sh` (add `--purge` to also remove
 the agent's stored configuration).
 
+### macOS (Apple Silicon only)
+
+1. Copy the zip bundle (`nia-agent-macos-arm64-<version>.zip`) to the
+   target Mac and unzip it.
+2. Open Terminal in the unzipped folder and run:
+   ```
+   ./install.sh
+   ```
+   This installs the agent as a per-user `launchd` service, under your
+   own macOS user account (no administrator rights needed). It starts
+   immediately, and is set to start again at every login and to restart
+   itself if it ever stops unexpectedly — unlike Windows/Linux above,
+   there is no separate "start the agent" step.
+
+   To instead run it as a system-wide service that starts at boot for
+   every user (needs an administrator):
+   ```
+   sudo ./install.sh --system
+   ```
+
+   Settings and encrypted secrets are stored under
+   `~/Library/Application Support/NiaAgent` (owner-only permissions);
+   logs are stored under `~/Library/Logs/NiaAgent`. (For a `--system`
+   install, both move to the matching `/Library/...` paths and are
+   owned by root.)
+
+   > **Security warning — unsigned build.** This build is only ad-hoc
+   > signed (enough to run on the machine it was built on), **not**
+   > signed with an Apple Developer ID. On any other Mac, Gatekeeper
+   > will refuse to run it with a message like *"nia-agent" cannot be
+   > opened because the developer cannot be verified* or *is damaged
+   > and can't be opened*. To run it anyway for testing: open **System
+   > Settings → Privacy & Security**, scroll to the Security section
+   > after the first blocked attempt, and click **Open Anyway** next to
+   > the agent — or run `xattr -d com.apple.quarantine ./nia-agent`
+   > before installing, if the quarantine flag is what's blocking it.
+   > **A build for customers needs real Developer ID signing and Apple
+   > notarization — neither has been done yet, so do not send this
+   > unsigned build to a customer.**
+
+To uninstall later: `./uninstall.sh` (or `sudo ./uninstall.sh --system`
+for a system-wide install; add `--purge` to also remove the agent's
+stored configuration and logs).
+
 ## 5. Pair the agent with Nia Core
 
 Pairing links this installed agent to your Nia Core account. Nia Core
@@ -190,6 +235,7 @@ job add` are not affected by this list.
 - **Windows:** `Start-Service nia-agent` (or restart the machine — the
   service is already registered to start automatically going forward).
 - **Linux:** `sudo systemctl start nia-agent`
+- **macOS:** nothing to do — `install.sh` already started it (see step 4).
 
 ## 9. Check status
 

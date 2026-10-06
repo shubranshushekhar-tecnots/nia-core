@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd service descriptor template for the Nia Agent. install.sh fills
+  in the four placeholders below and writes the result to
+  ~/Library/LaunchAgents/<label>.plist (per-user, default) or
+  /Library/LaunchDaemons/<label>.plist (--system).
+
+  KeepAlive=true: launchd restarts the agent any time it exits, for any
+  reason (unlike systemd's Restart=on-failure, which skips a clean exit) —
+  this is a long-lived daemon that is never expected to exit on its own.
+  RunAtLoad=true: starts at login (per-user) or at boot (system).
+
+  Graceful shutdown: launchd's default stop for a directly-spawned process
+  (no ExitTimeOut override needed for the signal itself) sends SIGTERM,
+  which is exactly what ops/shutdown.ts's installGracefulShutdown()
+  listens for, same as the Linux systemd unit.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>__NIA_AGENT_LABEL__</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__NIA_AGENT_EXE__</string>
+        <string>start</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NIA_AGENT_HOME</key>
+        <string>__NIA_AGENT_HOME__</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>__NIA_AGENT_LOG_DIR__/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__NIA_AGENT_LOG_DIR__/launchd.err.log</string>
+</dict>
+</plist>
