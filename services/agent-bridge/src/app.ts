@@ -1,11 +1,14 @@
 import Fastify from "fastify";
 import { z } from "zod";
+import { gunzipSync } from "node:zlib";
 import { withServiceRole } from "@nia/db";
 import { decryptSecret, parseMasterKey, type EncryptedSecret } from "@nia/secrets";
+import { Column, StructuredQueryCursor } from "@nia/schemas";
 import { dbPool } from "./db.js";
 import { generateAgentKey, sha256Hex } from "./crypto.js";
 import { DbAgentTransport, type AgentTransport } from "./transport.js";
 import { taskBus } from "./taskBus.js";
+import { batchKeyFor, putCachedBatch } from "./readAheadCache.js";
 
 /**
  * Thrown by a route handler to force a specific HTTP status. Fastify's
@@ -21,6 +24,15 @@ class HttpError extends Error {
 }
 
 const CHECK_IN_HOLD_MS = Number(process.env.AGENT_CHECK_IN_HOLD_MS ?? 25_000);
+
+// Slice T2, plan point 3 — "at most 20 MB per batch", on the compressed
+// upload itself (what actually crosses the wire), not the decompressed
+// size. Checked explicitly against Content-Length below, with the
+// route's own Fastify bodyLimit set a bit above this as a hard backstop
+// (so a request with no/a lying Content-Length header still can't slip
+// past as an unbounded read into memory).
+const READ_BATCH_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+const READ_BATCH_UPLOAD_TOO_LARGE_MESSAGE = "batch exceeds the 20 MB upload cap — select fewer columns and try again";
 
 const PairBody = z.object({
   pairingCodeId: z.string().uuid(),
@@ -110,6 +122,18 @@ const TaskResultBody = z.object({
   errorClass: z.string().optional(),
 });
 
+// Slice T2, plan point 2/3 — one decompressed batch upload body, shaped
+// exactly like readAheadCache.ts's CachedBatch (cursor added: the
+// starting cursor this specific batch answers, used to compute the
+// cache key — "keyed by its starting cursor").
+const UploadedBatchBody = z.object({
+  cursor: StructuredQueryCursor.nullable(),
+  columns: z.array(Column),
+  rows: z.array(z.array(z.unknown())),
+  nextCursor: StructuredQueryCursor.nullable(),
+  isLast: z.boolean(),
+});
+
 // Slice R3a (B.4) — exactly one of the two: applying a version clears any
 // previous rejection, rejecting leaves applied_version untouched. Never
 // both in the same report.
@@ -182,6 +206,16 @@ async function resolveAgentFromKey(agentKey: string): Promise<{ id: string; crea
  */
 export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool)) {
   const app = Fastify({ logger: true });
+
+  // Slice T2, plan point 3 — the read-batch upload body is raw gzip
+  // bytes, not JSON; Fastify's built-in parsers only cover
+  // application/json and text/plain, so this content type needs its own
+  // parser, registered once here rather than per-route. Hands the buffer
+  // through completely unparsed — decompression/validation happens in
+  // the route handler itself, after the task-ownership check.
+  app.addContentTypeParser("application/gzip", { parseAs: "buffer" }, (_req, body, done) => {
+    done(null, body);
+  });
 
   app.get("/health", async () => ({ status: "ok" as const, service: "agent-bridge" }));
 
@@ -405,6 +439,15 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
       if (task.kind === "test_connection" || task.kind === "list_tables") {
         return { id: task.id, kind: task.kind, localConnectionId: task.payload.localConnectionId };
       }
+      // Slice T2 — read_batch's payload already carries localConnectionId
+      // merged in (transport.ts's claimPending), alongside the structured
+      // read fields (table/columns/filter/cursor/limit/batchCount/
+      // signatureKey) — passed through whole. Unlike run_now/pause/resume/
+      // test_job below, read_batch has no agentSetupId (it targets a
+      // connection, not a platform-managed job).
+      if (task.kind === "read_batch") {
+        return { id: task.id, kind: task.kind, payload: task.payload };
+      }
       return { id: task.id, kind: task.kind, agentSetupId: task.agentSetupId, payload: task.payload };
     });
 
@@ -450,13 +493,13 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
     const agentKeyHash = sha256Hex(agentKey);
 
     const { rows } = await withServiceRole(dbPool, (db) =>
-      db.query<{ id: string }>(
+      db.query<{ id: string; kind: string; payload: Record<string, unknown> }>(
         `update public.agent_tasks t
            set status = $3, result = $4::jsonb, error_class = $5, completed_at = now()
          where t.id = $2
            and t.agent_id = (select id from public.platform_agents where agent_key_hash = $1 and status <> 'revoked')
            and t.status = 'delivered'
-         returning t.id`,
+         returning t.id, t.kind, t.payload`,
         [agentKeyHash, taskId, status, result !== undefined ? JSON.stringify(result) : null, errorClass ?? null],
       ),
     );
@@ -464,8 +507,88 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
     if (!updated) throw new HttpError(404, "task not found, not yours, or already resolved");
 
     taskBus.resolveTaskResult(taskId, { status, result, errorClass });
+
+    // Slice T2, plan point 5 — a read_batch task that fails (or that the
+    // agent reports done without ever reaching the dedicated upload
+    // route below, e.g. stopped mid-read) must not leave a pending
+    // /execute hanging out its own timeout. The task's own stored
+    // payload carries the signatureKey and starting cursor it was asked
+    // for, which is exactly the cache key a waiting /execute is parked
+    // on for the FIRST batch of this task; later read-ahead batches have
+    // no waiter (plan point 2 — only the first is awaited synchronously)
+    // so this is a no-op for those, which is fine.
+    if (status === "failed" && updated.kind === "read_batch") {
+      const signatureKey = typeof updated.payload.signatureKey === "string" ? updated.payload.signatureKey : null;
+      if (signatureKey) {
+        const cursor = (updated.payload.cursor ?? null) as z.infer<typeof StructuredQueryCursor> | null;
+        taskBus.rejectBatch(batchKeyFor(signatureKey, cursor), errorClass);
+      }
+    }
+
     return { ok: true as const };
   });
+
+  // Slice T2, plan point 3 — the dedicated authenticated call for the
+  // agent to upload one batch of a read_batch task: compressed JSON
+  // (gzip), at most 20 MB per batch. Only the agent that owns the task
+  // may upload to it (ownership checked the same way task-results checks
+  // it — by agent_id, via the same key). The content-type parser below
+  // (registered once, outside this handler) hands the raw gzip bytes
+  // through unparsed; everything else is handled here.
+  app.post<{ Params: { taskId: string } }>(
+    "/agent-api/read-batches/:taskId",
+    { bodyLimit: READ_BATCH_UPLOAD_MAX_BYTES + 1024 * 1024 },
+    async (req) => {
+      const agentKey = extractAgentKey(req.headers.authorization);
+      const agent = await resolveAgentFromKey(agentKey);
+      if (!agent) throw new HttpError(401, "agent key is invalid or revoked");
+
+      const contentLength = Number(req.headers["content-length"] ?? 0);
+      if (contentLength > READ_BATCH_UPLOAD_MAX_BYTES) {
+        throw new HttpError(413, READ_BATCH_UPLOAD_TOO_LARGE_MESSAGE);
+      }
+
+      const { rows } = await withServiceRole(dbPool, (db) =>
+        db.query<{ payload: Record<string, unknown> }>(
+          `select payload from public.agent_tasks
+           where id = $1 and kind = 'read_batch' and status = 'delivered'
+             and agent_id = (select id from public.platform_agents where agent_key_hash = $2 and status <> 'revoked')`,
+          [req.params.taskId, sha256Hex(agentKey)],
+        ),
+      );
+      const task = rows[0];
+      if (!task) throw new HttpError(404, "task not found, not yours, or already resolved");
+
+      const compressed = req.body as Buffer;
+      if (compressed.length > READ_BATCH_UPLOAD_MAX_BYTES) {
+        throw new HttpError(413, READ_BATCH_UPLOAD_TOO_LARGE_MESSAGE);
+      }
+
+      let decompressed: Buffer;
+      try {
+        decompressed = gunzipSync(compressed);
+      } catch {
+        throw new HttpError(400, "batch payload is not valid gzip");
+      }
+
+      let parsed: z.infer<typeof UploadedBatchBody>;
+      try {
+        parsed = UploadedBatchBody.parse(JSON.parse(decompressed.toString("utf8")));
+      } catch {
+        throw new HttpError(400, "batch payload is not a valid batch");
+      }
+
+      const signatureKey = typeof task.payload.signatureKey === "string" ? task.payload.signatureKey : null;
+      if (!signatureKey) throw new HttpError(500, "task is missing its signature key");
+
+      const cacheKey = batchKeyFor(signatureKey, parsed.cursor);
+      const cached = { columns: parsed.columns, rows: parsed.rows, nextCursor: parsed.nextCursor, isLast: parsed.isLast };
+      await putCachedBatch(cacheKey, cached);
+      taskBus.resolveBatch(cacheKey, cached);
+
+      return { ok: true as const };
+    },
+  );
 
   // Slice R3a (B.4) — fetch one platform setup by id. No secrets: the
   // destination connection's own `config` is non-secret by construction

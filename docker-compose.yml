@@ -127,10 +127,16 @@ services:
       PORT: 4040
       INTERNAL_PORT: 4041
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+      # Slice T2 — the internal listener's /execute read-ahead cache
+      # (readAheadCache.ts). Same redis service connector-mysql's sibling
+      # jobs never needed before; reused here rather than a new container.
+      REDIS_URL: redis://redis:6379
       WRITE_DISPATCH_SIGNING_SECRET: ${WRITE_DISPATCH_SIGNING_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     ports:
       - "4040:4040"   # exposed for local curl; internal-network-only in prod
       # No "4041:4041" entry here — that omission is what keeps the internal

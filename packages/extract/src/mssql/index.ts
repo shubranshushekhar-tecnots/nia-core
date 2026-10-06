@@ -4,3 +4,4 @@ export * from "./quoteIdent.js";
 export * from "./introspect.js";
 export * from "./buildSelectSql.js";
 export * from "./streamExtract.js";
+export * from "./extractKeysetBatch.js";

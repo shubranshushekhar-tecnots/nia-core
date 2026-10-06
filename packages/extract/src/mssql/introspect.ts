@@ -17,6 +17,13 @@ interface ColumnRow {
   ordinal_position: number;
 }
 
+interface PrimaryKeyRow {
+  schema_name: string;
+  table_name: string;
+  column_name: string;
+  key_ordinal: number;
+}
+
 // INFORMATION_SCHEMA.TABLES/COLUMNS are available unchanged since SQL
 // Server 2000 — no sys.* catalog views, no version-gated columns — so
 // these two queries already work as-is on SQL Server 2008 (GMS's
@@ -38,6 +45,27 @@ export const COLUMNS_SQL = `
   ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION
 `;
 
+// Slice T2 — INFORMATION_SCHEMA.TABLE_CONSTRAINTS/KEY_COLUMN_USAGE are the
+// same vintage as TABLES_SQL/COLUMNS_SQL above (available unchanged since
+// SQL Server 2000, no sys.* catalog views) — joined on CONSTRAINT_NAME +
+// schema to find every PRIMARY KEY constraint's column(s), in their real
+// key-ordinal order (KEY_COLUMN_USAGE.ORDINAL_POSITION is the position
+// *within the key*, not the table — exactly what a composite key's
+// column order for keyset paging needs). One row per key column; a
+// single-column PK yields one row, a composite PK yields one row per
+// column, grouped back into an array below.
+export const PRIMARY_KEYS_SQL = `
+  SELECT kcu.TABLE_SCHEMA AS schema_name, kcu.TABLE_NAME AS table_name,
+         kcu.COLUMN_NAME AS column_name, kcu.ORDINAL_POSITION AS key_ordinal
+  FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+  JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+    ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+   AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+   AND tc.TABLE_NAME = kcu.TABLE_NAME
+  WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+  ORDER BY kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.ORDINAL_POSITION
+`;
+
 /**
  * Builds the Planometry catalog from INFORMATION_SCHEMA — tables and
  * views, schema-qualified names (e.g. "dbo.vw_salesdata"), nullability,
@@ -46,15 +74,16 @@ export const COLUMNS_SQL = `
  * unchanged into the catalog; it isn't used for introspection itself.
  */
 export async function introspectCatalog(pool: sql.ConnectionPool, sourceTimeZone: string): Promise<Catalog> {
-  const [tablesResult, columnsResult] = await Promise.all([
+  const [tablesResult, columnsResult, primaryKeysResult] = await Promise.all([
     pool.request().query<TableRow>(TABLES_SQL),
     pool.request().query<ColumnRow>(COLUMNS_SQL),
+    pool.request().query<PrimaryKeyRow>(PRIMARY_KEYS_SQL),
   ]);
 
   const tables = new Map<string, CatalogTable>();
   for (const row of tablesResult.recordset) {
     const name = `${row.schema_name}.${row.table_name}`;
-    tables.set(name, { name, kind: row.kind, columns: [], excluded: [] });
+    tables.set(name, { name, kind: row.kind, columns: [], excluded: [], primaryKey: null });
   }
 
   for (const row of columnsResult.recordset) {
@@ -70,6 +99,27 @@ export async function introspectCatalog(pool: sql.ConnectionPool, sourceTimeZone
     }
     const column: CatalogColumn = { name: row.column_name, type: info.extractType, nullable: row.is_nullable === "YES" };
     table.columns.push(column);
+  }
+
+  // Grouped by table, key_ordinal ascending (already guaranteed by
+  // PRIMARY_KEYS_SQL's ORDER BY) — a single-column PK produces a
+  // 1-element array, a composite PK a 2+ element array in real key
+  // order. This package's own keyset read (buildSelectSql.ts/
+  // extractKeysetBatch.ts) is composite-aware and pages by this array
+  // directly; collapsing a composite key down to the wire-level
+  // single-string convention (@nia/schemas's IntrospectResponse.entity.
+  // primaryKey) is the caller's job, not this package's — see
+  // CatalogTable.primaryKey's own doc comment.
+  const primaryKeyColumns = new Map<string, string[]>();
+  for (const row of primaryKeysResult.recordset) {
+    const name = `${row.schema_name}.${row.table_name}`;
+    if (!tables.has(name)) continue;
+    const columns = primaryKeyColumns.get(name) ?? [];
+    columns.push(row.column_name);
+    primaryKeyColumns.set(name, columns);
+  }
+  for (const [name, columns] of primaryKeyColumns) {
+    tables.get(name)!.primaryKey = columns;
   }
 
   return {

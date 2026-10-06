@@ -64,8 +64,8 @@ export interface StreamExtractOptions {
  */
 export class TransientExtractError extends Error {}
 
-/** SQL Server's error number for a session's `LOCK_TIMEOUT` expiring mid-request. */
-const SQL_LOCK_TIMEOUT_ERROR_NUMBER = 1222;
+/** SQL Server's error number for a session's `LOCK_TIMEOUT` expiring mid-request. Exported for extractKeysetBatch.ts's own (non-streaming) use of the same classification. */
+export const SQL_LOCK_TIMEOUT_ERROR_NUMBER = 1222;
 
 /**
  * Validates `request` against `catalog`, builds one parameterized SELECT,

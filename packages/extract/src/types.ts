@@ -30,6 +30,18 @@ export interface CatalogTable {
   kind: "table" | "view";
   columns: CatalogColumn[];
   excluded: ExcludedColumn[];
+  /**
+   * Slice T2 — the table's PRIMARY KEY column(s), in key-ordinal order, or
+   * null if the table has no primary key. Unlike @nia/schemas's
+   * IntrospectResponse.entity.primaryKey (a single string, by design —
+   * see that field's own doc comment: a composite key there is collapsed
+   * to null, "treated the same as no key found"), this package's own
+   * keyset-read capability is genuinely composite-aware: a 2+ column
+   * array here can still be paged with buildSelectSql's keyset ORDER BY/
+   * cursor support. Collapsing to the wire's single-string convention is
+   * the caller's job (apps/agent's taskRunner.ts), not this package's.
+   */
+  primaryKey: string[] | null;
 }
 
 export interface Catalog {

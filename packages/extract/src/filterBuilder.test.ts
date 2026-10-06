@@ -17,6 +17,7 @@ const catalog: Catalog = {
         { name: "placed_at", type: "datetime", nullable: false },
       ],
       excluded: [],
+      primaryKey: ["id"],
     },
   ],
 };

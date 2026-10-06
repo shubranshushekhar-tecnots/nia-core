@@ -18,6 +18,38 @@ export interface AgentConnectionReport {
 }
 
 /**
+ * Mirrors packages/schemas/src/contract.ts's StructuredFilterCondition/
+ * StructuredQueryCursor shapes exactly, as plain TS interfaces rather
+ * than an @nia/schemas import — apps/agent has no dependency on that
+ * package (same convention as this file's AgentConnectionReport and
+ * setupClient.ts's PublishedJobSetup/FetchedSetup).
+ */
+export type StructuredFilterCondition =
+  | { column: string; operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "startsWith"; value: string | number | boolean }
+  | { column: string; operator: "in"; values: (string | number | boolean)[] }
+  | { column: string; operator: "between"; low: string | number | boolean; high: string | number | boolean }
+  | { column: string; operator: "isNull" | "isNotNull" };
+
+export interface StructuredQueryCursor {
+  column: string;
+  value: string | number | null;
+}
+
+/** read_batch's own payload shape, set by the bridge's internalApp.ts /execute handler plus localConnectionId merged in by transport.ts's claimPending (services/agent-bridge/src/transport.ts). */
+export interface ReadBatchPayload {
+  localConnectionId: string;
+  table: string;
+  columns: string[];
+  filter: StructuredFilterCondition[];
+  cursor: StructuredQueryCursor | null;
+  limit: number;
+  /** "that batch and the next 9 after it" (plan point 2) — up to this many sequential batches get read and uploaded for one task. */
+  batchCount: number;
+  /** Opaque key identifying "what query is this" (connection/table/columns/filter/limit) for the bridge's read-ahead cache — passed through unchanged on every batch upload. */
+  signatureKey: string;
+}
+
+/**
  * Slice C1 — one task delivered by the bridge in a check-in response,
  * flattened from its internal `AgentTask` shape (services/agent-bridge/
  * src/app.ts's check-in handler: `{id, kind, localConnectionId}`).
@@ -30,10 +62,17 @@ export interface AgentConnectionReport {
  * handler: `{id, kind, agentSetupId, payload}`). `payload` is `{}` for
  * pause/resume/test_job, and `{params?, fullReload?, allowMassDelete?}`
  * for run_now (supabase/migrations/0074_agent_setup_actions.sql).
+ *
+ * Slice T2 adds `read_batch` — a keyset-paged structured read through
+ * packages/extract, targeting a connection like test_connection/
+ * list_tables but carrying its own rich payload instead of a flat
+ * `localConnectionId` (services/agent-bridge/src/app.ts's check-in
+ * handler: `{id, kind, payload}`, payload.localConnectionId included).
  */
 export type AgentTask =
   | { id: string; kind: "test_connection" | "list_tables"; localConnectionId: string }
-  | { id: string; kind: "run_now" | "pause" | "resume" | "test_job"; agentSetupId: string; payload: Record<string, unknown> };
+  | { id: string; kind: "run_now" | "pause" | "resume" | "test_job"; agentSetupId: string; payload: Record<string, unknown> }
+  | { id: string; kind: "read_batch"; payload: ReadBatchPayload };
 
 /**
  * Slice L2 (docs/plans/agent-canvas-integration.md B.3): "Isolated behind

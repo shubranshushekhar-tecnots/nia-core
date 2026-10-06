@@ -4,6 +4,7 @@ import { findConnection, loadConfig } from "./config/store.js";
 import { buildAgentConnectionReports } from "./link/agentConnectionReports.js";
 import { CheckInLoop } from "./link/checkInLoop.js";
 import { buildLocalJobReports } from "./link/localJobReports.js";
+import { ReadBatchUploadClient } from "./link/readBatchUploadClient.js";
 import * as runReportOutbox from "./link/runReportOutbox.js";
 import { SetupClient } from "./link/setupClient.js";
 import { SetupManager } from "./link/setupManager.js";
@@ -65,6 +66,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
   let transport: HttpAgentTransport | undefined;
   let taskResultsClient: TaskResultsClient | undefined;
   let setupClient: SetupClient | undefined;
+  let uploadClient: ReadBatchUploadClient | undefined;
   if (link) {
     const masterKey = loadOrCreateMasterKey(dir);
     const secrets = new LocalSecretStore(masterKey, dir);
@@ -72,8 +74,10 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     if (secret) {
       transport = new HttpAgentTransport({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
       taskResultsClient = new TaskResultsClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
+      uploadClient = new ReadBatchUploadClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
       // Slice R5b — the scheduler itself satisfies TaskRunner's JobActionRunner (runNow), so run_now reuses the scheduler's own lock/semaphore/run-report path.
-      const taskRunner = new TaskRunner(taskResultsClient, logger, dir, scheduler);
+      // Slice T2 — uploadClient lets TaskRunner's read_batch handler upload batches directly to the bridge.
+      const taskRunner = new TaskRunner(taskResultsClient, logger, dir, scheduler, uploadClient);
       setupClient = new SetupClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
       const setupManager = new SetupManager({ setupClient, logger, dir });
       checkInLoop = new CheckInLoop({
@@ -131,6 +135,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     await transport?.close();
     await taskResultsClient?.close();
     await setupClient?.close();
+    await uploadClient?.close();
   }
 }
 

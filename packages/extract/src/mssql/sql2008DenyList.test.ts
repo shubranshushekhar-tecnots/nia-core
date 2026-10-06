@@ -33,7 +33,7 @@ function assertSql2008Safe(sql: string): void {
   }
 }
 
-const table: CatalogTable = { name: "dbo.orders", kind: "table", columns: [], excluded: [] };
+const table: CatalogTable = { name: "dbo.orders", kind: "table", columns: [], excluded: [], primaryKey: null };
 
 // Every native type this module knows how to CAST/CONVERT, one at a time.
 const CAST_TYPES = [

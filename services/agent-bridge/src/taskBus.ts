@@ -57,6 +57,47 @@ class TaskBus extends EventEmitter {
       this.once(event, onWake);
     });
   }
+
+  /**
+   * Slice T2 (plan point 2) — the same wait/resolve/timeout shape as
+   * awaitTaskResult/resolveTaskResult above, but keyed by a read-ahead
+   * batch's cache key (readAheadCache.ts) instead of a taskId: /execute
+   * creates at most one read_batch task per cache miss, then waits here
+   * for the dedicated upload route (app.ts) to store the FIRST batch —
+   * woken in-process the instant it lands, no Redis round-trip needed for
+   * the waiter itself (the batch is also durably written to Redis, for
+   * correctness and for every batch after the first).
+   */
+  async awaitBatch(cacheKey: string, timeoutMs: number): Promise<{ ok: true; batch: unknown } | { ok: false; errorClass?: string }> {
+    return new Promise((resolve, reject) => {
+      const event = `batch:${cacheKey}`;
+      const timer = setTimeout(() => {
+        this.removeListener(event, onBatch);
+        reject(new Error("timed out waiting for the agent's read batch"));
+      }, timeoutMs);
+      const onBatch = (payload: { ok: true; batch: unknown } | { ok: false; errorClass?: string }) => {
+        clearTimeout(timer);
+        resolve(payload);
+      };
+      this.once(event, onBatch);
+    });
+  }
+
+  /** Called by the dedicated upload route once a batch is durably cached. */
+  resolveBatch(cacheKey: string, batch: unknown): void {
+    this.emit(`batch:${cacheKey}`, { ok: true, batch });
+  }
+
+  /**
+   * Called when the read_batch task itself fails or is reported done
+   * without ever producing the awaited batch (e.g. the agent is stopped
+   * mid-read) — lets a pending /execute fail promptly with a clear message
+   * instead of hanging out its own timeout (plan point 5's "cancel ...
+   * never a hang").
+   */
+  rejectBatch(cacheKey: string, errorClass?: string): void {
+    this.emit(`batch:${cacheKey}`, { ok: false, errorClass });
+  }
 }
 
 /** One shared instance per process — every route handler imports this same bus. */

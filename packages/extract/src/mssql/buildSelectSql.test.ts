@@ -7,6 +7,7 @@ const table: CatalogTable = {
   kind: "table",
   columns: [],
   excluded: [],
+  primaryKey: null,
 };
 
 describe("buildSelectSql", () => {

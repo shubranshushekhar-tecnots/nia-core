@@ -4,7 +4,7 @@ import type { SchemaColumn } from "../planometry/types.js";
 import { buildMapping, norm, parseMapOverrides } from "./jobMapping.js";
 
 function sourceTable(columns: CatalogTable["columns"], excluded: CatalogTable["excluded"] = []): CatalogTable {
-  return { name: "dbo.Source", kind: "table", columns, excluded };
+  return { name: "dbo.Source", kind: "table", columns, excluded, primaryKey: null };
 }
 
 describe("norm", () => {

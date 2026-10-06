@@ -51,10 +51,42 @@ export interface BuiltSelect {
 }
 
 /**
+ * Slice T2 (plan point 4) — keyset pagination, composite-key-aware.
+ * `keyColumns` must be in catalog-identifier form (never attacker-
+ * controlled free text — always sourced from CatalogTable.primaryKey,
+ * same "identifiers from the catalog only" discipline as `columns`/
+ * `filter`); the SQL emitted works unchanged on SQL Server 2008 (no row
+ * value constructors in WHERE — `(a, b) > (@a, @b)` is a 2012+ feature,
+ * see sql2008DenyList.test.ts) — the standard "seek method" OR-of-ANDs
+ * expansion is used instead:
+ *   (k0 > @c0) OR (k0 = @c0 AND k1 > @c1) OR (k0 = @c0 AND k1 = @c1 AND k2 > @c2) OR ...
+ * `cursor` is `null` for the first page (no WHERE added, only ORDER BY).
+ */
+export interface KeysetOptions {
+  keyColumns: string[];
+  cursor: unknown[] | null;
+}
+
+function buildKeysetWhere(keyColumns: string[], cursor: unknown[], sink: ReturnType<typeof createParamSink>): string {
+  if (cursor.length !== keyColumns.length) {
+    throw new Error(`buildSelectSql: cursor has ${cursor.length} value(s) but ${keyColumns.length} key column(s) were given`);
+  }
+  const branches = keyColumns.map((_, i) => {
+    const equalities = keyColumns.slice(0, i).map((col, j) => `${quoteIdent(col)} = ${sink.push(cursor[j])}`);
+    const strictGreater = `${quoteIdent(keyColumns[i]!)} > ${sink.push(cursor[i])}`;
+    return [...equalities, strictGreater].join(" AND ");
+  });
+  return branches.length === 1 ? branches[0]! : branches.map((b) => `(${b})`).join(" OR ");
+}
+
+/**
  * Builds one parameterized SELECT for a validated extract request.
  * `nativeTypes` maps every column name in `columns`/`filter` to its live
  * `INFORMATION_SCHEMA.COLUMNS.DATA_TYPE` (fetched fresh by the caller,
  * not trusted from a possibly-stale cached catalog — see introspect.ts).
+ * `keyset`, if given, adds an `ORDER BY` on `keyset.keyColumns` (ascending
+ * — keyset reads only ever page forward) and, once `keyset.cursor` is
+ * non-null, a seek-method `WHERE` clause ANDed with `filter`'s own.
  */
 export function buildSelectSql(
   table: CatalogTable,
@@ -62,6 +94,7 @@ export function buildSelectSql(
   columns: string[],
   filter: FilterCondition[],
   limit?: number,
+  keyset?: KeysetOptions,
 ): BuiltSelect {
   const sink = createParamSink();
 
@@ -76,13 +109,18 @@ export function buildSelectSql(
     .join(", ");
 
   const whereFragments = compileWhereClause(filter, adapter, sink);
+  if (keyset && keyset.cursor !== null) {
+    for (const col of keyset.keyColumns) assertSafeIdentifierText(col);
+    whereFragments.push(`(${buildKeysetWhere(keyset.keyColumns, keyset.cursor, sink)})`);
+  }
   const whereSql = whereFragments.length > 0 ? ` WHERE ${whereFragments.join(" AND ")}` : "";
   if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
     throw new Error(`buildSelectSql: limit must be a positive integer, got ${limit}`);
   }
   const topSql = limit !== undefined ? `TOP (${limit}) ` : "";
+  const orderBySql = keyset ? ` ORDER BY ${keyset.keyColumns.map((col) => quoteIdent(col)).join(", ")}` : "";
 
-  const rawSql = `SELECT ${topSql}${selectList} FROM ${quoteQualifiedName(table.name)}${whereSql}`;
+  const rawSql = `SELECT ${topSql}${selectList} FROM ${quoteQualifiedName(table.name)}${whereSql}${orderBySql}`;
   const { sql, params } = resolveParamSink(sink, rawSql, (i) => `@p${i}`);
   return { sql, params };
 }

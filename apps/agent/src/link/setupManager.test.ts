@@ -30,7 +30,7 @@ function sourceCatalog(table: CatalogTable): Catalog {
 }
 
 function sourceTable(name: string, columns: CatalogTable["columns"]): CatalogTable {
-  return { name, kind: "table", columns, excluded: [] };
+  return { name, kind: "table", columns, excluded: [], primaryKey: null };
 }
 
 /** A bare-bones FetchedSetup for an `https-endpoint` destination — no live schema/server needed, unlike a Planometry destination. */

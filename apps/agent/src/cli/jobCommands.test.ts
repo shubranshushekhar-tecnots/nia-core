@@ -28,7 +28,7 @@ function sourceCatalog(table: CatalogTable): Catalog {
 }
 
 function sourceTable(name: string, columns: CatalogTable["columns"], excluded: CatalogTable["excluded"] = []): CatalogTable {
-  return { name, kind: "table", columns, excluded };
+  return { name, kind: "table", columns, excluded, primaryKey: null };
 }
 
 describe("job commands", () => {

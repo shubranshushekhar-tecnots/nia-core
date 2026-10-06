@@ -1,9 +1,19 @@
 import Fastify from "fastify";
-import { TestRequest, IntrospectRequest, ExecuteRequest, WriteRequest, type ReadContext } from "@nia/schemas";
+import {
+  TestRequest,
+  IntrospectRequest,
+  ExecuteRequest,
+  WriteRequest,
+  type ReadContext,
+  type StructuredQueryPayload,
+  type TabularResult,
+} from "@nia/schemas";
 import { withServiceRole } from "@nia/db";
+import { validateBeforeDispatch } from "@nia/guardrails";
 import { dbPool } from "./db.js";
 import { verifyReadContext, HttpError } from "./writeSignature.js";
 import { taskBus } from "./taskBus.js";
+import { signatureKeyFor, batchKeyFor, takeCachedBatch, type CachedBatch } from "./readAheadCache.js";
 
 /**
  * Slice C1 — the bridge's *internal* listener (never published through
@@ -22,10 +32,24 @@ import { taskBus } from "./taskBus.js";
 // (services/connector-mysql/src/index.ts) — duplicated per-service by
 // convention (see writeSignature.ts's header), route is always the literal
 // call-site string, never taken from the request body.
-function verifyReadRequest(route: "test" | "introspect", connectionId: string, context: ReadContext): void {
+function verifyReadRequest(
+  route: "test" | "introspect" | "execute",
+  connectionId: string,
+  context: ReadContext,
+  queryPayload: unknown = null,
+): void {
   const secret = process.env.WRITE_DISPATCH_SIGNING_SECRET;
   if (!secret) throw new Error("WRITE_DISPATCH_SIGNING_SECRET is not configured");
-  const valid = verifyReadContext({ route, connectionId, queryPayload: null, issuedAt: context.issuedAt }, context.signature, secret);
+  const valid = verifyReadContext(
+    {
+      route,
+      connectionId,
+      queryPayload: queryPayload === null ? null : JSON.stringify(queryPayload),
+      issuedAt: context.issuedAt,
+    },
+    context.signature,
+    secret,
+  );
   if (!valid) throw new HttpError(401, "read context signature is invalid or expired");
 }
 
@@ -65,6 +89,31 @@ const TASK_TIMEOUT_MS: Record<"test_connection" | "list_tables", number> = {
   test_connection: 8_000,
   list_tables: 45_000,
 };
+
+// Slice T2 — a read_batch task waits on the agent streaming a full
+// keyset-paged batch through packages/extract (lock/stall limits included,
+// see taskRunner.ts), not just a quick round-trip, so this is a separate,
+// more generous budget than list_tables' catalog browse.
+const READ_BATCH_TASK_TIMEOUT_MS = 40_000;
+
+function toTabularResult(
+  batch: CachedBatch,
+  connectionId: string,
+  query: StructuredQueryPayload,
+  startedAt: number,
+): TabularResult {
+  return {
+    columns: batch.columns,
+    rows: batch.rows,
+    meta: {
+      executedQuery: `structured read of ${query.table} (${query.columns.join(", ")})`,
+      connectionId,
+      durationMs: Date.now() - startedAt,
+      rowCount: batch.rows.length,
+      truncated: false,
+    },
+  };
+}
 
 // Slice R1, requirement 4 — planometry-table and https-endpoint are
 // destinations whose manifest.service also points at this same bridge
@@ -232,16 +281,80 @@ export function buildInternalApp() {
     return outcome.result;
   });
 
-  // No connector in this codebase implements /execute yet (confirmed in
-  // connectorDispatch.ts's own comment) — registered now so the route
-  // exists, but refuses immediately: no task created, no agent contacted.
-  app.post("/execute", async (req) => {
-    const { credential } = ExecuteRequest.parse(req.body);
+  // Slice T2 — a real structured read through the agent. Only the
+  // "structured" QueryPayload kind is ever routed here (the manifest's
+  // guardrail validator, "sqlserver-agent", only knows that shape); sql/
+  // mongo QueryPayload kinds can't be produced for this connector in the
+  // first place (apps/worker's queryBuilder.ts), so validateBeforeDispatch
+  // rejecting them here is a defence-in-depth backstop, not a real path.
+  app.post("/execute", async (req): Promise<TabularResult> => {
+    const startedAt = Date.now();
+    const { credential, query, context } = ExecuteRequest.parse(req.body);
+    verifyReadRequest("execute", credential.connectionId, context, query);
+
     const connectorId = await getConnectorId(credential.connectionId);
     if (connectorId && AGENT_DELIVERED_CONNECTOR_IDS.has(connectorId)) {
       throw new HttpError(501, "this destination is delivered by an agent");
     }
-    throw new HttpError(501, "reading through the agent is not available yet");
+
+    const validated = validateBeforeDispatch("sqlserver-agent", query, { connectionId: credential.connectionId });
+    if (!validated.ok) throw new HttpError(400, validated.reason);
+    const structuredQuery = validated.sanitizedQuery.query as StructuredQueryPayload;
+
+    const signatureKey = signatureKeyFor(
+      credential.connectionId,
+      structuredQuery.table,
+      structuredQuery.columns,
+      structuredQuery.filter,
+      structuredQuery.limit,
+    );
+    const cacheKey = batchKeyFor(signatureKey, structuredQuery.cursor);
+
+    // Read-ahead hit — "the worker's following requests are answered from
+    // the waiting batches with no new task" (plan point 2). Checked before
+    // resolving/online-checking the agent at all: a batch already sitting
+    // in Redis answers the call even if the agent has since gone offline.
+    const cached = await takeCachedBatch(cacheKey);
+    if (cached) return toTabularResult(cached, credential.connectionId, structuredQuery, startedAt);
+
+    const resolved = await resolveAgentConnection(credential.connectionId);
+    if (resolved.agentStatus === "revoked") throw new HttpError(409, "agent was revoked");
+    const online =
+      resolved.lastCheckInAt !== null && Date.now() - new Date(resolved.lastCheckInAt).getTime() < ONLINE_THRESHOLD_MS;
+    if (!online) throw new HttpError(409, "agent is offline");
+
+    // "a task asking the agent for that batch and the next 9 after it"
+    // (plan point 2) — one agent_tasks row covers up to 10 uploads; only
+    // the first is awaited here, the rest land in Redis for later cursors.
+    const expiresAt = new Date(Date.now() + READ_BATCH_TASK_TIMEOUT_MS).toISOString();
+    const payload = {
+      localConnectionId: resolved.localConnectionId,
+      table: structuredQuery.table,
+      columns: structuredQuery.columns,
+      filter: structuredQuery.filter,
+      cursor: structuredQuery.cursor,
+      limit: structuredQuery.limit,
+      batchCount: 10,
+      signatureKey,
+    };
+    await withServiceRole(dbPool, (db) =>
+      db.query(
+        `insert into public.agent_tasks (agent_id, connection_id, kind, payload, expires_at) values ($1, $2, 'read_batch', $3, $4)`,
+        [resolved.agentId, credential.connectionId, payload, expiresAt],
+      ),
+    );
+    taskBus.wakeAgent(resolved.agentId);
+
+    try {
+      const outcome = await taskBus.awaitBatch(cacheKey, READ_BATCH_TASK_TIMEOUT_MS);
+      if (!outcome.ok) throw new HttpError(502, outcome.errorClass ?? "read_batch failed");
+      return toTabularResult(outcome.batch as CachedBatch, credential.connectionId, structuredQuery, startedAt);
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      // taskBus.awaitBatch's own timeout rejection, or any other unexpected
+      // throw while waiting — never surfaces as a hang (plan point 5).
+      throw new HttpError(504, "agent did not respond in time");
+    }
   });
 
   // Slice R1, requirement 4 — no connector in this codebase writes through

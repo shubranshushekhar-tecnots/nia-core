@@ -18,11 +18,11 @@ import { taskBus } from "./taskBus.js";
  */
 export interface AgentTask {
   id: string;
-  kind: "test_connection" | "list_tables" | "run_now" | "pause" | "resume" | "test_job";
+  kind: "test_connection" | "list_tables" | "read_batch" | "run_now" | "pause" | "resume" | "test_job";
   // Exactly one of connectionId/agentSetupId is set, matching
-  // 0074_agent_setup_actions.sql's agent_tasks_connection_xor_setup check —
-  // test_connection/list_tables carry connectionId, the Slice R5a action
-  // kinds carry agentSetupId.
+  // 0075_agent_tasks_read_batch.sql's (0074's, before it) agent_tasks_
+  // connection_xor_setup check — test_connection/list_tables/read_batch
+  // carry connectionId, the Slice R5a action kinds carry agentSetupId.
   connectionId: string | null;
   agentSetupId: string | null;
   payload: Record<string, unknown>;
@@ -77,6 +77,20 @@ export class DbAgentTransport implements AgentTransport {
           connectionId: row.connection_id,
           agentSetupId: null,
           payload: { localConnectionId: row.local_connection_id },
+        };
+      }
+      // Slice T2 — read_batch carries its own rich payload (table/columns/
+      // filter/cursor/limit/batchCount/signatureKey, set by internalApp.ts
+      // at task-creation time), with localConnectionId merged in the same
+      // way test_connection/list_tables derive it, rather than trusting any
+      // localConnectionId the task-creation payload might have carried.
+      if (row.kind === "read_batch") {
+        return {
+          id: row.id,
+          kind: row.kind,
+          connectionId: row.connection_id,
+          agentSetupId: null,
+          payload: { ...row.payload, localConnectionId: row.local_connection_id },
         };
       }
       // Slice R5a — run_now/pause/resume/test_job: payload is whatever

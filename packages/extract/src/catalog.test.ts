@@ -14,6 +14,7 @@ const catalog: Catalog = {
         { name: "name", type: "text", nullable: true },
       ],
       excluded: [],
+      primaryKey: ["id"],
     },
   ],
 };
