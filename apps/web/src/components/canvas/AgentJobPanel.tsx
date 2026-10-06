@@ -122,6 +122,11 @@ function RunHistoryList({ workflowId, open }: { workflowId: string; open: boolea
     queryKey: ['agent-setup-runs', workflowId],
     queryFn: () => listAgentSetupRuns(workflowId),
     enabled: open,
+    // A run's report reaches the platform asynchronously (the agent sends
+    // it on its next check-in, not the instant the run finishes) — poll
+    // while open so a run that completes just after this panel was opened
+    // still shows up without the user having to close and reopen it.
+    refetchInterval: open ? 3_000 : false,
   });
 
   if (!open) return null;
