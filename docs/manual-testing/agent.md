@@ -90,18 +90,7 @@ No `sqlcmd` errors in between. This creates a `nia_agent_readonly` SQL
 login scoped read-only to `nia_extract_test`, with cancel-visibility
 grants (needed for the `check-running` step later).
 
-## 4. Issue an agent key (terminal D)
-
-```bash
-pnpm --filter @nia/agent run manual:planometry:ctl issue-key
-```
-
-**What you should see:** a bare UUID printed, e.g. `3f1b2c4a-...`. Copy
-it — you'll use it as `--agent-key` next. Terminal B also logs
-`[fake-planometry] issued agent key: <uuid>`. From this point on, the
-fake server requires every request to carry this key.
-
-## 5. Add a connection
+## 4. Add a connection
 
 ```bash
 pnpm --filter @nia/agent run dev connection add \
@@ -109,8 +98,7 @@ pnpm --filter @nia/agent run dev connection add \
   --host localhost --port 14330 --database nia_extract_test \
   --user nia_agent_readonly --password 'N!aExtractTest_2026' \
   --encrypt true --trust-server-certificate true \
-  --planometry-url http://127.0.0.1:4455 \
-  --agent-key '<paste the uuid from step 4>'
+  --planometry-url http://127.0.0.1:4455
 ```
 
 **What you should see:**
@@ -119,7 +107,7 @@ pnpm --filter @nia/agent run dev connection add \
 added connection test1 (Harness SQL Server)
 ```
 
-## 6. `doctor` — confirm everything is green
+## 5. `doctor` — confirm everything is green
 
 ```bash
 pnpm --filter @nia/agent run dev doctor test1
@@ -137,13 +125,12 @@ test1 (Harness SQL Server):
   [PASS] disk space — ...
   [PASS] Planometry reachable — ...
   [PASS] clock skew — ...
-  [PASS] agent key accepted — ...
 ```
 
 If anything fails, fix it before continuing — don't proceed with a red
 doctor.
 
-## 7. Start the agent in the foreground (terminal C)
+## 6. Start the agent in the foreground (terminal C)
 
 ```bash
 export NIA_AGENT_HOME=/tmp/nia-agent-manual
@@ -165,7 +152,7 @@ The catalog itself isn't pushed yet — it's pushed lazily the first time
 a sync actually runs (next step), not proactively at startup. Leave this
 terminal running for the rest of the walkthrough.
 
-## 8. Sync a small table (terminal D)
+## 7. Sync a small table (terminal D)
 
 ```bash
 pnpm --filter @nia/agent run manual:planometry:ctl queue \
@@ -195,7 +182,7 @@ pnpm --filter @nia/agent run dev status
 
 should show `test1: ... last sync ... (3 rows)`.
 
-## 9. Sync the 1.2M-row table
+## 8. Sync the 1.2M-row table
 
 ```bash
 pnpm --filter @nia/agent run manual:planometry:ctl queue \
@@ -207,7 +194,7 @@ seq=N rows=... -> ok` lines (one per spooled chunk) followed by
 `complete: run=run-big rows=1200000 chunks=N`. This takes longer than
 the small-table sync — give it time.
 
-## 10. A filtered sync
+## 9. A filtered sync
 
 ```bash
 pnpm --filter @nia/agent run manual:planometry:ctl queue \
@@ -220,7 +207,7 @@ pnpm --filter @nia/agent run manual:planometry:ctl queue \
 (only `alpha` and `disc%ount_promo` have `is_active = 1` in the seed
 data) and only the 3 requested columns.
 
-## 11. The slow view — watch heartbeats
+## 10. The slow view — watch heartbeats
 
 `dbo.vw_slow` takes several seconds but the agent's default heartbeat
 interval is 60s, too long to observe in a short demo. Restart the agent
@@ -243,7 +230,7 @@ pnpm --filter @nia/agent run manual:planometry:ctl queue \
 `[fake-planometry] heartbeat: run=run-slow count=N` lines while the view
 is still computing, then the single-row chunk and `complete`.
 
-## 12. Drop a chunk — watch the retry
+## 11. Drop a chunk — watch the retry
 
 Arm the drop fault *before* queuing the sync (arming doesn't require the
 run to exist yet, and `dbo.widgets` is small enough that queuing first
@@ -270,9 +257,9 @@ pnpm --filter @nia/agent run manual:planometry:ctl queue \
 Same `seq=0` both times — that's the agent retrying the exact same
 chunk after the dropped connection.
 
-## 13. A 409 — watch cleanup
+## 12. A 409 — watch cleanup
 
-Same ordering note as step 12 — arm the fault *before* queuing, since
+Same ordering note as step 11 — arm the fault *before* queuing, since
 `dbo.widgets` is fast enough that queuing first is a real race:
 
 ```bash
@@ -302,7 +289,7 @@ ls $NIA_AGENT_HOME/spool/run-409 2>&1
 should print `No such file or directory`. `status` won't show a new
 error for this connection either.
 
-## 14. Stop the agent mid-sync — watch it report failed
+## 13. Stop the agent mid-sync — watch it report failed
 
 Queue the big table again, then interrupt partway through:
 
@@ -338,7 +325,7 @@ tail -5 $NIA_AGENT_HOME/logs/agent.log
 
 should include a `"sync_failed"` JSON line.
 
-## 15. Direct extract + Ctrl+C cancel (bypasses Planometry entirely)
+## 14. Direct extract + Ctrl+C cancel (bypasses Planometry entirely)
 
 ```bash
 pnpm --filter @nia/agent run manual:extract catalog --connection-id test1
@@ -379,11 +366,11 @@ pnpm --filter @nia/agent run manual:extract check-running \
 (Optional: re-run the same `extract` command without interrupting it to
 see a clean, uncancelled run — `error` absent, `trailer row count: 1`.)
 
-## 16. `job add` / `job run` — a replace load against the fake Planometry server (v4 Internal Table)
+## 15. `job add` / `job run` — a replace load against the fake Planometry server (v4 Internal Table)
 
 This exercises the newer `job`-based path (full-table `replace` loads against
 a v4 Internal Table), separate from the `connection`-based chunk-push path
-used in steps 8-14 above. It reuses the same terminal B fake server (still
+used in steps 7-13 above. It reuses the same terminal B fake server (still
 running) and terminal D.
 
 Create a fake Internal Table (terminal D):
@@ -433,7 +420,7 @@ unchanged if the source hasn't changed.
 `--allow-empty-replace` are available the same way as on `job add`, to
 exercise the null-key and zero-row safety rules.
 
-## 17. Tear everything down
+## 16. Tear everything down
 
 - Terminal C: `Ctrl+C` if still running.
 - Terminal B: `Ctrl+C` — prints `[fake-planometry] shutting down...` and

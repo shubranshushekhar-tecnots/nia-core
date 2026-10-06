@@ -52,7 +52,6 @@ export interface AddConnectionInput {
   trustServerCertificate?: boolean;
   /** IANA time zone name (e.g. "America/New_York"), validated here. */
   sourceTimeZone: string;
-  agentKey: string;
 }
 
 /** `nia-agent connection add`: stores credentials in the local secret store, non-secret shape in agent.config.json. Does not validate connectivity — use `connection test` for that. */
@@ -63,7 +62,6 @@ export function addConnection(input: AddConnectionInput, dir = defaultHomeDir())
   const secrets = new LocalSecretStore(masterKey, dir);
 
   const credentialRef = secrets.put({ user: input.user, password: input.password });
-  const agentKeyRef = secrets.put({ agentKey: input.agentKey });
 
   const sqlserver: SqlServerConnectionConfig = {
     host: input.host,
@@ -79,7 +77,6 @@ export function addConnection(input: AddConnectionInput, dir = defaultHomeDir())
     sqlserver,
     sourceTimeZone: input.sourceTimeZone,
     credentialRef,
-    agentKeyRef,
   };
 
   const config = loadConfig(dir);
@@ -104,7 +101,6 @@ export function removeConnection(id: string, dir = defaultHomeDir()): boolean {
   const masterKey = loadOrCreateMasterKey(dir);
   const secrets = new LocalSecretStore(masterKey, dir);
   secrets.delete(entry.credentialRef);
-  secrets.delete(entry.agentKeyRef);
 
   saveConfig(removeFromConfig(config, id), dir);
   return true;

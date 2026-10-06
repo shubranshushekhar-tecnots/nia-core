@@ -25,8 +25,6 @@ export interface ConnectionEntry {
   sourceTimeZone: string;
   /** Ref into the local secret store for `{ user, password }`. */
   credentialRef: string;
-  /** Ref into the local secret store for `{ agentKey }`. */
-  agentKeyRef: string;
 }
 
 /** One mapped source column -> target column pair. */

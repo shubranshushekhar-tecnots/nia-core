@@ -112,13 +112,11 @@ async function main(argv: string[]): Promise<void> {
         "allow-legacy-tls": { type: "string" },
         "trust-server-certificate": { type: "string" },
         "source-timezone": { type: "string" },
-        "agent-key": { type: "string" },
       },
     });
     const sourceTimeZone = values["source-timezone"] as string | undefined;
-    const agentKey = values["agent-key"] as string | undefined;
-    if (!values.id || !values.label || !values.host || !values.database || !values.user || !values.password || !sourceTimeZone || !agentKey) {
-      console.error("usage: nia-agent connection add --id <id> --label <label> --host <host> --database <db> --user <user> --password <password> --source-timezone <iana-name> --agent-key <key> [--port <n>] [--encrypt true|false] [--allow-legacy-tls true|false] [--trust-server-certificate true|false]");
+    if (!values.id || !values.label || !values.host || !values.database || !values.user || !values.password || !sourceTimeZone) {
+      console.error("usage: nia-agent connection add --id <id> --label <label> --host <host> --database <db> --user <user> --password <password> --source-timezone <iana-name> [--port <n>] [--encrypt true|false] [--allow-legacy-tls true|false] [--trust-server-certificate true|false]");
       process.exitCode = 1;
       return;
     }
@@ -134,7 +132,6 @@ async function main(argv: string[]): Promise<void> {
       allowLegacyTls: toOptionalBool(values["allow-legacy-tls"] as string | undefined),
       trustServerCertificate: toOptionalBool(values["trust-server-certificate"] as string | undefined),
       sourceTimeZone,
-      agentKey,
     });
     console.log(`added connection ${entry.id} (${entry.label})`);
     return;

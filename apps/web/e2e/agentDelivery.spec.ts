@@ -340,8 +340,6 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
             'true',
             '--source-timezone',
             'UTC',
-            '--agent-key',
-            'e2e-placeholder-agent-key',
           ],
           home,
         );

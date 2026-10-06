@@ -106,8 +106,7 @@ node dist/index.js connection add \
   --host <sql-server-host> --port 1433 --database SummitERP_1 \
   --user nia_agent --password <the-password-from-step-3> \
   --encrypt false \
-  --planometry-url <planometry-base-url> \
-  --agent-key <agent-key-from-planometry>
+  --planometry-url <planometry-base-url>
 ```
 
 Repeat for `SummitERP_2` through `SummitERP_7`, changing `--id`,
@@ -120,10 +119,8 @@ Notes on the flags:
   can't), see `--allow-legacy-tls true` — documented in
   `docs/plans/planometry-integration.md` §Phase 1 as explicitly insecure
   and intended only for a private, trusted LAN. Try without it first.
-- `--agent-key` is issued by Planometry when GMS's connection is paired
-  on their side — not something generated locally.
-- Credentials and the agent key are encrypted at rest immediately; they
-  are never written to `agent.config.json` in plain text.
+- Credentials are encrypted at rest immediately; they are never written
+  to `agent.config.json` in plain text.
 
 Confirm each connection independently before moving on:
 ```
@@ -148,8 +145,8 @@ node dist/index.js doctor summit-erp-1
 This checks, per connection: SQL Server reachability, TLS mode, login
 credentials, read access (catalog), that the login truly can't write,
 `sys.dm_exec_requests` visibility (cancel confirmation), spool directory
-free disk space, Planometry URL reachability, clock skew between this
-host and Planometry, and that the agent key is accepted. Every failing
+free disk space, Planometry URL reachability, and clock skew between
+this host and Planometry. Every failing
 check prints a suggested fix. **All 7 connections must show every check
 passing (`[PASS]`) before starting the agent for the pilot** — see
 `docs/pilot/gms-pilot-runbook.md` for the full pilot-day sequence.

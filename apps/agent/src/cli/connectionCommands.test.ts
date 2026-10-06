@@ -29,7 +29,6 @@ describe("connection commands", () => {
         user: "sa",
         password: "s3cret",
         sourceTimeZone: "UTC",
-        agentKey: "agent-key-value",
       },
       dir,
     );
@@ -37,17 +36,15 @@ describe("connection commands", () => {
     const config = loadConfig(dir);
     expect(config.connections).toHaveLength(1);
     expect(JSON.stringify(config)).not.toContain("s3cret");
-    expect(JSON.stringify(config)).not.toContain("agent-key-value");
 
     const masterKey = loadOrCreateMasterKey(dir);
     const secrets = new LocalSecretStore(masterKey, dir);
     expect(secrets.get(entry.credentialRef)).toEqual({ user: "sa", password: "s3cret" });
-    expect(secrets.get(entry.agentKeyRef)).toEqual({ agentKey: "agent-key-value" });
   });
 
   it("lists added connections", () => {
     addConnection(
-      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "UTC", agentKey: "k" },
+      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "UTC" },
       dir,
     );
     expect(listConnections(dir).map((c) => c.id)).toEqual(["conn-1"]);
@@ -55,7 +52,7 @@ describe("connection commands", () => {
 
   it("removes a connection and its secrets", () => {
     const entry = addConnection(
-      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "UTC", agentKey: "k" },
+      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "UTC" },
       dir,
     );
     expect(removeConnection("conn-1", dir)).toBe(true);
@@ -73,7 +70,7 @@ describe("connection commands", () => {
   it("rejects an invalid IANA time zone", () => {
     expect(() =>
       addConnection(
-        { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "Not/AZone", agentKey: "k" },
+        { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "Not/AZone" },
         dir,
       ),
     ).toThrow(InvalidTimeZoneError);
@@ -81,7 +78,7 @@ describe("connection commands", () => {
 
   it("refuses to remove a connection while a job uses it", () => {
     addConnection(
-      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "UTC", agentKey: "k" },
+      { id: "conn-1", label: "A", host: "h", database: "d", user: "u", password: "p", sourceTimeZone: "UTC" },
       dir,
     );
     const job: SyncJobEntry = {

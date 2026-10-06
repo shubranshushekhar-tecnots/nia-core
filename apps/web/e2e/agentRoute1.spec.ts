@@ -234,8 +234,6 @@ test.describe('Route 1: normal worker-dispatched run from a local-database-via-a
             'true',
             '--source-timezone',
             'UTC',
-            '--agent-key',
-            'e2e-placeholder-agent-key',
           ],
           home,
         );

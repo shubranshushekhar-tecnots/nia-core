@@ -197,8 +197,6 @@ test('agent-backed local SQL Server connection: install, pair, test, browse tabl
           'true',
           '--source-timezone',
           'UTC',
-          '--agent-key',
-          'e2e-placeholder-agent-key',
         ],
         home,
       );

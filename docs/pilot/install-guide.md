@@ -190,17 +190,14 @@ nia-agent connection add \
   --id <short-id> --label "<friendly name>" \
   --host <database-server-host> --port <port> --database <database-name> \
   --user nia_agent --password <the-password-from-step-3> \
-  --source-timezone <IANA time zone, e.g. America/New_York> \
-  --agent-key <key-provided-by-nia>
+  --source-timezone <IANA time zone, e.g. America/New_York>
 ```
 
 - `--source-timezone` must be an IANA time zone name — this tells the
   agent what time zone date/time columns in this database should be read
   as. Use the time zone the database server itself runs in.
-- `--agent-key` is a value Nia Core gives you for this connection, not
-  something you generate yourself.
-- The password and key are encrypted immediately; they are never stored
-  in plain text.
+- The password is encrypted immediately; it is never stored in plain
+  text.
 - If your database only accepts unencrypted connections on your local
   network, add `--encrypt false`. Only use `--allow-legacy-tls true` if
   your DBA has confirmed the server cannot negotiate a modern TLS
