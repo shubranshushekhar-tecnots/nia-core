@@ -50,39 +50,46 @@ Copy-Item -Path (Join-Path $ScriptDir "nia-agent-service.xml") -Destination $Ins
 Copy-Item -Path (Join-Path $ScriptDir "LICENSE-WinSW.txt") -Destination $InstallDir
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+
+# `& $ServiceExe install` registers the "NT SERVICE\nia-agent" virtual
+# service account with the SCM. On a real Windows host, a virtual service
+# account's SID is only resolvable (by Get-Acl/New-Object
+# FileSystemAccessRule's identity lookup) once that registration has
+# happened — attempting the ACL below beforehand fails with "Some or all
+# identity references could not be translated". So this whole block (data-
+# dir ACL + the logs subdirectory, which must be created after the ACL so
+# it inherits the locked-down permissions instead of %ProgramData%'s
+# default) runs AFTER `& $ServiceExe install`, never before.
+& $ServiceExe install
+
 # Restrict to the agent's own virtual service account (least privilege — the
 # service runs as $ServiceAccount, not LocalSystem/SYSTEM) and local
 # Administrators only, removing inherited permissions — matches the Linux
 # install's 0700 data dir. POSIX file modes (0o700/0o600) have no effect on
 # Windows, so this ACL is the only thing protecting config, secrets, the
-# master keyfile, and spool chunk files containing customer row data. Must
-# run BEFORE any subdirectory (e.g. "logs") is created below, so that
-# subdirectory inherits this locked-down ACL instead of %ProgramData%'s
-# default (which grants Users/Authenticated Users access).
-# UNVERIFIED ON A REAL WINDOWS HOST: that a virtual service account's SID is
-# resolvable via Get-Acl/New-Object FileSystemAccessRule before the service
-# has ever been installed (Microsoft docs say virtual-account SIDs are
-# deterministic and don't require prior provisioning, but this hasn't been
-# exercised against a live SCM here). If Set-Acl below throws "account could
-# not be translated", move this ACL block to after `& $ServiceExe install`.
+# master keyfile, and spool chunk files containing customer row data.
+# Administrators is identified by its well-known SID (S-1-5-32-544), not the
+# localizable "BUILTIN\Administrators" name, so this resolves identically on
+# non-English Windows installs. The virtual service account has no such
+# well-known SID to pin to — it's looked up by name, which is reliable now
+# that `install` above has registered it with the SCM.
 $acl = Get-Acl $DataDir
 $acl.SetAccessRuleProtection($true, $false)
-foreach ($identity in @($ServiceAccount, "BUILTIN\Administrators")) {
+$administratorsSid = New-Object Security.Principal.SecurityIdentifier("S-1-5-32-544")
+foreach ($identity in @($ServiceAccount, $administratorsSid)) {
     $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
     $acl.AddAccessRule($rule)
 }
 Set-Acl $DataDir $acl
 New-Item -ItemType Directory -Force -Path (Join-Path $DataDir "logs") | Out-Null
 
-& $ServiceExe install
+& $ServiceExe start
 
 if ($serviceWasRunning) {
-    & $ServiceExe start
     Write-Host "upgraded and restarted nia-agent"
 } else {
-    Write-Host "installed. Next steps:"
-    Write-Host "  & `"$InstallDir\nia-agent.exe`" connection add ..."
+    Write-Host "installed and started nia-agent. Next steps:"
+    Write-Host "  & `"$InstallDir\nia-agent.exe`" setup"
     Write-Host "  & `"$InstallDir\nia-agent.exe`" doctor"
-    Write-Host "  & `"$ServiceExe`" start"
     Write-Host "  Get-Service nia-agent"
 }
