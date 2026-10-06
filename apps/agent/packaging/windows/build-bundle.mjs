@@ -61,7 +61,7 @@ async function main() {
   copyFileSync(path.join(here, "uninstall.ps1"), path.join(stageDir, "uninstall.ps1"));
   writeFileSync(
     path.join(stageDir, "VERSION.txt"),
-    `Nia Agent ${version}\nWinSW ${WINSW_VERSION}\nBuilt ${new Date().toISOString()}\n`,
+    `Nia Core Agent ${version}\nWinSW ${WINSW_VERSION}\nBuilt ${new Date().toISOString()}\n`,
   );
 
   console.log("[3/3] zipping bundle...");

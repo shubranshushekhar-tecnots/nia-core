@@ -39,7 +39,7 @@ async function main() {
   copyFileSync(path.join(here, "uninstall.sh"), path.join(stageDir, "uninstall.sh"));
   chmodSync(path.join(stageDir, "install.sh"), 0o755);
   chmodSync(path.join(stageDir, "uninstall.sh"), 0o755);
-  writeFileSync(path.join(stageDir, "VERSION.txt"), `Nia Agent ${version} (darwin-arm64)\nBuilt ${new Date().toISOString()}\n`);
+  writeFileSync(path.join(stageDir, "VERSION.txt"), `Nia Core Agent ${version} (darwin-arm64)\nBuilt ${new Date().toISOString()}\n`);
 
   console.log("[2/2] zipping bundle...");
   const zipName = `nia-agent-macos-arm64-${version}.zip`;

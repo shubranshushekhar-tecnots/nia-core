@@ -4,7 +4,7 @@ Audience: GMS's DBAs. A practical guide to shaping `SummitERP_*` tables
 into the two shapes Planometry expects — **hierarchies** and **facts** —
 using plain SQL Server views. You don't need to modify any underlying
 table; a view that presents the data in the right shape is enough, and
-the Nia Agent reads views exactly like tables (see
+the Nia Core Agent reads views exactly like tables (see
 `docs/plans/planometry-integration.md`'s catalog/contract section).
 
 Every example below is plain SQL Server 2008-compatible T-SQL — no

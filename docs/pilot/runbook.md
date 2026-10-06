@@ -1,4 +1,4 @@
-# Nia Agent — runbook
+# Nia Core Agent — runbook
 
 Audience: whoever operates the agent day to day. What each job status
 and error means, and what to do about it. Everything here comes from

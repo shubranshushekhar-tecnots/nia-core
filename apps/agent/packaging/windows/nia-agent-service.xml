@@ -13,7 +13,7 @@
 -->
 <service>
   <id>nia-agent</id>
-  <name>Nia Agent</name>
+  <name>Nia Core Agent</name>
   <description>Nia on-premise agent — polls Planometry and syncs SQL Server data.</description>
 
   <!-- Least privilege: runs as the virtual service account "NT SERVICE\nia-agent"

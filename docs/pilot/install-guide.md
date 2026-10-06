@@ -1,6 +1,6 @@
-# Nia Agent — install guide
+# Nia Core Agent — install guide
 
-Audience: your IT team. The Nia Agent is a small program that runs on a
+Audience: your IT team. The Nia Core Agent is a small program that runs on a
 machine inside your network. It reads from one or more of your databases
 and sends rows out to a destination you choose — either straight to
 Planometry (or another HTTPS address you control), or as part of a

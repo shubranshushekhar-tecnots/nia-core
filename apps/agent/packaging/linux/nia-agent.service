@@ -1,5 +1,5 @@
 [Unit]
-Description=Nia Agent (on-premise Planometry sync)
+Description=Nia Core Agent (on-premise Planometry sync)
 After=network-online.target
 Wants=network-online.target
 

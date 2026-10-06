@@ -4,9 +4,9 @@
 > install instructions, see `docs/pilot/install-guide.md`. Kept here for
 > GMS-pilot-specific history only.
 
-# GMS install guide — Nia Agent
+# GMS install guide — Nia Core Agent
 
-Audience: GMS IT. Installs the on-premise Nia Agent that reads GMS's 7
+Audience: GMS IT. Installs the on-premise Nia Core Agent that reads GMS's 7
 `SummitERP_*` SQL Server 2008 databases and pushes rows to Planometry.
 The agent never writes to SQL Server, never stores row data at rest, and
 makes no inbound network connections — it only needs outbound HTTPS to
