@@ -14,6 +14,18 @@ destination-contract chain or the two profiling entry points below.
 ### Checks
 No dependency. `apps/worker/src/lib/checks/runWorkflowChecks.ts` and
 `packages/schemas/src/checks.ts` never reference dialect or native types.
+Confirmed this also means the run-checks suite already handles a
+structured/agent source correctly today, with no gate to fix: `checkGrants`
+(`packages/schemas/src/checks.ts:416`) keys purely on the **destination**
+node's `connectionId`/`namespace` via the injected `hasActiveGrant`
+callback — the source side of a write-verb node is never consulted.
+`checkCredentials` (`checks.ts:275`) is similarly a pure
+`testConnection(connectionId)` callback per node — it tests whatever
+connection is wired to that node (agent or DB) without branching on kind.
+`checkMappings` (`checks.ts:342`) flags source/dest as "heterogeneous"
+whenever `source.manifestId !== dest.manifestId`, which is always true for
+an agent source + SQL destination — this only changes which mapping-drift
+message is shown, not a pass/fail gate.
 
 ### Run start / reading / transforms
 | # | File:line | What it needs | Smallest safe change | apps/worker? | Catching tests |
@@ -104,7 +116,24 @@ No changes needed anywhere in `queryBuilder.ts`, `sampleEntity.ts`, `runPreview.
 - No live type/fidelity preview in the web Mapping Editor UI (optional item above, left unfixed).
 - Slower throughput generally — each chunk is one agent-bridge round trip (~1-3s/chunk per route1-design.md's own estimate) vs. a direct DB connection.
 
-## 5. Honest estimate of remaining hidden dependencies
+## 5. Write-grant requirement
+
+Unrelated to source dialect: `resolveWriteGrant` (`apps/worker/src/lib/
+resolveWriteGrant.ts:32-63`) requires a row in `public.write_grants` for
+the **destination** connection that is `confirmed_at is not null`,
+`revoked_at is null`, and whose `scope.schemas` array includes the target
+namespace — looked up purely by `connectionId`/`namespace`, with zero
+reference to the source. So before this route's workflow can run, a user
+must: open the destination (Postgres/Supabase) connection in the
+Connections UI, grant write access scoped to the destination schema, and
+confirm it (the confirm step rotates/stores the write credential in the
+vault) — exactly the same step required for any other source-dialect
+pairing into that same destination. No new or different write-grant setup
+is needed because the source is an agent; `checkGrants` (§1 "Checks"
+above) already verifies this correctly for a structured source with no
+code change.
+
+## 6. Honest estimate of remaining hidden dependencies
 
 **Some, not none, bounded.** This trace covered every call site found via repo-wide greps for `manifestDialect(`, `SourceDialect`, `getDialectAdapter(`, and `schemaFromIntrospection(` across `apps/worker`, `apps/web`, `apps/agent`, `packages/schemas`, and `packages/guardrails` — 16 numbered places plus 2 explicitly out-of-scope ones, all read in full. Known unknowns:
 - **Test coverage gaps, not code gaps**: no `profileEntity.test.ts` or `proposeCleaning.test.ts` exists today, so a mistake in items #13/#15 would not be caught by any existing test — a new test would need to be written alongside the fix, not after.
