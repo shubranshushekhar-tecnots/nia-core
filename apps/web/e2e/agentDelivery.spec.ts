@@ -616,11 +616,13 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
         // best-effort — don't mask the real test failure/result with a cleanup error
       }
       rmSync(home, { recursive: true, force: true });
-      await pool.query('delete from public.connections where display_name = any($1)', [[SOURCE_CONNECTION_NAME, DEST_CONNECTION_NAME]]);
       // agent_setups.workflow_id FK is ON DELETE CASCADE from workflows, but
       // this spec reuses the shared, persistent "Canvas E2E Workflow"
       // fixture rather than deleting it — delete the setup rows (and, via
       // their own ON DELETE CASCADE, the agent_setup_runs rows) directly.
+      // Must run before the connections delete below: agent_setups has its
+      // own FK on connection_id, so deleting connections first violates
+      // agent_setups_connection_id_fkey.
       await pool.query(
         `delete from public.agent_setups where workflow_id = (
            select w.id from public.workflows w
@@ -628,6 +630,7 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
            where p.name = 'Canvas E2E Project' and w.name = 'Canvas E2E Workflow'
          )`,
       );
+      await pool.query('delete from public.connections where display_name = any($1)', [[SOURCE_CONNECTION_NAME, DEST_CONNECTION_NAME]]);
       if (agentId) {
         await pool.query('delete from public.platform_agents where id = $1', [agentId]);
       }
