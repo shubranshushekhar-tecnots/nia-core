@@ -12,8 +12,8 @@ import { personas } from './fixtures/personas';
  * /execute path) and the workflow is run the NORMAL way (worker-dispatched
  * write via a real connector service), not the agent-autonomous push
  * agentDelivery.spec.ts (Route 2) exercises. No fake Planometry server, no
- * publish/pause/resume/allow-list — this reuses the plain "Run now" /
- * run-history machinery canvas.spec.ts's non-agent workflows already use.
+ * publish/pause/resume/allow-list — this reuses the plain "Run checks" /
+ * "Run" / run-history machinery canvas.spec.ts's non-agent workflows already use.
  *
  * Same style/helpers as agentDelivery.spec.ts (gotoSeededWorkflow,
  * loadWebEnv, runCli/startAgent/stopAgent, the SQL Server harness,
@@ -355,8 +355,8 @@ test.describe('Route 1: normal worker-dispatched run from a local-database-via-a
         expect(Array.isArray(preview.rows) ? preview.rows.length : 0).toBeGreaterThan(0);
       }, { timeout: 3 * 60 * 1000 });
 
-      // d) Run the workflow the normal way (the UI "Run now" button — the
-      // run/cancel/stream API is cookie-authed, not usable via Bearer
+      // d) Run the workflow the normal way (the UI "Run checks" + "Run"
+      // buttons — the run/cancel/stream API is cookie-authed, not usable via Bearer
       // page.request calls). Today this is EXPECTED to fail fast: the
       // "sqlserver-agent" source connector has no entry in
       // packages/schemas/src/pushdown.ts's manifestDialect(), so
@@ -368,11 +368,16 @@ test.describe('Route 1: normal worker-dispatched run from a local-database-via-a
       let runOutcome: { status: string; rowsProcessed: number; durationMs: number | null; error: unknown } | undefined;
       await test.step('d) run now: fails fast with the documented dialect-gap error (apps/worker fix out of scope)', async () => {
         await page.reload();
-        await page.getByRole('button', { name: 'Run now', exact: true }).click();
-        const runNowDialog = page.getByText('Run now?').locator('../..');
-        if (await runNowDialog.isVisible().catch(() => false)) {
-          await page.getByRole('button', { name: 'Run now', exact: true }).last().click();
-        }
+        // "Run" is gated on a fresh "Run checks" pass (FlowCanvas.tsx's
+        // runEnabled: !checksStale && failingChecks === 0) — the graph was
+        // just saved via the API in step b), so the client has no check
+        // run for this graphVersion yet. Single-destination graphs run
+        // immediately on click (Phase 6 Block 3 removed the old "Run now?"
+        // confirm modal — see canvas.spec.ts's equivalent Run flow).
+        await page.getByRole('button', { name: 'Run checks' }).click();
+        const runBtn = page.getByRole('button', { name: 'Run', exact: true });
+        await expect(runBtn).toBeEnabled({ timeout: 15_000 });
+        await runBtn.click();
 
         const workflowId = currentWorkflowId(page);
         await expect(async () => {
@@ -406,11 +411,13 @@ test.describe('Route 1: normal worker-dispatched run from a local-database-via-a
       await test.step('f) stopping the agent mid-run: second run still fails fast with a clear message and does not hang', async () => {
         const workflowId = currentWorkflowId(page);
         await page.reload();
-        await page.getByRole('button', { name: 'Run now', exact: true }).click();
-        const runNowDialog = page.getByText('Run now?').locator('../..');
-        if (await runNowDialog.isVisible().catch(() => false)) {
-          await page.getByRole('button', { name: 'Run now', exact: true }).last().click();
-        }
+        // Checks aren't stale here (nothing changed the graph since step
+        // d)'s "Run checks" pass) — "Run" is enabled on reload, no
+        // confirm modal for this single-destination graph (see step d)'s
+        // comment).
+        const runBtn = page.getByRole('button', { name: 'Run', exact: true });
+        await expect(runBtn).toBeEnabled({ timeout: 15_000 });
+        await runBtn.click();
 
         // Give the run a brief moment to actually start before killing the
         // agent — then stop it mid-flight.
