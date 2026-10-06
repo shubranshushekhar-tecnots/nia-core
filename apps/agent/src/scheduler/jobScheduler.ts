@@ -348,7 +348,17 @@ export class JobScheduler {
    * through the normal run report, exactly like any other tick.
    */
   runNow(jobId: string, forceReplace: boolean, extra?: RunNowExtra): { ok: true } | { ok: false; error: string } {
-    const runtime = this.runtimes.get(jobId);
+    let runtime = this.runtimes.get(jobId);
+    // A job just added/updated via SetupManager (e.g. right after a
+    // Publish) only reaches `this.runtimes` on the next periodic
+    // `reconcile()` (default every 60s) — without this, a `run_now`
+    // landing in that window would wrongly report "job not found" for
+    // a job that genuinely exists in config. Reconciling once on a
+    // miss closes that race without changing scheduled-tick behavior.
+    if (!runtime) {
+      this.reconcile();
+      runtime = this.runtimes.get(jobId);
+    }
     if (!runtime) return { ok: false, error: "job not found" };
     if (runtime.running) return { ok: false, error: "already running" };
     void this.fire(runtime, forceReplace, extra);
