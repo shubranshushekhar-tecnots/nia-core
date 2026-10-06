@@ -2,6 +2,7 @@ import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 import type { WithUser } from "../lib/withUser.js";
 import { assertWorkflowInScope } from "./checks.js";
+import { assertRowsLimitNotExceeded } from "./runs.js";
 
 /**
  * Agent-Canvas integration, Slice R5a (docs/plans/agent-canvas-integration.md
@@ -81,6 +82,15 @@ export async function requestAgentSetupAction(
 ): Promise<AgentActionTask> {
   await assertWorkflowInScope(withUser, scope, workflowId);
   const { kind, payload } = toRpcArgs(request);
+
+  // Safeguards slice: an org already over its monthly row limit may not
+  // Run now (this covers the run_now/full_reload/allow_mass_delete family
+  // — toRpcArgs maps all three onto kind "run_now") — same message and
+  // check as starting a run from the canvas (runs.ts's
+  // assertRowsLimitNotExceeded). test/pause/resume are never blocked: a
+  // paused job staying paused, or a job already running on the agent,
+  // keeps running regardless of this check.
+  if (kind === "run_now") await assertRowsLimitNotExceeded(withUser, scope);
 
   try {
     const { rows } = await withUser((db) =>

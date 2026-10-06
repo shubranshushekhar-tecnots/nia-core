@@ -280,7 +280,20 @@ export async function createConnection(
           [orgId, ownerId, manifest.id, handle, input.displayName, ownerUserId, config, vaultRef as string],
         ),
       );
-      return toConnection(rows[0]!);
+      const connection = toConnection(rows[0]!);
+      // Safeguards slice: connection.created, same log_connection_audit RPC
+      // updateConnection/deleteConnection already use — detail carries only
+      // the connector id (never config/secret values), same "no secrets in
+      // audit_log" rule as connection.updated's changedFields-only detail.
+      await withUser((db) =>
+        db.query(`select public.log_connection_audit($1, $2, $3, $4)`, [
+          connection.id,
+          "connection.created",
+          { connectorId: manifest.id },
+          ownerUserId,
+        ]),
+      );
+      return connection;
     } catch (err) {
       if (!isUniqueViolation(err)) {
         const message = err instanceof Error ? err.message : String(err);

@@ -68,7 +68,7 @@ async function assertGraphConnectionsExist(withUser: WithUser, scope: WorkspaceS
  * returns only what this actor may see — no service-role escalation needed
  * for a plain read.
  */
-async function assertRowsLimitNotExceeded(withUser: WithUser, scope: WorkspaceScope): Promise<void> {
+export async function assertRowsLimitNotExceeded(withUser: WithUser, scope: WorkspaceScope): Promise<void> {
   const isPersonal = !("orgId" in scope);
   const table = isPersonal ? "owner_plan" : "org_plan";
   const scopeColumn = isPersonal ? "user_id" : "org_id";

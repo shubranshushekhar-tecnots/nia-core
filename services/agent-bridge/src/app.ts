@@ -165,6 +165,8 @@ const PAIR_REFUSAL_MESSAGE: Record<Exclude<ConsumeResult["status"], "ok">, strin
 type AgentRow = {
   id: string;
   status: "pending" | "active" | "revoked";
+  org_id: string | null;
+  owner_id: string | null;
 };
 
 type NiaSecretRow = {
@@ -187,16 +189,18 @@ function extractAgentKey(authHeader: string | undefined): string {
   return agentKey;
 }
 
-async function resolveAgentFromKey(agentKey: string): Promise<{ id: string; createdByUserId: string } | null> {
+async function resolveAgentFromKey(
+  agentKey: string,
+): Promise<{ id: string; createdByUserId: string; orgId: string | null; ownerId: string | null } | null> {
   const agentKeyHash = sha256Hex(agentKey);
   const { rows } = await withServiceRole(dbPool, (db) =>
-    db.query<{ id: string; created_by_user_id: string }>(
-      `select id, created_by_user_id from public.platform_agents where agent_key_hash = $1 and status <> 'revoked'`,
+    db.query<{ id: string; created_by_user_id: string; org_id: string | null; owner_id: string | null }>(
+      `select id, created_by_user_id, org_id, owner_id from public.platform_agents where agent_key_hash = $1 and status <> 'revoked'`,
       [agentKeyHash],
     ),
   );
   const row = rows[0];
-  return row ? { id: row.id, createdByUserId: row.created_by_user_id } : null;
+  return row ? { id: row.id, createdByUserId: row.created_by_user_id, orgId: row.org_id, ownerId: row.owner_id } : null;
 }
 
 /**
@@ -267,6 +271,22 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
     const agentId = agentRows[0]?.id;
     if (!agentId) throw new HttpError(500, "failed to create agent record");
 
+    // Safeguards slice: agent.paired audit entry — who (created_by_user_id,
+    // the pairing member), when (created_at default), which org/workspace
+    // (org_id xor owner_id), which agent (agentId). No RPC exists for this
+    // (unlike revoke_agent's own private.log_audit call, 0069) and there's
+    // no connection_id to key a log_connection_audit call off, so this
+    // writes audit_log directly — service_role already holds a plain
+    // GRANT ALL on audit_log (confirmed against 0001/0007's grants).
+    // Detail never carries the agent key or any secret.
+    await withServiceRole(dbPool, (db) =>
+      db.query(
+        `insert into public.audit_log (org_id, owner_id, actor, action, detail)
+         values ($1, $2, $3, 'agent.paired', $4::jsonb)`,
+        [result.org_id, result.owner_id, result.created_by_user_id, JSON.stringify({ agentId })],
+      ),
+    );
+
     return { agentId, agentKey };
   });
 
@@ -305,7 +325,7 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
                agent_version = coalesce($2, agent_version),
                host_name = coalesce($3, host_name)
          where agent_key_hash = $1 and status <> 'revoked'
-         returning id, status`,
+         returning id, status, org_id, owner_id`,
         [agentKeyHash, agentVersion ?? null, hostName ?? null],
       );
       const agent = rows[0];
@@ -431,6 +451,24 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
             [report.runId],
           );
           if (exists.length > 0) acknowledgedRunIds.push(report.runId);
+        }
+
+        // Safeguards slice: rows an agent's run reports count toward the
+        // org's/workspace's monthly row usage, same measure+table a normal
+        // workflow run uses (usage_events, kind='rows_moved',
+        // subject_id=runId) — 0066_usage_events.sql's own unique index on
+        // (kind, subject_id) is exactly the "once per run id, a report
+        // received twice counts once" idempotency this needs, so the same
+        // report redelivered (acknowledgedRunIds already handles the
+        // agent_setup_runs side of that) just no-ops here too via
+        // `on conflict do nothing` — no separate dedup logic required.
+        if (report.rowsSent > 0) {
+          await db.query(
+            `insert into public.usage_events (org_id, owner_id, kind, quantity, subject_id)
+             values ($1, $2, 'rows_moved', $3, $4)
+             on conflict (kind, subject_id) do nothing`,
+            [agent.org_id, agent.owner_id, report.rowsSent, report.runId],
+          );
         }
       }
 
@@ -744,17 +782,41 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
     const { appliedVersion, rejectionReason } = SetupReportBody.parse(req.body);
 
     const { rows } = await withServiceRole(dbPool, (db) =>
-      db.query<{ id: string }>(
+      db.query<{ id: string; workflow_id: string | null }>(
         `update public.agent_setups
            set applied_version = coalesce($3, applied_version),
                rejection_reason = $4,
                updated_at = now()
          where id = $1 and source = 'platform' and agent_id = $2
-         returning id`,
+         returning id, workflow_id`,
         [req.params.id, agent.id, appliedVersion ?? null, rejectionReason ?? null],
       ),
     );
-    if (rows.length === 0) throw new HttpError(404, "setup not found");
+    const updated = rows[0];
+    if (!updated) throw new HttpError(404, "setup not found");
+
+    // Safeguards slice: agent_setup.rejected audit entry — who (there's no
+    // acting user here, this is the agent itself reporting; attributed to
+    // the agent's own created_by_user_id, same posture as the secret-fetch
+    // audit above), when (created_at default), which org/workspace
+    // (agent.orgId xor agent.ownerId), which workflow (workflow_id), and
+    // the agent's own reason string (never a secret/row/param value — this
+    // is a short human-readable rejection reason apps/agent itself wrote,
+    // e.g. "destination unreachable").
+    if (rejectionReason !== undefined) {
+      await withServiceRole(dbPool, (db) =>
+        db.query(
+          `insert into public.audit_log (org_id, owner_id, actor, action, detail)
+           values ($1, $2, $3, 'agent_setup.rejected', $4::jsonb)`,
+          [
+            agent.orgId,
+            agent.ownerId,
+            agent.createdByUserId,
+            JSON.stringify({ workflowId: updated.workflow_id, agentSetupId: updated.id, reason: rejectionReason }),
+          ],
+        ),
+      );
+    }
 
     return { ok: true as const };
   });

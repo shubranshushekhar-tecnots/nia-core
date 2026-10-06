@@ -393,6 +393,7 @@ describe("Slice R1 — planometry-table", () => {
             return { rows: [] } as never;
           }
           if (text.includes("log_execution_audit")) return { rows: [] } as never;
+          if (text.includes("log_connection_audit")) return { rows: [] } as never;
           throw new Error(`unexpected query in fake: ${text}`);
         },
       })) as WithUser;

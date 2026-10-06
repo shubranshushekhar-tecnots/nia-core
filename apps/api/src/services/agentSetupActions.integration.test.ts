@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { withActingUser, withServiceRole } from "@nia/db";
 import type { AgentJobSetup } from "@nia/schemas";
@@ -193,6 +194,30 @@ async function simulateRunReport(
   );
 }
 
+/**
+ * Mirrors services/agent-bridge/src/app.ts's check-in handler's own
+ * usage_events insert (Safeguards slice, Task 2) exactly — same columns,
+ * same `on conflict (kind, subject_id) do nothing` idempotency — since
+ * this process never spins up the real bridge (same posture as
+ * simulateRunReport above, which stands in for that handler's other
+ * insert, into agent_setup_runs).
+ */
+async function recordUsageForRunReport(
+  scope: { orgId?: string; ownerId?: string },
+  runId: string,
+  rowsSent: number,
+): Promise<void> {
+  if (rowsSent <= 0) return;
+  await withServiceRole(dbPool, (db) =>
+    db.query(
+      `insert into public.usage_events (org_id, owner_id, kind, quantity, subject_id)
+       values ($1, $2, 'rows_moved', $3, $4)
+       on conflict (kind, subject_id) do nothing`,
+      [scope.orgId ?? null, scope.ownerId ?? null, rowsSent, runId],
+    ),
+  );
+}
+
 describe("agent_setup actions/run history — real Postgres (Slice R5a)", () => {
   it("allowed: a member's run now creates a task for the right agent, and a run report carrying the setup id appears in that workflow's run history", async () => {
     const ownerId = await fixtureUserId("canvas-e2e-a@nia.dev");
@@ -331,6 +356,205 @@ describe("agent_setup actions/run history — real Postgres (Slice R5a)", () => 
       ).rejects.toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
     } finally {
       await dropOrg(orgId);
+    }
+  });
+});
+
+/**
+ * Safeguards slice (audit entries + usage counting for agent actions).
+ * Real local Postgres only, same conventions as the describe block above.
+ */
+describe("agent action safeguards — audit entries and usage counting — real Postgres", () => {
+  it("allowed: a run report for 33 rows creates one usage record for the right organisation; the same report sent again does not add a second", async () => {
+    const ownerId = await fixtureUserId("canvas-e2e-a@nia.dev");
+    const orgId = await makeOrg(ownerId);
+    try {
+      await installConnector(orgId, "sqlserver-agent", ownerId);
+      await installConnector(orgId, "https-endpoint", ownerId);
+      const agentId = await makeAgent(orgId, ownerId, "local-conn-r5a-usage");
+      const scope = { orgId };
+
+      const source = await createConnection(withUserFor(ownerId), scope, ownerId, {
+        connectorId: "sqlserver-agent",
+        displayName: "r5a usage source",
+        fields: { agentId, agentConnectionId: "local-conn-r5a-usage" },
+      });
+      const destination = await createConnection(
+        withUserFor(ownerId),
+        scope,
+        ownerId,
+        {
+          connectorId: "https-endpoint",
+          displayName: "r5a usage destination",
+          fields: { address: "https://example.com/webhook", authMethod: "none" },
+        },
+        { assertAddressSafe: async () => {} },
+      );
+      const { workflowId } = await makeWorkflow(orgId, ownerId);
+      await publishAgentSetup(withUserFor(ownerId), scope, workflowId, source.id, destination.id, baseSetup(source.id, destination.id));
+      const checkIn = await simulateSetupsCheckIn(agentId);
+      const setupId = checkIn.find((s) => s.workflowId === workflowId)!.id;
+
+      const report = {
+        runId: randomUUID(),
+        status: "ok" as const,
+        rowsSent: 33,
+        rowsDeleted: 0,
+        mode: "incremental",
+        errorClass: null,
+        startedAt: new Date(Date.now() - 1000).toISOString(),
+        finishedAt: new Date().toISOString(),
+      };
+      // Mirrors app.ts's check-in handler: the agent_setup_runs insert and
+      // the usage_events insert happen together, in the same request,
+      // keyed off the same run id.
+      await simulateRunReport(agentId, setupId, report);
+      await recordUsageForRunReport({ orgId }, report.runId, report.rowsSent);
+      // Redelivery of the exact same report — on conflict do nothing on
+      // both tables (agent_setup_runs_run_id_key, usage_events_kind_subject_id_key).
+      await simulateRunReport(agentId, setupId, report);
+      await recordUsageForRunReport({ orgId }, report.runId, report.rowsSent);
+
+      const { rows } = await dbPool.query<{ quantity: number; org_id: string }>(
+        `select quantity, org_id from public.usage_events where kind = 'rows_moved' and subject_id = $1`,
+        [report.runId],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ quantity: 33, org_id: orgId });
+    } finally {
+      await dropOrg(orgId);
+    }
+  });
+
+  it("allowed: publishing and then running a job each leave one audit entry with the right actor and workflow; neither entry contains the destination key", async () => {
+    const ownerId = await fixtureUserId("canvas-e2e-a@nia.dev");
+    const orgId = await makeOrg(ownerId);
+    try {
+      await installConnector(orgId, "sqlserver-agent", ownerId);
+      await installConnector(orgId, "https-endpoint", ownerId);
+      const agentId = await makeAgent(orgId, ownerId, "local-conn-r5a-audit");
+      const scope = { orgId };
+
+      const source = await createConnection(withUserFor(ownerId), scope, ownerId, {
+        connectorId: "sqlserver-agent",
+        displayName: "r5a audit source",
+        fields: { agentId, agentConnectionId: "local-conn-r5a-audit" },
+      });
+      const destination = await createConnection(
+        withUserFor(ownerId),
+        scope,
+        ownerId,
+        {
+          connectorId: "https-endpoint",
+          displayName: "r5a audit destination",
+          fields: { address: "https://example.com/webhook", authMethod: "none" },
+        },
+        { assertAddressSafe: async () => {} },
+      );
+      const { workflowId } = await makeWorkflow(orgId, ownerId);
+
+      await publishAgentSetup(withUserFor(ownerId), scope, workflowId, source.id, destination.id, baseSetup(source.id, destination.id));
+      await requestAgentSetupAction(withUserFor(ownerId), scope, workflowId, { kind: "run_now", params: {} });
+
+      // ownerId's role is 'owner' — private.is_admin counts owner/admin,
+      // so this read goes through audit_log_select_admins_or_self (0007)
+      // as the acting user, not a service-role bypass.
+      const { rows } = await withUserFor(ownerId)((db) =>
+        db.query<{ action: string; actor: string; detail: Record<string, unknown>; org_id: string }>(
+          `select action, actor, detail, org_id from public.audit_log
+           where org_id = $1 and action in ('agent_setup.published', 'agent_setup.action_requested')
+           order by created_at asc`,
+          [orgId],
+        ),
+      );
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toMatchObject({ action: "agent_setup.published", actor: ownerId, org_id: orgId });
+      expect(rows[0]!.detail).toMatchObject({ workflowId });
+      expect(rows[1]).toMatchObject({ action: "agent_setup.action_requested", actor: ownerId, org_id: orgId });
+      expect(rows[1]!.detail).toMatchObject({ workflowId, kind: "run_now" });
+
+      const serializedDetail = JSON.stringify(rows.map((r) => r.detail)).toLowerCase();
+      expect(serializedDetail).not.toContain(destination.id.toLowerCase());
+      expect(serializedDetail).not.toContain("vault");
+      expect(serializedDetail).not.toContain("secret");
+    } finally {
+      await dropOrg(orgId);
+    }
+  });
+
+  it("refused: an organisation over its monthly row limit cannot publish or run now, and gets the plan-limit message; a member of another organisation cannot read these audit entries or usage records", async () => {
+    const ownerId = await fixtureUserId("canvas-e2e-a@nia.dev");
+    const otherOwnerId = await fixtureUserId("canvas-e2e-b@nia.dev");
+    const outsiderMemberId = await fixtureUserId("canvas-e2e-c@nia.dev");
+    const orgId = await makeOrg(ownerId);
+    const otherOrgId = await makeOrg(otherOwnerId);
+    try {
+      await addMember(otherOrgId, outsiderMemberId, "member");
+
+      await installConnector(orgId, "sqlserver-agent", ownerId);
+      await installConnector(orgId, "https-endpoint", ownerId);
+      const agentId = await makeAgent(orgId, ownerId, "local-conn-r5a-limit");
+      const scope = { orgId };
+
+      const source = await createConnection(withUserFor(ownerId), scope, ownerId, {
+        connectorId: "sqlserver-agent",
+        displayName: "r5a limit source",
+        fields: { agentId, agentConnectionId: "local-conn-r5a-limit" },
+      });
+      const destination = await createConnection(
+        withUserFor(ownerId),
+        scope,
+        ownerId,
+        {
+          connectorId: "https-endpoint",
+          displayName: "r5a limit destination",
+          fields: { address: "https://example.com/webhook", authMethod: "none" },
+        },
+        { assertAddressSafe: async () => {} },
+      );
+      const { workflowId } = await makeWorkflow(orgId, ownerId);
+
+      // New orgs default to the Free plan (100,000 rows/month — 0049's
+      // seed row, 0050's auto-provisioning trigger). Push this org over
+      // that limit directly, the same ledger a real run's usage_events
+      // row would land in.
+      await withServiceRole(dbPool, (db) =>
+        db.query(
+          `insert into public.usage_events (org_id, kind, quantity, subject_id) values ($1, 'rows_moved', 100000, $2)`,
+          [orgId, randomUUID()],
+        ),
+      );
+
+      await expect(
+        publishAgentSetup(withUserFor(ownerId), scope, workflowId, source.id, destination.id, baseSetup(source.id, destination.id)),
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        code: "ROWS_LIMIT_EXCEEDED",
+        message: expect.stringContaining("Upgrade to Pro to keep running workflows this month."),
+      });
+
+      // Publish never succeeded above, so there is no published setup for
+      // run_now to act on either way — the row-limit check runs first
+      // regardless (requestAgentSetupAction checks it before the RPC call).
+      await expect(
+        requestAgentSetupAction(withUserFor(ownerId), scope, workflowId, { kind: "run_now", params: {} }),
+      ).rejects.toMatchObject({ statusCode: 403, code: "ROWS_LIMIT_EXCEEDED" });
+
+      // A member of a different organisation cannot read this org's audit
+      // entries or usage records — RLS filters to an empty set, not an error.
+      const { rows: auditRows } = await withUserFor(outsiderMemberId)((db) =>
+        db.query(`select id from public.audit_log where org_id = $1`, [orgId]),
+      );
+      expect(auditRows).toHaveLength(0);
+
+      const { rows: usageRows } = await withUserFor(outsiderMemberId)((db) =>
+        db.query(`select id from public.usage_events where org_id = $1`, [orgId]),
+      );
+      expect(usageRows).toHaveLength(0);
+    } finally {
+      await dropOrg(orgId);
+      await dropOrg(otherOrgId);
     }
   });
 });

@@ -3,6 +3,7 @@ import type { WorkspaceScope } from "../lib/workspaceScope.js";
 import { AppError } from "../lib/appError.js";
 import type { WithUser } from "../lib/withUser.js";
 import { assertWorkflowInScope } from "./checks.js";
+import { assertRowsLimitNotExceeded } from "./runs.js";
 
 /**
  * Agent-Canvas integration, Slice R3a (docs/plans/agent-canvas-integration.md
@@ -180,6 +181,13 @@ export async function publishAgentSetup(
 ): Promise<AgentSetupPublication> {
   await assertWorkflowInScope(withUser, scope, workflowId);
   await validatePublishTargets(withUser, scope, sourceConnectionId, destinationConnectionId);
+  // Safeguards slice: an org already over its monthly row limit may not
+  // Publish a new/changed job — same message and check as starting a run
+  // (runs.ts's assertRowsLimitNotExceeded). A job already running on the
+  // agent (applied before the org went over) is NOT affected by this —
+  // the agent keeps executing whatever it already applied; this only
+  // blocks a NEW publish from reaching the agent on its next check-in.
+  await assertRowsLimitNotExceeded(withUser, scope);
 
   try {
     const { rows } = await withUser((db) =>
