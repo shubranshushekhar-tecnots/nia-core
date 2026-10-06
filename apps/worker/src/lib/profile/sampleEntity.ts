@@ -65,13 +65,47 @@ function buildMongoPage(entity: { name: string }, direction: "asc" | "desc", cur
   return { kind: "mongo", collection: entity.name, pipeline };
 }
 
-function buildPage(
-  dialect: SourceDialect,
+/**
+ * Structured (agent-backed) page builder. The payload's `cursor` field is
+ * gt-only (contract.ts's StructuredQueryCursor — route1-design.md §2
+ * assumes forward keyset paging), so the descending/tail pass can't use
+ * it: "<" is expressed as an ordinary filter condition instead.
+ */
+function buildStructuredPage(
   entity: { namespace: string; name: string },
   keyColumn: string,
   direction: "asc" | "desc",
   cursor: string | number | null,
 ): QueryPayload {
+  const table = `${entity.namespace}.${entity.name}`;
+  if (direction === "asc") {
+    return {
+      kind: "structured",
+      table,
+      columns: [],
+      filter: [],
+      cursor: cursor === null ? null : { column: keyColumn, value: cursor },
+      limit: PAGE_SIZE,
+    };
+  }
+  return {
+    kind: "structured",
+    table,
+    columns: [],
+    filter: cursor === null ? [] : [{ column: keyColumn, operator: "lt", value: cursor }],
+    cursor: null,
+    limit: PAGE_SIZE,
+  };
+}
+
+function buildPage(
+  dialect: SourceDialect | "structured",
+  entity: { namespace: string; name: string },
+  keyColumn: string,
+  direction: "asc" | "desc",
+  cursor: string | number | null,
+): QueryPayload {
+  if (dialect === "structured") return buildStructuredPage(entity, keyColumn, direction, cursor);
   if (dialect === "mongo") return buildMongoPage(entity, direction, cursor as string | null);
   return buildSqlPage(dialect, entity, keyColumn, direction, cursor);
 }
@@ -88,7 +122,7 @@ function toRecords(result: TabularResult): Record<string, unknown>[] {
  * PAGE_SIZE, since that can only happen on the last page.
  */
 async function fetchDirection(
-  dialect: SourceDialect,
+  dialect: SourceDialect | "structured",
   entity: { namespace: string; name: string },
   keyColumn: string,
   direction: "asc" | "desc",
@@ -162,10 +196,12 @@ async function fetchUnkeyedPage(
  * `keyColumn` is `null` for mongo (which always keys off `_id` — same
  * convention as queryBuilder.ts's buildEtlReadQuery) or for a SQL entity
  * with no single-column primary key, in which case this falls back to
- * fetchUnkeyedPage.
+ * fetchUnkeyedPage. Structured (agent-backed) sources have no such
+ * fallback — route1-design.md's "no key to page by" refusal — since
+ * fetchUnkeyedPage's query shape is SQL/mongo-only.
  */
 export async function sampleEntity(
-  dialect: SourceDialect,
+  dialect: SourceDialect | "structured",
   entity: { namespace: string; name: string },
   keyColumn: string | null,
   connectionId: string,
@@ -174,6 +210,15 @@ export async function sampleEntity(
 ): Promise<DispatchResult<SampleResult>> {
   const effectiveKey = dialect === "mongo" ? "_id" : keyColumn;
   if (!effectiveKey) {
+    if (dialect === "structured") {
+      return {
+        ok: false,
+        error: {
+          kind: "service-error",
+          message: "This table has no single-column key to page by; sampling an agent-backed source without a key is not supported in this version.",
+        },
+      };
+    }
     return fetchUnkeyedPage(dialect, entity, connectionId, scope, actorUserId);
   }
 

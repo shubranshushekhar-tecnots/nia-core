@@ -127,11 +127,27 @@ function quoteIdent(name: string, dialect: "mysql" | "postgres"): string {
  * aggregation aliases), same as the flat non-aggregate case.
  */
 function buildPreviewQuery(
-  dialect: SourceDialect,
+  dialect: SourceDialect | "structured",
   entity: { namespace: string; name: string },
   mappingEntries: MappingEntry[],
   dialectQuery: DialectQuery | null,
 ): QueryPayload {
+  if (dialect === "structured") {
+    // Agent-backed sources — no pushdown wiring in this slice (dialectQuery
+    // is always null for "structured", see the call site below), so this
+    // just projects the mapping's source columns with no filter/cursor;
+    // the outer dispatch() call below caps rowCap at 50, same as every
+    // other branch here.
+    return {
+      kind: "structured",
+      table: `${entity.namespace}.${entity.name}`,
+      columns: mappingEntries.map((e) => e.from),
+      filter: [],
+      cursor: null,
+      limit: 50,
+    };
+  }
+
   if (dialect === "mongo") {
     const pipeline: Record<string, unknown>[] = dialectQuery && dialectQuery.dialect === "mongo" ? [...dialectQuery.pipeline] : [];
     const project: Record<string, unknown> = { _id: 0 };
@@ -161,6 +177,7 @@ function buildPreviewQuery(
 /** Defense in depth — see this task's plan: assert the compiled query is read-shaped before it ever reaches dispatch(), even though every branch that builds one here is already SELECT/aggregation-only by construction. */
 function isReadShaped(query: QueryPayload): boolean {
   if (query.kind === "sql") return /^\s*(SELECT|WITH)\b/i.test(query.sql);
+  if (query.kind === "structured") return true; // no mutation capability by construction — see contract.ts's StructuredQueryPayload.
   return !query.pipeline.some((stage) => "$out" in stage || "$merge" in stage);
 }
 
@@ -247,7 +264,11 @@ export async function runPreview(job: PreviewJob): Promise<PreviewOutcome> {
     entity = entityResult.entity;
   }
 
-  const dialect = manifestDialect(source.manifestId);
+  // route1-design.md: agent-backed sources have no dialect manifestDialect
+  // knows about (it never returns "structured") — special-cased locally
+  // here rather than widening that shared helper's return type.
+  const dialect: SourceDialect | "structured" | null =
+    source.manifestId === "sqlserver-agent" ? "structured" : manifestDialect(source.manifestId);
   if (!dialect) {
     return { ok: false, error: { kind: "entity-unresolved", message: `Source connector "${source.manifestId ?? "unknown"}" has no supported query dialect.` } };
   }
@@ -257,16 +278,19 @@ export async function runPreview(job: PreviewJob): Promise<PreviewOutcome> {
   // against a base dialect — see its header comment); rather than invent
   // undefined chaining semantics, 2+ transform nodes on the path degrade to
   // fully residual, matching this preview's own honest-degradation
-  // contract (report the count, never silently skip or guess).
+  // contract (report the count, never silently skip or guess). Structured
+  // sources have no pushdown compiler at all in this slice (compilePushdown
+  // doesn't accept "structured"), so every transform step is always
+  // residual for them, same as the 2+-transforms case.
   let residualCount = 0;
   let dialectQuery: DialectQuery | null = null;
-  if (transforms.length === 1) {
+  if (dialect !== "structured" && transforms.length === 1) {
     const parsedTransform = parseNodeConfig("transform", transforms[0]!.config);
     const transformConfig = !parsedTransform.unrecognized && parsedTransform.type === "transform" ? parsedTransform.value : { steps: [] };
     const plan = compilePushdown(dialect, transformConfig);
     dialectQuery = plan.dialectQuery;
     residualCount = plan.residualCount;
-  } else if (transforms.length > 1) {
+  } else {
     for (const t of transforms) {
       const parsed = parseNodeConfig("transform", t.config);
       residualCount += !parsed.unrecognized && parsed.type === "transform" ? parsed.value.steps.length : 0;

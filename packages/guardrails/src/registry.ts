@@ -2,6 +2,7 @@ import { CONNECTOR_MANIFESTS, type QueryPayload } from "@nia/schemas";
 import { validateMongoPipeline } from "./mongodb.js";
 import { validateMysqlQuery } from "./sql/mysql.js";
 import { validatePostgresQuery } from "./sql/postgres.js";
+import { validateStructuredQuery } from "./structured.js";
 import type { ConnectionScope, DispatchValidationResult, GuardrailValidator } from "./types.js";
 import { ValidatedQueryImpl } from "./validated.js";
 
@@ -16,6 +17,7 @@ export const GUARDRAIL_REGISTRY: Record<string, GuardrailValidator> = {
   mongodb: validateMongoPipeline,
   supabase: validatePostgresQuery,
   postgres: validatePostgresQuery,
+  "sqlserver-agent": validateStructuredQuery,
 };
 
 /**

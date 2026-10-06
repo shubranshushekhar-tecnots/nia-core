@@ -139,7 +139,48 @@ export const MongoQueryPayload = z.object({
   /** Aggregation pipeline, already guardrail-approved by the worker. */
   pipeline: z.array(z.record(z.string(), z.unknown())),
 });
-export const QueryPayload = z.discriminatedUnion("kind", [SqlQueryPayload, MongoQueryPayload]);
+
+/**
+ * Third query-payload kind (route1-design.md §§1-2) for agent-backed
+ * sources (e.g. "sqlserver-agent"): no SQL text crosses the wire, only a
+ * flat, structured description of the read. Filter/operator shapes are
+ * deliberately redefined here rather than imported from
+ * packages/extract's equivalent FilterCondition — this package has no
+ * dependency on @nia/extract and shouldn't gain one just for this.
+ */
+const StructuredFilterScalar = z.union([z.string(), z.number(), z.boolean()]);
+
+export const StructuredFilterCondition = z.union([
+  z.object({
+    column: z.string(),
+    operator: z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "startsWith"]),
+    value: StructuredFilterScalar,
+  }),
+  z.object({ column: z.string(), operator: z.literal("in"), values: z.array(StructuredFilterScalar) }),
+  z.object({ column: z.string(), operator: z.literal("between"), low: StructuredFilterScalar, high: StructuredFilterScalar }),
+  z.object({ column: z.string(), operator: z.enum(["isNull", "isNotNull"]) }),
+]);
+export type StructuredFilterCondition = z.infer<typeof StructuredFilterCondition>;
+
+/** Single-column, greater-than-only keyset cursor — composite keys aren't supported in this version (see queryBuilder.ts). */
+export const StructuredQueryCursor = z.object({
+  column: z.string(),
+  value: z.union([z.string(), z.number()]).nullable(),
+});
+export type StructuredQueryCursor = z.infer<typeof StructuredQueryCursor>;
+
+export const StructuredQueryPayload = z.object({
+  kind: z.literal("structured"),
+  table: z.string(),
+  columns: z.array(z.string()),
+  /** AND-joined, same convention as packages/extract's ExtractRequest.filter. */
+  filter: z.array(StructuredFilterCondition),
+  cursor: StructuredQueryCursor.nullable(),
+  limit: z.number().int().positive(),
+});
+export type StructuredQueryPayload = z.infer<typeof StructuredQueryPayload>;
+
+export const QueryPayload = z.discriminatedUnion("kind", [SqlQueryPayload, MongoQueryPayload, StructuredQueryPayload]);
 export type SqlQueryPayload = z.infer<typeof SqlQueryPayload>;
 export type MongoQueryPayload = z.infer<typeof MongoQueryPayload>;
 export type QueryPayload = z.infer<typeof QueryPayload>;

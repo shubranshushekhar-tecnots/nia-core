@@ -84,7 +84,9 @@ export async function dispatch(
 }
 
 function describeQuery(query: QueryPayload): string {
-  return query.kind === "sql" ? query.sql : JSON.stringify({ collection: query.collection, pipeline: query.pipeline });
+  if (query.kind === "sql") return query.sql;
+  if (query.kind === "structured") return JSON.stringify({ table: query.table, filter: query.filter, cursor: query.cursor });
+  return JSON.stringify({ collection: query.collection, pipeline: query.pipeline });
 }
 
 async function auditDispatch(connection: ResolvedConnection, actorUserId: string, queryText: string): Promise<void> {

@@ -54,13 +54,32 @@ function sqlAdapterFor(dialect: "mysql" | "postgres"): SqlDialectAdapter {
 }
 
 export function buildEtlReadQuery(
-  dialect: SourceDialect,
+  dialect: SourceDialect | "structured",
   entity: { namespace: string; name: string },
   dialectQuery: DialectQuery | null,
   keyColumn: string | undefined,
   cursor: string | number | null,
   limit: number,
 ): QueryPayload {
+  if (dialect === "structured") {
+    // Agent-backed sources (route1-design.md) — no SQL text, no pushdown
+    // wiring in this slice, so dialectQuery is always ignored here; every
+    // transform runs residually. Same keyset-pagination precondition as
+    // the SQL branches below: runEtl.ts must have already hard-failed if
+    // the source entity has no single-column key.
+    if (!keyColumn) {
+      throw new Error("buildEtlReadQuery: structured reads require a single-column key to page by; tables without one are not supported in this version.");
+    }
+    return {
+      kind: "structured",
+      table: `${entity.namespace}.${entity.name}`,
+      columns: [],
+      filter: [],
+      cursor: cursor === null ? null : { column: keyColumn, value: cursor },
+      limit,
+    };
+  }
+
   if (dialect === "mongo") {
     const mongoQuery = dialectQuery && dialectQuery.dialect === "mongo" ? dialectQuery : null;
     const pipeline: Record<string, unknown>[] = mongoQuery ? [...mongoQuery.pipeline] : [];

@@ -34,6 +34,8 @@ import { signReadContext } from "./writeSignature.js";
 
 const DEFAULT_ROW_CAP = 1000;
 const DEFAULT_TIMEOUT_MS = 15000;
+/** route1-design.md §3 — the agent bridge hops through an on-prem agent, slower than a direct connector service; ~bridge timeout + 5s slack. */
+const STRUCTURED_EXECUTE_TIMEOUT_MS = 45000;
 const DEFAULT_INTROSPECT_TIMEOUT_MS = 15000;
 const DEFAULT_TEST_TIMEOUT_MS = 15000;
 const DEFAULT_WRITE_TIMEOUT_MS = 15000;
@@ -86,7 +88,7 @@ export async function sendToConnector(
   opts: { rowCap?: number; timeoutMs?: number } = {},
 ): Promise<DispatchResult<ExecuteResponse>> {
   warnIfRouteMissing(manifest, "execute");
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? (manifest.id === "sqlserver-agent" ? STRUCTURED_EXECUTE_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
