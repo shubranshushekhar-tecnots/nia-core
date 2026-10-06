@@ -1,3 +1,7 @@
+// Must stay the first import — db.ts (pulled in transitively by app.js
+// below) reads process.env.DATABASE_URL at module load time, same
+// ordering constraint as apps/api/src/env.ts's own `import "dotenv/config"`.
+import "dotenv/config";
 import type { Client } from "pg";
 import { buildApp } from "./app.js";
 import { buildInternalApp } from "./internalApp.js";
