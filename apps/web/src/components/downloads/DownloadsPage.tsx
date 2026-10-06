@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { buildDownloadCards } from '@/lib/downloads/buildDownloadCards';
 import type { AgentOs, DownloadManifestFile } from '@/lib/downloads/manifest';
 import {
   nxDownloadsAdvancedLinkStyle,
@@ -70,13 +71,7 @@ export default function DownloadsPage({
     setVisitorOs(detectOs());
   }, []);
 
-  const order: AgentOs[] = ['windows', 'macos', 'linux'];
-  const primaryByOs = new Map<AgentOs, DownloadManifestFile>();
-  const advancedByOs = new Map<AgentOs, DownloadManifestFile>();
-  for (const file of files) {
-    if (file.kind === 'primary') primaryByOs.set(file.os, file);
-    else advancedByOs.set(file.os, file);
-  }
+  const cards = buildDownloadCards(files);
 
   return (
     <div style={nxDownloadsPageStyle}>
@@ -101,11 +96,8 @@ export default function DownloadsPage({
       </header>
 
       <div style={nxDownloadsCardsGridStyle}>
-        {order.map((os) => {
-          const primary = primaryByOs.get(os);
-          if (!primary) return null;
+        {cards.map(({ os, primary, advanced }) => {
           const isVisitorOs = visitorOs === os;
-          const advanced = advancedByOs.get(os);
           return (
             <div key={os} style={nxDownloadsCardStyle(isVisitorOs)}>
               <div style={nxDownloadsCardTopRowStyle}>
