@@ -518,8 +518,12 @@ test.describe('Route 2: agent-delivered Canvas workflow', () => {
           expect(rows).toHaveLength(3);
         }).toPass({ timeout: 60_000 });
 
+        // The run's report only reaches the platform on the agent's *next*
+        // check-in (it was already running/held when the run finished) —
+        // up to ~CHECK_IN_HOLD_MS (25s) plus a round trip, same as the
+        // revoke-visibility wait in agents.spec.ts. 45s margin, same reason.
         await page.getByRole('button', { name: 'Run history', exact: true }).click();
-        await expect(page.getByText('3 sent')).toBeVisible({ timeout: 15_000 });
+        await expect(page.getByText('3 sent')).toBeVisible({ timeout: 45_000 });
       }, { timeout: 3 * 60 * 1000 });
 
       // d) Change the filter — forces a full reload; publish again at v2.
