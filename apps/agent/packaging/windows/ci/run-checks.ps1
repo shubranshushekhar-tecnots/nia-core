@@ -354,6 +354,16 @@ function Set-SqlTcp {
     $ipAllKey = "$tcpKey\IPAll"
     New-Item -Path $tcpKey -Force -ErrorAction SilentlyContinue | Out-Null
     Set-ItemProperty -Path $tcpKey -Name "Enabled" -Value ([int]$Enabled) -Type DWord
+    # SNI's TDSSNIClient reads a "TcpKeepAlive" DWORD directly under the Tcp
+    # key on every startup where tcp is in ProtocolList, not just when first
+    # configuring it through SQL Server Configuration Manager (which writes
+    # this value as a side effect of its UI, unlike a bare registry toggle).
+    # Missing it fails SQL Server startup outright with "TDSSNIClient
+    # initialization failed with error 0x2, status code 0x8/0x1 ... Unable to
+    # retrieve 'TcpKeepAlive' registry setting" (0x2 = ERROR_FILE_NOT_FOUND)
+    # -> "Could not start the network library" -> service fails to start.
+    # Confirmed by reproducing exactly this failure in CI before adding this.
+    Set-ItemProperty -Path $tcpKey -Name "TcpKeepAlive" -Value 30000 -Type DWord
     if ($Enabled) {
         New-Item -Path $ipAllKey -Force -ErrorAction SilentlyContinue | Out-Null
         Set-ItemProperty -Path $ipAllKey -Name "TcpPort" -Value "$Port" -Type String
@@ -436,7 +446,7 @@ function Test-FreshInstallInvariants {
     }
 
     $uninstKey = Get-ItemProperty -Path $UninstKeyPath -ErrorAction SilentlyContinue
-    Add-Result -Check "$Prefix.uninstall-registry-entry" -Pass ([bool]$uninstKey) -Detail (if ($uninstKey) { $uninstKey.DisplayName } else { "missing" })
+    Add-Result -Check "$Prefix.uninstall-registry-entry" -Pass ([bool]$uninstKey) -Detail $(if ($uninstKey) { $uninstKey.DisplayName } else { "missing" })
 
     Add-Result -Check "$Prefix.start-menu-shortcuts" -Pass (
         (Test-Path (Join-Path $StartMenuDir "Nia Core Agent Setup.lnk")) -and

@@ -753,8 +753,15 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "setup") {
+    // `setup` is a single-token command (like `pair`/`status`/`start`), not
+    // a `command subcommand` pair -- it must parse argv.slice(1), not `rest`
+    // (which is argv.slice(2) and would silently swallow the first flag,
+    // e.g. `--answers-file`, into the unused `subcommand` destructured
+    // variable above, leaving parseArgs only the bare path and rejecting it
+    // as an unexpected positional argument). Confirmed by reproducing this
+    // exact failure in CI before this fix.
     const { values } = parseArgs({
-      args: rest,
+      args: argv.slice(1),
       options: { "answers-file": { type: "string" } },
     });
     const answersFile = values["answers-file"] as string | undefined;

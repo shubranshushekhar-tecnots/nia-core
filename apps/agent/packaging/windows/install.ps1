@@ -405,12 +405,12 @@ try {
     Fail "start service" $_.Exception.Message
 }
 
-if (-not (Wait-ServiceRunning -TimeoutSec 60 -StableSec 3)) {
+if (-not (Wait-ServiceRunning -TimeoutSec 180 -StableSec 3)) {
     Write-ServiceFailureDiagnostics
     Remove-ServiceQuietly
     $finalSvc = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue
     $finalStatus = if ($finalSvc) { $finalSvc.Status } else { "<not found>" }
-    Fail "verify service running" "service did not reach a stable Running state within 60s (last status: $finalStatus)"
+    Fail "verify service running" "service did not reach a stable Running state within 180s (last status: $finalStatus)"
 }
 
 $qcOutput = & sc.exe qc nia-agent 2>&1
