@@ -324,20 +324,31 @@ function Get-SqlInstanceRegistryId {
     return (Get-ItemProperty -Path $namesKey -Name $SqlInstanceName -ErrorAction Stop).$SqlInstanceName
 }
 
-function Test-TcpPortOpen {
-    # .NET socket probe, not Test-NetConnection -- that cmdlet also fires an
-    # ICMP ping and DNS work on every call, which is both slower and
-    # unnecessary noise for a tight polling loop against localhost.
-    param([string]$ComputerName = "localhost", [int]$Port, [int]$TimeoutMs = 1000)
-    $client = New-Object System.Net.Sockets.TcpClient
-    try {
-        $task = $client.ConnectAsync($ComputerName, $Port)
-        return ($task.Wait($TimeoutMs) -and $client.Connected)
-    } catch {
-        return $false
-    } finally {
-        $client.Close()
-    }
+function Test-SqlTcpLoginReady {
+    # A bare TCP connect (what this used to check) is NOT a reliable
+    # readiness signal here: confirmed in run #16 that SQL Server's TCP
+    # listener accepts the socket handshake almost immediately after the
+    # service reports "Running", well before its TDS layer is actually
+    # ready to complete a login -- nia-agent's very next connection
+    # attempt still failed with the exact same "server not reachable"
+    # classification (sqlLoginTest.ts folds ECONNRESET-during-prelogin
+    # into that bucket too, same as a refused/timed-out connect). Drive an
+    # actual login over that TCP endpoint instead, the same way nia-agent
+    # itself will -- that's the only signal that means "ready".
+    #
+    # Deliberately Windows/integrated auth (-E), not sa/password: this is
+    # also used to confirm readiness right after Invoke-CheckC3-
+    # WindowsOnlyAuth switches LoginMode to 1 (Windows-only), where a SQL
+    # (password) login is *expected* to be rejected by design -- that
+    # rejection would otherwise look identical to "not ready yet" and spin
+    # this out to a false-negative timeout. Windows auth is accepted in
+    # both LoginMode 1 and 2, and install-sql-express.ps1 grants sysadmin
+    # to BUILTIN\Administrators, which this (elevated) process always runs
+    # as -- so it's a mode-independent readiness signal.
+    param([int]$Port, [int]$TimeoutSec = 5)
+    $sqlArgs = @("-S", "127.0.0.1,$Port", "-E", "-b", "-l", "$TimeoutSec", "-Q", "SELECT 1")
+    & sqlcmd.exe @sqlArgs *> $null
+    return $LASTEXITCODE -eq 0
 }
 
 function Restart-SqlInstanceAndWait {
@@ -345,13 +356,13 @@ function Restart-SqlInstanceAndWait {
     # across this restart (e.g. 14330 once Enable-SqlTcpForTesting has run).
     # Service status alone is not a reliable "ready" signal: Get-Service
     # reports "Running" as soon as SQL Server's main thread starts, but its
-    # TDS/TCP listener only binds once database recovery finishes -- which
-    # on a loaded CI runner can take well past that point. Confirmed in run
-    # #15: C3/C4/C5 all failed to connect ("server not reachable on that
-    # host/port", i.e. ECONNREFUSED/ETIMEOUT) against an instance that had
-    # already reported "Running" several seconds earlier. Poll the real
-    # socket instead of trusting service status alone whenever a TCP port
-    # is actually expected to be listening.
+    # TDS layer only finishes initializing once database recovery
+    # completes -- which on a loaded CI runner can take well past that
+    # point. Confirmed across runs #15-16: C3/C4/C5 all failed to connect
+    # against an instance that had already reported "Running" (and, in
+    # #16, already accepted raw TCP connects) seconds earlier. Poll an
+    # actual SQL login instead of trusting service/socket status alone
+    # whenever a TCP port is actually expected to be listening.
     param([int]$TimeoutSec = 90, [int]$TcpPort = 0)
     try {
         Restart-Service -Name $SqlServiceName -Force -ErrorAction Stop
@@ -379,10 +390,10 @@ function Restart-SqlInstanceAndWait {
         return $true
     }
     while ((Get-Date) -lt $deadline) {
-        if (Test-TcpPortOpen -Port $TcpPort -TimeoutMs 1000) { return $true }
+        if (Test-SqlTcpLoginReady -Port $TcpPort) { return $true }
         Start-Sleep -Seconds 2
     }
-    Write-Host "Restart-SqlInstanceAndWait: service reported Running but port $TcpPort never accepted a connection within the timeout"
+    Write-Host "Restart-SqlInstanceAndWait: service reported Running but a real sa login over port $TcpPort never succeeded within the timeout"
     return $false
 }
 
