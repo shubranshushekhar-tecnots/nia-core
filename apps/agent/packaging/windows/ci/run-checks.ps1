@@ -389,11 +389,25 @@ function Restart-SqlInstanceAndWait {
         Start-Sleep -Seconds 3
         return $true
     }
+    # A single successful login isn't trustworthy either: run #17 showed
+    # sqlcmd logging in fine, then nia-agent's own connection attempt
+    # getting refused just ~0.65s later -- the listener can briefly accept
+    # a login and then flap back down again during SQL Server's own
+    # startup sequence. Require 3 consecutive successes 2s apart before
+    # trusting it, same "stable-for-N-seconds" pattern already proven for
+    # install.ps1's Wait-ServiceRunning.
     while ((Get-Date) -lt $deadline) {
-        if (Test-SqlTcpLoginReady -Port $TcpPort) { return $true }
+        if (Test-SqlTcpLoginReady -Port $TcpPort) {
+            $stableCount = 1
+            for ($i = 0; $i -lt 2; $i++) {
+                Start-Sleep -Seconds 2
+                if (Test-SqlTcpLoginReady -Port $TcpPort) { $stableCount++ } else { break }
+            }
+            if ($stableCount -ge 3) { return $true }
+        }
         Start-Sleep -Seconds 2
     }
-    Write-Host "Restart-SqlInstanceAndWait: service reported Running but a real sa login over port $TcpPort never succeeded within the timeout"
+    Write-Host "Restart-SqlInstanceAndWait: service reported Running but a real sa login over port $TcpPort never stayed up for 3 consecutive checks within the timeout"
     return $false
 }
 
