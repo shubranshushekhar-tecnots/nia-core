@@ -870,9 +870,20 @@ function Invoke-CheckD {
         $jobResult = Invoke-NiaAgent -Arguments $jobArgs -StdIn "$($table.pushKey)`n" -TimeoutSec 30 -LogName "D-job-add"
         Add-Result -Check "D2.job-added" -Pass ($jobResult.StdOut -match "added job") -Detail ($jobResult.StdOut -split "`n" | Select-Object -First 1)
 
+        # jobScheduler.ts's reconcile loop deliberately picks up a newly
+        # added job within up to 60s, not immediately (DEFAULT_RECONCILE_
+        # INTERVAL_MS, documented product requirement, v4 migration plan
+        # §8) -- and once picked up, cron-parser's nextOccurrence() then
+        # computes the next "* * * * *" minute boundary strictly after
+        # whatever moment reconcile happened to run at, which can itself
+        # be up to another ~60s away. So the documented worst case between
+        # `job add` and the job's first tick is just under 120s, not 100s
+        # -- a run that actually hit ~101s real latency (confirmed via
+        # this job's own agent.log: push_completed ~101s after job add)
+        # failed this check even though nothing was actually broken.
         $rowsOk = $false
         $rowsDetail = ""
-        $deadline = (Get-Date).AddSeconds(100)
+        $deadline = (Get-Date).AddSeconds(160)
         while ((Get-Date) -lt $deadline) {
             try {
                 $rowsResp = Invoke-RestMethod -Method Get -Uri "$FakePlanometryControlUrl/rows?tableId=$($table.tableId)"
