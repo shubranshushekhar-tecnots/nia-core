@@ -73,6 +73,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# When this script's whole process tree is ultimately launched from a
+# pwsh (PowerShell 7+) parent -- as happens under GitHub Actions'
+# `shell: pwsh` default, and will happen for any automation that drives
+# the installer from pwsh -- $env:PSModulePath is inherited from that
+# parent and does not include this (Windows PowerShell 5.1) process's own
+# system modules directory. Confirmed on a real run: that silently broke
+# auto-loading of built-in modules like Microsoft.PowerShell.Security,
+# making Get-Acl/Set-Acl below fail with "the module could not be
+# loaded" even though the module is right there on disk. Make sure it's
+# always on the path, regardless of what launched this process.
+$winPSModulesDir = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\Modules"
+if ($env:PSModulePath -notlike "*$winPSModulesDir*") {
+    $env:PSModulePath = "$winPSModulesDir;$env:PSModulePath"
+}
+
 # Relaunch under 64-bit PowerShell if this process is 32-bit on 64-bit
 # Windows. "Sysnative" is a virtual alias that bypasses the WOW64
 # file-system redirector that would otherwise turn it back into SysWOW64;

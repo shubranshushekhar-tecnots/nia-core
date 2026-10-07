@@ -152,7 +152,13 @@ Section "Install" SEC01
   nsExec::ExecToLog '"$PowerShellExe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\install.ps1" -InPlace'
   Pop $0
   ${If} $0 != 0
-    MessageBox MB_OK|MB_ICONSTOP "Installing the nia-agent service failed. See the log at $DataDir\install.log (or %TEMP%\nia-agent-install.log if that folder could not be written) for which step failed, or run install.ps1 manually from $INSTDIR as Administrator."
+    ; Silent installs (/S, used by CI and scripted IT deployments) have no one
+    ; to dismiss a MessageBox -- an un-guarded one here would hang forever,
+    ; same reasoning as the uninstaller's keep/purge prompt below. Just log
+    ; and abort instead.
+    ${IfNot} ${Silent}
+      MessageBox MB_OK|MB_ICONSTOP "Installing the nia-agent service failed. See the log at $DataDir\install.log (or %TEMP%\nia-agent-install.log if that folder could not be written) for which step failed, or run install.ps1 manually from $INSTDIR as Administrator."
+    ${EndIf}
     Abort
   ${EndIf}
 
