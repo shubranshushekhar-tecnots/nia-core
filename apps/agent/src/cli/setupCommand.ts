@@ -316,7 +316,22 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
     }
     const password = await io.askSecret("Database password", "password");
 
-    const result = await deps.testSqlLogin({ host, port, user, password });
+    // SQL Server auto-generates a self-signed certificate for encrypted
+    // connections whenever none is explicitly configured -- the default for
+    // the vast majority of self-hosted instances, including every one this
+    // step just auto-detected on the local machine above. `connect()`'s own
+    // default (`trustServerCertificate: false`) is deliberately strict for
+    // connections that might cross the public internet, but a server this
+    // step found running on localhost (or the user explicitly typed as
+    // localhost/127.0.0.1/::1) is, by definition, not that: keep the
+    // connection encrypted, just don't require a CA-trusted chain for it --
+    // same trade-off SSMS/Azure Data Studio make by default for local
+    // instances. Never do this for a host the user typed as a remote
+    // address; that's exactly the MITM exposure the strict default exists
+    // to prevent.
+    const trustServerCertificate = isLocalHost(host) ? true : undefined;
+
+    const result = await deps.testSqlLogin({ host, port, user, password, trustServerCertificate });
     if (!result.ok) {
       io.print(`Couldn't log in: ${result.reason}`);
       io.print("Let's try the username and password again.");
@@ -340,7 +355,7 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
     const sourceTimeZone = await io.ask("Time zone this database server runs in", defaultTimeZone, "timezone");
 
     const id = toConnectionId(database, deps.listConnections());
-    deps.addConnection({ id, label: database, host, port, database, user, password, sourceTimeZone });
+    deps.addConnection({ id, label: database, host, port, database, user, password, sourceTimeZone, trustServerCertificate });
     const testResult = await deps.testConnection(id);
     if (testResult.ok) {
       io.print(`Connected. ${testResult.tableCount} table(s)/view(s) visible.`);

@@ -5,6 +5,8 @@ export interface SqlLoginTestInput {
   port?: number;
   user: string;
   password: string;
+  encrypt?: boolean;
+  trustServerCertificate?: boolean;
 }
 
 export type SqlLoginTestResult = { ok: true; databases: string[] } | { ok: false; reason: string };
@@ -24,6 +26,8 @@ export async function testSqlLoginAndListDatabases(input: SqlLoginTestInput): Pr
       database: "master",
       user: input.user,
       password: input.password,
+      encrypt: input.encrypt,
+      trustServerCertificate: input.trustServerCertificate,
     });
     try {
       const result = await pool.request().query<{ name: string }>(
@@ -48,6 +52,14 @@ export function classifySqlLoginError(err: unknown): string {
   }
   if (code === "ELOGIN") {
     return "wrong username or password";
+  }
+  // Checked before the generic ESOCKET/timeout bucket below: a TLS/certificate
+  // handshake failure (e.g. the server's default self-signed certificate isn't
+  // trusted) also surfaces from tedious as ESOCKET, and would otherwise be
+  // misreported as a plain unreachable-host error — same distinction
+  // doctorChecks.ts's TLS_ERROR_PATTERN already makes for `agent doctor`.
+  if (/ssl|tls|certificate|handshake|self signed/i.test(message)) {
+    return "couldn't verify this server's TLS certificate (it's likely self-signed) — ask your DBA for a trusted certificate, or re-run setup against this server once it's reachable on your local network";
   }
   if (code === "ESOCKET" || code === "ETIMEOUT" || /ECONNREFUSED|getaddrinfo|timed? ?out/i.test(message)) {
     return "server not reachable on that host/port";
