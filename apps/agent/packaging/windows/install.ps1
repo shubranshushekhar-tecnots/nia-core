@@ -232,10 +232,30 @@ function Wait-ServiceRunning {
     # *transition* (not every poll, to avoid log spam) so the next failure
     # shows the full state history across the 180s instead of just the
     # final snapshot.
+    #
+    # ROOT CAUSE FOUND (run #13, via the script-scope trap added after run
+    # #12): every single failure above was the exact same bug —
+    # `((Get-Date) - $runningSince).TotalSeconds` throws
+    # "MethodException: Cannot find an overload for 'op_Subtraction' and
+    # the argument count: '2'" under the real CI runtime, Windows
+    # PowerShell 5.1 (confirmed via installer.nsi's GetPowerShellExe —
+    # install.ps1 is never run under pwsh/PowerShell 7 in production,
+    # only in this repo's own local testing). PowerShell 5.1's older
+    # .NET-Framework method binder cannot resolve DateTime's op_Subtraction
+    # overload when the right-hand side started life as $null, even after
+    # being reassigned to a real [datetime] earlier in the same branch;
+    # pwsh/PowerShell 7's binder tolerates this, which is exactly why every
+    # local repro (always run under pwsh) "worked" while CI kept dying
+    # silently right at this line, immediately after the first RUNNING
+    # poll, well before Wait-ServiceRunning's own Fail()/timeout path ever
+    # got a chance to run. Fixed by tracking elapsed time as plain [long]
+    # tick counts instead of DateTime arithmetic — Int64 subtraction has
+    # exactly one unambiguous overload on every PowerShell/.NET version, so
+    # there is no overload resolution left to fail.
     param([int]$TimeoutSec, [int]$StableSec)
     $startTime = Get-Date
     $deadline = $startTime.AddSeconds($TimeoutSec)
-    $runningSince = $null
+    $runningSinceTicks = $null
     $lastStatus = "<not found>"
     $loggedStatus = $null
     $iteration = 0
@@ -256,7 +276,7 @@ function Wait-ServiceRunning {
             $loggedStatus = $lastStatus
         }
         if (((Get-Date) - $lastHeartbeat).TotalSeconds -ge 15) {
-            Write-Log "  wait-service-running: heartbeat iter=$iteration status='$lastStatus' runningSince=$runningSince t=$([int]((Get-Date) - $startTime).TotalSeconds)s"
+            Write-Log "  wait-service-running: heartbeat iter=$iteration status='$lastStatus' runningSinceTicks=$runningSinceTicks t=$([int]((Get-Date) - $startTime).TotalSeconds)s"
             $lastHeartbeat = Get-Date
         }
         if ($lastStatus -eq "STOPPED") {
@@ -264,34 +284,21 @@ function Wait-ServiceRunning {
             return $false
         }
         if ($lastStatus -eq "RUNNING") {
-            if (-not $runningSince) {
-                $runningSince = Get-Date
-                # Direct, unconditional log of every single set/reset of
-                # $runningSince (not gated on status *value* changing, unlike
-                # the transition log above) — run #11 proved $lastStatus stays
-                # a clean "RUNNING" at every heartbeat yet $runningSince still
-                # reads empty at every heartbeat, which can only happen if the
-                # `else` branch below is firing between heartbeats without
-                # $lastStatus ever differing from the logged value, which
-                # should be impossible given both branches test the same
-                # variable with the same string operators. This will either
-                # catch the impossible-looking reset directly, or prove
-                # $runningSince itself is not surviving between loop
-                # iterations for some other reason (e.g. a currently-unknown
-                # second assignment).
+            if ($null -eq $runningSinceTicks) {
+                $runningSinceTicks = (Get-Date).Ticks
                 Write-Log "  wait-service-running: runningSince SET (iter=$iteration)"
             }
-            $elapsed = ((Get-Date) - $runningSince).TotalSeconds
+            $elapsed = ((Get-Date).Ticks - $runningSinceTicks) / [double][TimeSpan]::TicksPerSecond
             if ($elapsed -ge $StableSec) {
                 Write-Log "  wait-service-running: stable for ${elapsed}s >= ${StableSec}s — succeeding (iter=$iteration)"
                 return $true
             }
         } else {
-            if ($runningSince) {
+            if ($null -ne $runningSinceTicks) {
                 Write-Log "  wait-service-running: runningSince RESET to null (lastStatus='$lastStatus') (iter=$iteration)"
             }
             # START_PENDING, etc. — not a failure, just not there yet.
-            $runningSince = $null
+            $runningSinceTicks = $null
         }
         Start-Sleep -Seconds 1
     }

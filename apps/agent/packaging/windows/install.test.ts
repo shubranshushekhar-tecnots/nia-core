@@ -153,13 +153,30 @@ describe("packaging/windows/install.ps1", () => {
     });
 
     it("requires the Running status to hold for a stable period before succeeding", () => {
-      expect(fnBody).toContain("$runningSince");
+      expect(fnBody).toContain("$runningSinceTicks");
       expect(fnBody).toContain("$elapsed -ge $StableSec");
     });
 
     it("polls once a second up to a timeout", () => {
       expect(fnBody).toContain("Start-Sleep -Seconds 1");
       expect(fnBody).toContain("$deadline");
+    });
+
+    // Regression test for a real production failure: install.ps1 only
+    // ever runs under Windows PowerShell 5.1 (see installer.nsi's
+    // GetPowerShellExe), never pwsh/PowerShell 7. Its older .NET-Framework
+    // method binder cannot resolve DateTime's op_Subtraction overload for
+    // `(Get-Date) - $runningSince` once $runningSince started life as
+    // $null, throwing "Cannot find an overload for 'op_Subtraction' and
+    // the argument count: '2'" the instant the service first reports
+    // Running — a crash invisible under local pwsh testing (pwsh's binder
+    // tolerates it) and invisible in CI too, since nothing was there yet
+    // to catch and log the otherwise-silent terminating exception. Elapsed
+    // time must be tracked via plain [long] tick counts (unambiguous Int64
+    // subtraction) instead of DateTime arithmetic.
+    it("tracks running-stability via tick counts, not DateTime subtraction", () => {
+      expect(fnBody).toContain("(Get-Date).Ticks");
+      expect(fnBody).not.toContain("= ((Get-Date) - $runningSince).TotalSeconds");
     });
 
     // Regression test: a `ServiceController` object from `Get-Service`
