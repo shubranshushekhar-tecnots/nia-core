@@ -44,10 +44,41 @@ $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";
 "PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
 Write-Host "Installing SQL Server Express (instance $InstanceName) via Chocolatey..."
-$packageParams = "/IACCEPTSQLSERVERLICENSETERMS /INSTANCENAME=$InstanceName /SECURITYMODE=SQL /SAPWD=$SaPassword /UPDATEENABLED=False /SQLSVCSTARTUPTYPE=Automatic"
-choco install sql-server-express -y --no-progress --package-parameters "$packageParams" --timeout 1800
-if ($LASTEXITCODE -ne 0) {
-  throw "choco install sql-server-express failed with exit code $LASTEXITCODE"
+# The current sql-server-express Chocolatey package's chocolateyInstall.ps1 only
+# reads ONE package parameter, ConfigurationFile — any other package-parameters
+# (e.g. /INSTANCENAME=, /SECURITYMODE=, /SAPWD=) passed directly are silently
+# ignored, and the package falls back to its hardcoded defaults (instance
+# "SQLEXPRESS", Windows-only auth, no sa password). So a real unattended
+# config file is required to get a named instance in mixed-mode auth.
+$configIniPath = Join-Path ([System.IO.Path]::GetTempPath()) "nia-sql-express-config.ini"
+@"
+[OPTIONS]
+ACTION="Install"
+IACCEPTSQLSERVERLICENSETERMS="True"
+QUIET="True"
+FEATURES="SQLENGINE"
+INSTANCENAME="$InstanceName"
+INSTANCEID="$InstanceName"
+SQLSVCACCOUNT="NT AUTHORITY\NETWORK SERVICE"
+SQLSVCSTARTUPTYPE="Automatic"
+SQLSYSADMINACCOUNTS="BUILTIN\Administrators"
+SECURITYMODE="SQL"
+SAPWD="$SaPassword"
+TCPENABLED="0"
+NPENABLED="0"
+BROWSERSVCSTARTUPTYPE="Automatic"
+UPDATEENABLED="False"
+"@ | Out-File -FilePath $configIniPath -Encoding ascii
+
+try {
+  choco install sql-server-express -y --no-progress --package-parameters "/ConfigurationFile:`"$configIniPath`"" --timeout 1800
+  if ($LASTEXITCODE -ne 0) {
+    throw "choco install sql-server-express failed with exit code $LASTEXITCODE"
+  }
+} finally {
+  # Contains the generated sa password in plain text — remove it as soon as
+  # the installer has read it, regardless of success/failure.
+  Remove-Item -Path $configIniPath -Force -ErrorAction SilentlyContinue
 }
 
 $serviceName = "MSSQL`$$InstanceName"
@@ -60,6 +91,13 @@ while ((Get-Date) -lt $deadline) {
   Start-Sleep -Seconds 5
 }
 if (-not $svc -or $svc.Status -ne "Running") {
+  Write-Host "---- Diagnostic: services matching MSSQL* ----"
+  Get-Service -Name "MSSQL*" -ErrorAction SilentlyContinue | Format-Table -AutoSize | Out-String | Write-Host
+  $summaryLogs = Get-ChildItem -Path "C:\Program Files\Microsoft SQL Server\*\Setup Bootstrap\Log\*\Summary.txt" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+  if ($summaryLogs) {
+    Write-Host "---- Diagnostic: SQL Server setup summary log (last 100 lines) ----"
+    Get-Content -Path $summaryLogs[0].FullName -Tail 100 | Write-Host
+  }
   throw "SQL Server service $serviceName did not reach Running state within 5 minutes (found: $($svc.Status))"
 }
 Write-Host "SQL Server Express instance $InstanceName is running."
