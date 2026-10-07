@@ -2,6 +2,9 @@ name: windows-installer-probe
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - ci/windows-installer
 
 jobs:
   probe:
