@@ -1,0 +1,14 @@
+name: windows-installer-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - name: Print Windows version
+        run: |
+          [System.Environment]::OSVersion.Version
+          systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
+        shell: pwsh
