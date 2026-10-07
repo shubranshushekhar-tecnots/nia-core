@@ -887,6 +887,17 @@ function Invoke-CheckD {
             Start-Sleep -Seconds 3
         }
         Add-Result -Check "D3.scheduled-job-delivered-correct-rows" -Pass $rowsOk -Detail $rowsDetail
+
+        # Capture the live service's own agent.log (covering checks A through
+        # D -- the same process the whole way, never restarted) before check
+        # E's reinstall wipes %ProgramData%\NiaAgent\logs clean (install.ps1
+        # step c recreates LogsDir on every install). Without this, a D1
+        # failure is undiagnosable from the CI artifact: the only
+        # "*.agent.log" snapshots Copy-InstallDiagnostics ever produces are
+        # tagged at install time, each just one "idle_no_jobs" line from the
+        # instant that install's service started, never anything from the
+        # live link/check-in session this check exercises.
+        Copy-InstallDiagnostics -Tag "D-live-service"
     }
 }
 

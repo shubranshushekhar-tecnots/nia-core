@@ -47,7 +47,15 @@ export function classifySqlLoginError(err: unknown): string {
   const code = (err as { code?: string } | undefined)?.code;
   const message = err instanceof Error ? err.message : String(err);
 
-  if (/windows authentication/i.test(message)) {
+  // SQL Server's actual client-visible text for "SQL login attempted while
+  // the server is configured for Windows Authentication mode only" is Error
+  // 18452: "Login failed for user '...'. The user is not associated with a
+  // trusted SQL Server connection." -- it never literally says "Windows
+  // Authentication". Confirmed against a real SQL Server Express instance
+  // in Windows-only mode (Windows installer CI, check C3) after the
+  // previous regex here (matching "windows authentication") never once
+  // matched and fell through to the generic ELOGIN "wrong password" case.
+  if (/not associated with a trusted sql server connection/i.test(message)) {
     return "password logins are switched off on this server (it only accepts Windows sign-in)";
   }
   if (code === "ELOGIN") {
