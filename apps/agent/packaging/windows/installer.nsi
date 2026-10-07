@@ -107,7 +107,7 @@ Section "Install" SEC01
   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\install.ps1"'
   Pop $0
   ${If} $0 != 0
-    MessageBox MB_OK|MB_ICONSTOP "Installing the nia-agent service failed (exit code $0). Check the details above, or run install.ps1 manually from $INSTDIR as Administrator."
+    MessageBox MB_OK|MB_ICONSTOP "Installing the nia-agent service failed. See the log at $DataDir\install.log (or %TEMP%\nia-agent-install.log if that folder could not be written) for which step failed, or run install.ps1 manually from $INSTDIR as Administrator."
     Abort
   ${EndIf}
 

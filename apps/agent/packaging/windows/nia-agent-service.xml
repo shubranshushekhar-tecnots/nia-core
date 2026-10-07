@@ -16,22 +16,22 @@
   <name>Nia Core Agent</name>
   <description>Nia on-premise agent — polls Planometry and syncs SQL Server data.</description>
 
-  <!-- Least privilege: runs as the virtual service account "NT SERVICE\nia-agent"
-       instead of LocalSystem. Virtual accounts need no password (Windows manages
-       the identity, derived deterministically from <id> above — domain+user here
-       must combine to exactly "NT SERVICE\nia-agent"), get "Log on as a service"
-       automatically, and present the computer's identity on the network, same as
-       LocalSystem would — but unlike LocalSystem they have no broad local-machine
-       access, only whatever install.ps1's data-dir ACL explicitly grants them.
-       UNVERIFIED ON A REAL WINDOWS HOST: this exact <serviceaccount> element
-       shape (domain/user vs. a single combined field) against WinSW v2.12.0's
-       schema, and that `nia-agent-service.exe install` succeeds non-interactively
-       (no password prompt) for a virtual account. -->
-  <serviceaccount>
-    <domain>NT SERVICE</domain>
-    <user>nia-agent</user>
-    <allowservicelogon>true</allowservicelogon>
-  </serviceaccount>
+  <!-- Least privilege: the service ultimately runs as the virtual service
+       account "NT SERVICE\nia-agent", not LocalSystem. Deliberately NOT
+       configured here via a serviceaccount element — CONFIRMED ON A REAL
+       WINDOWS 11 HOST: WinSW's `install` resolves a serviceaccount name
+       through the standard Windows account-name-to-SID lookup (LookupAccountName) to
+       grant it "Log on as a service", and that lookup does not work for
+       "NT SERVICE\nia-agent" (virtual/per-service accounts are not
+       enumerable that way — only the SCM's own SID-derivation algorithm,
+       exposed via `sc.exe showsid`, and `sc.exe config ... obj=`'s
+       special-cased handling, can resolve them). That mismatch is exactly
+       what produced "FATAL - Failed to find the account. No mapping
+       between account names and security IDs was done" during `install`.
+       So this XML registers the service with NO account (defaults to
+       LocalSystem at registration time only); install.ps1 immediately
+       reassigns it to the virtual account via `sc.exe config ... obj=`
+       right after registration, before the service is ever started. -->
 
   <executable>%BASE%\nia-agent.exe</executable>
   <arguments>start</arguments>
