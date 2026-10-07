@@ -65,12 +65,21 @@ Function .onInit
     Abort
   ${EndIf}
   SetRegView 64
+  ; RequestExecutionLevel admin elevates privileges but does NOT, by
+  ; itself, switch $SMPROGRAMS/$DESKTOP to the all-users context -- NSIS
+  ; defaults those to the current (installing) user's personal profile
+  ; unless this is called explicitly. Without it, Start Menu shortcuts
+  ; silently land in that one user's own Start Menu instead of the
+  ; shared "All Users" one, invisible to any other session on this
+  ; machine-wide, HKLM-registered, service-based install.
+  SetShellVarContext all
   ReadEnvStr $DataDir "ProgramData"
   StrCpy $DataDir "$DataDir\NiaAgent"
 FunctionEnd
 
 Function un.onInit
   SetRegView 64
+  SetShellVarContext all
   ReadEnvStr $DataDir "ProgramData"
   StrCpy $DataDir "$DataDir\NiaAgent"
   StrCpy $UninstPurge "0"

@@ -324,8 +324,35 @@ function Get-SqlInstanceRegistryId {
     return (Get-ItemProperty -Path $namesKey -Name $SqlInstanceName -ErrorAction Stop).$SqlInstanceName
 }
 
+function Test-TcpPortOpen {
+    # .NET socket probe, not Test-NetConnection -- that cmdlet also fires an
+    # ICMP ping and DNS work on every call, which is both slower and
+    # unnecessary noise for a tight polling loop against localhost.
+    param([string]$ComputerName = "localhost", [int]$Port, [int]$TimeoutMs = 1000)
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $task = $client.ConnectAsync($ComputerName, $Port)
+        return ($task.Wait($TimeoutMs) -and $client.Connected)
+    } catch {
+        return $false
+    } finally {
+        $client.Close()
+    }
+}
+
 function Restart-SqlInstanceAndWait {
-    param([int]$TimeoutSec = 90)
+    # $TcpPort, when given, is the port TCP/IP is expected to be enabled on
+    # across this restart (e.g. 14330 once Enable-SqlTcpForTesting has run).
+    # Service status alone is not a reliable "ready" signal: Get-Service
+    # reports "Running" as soon as SQL Server's main thread starts, but its
+    # TDS/TCP listener only binds once database recovery finishes -- which
+    # on a loaded CI runner can take well past that point. Confirmed in run
+    # #15: C3/C4/C5 all failed to connect ("server not reachable on that
+    # host/port", i.e. ECONNREFUSED/ETIMEOUT) against an instance that had
+    # already reported "Running" several seconds earlier. Poll the real
+    # socket instead of trusting service status alone whenever a TCP port
+    # is actually expected to be listening.
+    param([int]$TimeoutSec = 90, [int]$TcpPort = 0)
     try {
         Restart-Service -Name $SqlServiceName -Force -ErrorAction Stop
     } catch {
@@ -338,11 +365,24 @@ function Restart-SqlInstanceAndWait {
         return $false
     }
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $serviceRunning = $false
     while ((Get-Date) -lt $deadline) {
         $svc = Get-Service -Name $SqlServiceName -ErrorAction SilentlyContinue
-        if ($svc -and $svc.Status -eq "Running") { Start-Sleep -Seconds 3; return $true }
+        if ($svc -and $svc.Status -eq "Running") { $serviceRunning = $true; break }
         Start-Sleep -Seconds 2
     }
+    if (-not $serviceRunning) { return $false }
+    if ($TcpPort -le 0) {
+        # No TCP endpoint expected to be up (e.g. TCP/IP still disabled) --
+        # service status is the only readiness signal available here.
+        Start-Sleep -Seconds 3
+        return $true
+    }
+    while ((Get-Date) -lt $deadline) {
+        if (Test-TcpPortOpen -Port $TcpPort -TimeoutMs 1000) { return $true }
+        Start-Sleep -Seconds 2
+    }
+    Write-Host "Restart-SqlInstanceAndWait: service reported Running but port $TcpPort never accepted a connection within the timeout"
     return $false
 }
 
@@ -421,7 +461,16 @@ function Invoke-Sqlcmd2 {
 # ============================================================================
 
 function Test-FreshInstallInvariants {
-    param([string]$Prefix)
+    # $HasNsisUninstaller is $false only for check H (the zip bundle's
+    # install.ps1 run directly, no NSIS installer involved): the Start Menu
+    # shortcuts and the Add/Remove Programs "Uninstall" registry entry are
+    # both written by installer.nsi's Section "Install" only -- install.ps1
+    # itself never creates either, in either of its two modes (-InPlace or
+    # manual zip). Asserting their presence after a zip-only install is
+    # asserting something structurally impossible for that install path,
+    # not a real product bug -- so skip those two assertions there instead
+    # of reporting a permanent, un-fixable FAIL.
+    param([string]$Prefix, [bool]$HasNsisUninstaller = $true)
 
     $svc = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue | Select-Object -First 1
     Add-Result -Check "$Prefix.service-exists" -Pass ([bool]$svc)
@@ -458,13 +507,15 @@ function Test-FreshInstallInvariants {
         Add-Result -Check "$Prefix.data-dir-acl-restricted" -Pass $false -Detail "$RealDataDir not found"
     }
 
-    $uninstKey = Get-ItemProperty -Path $UninstKeyPath -ErrorAction SilentlyContinue
-    Add-Result -Check "$Prefix.uninstall-registry-entry" -Pass ([bool]$uninstKey) -Detail $(if ($uninstKey) { $uninstKey.DisplayName } else { "missing" })
+    if ($HasNsisUninstaller) {
+        $uninstKey = Get-ItemProperty -Path $UninstKeyPath -ErrorAction SilentlyContinue
+        Add-Result -Check "$Prefix.uninstall-registry-entry" -Pass ([bool]$uninstKey) -Detail $(if ($uninstKey) { $uninstKey.DisplayName } else { "missing" })
 
-    Add-Result -Check "$Prefix.start-menu-shortcuts" -Pass (
-        (Test-Path (Join-Path $StartMenuDir "Nia Core Agent Setup.lnk")) -and
-        (Test-Path (Join-Path $StartMenuDir "Nia Core Agent Status.lnk"))
-    )
+        Add-Result -Check "$Prefix.start-menu-shortcuts" -Pass (
+            (Test-Path (Join-Path $StartMenuDir "Nia Core Agent Setup.lnk")) -and
+            (Test-Path (Join-Path $StartMenuDir "Nia Core Agent Status.lnk"))
+        )
+    }
 
     $versionResult = Invoke-NiaAgent -Arguments @("version") -LogName "$Prefix-version"
     Add-Result -Check "$Prefix.cli-version" -Pass ($versionResult.ExitCode -eq 0) -Detail $versionResult.StdOut.Trim()
@@ -597,9 +648,9 @@ function Enable-SqlTcpForTesting {
     Invoke-Section "setup: enable SQL Server TCP/IP for subsequent checks" {
         Set-SqlTcp -Enabled $true -Port 14330
         Write-SqlTcpRegistryDiagnostics
-        $restarted = Restart-SqlInstanceAndWait -TimeoutSec 90
-        Add-Result -Check "setup.sql-tcp-enabled-and-restarted" -Pass $restarted
         $script:SqlTcpPort = 14330
+        $restarted = Restart-SqlInstanceAndWait -TimeoutSec 90 -TcpPort $script:SqlTcpPort
+        Add-Result -Check "setup.sql-tcp-enabled-and-restarted" -Pass $restarted
     }
 }
 
@@ -646,7 +697,7 @@ function Invoke-CheckC2-DbaScript {
 function Invoke-CheckC3-WindowsOnlyAuth {
     Invoke-Section "CHECK C3: Windows-only auth mode is explained" {
         Set-SqlLoginMode -Mode 1
-        $restarted = Restart-SqlInstanceAndWait -TimeoutSec 90
+        $restarted = Restart-SqlInstanceAndWait -TimeoutSec 90 -TcpPort $script:SqlTcpPort
         Add-Result -Check "C3.setup.login-mode-switched" -Pass $restarted
 
         $homeDir = New-ThrowawayHome -Suffix "c3"
@@ -665,7 +716,7 @@ function Invoke-CheckC3-WindowsOnlyAuth {
         Remove-Item -Recurse -Force $homeDir -ErrorAction SilentlyContinue
 
         Set-SqlLoginMode -Mode 2
-        $restoredRestart = Restart-SqlInstanceAndWait -TimeoutSec 90
+        $restoredRestart = Restart-SqlInstanceAndWait -TimeoutSec 90 -TcpPort $script:SqlTcpPort
         Add-Result -Check "C3.setup.login-mode-restored" -Pass $restoredRestart
     }
 }
@@ -902,7 +953,7 @@ function Invoke-CheckH {
             -WorkingDirectory $installScript.DirectoryName -TimeoutSec 420 -LogName "H-install-from-32bit"
         Copy-InstallDiagnostics -Tag "H-install-from-32bit"
         Add-Result -Check "H.install-exit-code" -Pass ($result.ExitCode -eq 0) -Detail "exit=$($result.ExitCode)"
-        Test-FreshInstallInvariants -Prefix "H"
+        Test-FreshInstallInvariants -Prefix "H" -HasNsisUninstaller:$false
 
         Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
     }
