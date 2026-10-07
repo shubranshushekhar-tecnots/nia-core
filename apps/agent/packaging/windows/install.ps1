@@ -221,11 +221,26 @@ function Wait-ServiceRunning {
     $runningSince = $null
     $lastStatus = "<not found>"
     $loggedStatus = $null
+    $iteration = 0
+    $lastHeartbeat = $startTime
     while ((Get-Date) -lt $deadline) {
+        $iteration++
         $lastStatus = Get-ServiceStateViaScQuery
         if ($lastStatus -ne $loggedStatus) {
-            Write-Log "  wait-service-running: status -> $lastStatus (t=$([int]((Get-Date) - $startTime).TotalSeconds)s)"
+            # Reproduced this exact loop in isolation locally with a stubbed
+            # status source and it latched correctly within ~4s — so if this
+            # keeps timing out despite reaching RUNNING, the real sc.exe
+            # text parsing must be returning a value that looks like
+            # "RUNNING" but doesn't -eq it (e.g. stray characters). Dump the
+            # length + char codes the first time each distinct value is seen
+            # to catch that.
+            $codes = ($lastStatus.ToCharArray() | ForEach-Object { [int]$_ }) -join ","
+            Write-Log "  wait-service-running: status -> '$lastStatus' (len=$($lastStatus.Length) codes=$codes) (t=$([int]((Get-Date) - $startTime).TotalSeconds)s iter=$iteration)"
             $loggedStatus = $lastStatus
+        }
+        if (((Get-Date) - $lastHeartbeat).TotalSeconds -ge 15) {
+            Write-Log "  wait-service-running: heartbeat iter=$iteration status='$lastStatus' runningSince=$runningSince t=$([int]((Get-Date) - $startTime).TotalSeconds)s"
+            $lastHeartbeat = Get-Date
         }
         if ($lastStatus -eq "STOPPED") {
             Write-Log "  wait-service-running: status STOPPED — failing"
