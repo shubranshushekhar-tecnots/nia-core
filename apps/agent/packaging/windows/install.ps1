@@ -206,12 +206,27 @@ function Wait-ServiceRunning {
     # status: Running" with a live `sc.exe query` showing RUNNING the same
     # instant). So this polls `sc.exe query` directly instead of
     # `Get-Service`/`ServiceController` at all.
+    #
+    # That `sc.exe query`-based version STILL hit the identical symptom in
+    # CI (timed out reporting "last status: RUNNING" with a diagnostic
+    # `sc.exe query` moments later also showing RUNNING) — so the bug is not
+    # (only) about which API reads the status, it's something about this
+    # loop's own stability tracking never latching. Logging every status
+    # *transition* (not every poll, to avoid log spam) so the next failure
+    # shows the full state history across the 180s instead of just the
+    # final snapshot.
     param([int]$TimeoutSec, [int]$StableSec)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $startTime = Get-Date
+    $deadline = $startTime.AddSeconds($TimeoutSec)
     $runningSince = $null
     $lastStatus = "<not found>"
+    $loggedStatus = $null
     while ((Get-Date) -lt $deadline) {
         $lastStatus = Get-ServiceStateViaScQuery
+        if ($lastStatus -ne $loggedStatus) {
+            Write-Log "  wait-service-running: status -> $lastStatus (t=$([int]((Get-Date) - $startTime).TotalSeconds)s)"
+            $loggedStatus = $lastStatus
+        }
         if ($lastStatus -eq "STOPPED") {
             Write-Log "  wait-service-running: status STOPPED — failing"
             return $false
