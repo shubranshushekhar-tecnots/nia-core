@@ -1,4 +1,4 @@
-# Uninstalls the Nia Agent Windows service. Run as Administrator from the
+﻿# Uninstalls the Nia Agent Windows service. Run as Administrator from the
 # install directory (or pass -InstallDir):
 #   .\uninstall.ps1              # keeps %ProgramData%\NiaAgent (config/secrets/spool/logs)
 #   .\uninstall.ps1 -Purge       # also removes %ProgramData%\NiaAgent

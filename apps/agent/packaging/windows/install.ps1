@@ -1,4 +1,4 @@
-# Installs the Nia Agent as a Windows service via WinSW.
+﻿# Installs the Nia Agent as a Windows service via WinSW.
 #
 # Two modes:
 #   - In-place (used by the NSIS installer, which passes -InPlace): the
@@ -280,7 +280,7 @@ function Wait-ServiceRunning {
             $lastHeartbeat = Get-Date
         }
         if ($lastStatus -eq "STOPPED") {
-            Write-Log "  wait-service-running: status STOPPED — failing"
+            Write-Log "  wait-service-running: status STOPPED - failing"
             return $false
         }
         if ($lastStatus -eq "RUNNING") {
@@ -290,7 +290,7 @@ function Wait-ServiceRunning {
             }
             $elapsed = ((Get-Date).Ticks - $runningSinceTicks) / [double][TimeSpan]::TicksPerSecond
             if ($elapsed -ge $StableSec) {
-                Write-Log "  wait-service-running: stable for ${elapsed}s >= ${StableSec}s — succeeding (iter=$iteration)"
+                Write-Log "  wait-service-running: stable for ${elapsed}s >= ${StableSec}s - succeeding (iter=$iteration)"
                 return $true
             }
         } else {
