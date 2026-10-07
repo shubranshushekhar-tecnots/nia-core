@@ -42,6 +42,7 @@ ShowUninstDetails show
 Var DataDir
 Var PowerShellExe
 Var CmdExe
+Var UninstPurge
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -72,6 +73,14 @@ Function un.onInit
   SetRegView 64
   ReadEnvStr $DataDir "ProgramData"
   StrCpy $DataDir "$DataDir\NiaAgent"
+  StrCpy $UninstPurge "0"
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} "$R0" "/PURGE" $R1
+  ${IfNot} ${Errors}
+    StrCpy $UninstPurge "1"
+  ${EndIf}
+  ClearErrors
 FunctionEnd
 
 Function RunSetupNow
@@ -171,12 +180,24 @@ Section "Install" SEC01
 SectionEnd
 
 Section "Uninstall"
-  MessageBox MB_YESNO|MB_ICONQUESTION "Keep this agent's configuration, secrets, and logs?$\n$\nYes = keep them in $DataDir (useful if you plan to reinstall)$\nNo = delete them too" IDYES KeepData
-  StrCpy $0 "purge"
-  Goto StopService
-  KeepData:
-  StrCpy $0 "keep"
-  StopService:
+  ; Silent uninstalls (/S, used by CI and scripted IT deployments) never show
+  ; the keep/purge MessageBox below -- there is no one to click it, and an
+  ; un-guarded MessageBox here would hang forever. Silent uninstalls default
+  ; to "keep" (matching uninstall.ps1's own -Purge-opt-in default); pass
+  ; /PURGE on the uninstaller's command line to force deleting $DataDir too
+  ; without a prompt.
+  ${If} $UninstPurge == "1"
+    StrCpy $0 "purge"
+  ${ElseIf} ${Silent}
+    StrCpy $0 "keep"
+  ${Else}
+    MessageBox MB_YESNO|MB_ICONQUESTION "Keep this agent's configuration, secrets, and logs?$\n$\nYes = keep them in $DataDir (useful if you plan to reinstall)$\nNo = delete them too" IDYES KeepData
+    StrCpy $0 "purge"
+    Goto StopService
+    KeepData:
+    StrCpy $0 "keep"
+    StopService:
+  ${EndIf}
 
   DetailPrint "Stopping and unregistering the nia-agent service..."
   nsExec::ExecToLog '"$INSTDIR\nia-agent-service.exe" stop'

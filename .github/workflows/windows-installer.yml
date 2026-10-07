@@ -1,0 +1,114 @@
+name: windows-installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/windows-installer
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install zip/unzip/nsis (makensis)
+        run: sudo apt-get update && sudo apt-get install -y zip unzip nsis
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build @nia/extract and @nia/agent
+        run: pnpm --filter @nia/agent... run build
+
+      - name: Build Windows SEA executable
+        run: node apps/agent/packaging/windows/build-sea.mjs
+
+      - name: Build Windows zip bundle
+        run: node apps/agent/packaging/windows/build-bundle.mjs
+
+      - name: Build Windows NSIS installer
+        run: node apps/agent/packaging/windows/build-installer.mjs
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: |
+            apps/agent/packaging/windows/dist/*.exe
+            apps/agent/packaging/windows/dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload repo snapshot (for the Windows test job's fake servers + test script)
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-snapshot
+          path: |
+            apps/agent
+            packages
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            package.json
+            tsconfig.base.json
+            turbo.json
+          if-no-files-found: error
+          retention-days: 1
+
+  test:
+    needs: build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Download Windows packages
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-packages
+          path: packages
+
+      - name: Download repo snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: repo-snapshot
+          path: repo
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: repo/pnpm-lock.yaml
+
+      - name: Install dependencies (for the fake platform/Planometry servers)
+        working-directory: repo
+        run: pnpm install --frozen-lockfile
+
+      - name: Install SQL Server Express (named instance, mixed-mode auth)
+        run: repo/apps/agent/packaging/windows/ci/install-sql-express.ps1
+
+      - name: Run installer checks A-I
+        run: repo/apps/agent/packaging/windows/ci/run-checks.ps1 -PackagesDir "${{ github.workspace }}\packages" -RepoDir "${{ github.workspace }}\repo"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-check-results
+          path: |
+            ci-artifacts/**
+          if-no-files-found: warn
+          retention-days: 14
