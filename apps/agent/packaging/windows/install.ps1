@@ -247,11 +247,32 @@ function Wait-ServiceRunning {
             return $false
         }
         if ($lastStatus -eq "RUNNING") {
-            if (-not $runningSince) { $runningSince = Get-Date }
-            if (((Get-Date) - $runningSince).TotalSeconds -ge $StableSec) {
+            if (-not $runningSince) {
+                $runningSince = Get-Date
+                # Direct, unconditional log of every single set/reset of
+                # $runningSince (not gated on status *value* changing, unlike
+                # the transition log above) — run #11 proved $lastStatus stays
+                # a clean "RUNNING" at every heartbeat yet $runningSince still
+                # reads empty at every heartbeat, which can only happen if the
+                # `else` branch below is firing between heartbeats without
+                # $lastStatus ever differing from the logged value, which
+                # should be impossible given both branches test the same
+                # variable with the same string operators. This will either
+                # catch the impossible-looking reset directly, or prove
+                # $runningSince itself is not surviving between loop
+                # iterations for some other reason (e.g. a currently-unknown
+                # second assignment).
+                Write-Log "  wait-service-running: runningSince SET (iter=$iteration)"
+            }
+            $elapsed = ((Get-Date) - $runningSince).TotalSeconds
+            if ($elapsed -ge $StableSec) {
+                Write-Log "  wait-service-running: stable for ${elapsed}s >= ${StableSec}s — succeeding (iter=$iteration)"
                 return $true
             }
         } else {
+            if ($runningSince) {
+                Write-Log "  wait-service-running: runningSince RESET to null (lastStatus='$lastStatus') (iter=$iteration)"
+            }
             # START_PENDING, etc. — not a failure, just not there yet.
             $runningSince = $null
         }

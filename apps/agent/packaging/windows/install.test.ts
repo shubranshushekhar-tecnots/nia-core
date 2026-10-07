@@ -154,7 +154,7 @@ describe("packaging/windows/install.ps1", () => {
 
     it("requires the Running status to hold for a stable period before succeeding", () => {
       expect(fnBody).toContain("$runningSince");
-      expect(fnBody).toContain("TotalSeconds -ge $StableSec");
+      expect(fnBody).toContain("$elapsed -ge $StableSec");
     });
 
     it("polls once a second up to a timeout", () => {
