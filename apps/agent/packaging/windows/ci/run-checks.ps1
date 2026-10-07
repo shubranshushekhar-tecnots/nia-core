@@ -104,6 +104,38 @@ function Protect-LogText {
     return $Text
 }
 
+# Copies install.ps1's own step-by-step log (and the WinSW/agent runtime
+# logs, if present) out of the real %ProgramData%\NiaAgent into the CI
+# artifact, tagged per-check. Run #3 showed the installer/uninstaller
+# process genuinely hanging for its entire -TimeoutSec (not just running
+# slowly), with install.ps1's own bounded-loop logic giving no indication
+# why -- these files are the only way to see which step it actually got
+# stuck on, and they live in $RealDataDir which is NOT otherwise part of
+# the uploaded $LogsDir artifact, so they'd be lost when the ephemeral
+# runner is torn down unless copied out here. Must never throw: it has to
+# be safe to call after every install/uninstall attempt regardless of
+# whether the process succeeded, failed, or was killed on timeout (in the
+# timeout case the files may not exist yet at all, or may be mid-write).
+function Copy-InstallDiagnostics {
+    param([string]$Tag)
+    $candidates = @(Join-Path $RealDataDir "install.log")
+    $realLogsDir = Join-Path $RealDataDir "logs"
+    if (Test-Path $realLogsDir) {
+        $candidates += (Get-ChildItem -Path $realLogsDir -File -ErrorAction SilentlyContinue).FullName
+    }
+    # install.ps1 falls back to %TEMP%\nia-agent-install.log if $RealDataDir
+    # itself couldn't be created/written -- capture that too, just in case.
+    $candidates += (Join-Path $env:TEMP "nia-agent-install.log")
+    foreach ($path in $candidates) {
+        if ($path -and (Test-Path $path -PathType Leaf)) {
+            $destName = "$Tag.$([System.IO.Path]::GetFileName($path))"
+            try {
+                Copy-Item -Path $path -Destination (Join-Path $LogsDir $destName) -Force -ErrorAction SilentlyContinue
+            } catch {}
+        }
+    }
+}
+
 function Invoke-Section {
     param([string]$Name, [scriptblock]$Body)
     Write-Host ""
@@ -418,6 +450,7 @@ function Test-FreshInstallInvariants {
 function Invoke-CheckA {
     Invoke-Section "CHECK A: fresh install" {
         $result = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 420 -LogName "A-install"
+        Copy-InstallDiagnostics -Tag "A-install"
         Add-Result -Check "A.installer-exit-code" -Pass ($result.ExitCode -eq 0) -Detail "exit=$($result.ExitCode)"
         Test-FreshInstallInvariants -Prefix "A"
     }
@@ -740,6 +773,7 @@ function Invoke-CheckD {
 function Invoke-CheckE {
     Invoke-Section "CHECK E: reinstall over the top keeps pairing/connection/job" {
         $result = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 420 -LogName "E-reinstall"
+        Copy-InstallDiagnostics -Tag "E-reinstall"
         Add-Result -Check "E.installer-exit-code" -Pass ($result.ExitCode -eq 0) -Detail "exit=$($result.ExitCode)"
         Test-FreshInstallInvariants -Prefix "E"
 
@@ -764,6 +798,7 @@ function Invoke-CheckF {
         Set-Content -Path (Join-Path $LegacyX86Dir "dummy.txt") -Value "simulated leftover v0.0.2 install"
 
         $result = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 420 -LogName "F-reinstall-over-legacy"
+        Copy-InstallDiagnostics -Tag "F-reinstall-over-legacy"
         Add-Result -Check "F.installer-exit-code" -Pass ($result.ExitCode -eq 0) -Detail "exit=$($result.ExitCode)"
         Test-FreshInstallInvariants -Prefix "F"
         Add-Result -Check "F.legacy-x86-dir-removed" -Pass (-not (Test-Path $LegacyX86Dir))
@@ -778,6 +813,7 @@ function Invoke-CheckG {
     Invoke-Section "CHECK G: uninstall keeping settings, then reinstall, then purge" {
         $uninstallExe = Join-Path $InstallDir "Uninstall.exe"
         $r1 = Invoke-Proc -FilePath $uninstallExe -Arguments @("/S") -TimeoutSec 300 -LogName "G-uninstall-keep"
+        Copy-InstallDiagnostics -Tag "G-uninstall-keep"
         Add-Result -Check "G.uninstall-exit-code" -Pass ($r1.ExitCode -eq 0) -Detail "exit=$($r1.ExitCode)"
         Start-Sleep -Seconds 3
         Add-Result -Check "G.service-removed" -Pass (-not (Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue))
@@ -787,12 +823,14 @@ function Invoke-CheckG {
         Add-Result -Check "G.data-dir-kept" -Pass (Test-Path $RealDataDir)
 
         $reinstall = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 420 -LogName "G-reinstall-after-keep"
+        Copy-InstallDiagnostics -Tag "G-reinstall-after-keep"
         Add-Result -Check "G.reinstall-exit-code" -Pass ($reinstall.ExitCode -eq 0) -Detail "exit=$($reinstall.ExitCode)"
         $statusResult = Invoke-NiaAgent -Arguments @("status") -TimeoutSec 30 -LogName "G-status-after-reinstall"
         Add-Result -Check "G.still-paired-after-reinstall" -Pass ($statusResult.StdOut -match "link: paired to")
 
         $uninstallExe2 = Join-Path $InstallDir "Uninstall.exe"
         $r2 = Invoke-Proc -FilePath $uninstallExe2 -Arguments @("/S", "/PURGE") -TimeoutSec 300 -LogName "G-uninstall-purge"
+        Copy-InstallDiagnostics -Tag "G-uninstall-purge"
         Add-Result -Check "G.purge-uninstall-exit-code" -Pass ($r2.ExitCode -eq 0) -Detail "exit=$($r2.ExitCode)"
         Start-Sleep -Seconds 3
         Add-Result -Check "G.data-dir-removed-after-purge" -Pass (-not (Test-Path $RealDataDir))
@@ -814,6 +852,7 @@ function Invoke-CheckH {
         $psWow64 = Join-Path $env:WINDIR "SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
         $result = Invoke-Proc -FilePath $psWow64 -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installScript.FullName) `
             -WorkingDirectory $installScript.DirectoryName -TimeoutSec 420 -LogName "H-install-from-32bit"
+        Copy-InstallDiagnostics -Tag "H-install-from-32bit"
         Add-Result -Check "H.install-exit-code" -Pass ($result.ExitCode -eq 0) -Detail "exit=$($result.ExitCode)"
         Test-FreshInstallInvariants -Prefix "H"
 
