@@ -20,7 +20,8 @@
     "manual:sql:readonly-apply": "bash scripts/manual-apply-readonly-sql.sh",
     "manual:planometry": "tsx src/testing/runFakePlanometryServer.ts",
     "manual:planometry:ctl": "tsx src/testing/planometryCtl.ts",
-    "manual:extract": "tsx src/testing/manualExtractCli.ts"
+    "manual:extract": "tsx src/testing/manualExtractCli.ts",
+    "manual:platform": "tsx src/testing/runFakePlatformServer.ts"
   },
   "dependencies": {
     "@nia/extract": "workspace:*",

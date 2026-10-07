@@ -22,8 +22,15 @@ import { detectWindowsSqlInstances, type WindowsSqlInstance } from "./windowsSql
  */
 export interface SetupIO {
   print(line: string): void;
-  ask(question: string, defaultValue?: string): Promise<string>;
-  askSecret(question: string): Promise<string>;
+  /**
+   * `key` identifies which question this is (e.g. "host", "password") for
+   * `createFileSetupIO` below to look up — the interactive console IO
+   * ignores it. Optional and additive so every existing caller/test
+   * (`createConsoleSetupIO`, `setupCommand.test.ts`'s fake IO) keeps
+   * working unchanged.
+   */
+  ask(question: string, defaultValue?: string, key?: string): Promise<string>;
+  askSecret(question: string, key?: string): Promise<string>;
 }
 
 function askPlain(question: string, defaultValue?: string): Promise<string> {
@@ -43,6 +50,83 @@ export function createConsoleSetupIO(): SetupIO {
     print: (line) => console.log(line),
     ask: (question, defaultValue) => askPlain(question, defaultValue),
     askSecret: (question) => readSecretFromStdin(`${question}: `),
+  };
+}
+
+/**
+ * Thrown by `createFileSetupIO` when a step asks for a key the answers
+ * file doesn't have (and no default applies), or asks for the same
+ * single-use key a second time — e.g. a wrong password: the interactive
+ * wizard just asks again, but a file has only one answer, so retrying
+ * would either loop forever or silently resend the same bad value. This
+ * surfaces as a plain top-level error instead (`nia-agent setup`'s own
+ * try/catch in src/index.ts prints it and exits non-zero).
+ */
+export class MissingAnswerError extends Error {
+  constructor(key: string) {
+    super(`non-interactive setup: no answer for "${key}" in the answers file (or it was already used once and the step needs it again — e.g. after a failed login)`);
+    this.name = "MissingAnswerError";
+  }
+}
+
+/** Keys the wizard can ask more than once in a loop until a blank answer ends it (destinationsStep) — consumed as a comma-separated list, one item per call, "" once exhausted. */
+const REPEATABLE_KEYS = new Set(["destinationHosts"]);
+
+/**
+ * A non-interactive `SetupIO` that answers from a `key=value` text file
+ * instead of a terminal — same `pairingStep`/`databaseStep`/
+ * `destinationsStep`/`finishStep` functions run either way (rule: "it
+ * must run the same code as the interactive questions"). One `key=value`
+ * pair per line; blank lines and lines starting with `#` are ignored.
+ * Every single-use key is consumed at most once, by design — see
+ * `MissingAnswerError`.
+ */
+export function createFileSetupIO(filePath: string): SetupIO {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const values = new Map<string, string>();
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const idx = trimmed.indexOf("=");
+    if (idx === -1) continue;
+    values.set(trimmed.slice(0, idx).trim(), trimmed.slice(idx + 1));
+  }
+  const listCursors = new Map<string, string[]>();
+
+  function takeFromList(key: string): string {
+    if (!listCursors.has(key)) {
+      const items = (values.get(key) ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      listCursors.set(key, items);
+    }
+    return listCursors.get(key)!.shift() ?? "";
+  }
+
+  function takeSingle(key: string): string | undefined {
+    if (!values.has(key)) return undefined;
+    const v = values.get(key)!;
+    values.delete(key);
+    return v;
+  }
+
+  return {
+    print: (line) => console.log(line),
+    ask: async (question, defaultValue, key) => {
+      if (!key) return defaultValue ?? "";
+      if (REPEATABLE_KEYS.has(key)) return takeFromList(key);
+      const v = takeSingle(key);
+      if (v !== undefined) return v;
+      if (defaultValue !== undefined) return defaultValue;
+      throw new MissingAnswerError(key);
+    },
+    askSecret: async (question, key) => {
+      if (!key) throw new Error(`non-interactive setup: internal error — askSecret called without a key for "${question}"`);
+      const v = takeSingle(key);
+      if (v === undefined) throw new MissingAnswerError(key);
+      return v;
+    },
   };
 }
 
@@ -152,13 +236,13 @@ export async function pairingStep(io: SetupIO, deps: SetupDeps): Promise<void> {
   io.print("Paste the pairing command shown on your Agents page, or just the code.");
 
   for (;;) {
-    const raw = await io.ask("Pairing command or code");
+    const raw = await io.ask("Pairing command or code", undefined, "pairing");
     const parsed = parsePairingInput(raw);
     if (!parsed) {
       io.print("That doesn't look like a pairing command or code — try again.");
       continue;
     }
-    const url = parsed.url ?? (await io.ask("Platform address (e.g. https://app.example.com)"));
+    const url = parsed.url ?? (await io.ask("Platform address (e.g. https://app.example.com)", undefined, "platformUrl"));
     try {
       const result = await deps.pair({ code: parsed.code, url });
       io.print(`Paired as agent ${result.agentId}.`);
@@ -194,8 +278,8 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
   io.print("");
   io.print("Now let's connect to your database.");
 
-  const host = await io.ask("Database server", "localhost");
-  let port = Number((await io.ask("Port", "1433")).trim()) || 1433;
+  const host = await io.ask("Database server", "localhost", "host");
+  let port = Number((await io.ask("Port", "1433", "port")).trim()) || 1433;
 
   if (deps.platform === "win32" && isLocalHost(host)) {
     const instances = await deps.detectWindowsSqlInstances();
@@ -205,7 +289,7 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
         const portLabel = inst.tcpEnabled ? `port ${inst.port}` : "TCP/IP disabled";
         io.print(`  ${i + 1}. ${inst.name} (${inst.instanceId}) — ${portLabel}`);
       });
-      const choice = await io.ask("Pick a number, or leave blank to use the port above");
+      const choice = await io.ask("Pick a number, or leave blank to use the port above", "", "sqlInstanceChoice");
       const picked = instances[Number(choice) - 1];
       if (picked) {
         if (!picked.tcpEnabled) {
@@ -220,17 +304,17 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
   }
 
   for (;;) {
-    const user = await io.ask("Database username (leave blank if you don't have one yet)");
+    const user = await io.ask("Database username (leave blank if you don't have one yet)", "", "username");
     if (!user) {
       io.print("This agent doesn't support Windows sign-in — your DBA needs a SQL login.");
-      const login = await io.ask("Login name for your DBA to create", "nia_agent");
-      const databases = await io.ask("Database name(s) to grant it access to (comma-separated)");
-      const outPath = await io.ask("Where should I write the setup script?", "nia-readonly-setup.sql");
+      const login = await io.ask("Login name for your DBA to create", "nia_agent", "dbaLogin");
+      const databases = await io.ask("Database name(s) to grant it access to (comma-separated)", undefined, "dbaDatabases");
+      const outPath = await io.ask("Where should I write the setup script?", "nia-readonly-setup.sql", "dbaOutPath");
       deps.writeReadonlyScript({ login, databases, out: outPath });
       io.print(`Wrote ${outPath}. Hand it to your DBA, then re-run \`nia-agent setup\` once you have a username and password.`);
       return;
     }
-    const password = await io.askSecret("Database password");
+    const password = await io.askSecret("Database password", "password");
 
     const result = await deps.testSqlLogin({ host, port, user, password });
     if (!result.ok) {
@@ -245,7 +329,7 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
 
     io.print("Databases this login can see:");
     result.databases.forEach((name, i) => io.print(`  ${i + 1}. ${name}`));
-    const dbChoice = await io.ask("Pick a number");
+    const dbChoice = await io.ask("Pick a number", undefined, "dbChoice");
     const database = result.databases[Number(dbChoice) - 1];
     if (!database) {
       io.print("That's not one of the numbers above — let's try again.");
@@ -253,7 +337,7 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
     }
 
     const defaultTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const sourceTimeZone = await io.ask("Time zone this database server runs in", defaultTimeZone);
+    const sourceTimeZone = await io.ask("Time zone this database server runs in", defaultTimeZone, "timezone");
 
     const id = toConnectionId(database, deps.listConnections());
     deps.addConnection({ id, label: database, host, port, database, user, password, sourceTimeZone });
@@ -271,7 +355,7 @@ async function destinationsStep(io: SetupIO, deps: SetupDeps): Promise<void> {
   io.print("");
   io.print("If this agent will deliver to destinations set up from Nia Core's workflow canvas, allow them now (optional).");
   for (;;) {
-    const host = await io.ask("Destination hostname to allow (leave blank to finish)");
+    const host = await io.ask("Destination hostname to allow (leave blank to finish)", "", "destinationHosts");
     if (!host) return;
     deps.allowDestinationHost(host);
     io.print(`Allowed ${host}.`);

@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ConnectionEntry } from "../config/types.js";
 import type { PairInput } from "../link/pairing.js";
-import { databaseStep, pairingStep, type SetupDeps, type SetupIO } from "./setupCommand.js";
+import { createFileSetupIO, databaseStep, MissingAnswerError, pairingStep, type SetupDeps, type SetupIO } from "./setupCommand.js";
 import type { SqlLoginTestInput } from "./sqlLoginTest.js";
 
 /** A scripted `SetupIO`: `ask`/`askSecret` return the next answer in order (both draw from the same queue — the wizard never needs to tell them apart), `print` is captured for assertions. Throws loudly if a step asks for more answers than the test provided, instead of hanging. */
@@ -105,5 +108,60 @@ describe("setup wizard: database step", () => {
     expect(printed).toContain("Connected. 5 table(s)/view(s) visible.");
     expect(printed.some((line) => line.includes("wrong-secret-pw"))).toBe(false);
     expect(printed.some((line) => line.includes("right-secret-pw"))).toBe(false);
+  });
+});
+
+describe("createFileSetupIO", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "nia-agent-answers-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function writeAnswers(contents: string): string {
+    const file = join(dir, "answers.txt");
+    writeFileSync(file, contents);
+    return file;
+  }
+
+  it("answers keyed questions from key=value lines, ignoring blanks and comments", async () => {
+    const file = writeAnswers(["# a comment", "", "host=db.internal", "port=1433", "username=nia_agent"].join("\n"));
+    const io = createFileSetupIO(file);
+
+    expect(await io.ask("Database server", "localhost", "host")).toBe("db.internal");
+    expect(await io.ask("Port", "1433", "port")).toBe("1433");
+    expect(await io.ask("Database username", "", "username")).toBe("nia_agent");
+  });
+
+  it("falls back to the default when a key is absent", async () => {
+    const io = createFileSetupIO(writeAnswers("username=nia_agent"));
+    expect(await io.ask("Database server", "localhost", "host")).toBe("localhost");
+  });
+
+  it("throws MissingAnswerError when a required key is absent and there is no default", async () => {
+    const io = createFileSetupIO(writeAnswers("host=db.internal"));
+    await expect(io.ask("Pick a number", undefined, "dbChoice")).rejects.toThrow(MissingAnswerError);
+  });
+
+  it("consumes a single-use key only once — a second ask (e.g. retry after a failed login) throws instead of looping", async () => {
+    const io = createFileSetupIO(writeAnswers("username=nia_agent\npassword=secret123"));
+    expect(await io.askSecret("Database password", "password")).toBe("secret123");
+    await expect(io.askSecret("Database password", "password")).rejects.toThrow(MissingAnswerError);
+  });
+
+  it("serves a repeatable key as a comma-separated list, one item per call, then empty", async () => {
+    const io = createFileSetupIO(writeAnswers("destinationHosts=a.example.com, b.example.com"));
+    expect(await io.ask("Destination hostname to allow (leave blank to finish)", "", "destinationHosts")).toBe("a.example.com");
+    expect(await io.ask("Destination hostname to allow (leave blank to finish)", "", "destinationHosts")).toBe("b.example.com");
+    expect(await io.ask("Destination hostname to allow (leave blank to finish)", "", "destinationHosts")).toBe("");
+  });
+
+  it("never needs a key for an unkeyed ask — returns the default", async () => {
+    const io = createFileSetupIO(writeAnswers(""));
+    expect(await io.ask("Some unkeyed question", "fallback")).toBe("fallback");
   });
 });

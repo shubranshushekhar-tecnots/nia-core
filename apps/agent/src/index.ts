@@ -34,7 +34,7 @@ import { runAgentLoop } from "./agentLoop.js";
 import { AGENT_VERSION } from "./generated/version.js";
 import { InvalidPairingCodeError, InvalidPlatformUrlError, pair, PairingRejectedError, unpair } from "./link/pairing.js";
 import { readLinkState } from "./ops/linkState.js";
-import { createConsoleSetupIO, runGuidedSetup } from "./cli/setupCommand.js";
+import { createConsoleSetupIO, createFileSetupIO, runGuidedSetup } from "./cli/setupCommand.js";
 
 function waitForEnter(prompt: string): Promise<void> {
   return new Promise((resolve) => {
@@ -753,20 +753,28 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "setup") {
-    // On Windows, setup is launched from a Start Menu shortcut or the
-    // installer's finish page, both running `cmd /k` in its own window —
-    // nothing the user is watching to notice a `nia-agent.exe` process
-    // exit. So once the wizard finishes (success, a caught setup error,
-    // or an uncaught crash), hold the window open with a visible summary
-    // or error and wait for Enter instead of letting the process (and
-    // with it `cmd /k`'s otherwise-empty window) end on its own.
+    const { values } = parseArgs({
+      args: rest,
+      options: { "answers-file": { type: "string" } },
+    });
+    const answersFile = values["answers-file"] as string | undefined;
+
+    // On Windows, interactive setup is launched from a Start Menu shortcut
+    // or the installer's finish page, both running `cmd /k` in its own
+    // window — nothing the user is watching to notice a `nia-agent.exe`
+    // process exit. So once the wizard finishes (success, a caught setup
+    // error, or an uncaught crash), hold the window open with a visible
+    // summary or error and wait for Enter instead of letting the process
+    // (and with it `cmd /k`'s otherwise-empty window) end on its own. An
+    // `--answers-file` run is unattended by definition (IT scripting/CI) —
+    // never wait for a keypress that will never come.
     try {
-      await runGuidedSetup(createConsoleSetupIO());
+      await runGuidedSetup(answersFile ? createFileSetupIO(answersFile) : createConsoleSetupIO());
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exitCode = 1;
     }
-    if (process.platform === "win32") {
+    if (process.platform === "win32" && !answersFile) {
       await waitForEnter("\nPress Enter to close this window...");
     }
     return;
@@ -813,7 +821,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   console.error(
-    "usage: nia-agent setup | nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent destinations <allow|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent pair --code <code> --url <platform> | nia-agent unpair | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
+    "usage: nia-agent setup [--answers-file <path>] | nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent destinations <allow|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent pair --code <code> --url <platform> | nia-agent unpair | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
   );
   process.exitCode = 1;
 }
