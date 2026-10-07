@@ -40,6 +40,38 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\MSSQL16.NIAEXPRES
     TcpPort    REG_SZ
 `;
 
+/** Same shape as a real instance switched to Windows Authentication only (`LoginMode` DWORD 1), e.g. by the CI harness's `Set-SqlLoginMode`. */
+const WINDOWS_ONLY_AUTH_DUMP = `
+HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\Instance Names\\SQL
+    SQLEXPRESS    REG_SZ    MSSQL15.SQLEXPRESS
+
+HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\MSSQL15.SQLEXPRESS\\MSSQLServer
+    LoginMode    REG_DWORD    0x1
+
+HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\MSSQL15.SQLEXPRESS\\MSSQLServer\\SuperSocketNetLib\\Tcp
+    Enabled    REG_DWORD    0x1
+
+HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\MSSQL15.SQLEXPRESS\\MSSQLServer\\SuperSocketNetLib\\Tcp\\IPAll
+    TcpDynamicPorts    REG_SZ
+    TcpPort    REG_SZ    1433
+`;
+
+/** Mixed Mode (`LoginMode` DWORD 2) — the normal, SQL-login-accepting state. */
+const MIXED_MODE_AUTH_DUMP = `
+HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\Instance Names\\SQL
+    SQLEXPRESS    REG_SZ    MSSQL15.SQLEXPRESS
+
+HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\MSSQL15.SQLEXPRESS\\MSSQLServer
+    LoginMode    REG_DWORD    0x2
+
+HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\MSSQL15.SQLEXPRESS\\MSSQLServer\\SuperSocketNetLib\\Tcp
+    Enabled    REG_DWORD    0x1
+
+HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\MSSQL15.SQLEXPRESS\\MSSQLServer\\SuperSocketNetLib\\Tcp\\IPAll
+    TcpDynamicPorts    REG_SZ
+    TcpPort    REG_SZ    1433
+`;
+
 describe("parseWindowsSqlInstancesFromRegistry", () => {
   it("parses two instances into the right names and ports", () => {
     const instances = parseWindowsSqlInstancesFromRegistry(TWO_INSTANCE_DUMP);
@@ -54,5 +86,21 @@ describe("parseWindowsSqlInstancesFromRegistry", () => {
     const instances = parseWindowsSqlInstancesFromRegistry(TCP_DISABLED_WITH_STALE_DYNAMIC_ZERO_DUMP);
 
     expect(instances).toEqual([{ name: "NIAEXPRESS", instanceId: "MSSQL16.NIAEXPRESS", tcpEnabled: false }]);
+  });
+
+  it("reads LoginMode 1 (Windows Authentication only) from the instance's own MSSQLServer key", () => {
+    const instances = parseWindowsSqlInstancesFromRegistry(WINDOWS_ONLY_AUTH_DUMP);
+
+    expect(instances).toEqual([
+      { name: "SQLEXPRESS", instanceId: "MSSQL15.SQLEXPRESS", port: 1433, tcpEnabled: true, loginMode: 1 },
+    ]);
+  });
+
+  it("reads LoginMode 2 (Mixed Mode) the same way", () => {
+    const instances = parseWindowsSqlInstancesFromRegistry(MIXED_MODE_AUTH_DUMP);
+
+    expect(instances).toEqual([
+      { name: "SQLEXPRESS", instanceId: "MSSQL15.SQLEXPRESS", port: 1433, tcpEnabled: true, loginMode: 2 },
+    ]);
   });
 });

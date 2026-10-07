@@ -9,6 +9,22 @@ export interface WindowsSqlInstance {
   /** Static or dynamic TCP port actually in use, or undefined if TCP/IP is disabled for this instance. */
   port?: number;
   tcpEnabled: boolean;
+  /**
+   * The server's `LoginMode` registry DWORD (1 = Windows Authentication
+   * only, 2 = Mixed Mode), or undefined if it couldn't be read. This is
+   * the only reliable way to detect "server only accepts Windows
+   * sign-in": SQL Server deliberately sends a non-sysadmin, non-local
+   * client the exact same generic "Login failed for user '...'." text
+   * (Error 18456) for a rejected-because-Windows-only-mode login as it
+   * does for a merely wrong password (the detailed state, e.g. State 58
+   * for this case, is only ever written to the server's own error log,
+   * never the wire) -- so that distinction can't be made by classifying
+   * the driver's error after a failed login. Confirmed against a real
+   * SQL Server Express instance in Windows-only mode (Windows installer
+   * CI, check C3): a dedicated readonly SQL login's failed connection
+   * attempt surfaced only the generic message, same as a wrong password.
+   */
+  loginMode?: number;
 }
 
 const REGISTRY_ROOT = "HKLM\\SOFTWARE\\Microsoft\\Microsoft SQL Server";
@@ -55,6 +71,12 @@ export function parseWindowsSqlInstancesFromRegistry(dump: string): WindowsSqlIn
 
   const instances: WindowsSqlInstance[] = [];
   for (const { name, value: instanceId } of namesBlock.values) {
+    const instanceBlock = blocks.find((b) =>
+      new RegExp(`\\\\${escapeRegExp(instanceId)}\\\\MSSQLServer$`, "i").test(b.key),
+    );
+    const loginModeValue = instanceBlock ? findValue(instanceBlock.values, "LoginMode") : undefined;
+    const loginMode = loginModeValue !== undefined ? parseInt(loginModeValue.trim(), 16) : undefined;
+
     const tcpBlock = blocks.find((b) =>
       new RegExp(`\\\\${escapeRegExp(instanceId)}\\\\MSSQLServer\\\\SuperSocketNetLib\\\\Tcp$`, "i").test(b.key),
     );
@@ -65,13 +87,13 @@ export function parseWindowsSqlInstancesFromRegistry(dump: string): WindowsSqlIn
       new RegExp(`\\\\${escapeRegExp(instanceId)}\\\\MSSQLServer\\\\SuperSocketNetLib\\\\Tcp\\\\IPAll$`, "i").test(b.key),
     );
     if (!protocolEnabled || !ipAllBlock) {
-      instances.push({ name, instanceId, tcpEnabled: false });
+      instances.push({ name, instanceId, tcpEnabled: false, loginMode });
       continue;
     }
     const tcpPort = findValue(ipAllBlock.values, "TcpPort");
     const tcpDynamicPorts = findValue(ipAllBlock.values, "TcpDynamicPorts");
     const port = firstNonEmptyPort(tcpPort, tcpDynamicPorts);
-    instances.push({ name, instanceId, port, tcpEnabled: port !== undefined });
+    instances.push({ name, instanceId, port, tcpEnabled: port !== undefined, loginMode });
   }
   return instances;
 }

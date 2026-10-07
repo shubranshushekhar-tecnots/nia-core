@@ -281,6 +281,13 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
   const host = await io.ask("Database server", "localhost", "host");
   let port = Number((await io.ask("Port", "1433", "port")).trim()) || 1433;
 
+  // Set only when a local Windows SQL Server instance was auto-detected and
+  // picked below -- used after a failed login attempt to tell "this server
+  // only accepts Windows sign-in" apart from "wrong password", which the
+  // driver's own error can't do (see WindowsSqlInstance.loginMode's doc
+  // comment for why).
+  let pickedInstanceLoginMode: number | undefined;
+
   if (deps.platform === "win32" && isLocalHost(host)) {
     const instances = await deps.detectWindowsSqlInstances();
     if (instances.length > 0) {
@@ -292,6 +299,7 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
       const choice = await io.ask("Pick a number, or leave blank to use the port above", "", "sqlInstanceChoice");
       const picked = instances[Number(choice) - 1];
       if (picked) {
+        pickedInstanceLoginMode = picked.loginMode;
         if (!picked.tcpEnabled) {
           io.print(
             `TCP/IP is disabled for ${picked.name}. To enable it: open SQL Server Configuration Manager -> SQL Server Network Configuration -> Protocols for ${picked.instanceId} -> enable TCP/IP -> restart the SQL Server service.`,
@@ -333,7 +341,17 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
 
     const result = await deps.testSqlLogin({ host, port, user, password, trustServerCertificate });
     if (!result.ok) {
-      io.print(`Couldn't log in: ${result.reason}`);
+      // A local instance in Windows-only auth mode rejects every SQL login
+      // (right password or wrong) before it even checks the password --
+      // and that rejection is indistinguishable, over the wire, from a
+      // wrong-password failure (see loginMode's doc comment). When we
+      // already know the mode from the registry, trust that over the
+      // driver's necessarily-generic error text.
+      const reason =
+        pickedInstanceLoginMode === 1
+          ? "password logins are switched off on this server (it only accepts Windows sign-in)"
+          : result.reason;
+      io.print(`Couldn't log in: ${reason}`);
       io.print("Let's try the username and password again.");
       continue;
     }

@@ -109,6 +109,35 @@ describe("setup wizard: database step", () => {
     expect(printed.some((line) => line.includes("wrong-secret-pw"))).toBe(false);
     expect(printed.some((line) => line.includes("right-secret-pw"))).toBe(false);
   });
+
+  it("on win32, when the picked local instance's registry LoginMode is Windows-only, explains that instead of the driver's generic error", async () => {
+    const { io, printed } = createFakeIO([
+      "localhost", // server
+      "1433", // port
+      "1", // pick the detected instance
+      "nia_ro", // username
+      "whatever-the-real-password-is", // password — must never appear in `printed`
+    ]);
+
+    const deps = fakeDeps({
+      platform: "win32",
+      detectWindowsSqlInstances: async () => [
+        { name: "SQLEXPRESS", instanceId: "MSSQL15.SQLEXPRESS", port: 1433, tcpEnabled: true, loginMode: 1 },
+      ],
+      // The real driver can't distinguish "server is Windows-only" from a
+      // wrong password over the wire (see WindowsSqlInstance.loginMode's doc
+      // comment) — so even a right-password attempt surfaces this same
+      // generic reason. The registry-based override is the only thing that
+      // can tell the user what's actually going on.
+      testSqlLogin: async () => ({ ok: false, reason: "wrong username or password" }),
+    });
+
+    await expect(databaseStep(io, deps)).rejects.toThrow(/fake SetupIO ran out of scripted answers/);
+
+    expect(printed).toContain("Couldn't log in: password logins are switched off on this server (it only accepts Windows sign-in)");
+    expect(printed.some((line) => line.includes("wrong username or password"))).toBe(false);
+    expect(printed.some((line) => line.includes("whatever-the-real-password-is"))).toBe(false);
+  });
 });
 
 describe("createFileSetupIO", () => {

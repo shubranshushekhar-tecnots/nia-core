@@ -794,7 +794,12 @@ function Invoke-CheckC5-CorrectDetails {
         Add-Result -Check "C5.databases-offered" -Pass ($result.StdOut -match [regex]::Escape($TestDbName))
         Add-Result -Check "C5.connected-with-table-count" -Pass ($result.StdOut -match "Connected\. \d+ table\(s\)/view\(s\) visible\.")
 
-        $agentIdMatch = [regex]::Match($result.StdOut, "Paired as agent (\S+)")
+        # Note the trailing `\.` -- setupCommand.ts's pairingStep prints
+        # "Paired as agent <id>." with a period right after the id and no
+        # space, so a bare `(\S+)` greedily swallows that period into the
+        # captured id (since "." isn't whitespace), producing an id that
+        # matches no real agent and making every check D1 lookup 404.
+        $agentIdMatch = [regex]::Match($result.StdOut, "Paired as agent (\S+)\.")
         if ($agentIdMatch.Success) { $script:RealPairingAgentId = $agentIdMatch.Groups[1].Value }
 
         $listResult = Invoke-NiaAgent -Arguments @("connection", "list") -TimeoutSec 30 -LogName "C5-connection-list"
