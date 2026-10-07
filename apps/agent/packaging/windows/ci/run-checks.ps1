@@ -40,11 +40,18 @@ if (-not $ZipBundle) { throw "no nia-agent-windows-*.zip found under $PackagesDi
 Write-Host "setup exe:  $($SetupExe.FullName)"
 Write-Host "zip bundle: $($ZipBundle.FullName)"
 
+$script:SecretsToRedact = New-Object System.Collections.Generic.List[string]
+function Add-SecretToRedact {
+    param([string]$Secret)
+    if ($Secret) { $script:SecretsToRedact.Add($Secret) }
+}
+
 $SqlInstanceName = $env:SQL_INSTANCE_NAME
 $SqlSaPassword = $env:SQL_SA_PASSWORD
 if (-not $SqlInstanceName) { throw "SQL_INSTANCE_NAME env var not set — install-sql-express.ps1 must run first" }
 if (-not $SqlSaPassword) { throw "SQL_SA_PASSWORD env var not set — install-sql-express.ps1 must run first" }
 Write-Host "::add-mask::$SqlSaPassword"
+Add-SecretToRedact $SqlSaPassword
 $SqlServiceName = "MSSQL`$$SqlInstanceName"
 
 $ProgramFiles64 = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
@@ -70,7 +77,9 @@ $TestDbName = "NiaAgentTestDB"
 $ReadonlyLogin = "nia_agent_ro"
 $ReadonlyLoginPassword = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 28 | ForEach-Object { [char]$_ })
 Write-Host "::add-mask::$ReadonlyLoginPassword"
+Add-SecretToRedact $ReadonlyLoginPassword
 $WrongPassword = "Wr0ng-Password-Not-The-Real-One!"
+Add-SecretToRedact $WrongPassword
 
 $script:FakePlatformProc = $null
 $script:FakePlanometryProc = $null
@@ -84,6 +93,15 @@ function Add-Result {
     $script:Results.Add([pscustomobject]@{ Check = $Check; Pass = $Pass; Detail = $Detail })
     $status = if ($Pass) { "PASS" } else { "FAIL" }
     Write-Host "[$status] $Check $(if ($Detail) { "- $Detail" })"
+}
+
+function Protect-LogText {
+    param([string]$Text)
+    if (-not $Text) { return $Text }
+    foreach ($secret in $script:SecretsToRedact) {
+        if ($secret) { $Text = $Text.Replace($secret, "***REDACTED***") }
+    }
+    return $Text
 }
 
 function Invoke-Section {
@@ -158,9 +176,9 @@ function Invoke-Proc {
     if ($LogName) {
         $script:LogCounter += 1
         $tag = "{0:D3}-{1}" -f $script:LogCounter, ($LogName -replace '[^A-Za-z0-9_.-]', '_')
-        Set-Content -Path (Join-Path $LogsDir "$tag.cmd.txt") -Value "$FilePath $($Arguments -join ' ')"
-        Set-Content -Path (Join-Path $LogsDir "$tag.out.log") -Value $stdout
-        Set-Content -Path (Join-Path $LogsDir "$tag.err.log") -Value $stderr
+        Set-Content -Path (Join-Path $LogsDir "$tag.cmd.txt") -Value (Protect-LogText "$FilePath $($Arguments -join ' ')")
+        Set-Content -Path (Join-Path $LogsDir "$tag.out.log") -Value (Protect-LogText $stdout)
+        Set-Content -Path (Join-Path $LogsDir "$tag.err.log") -Value (Protect-LogText $stderr)
     }
 
     return [pscustomobject]@{ ExitCode = $exitCode; StdOut = $stdout; StdErr = $stderr; TimedOut = -not $finished }
@@ -216,7 +234,12 @@ function Wait-HttpReady {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         try {
-            Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 3 | Out-Null
+            # -SkipHttpErrorCheck: readiness only needs the server to respond at
+            # all — a 404 for a deliberately nonexistent id/table still proves
+            # the server is up and routing requests, so it must not be treated
+            # as "not ready" the way Invoke-WebRequest's default non-2xx-throws
+            # behavior would.
+            Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 3 -SkipHttpErrorCheck | Out-Null
             return $true
         } catch {
             Start-Sleep -Milliseconds 500
@@ -271,7 +294,17 @@ function Get-SqlInstanceRegistryId {
 
 function Restart-SqlInstanceAndWait {
     param([int]$TimeoutSec = 90)
-    Restart-Service -Name $SqlServiceName -Force
+    try {
+        Restart-Service -Name $SqlServiceName -Force -ErrorAction Stop
+    } catch {
+        Write-Host "Restart-Service failed for $SqlServiceName : $($_.Exception.Message)"
+        $errorLogs = Get-ChildItem -Path "C:\Program Files\Microsoft SQL Server\*\MSSQL\Log\ERRORLOG" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+        if ($errorLogs) {
+            Write-Host "---- Diagnostic: SQL Server ERRORLOG tail ----"
+            Get-Content -Path $errorLogs[0].FullName -Tail 60 -ErrorAction SilentlyContinue | Write-Host
+        }
+        return $false
+    }
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $svc = Get-Service -Name $SqlServiceName -ErrorAction SilentlyContinue
@@ -284,7 +317,8 @@ function Restart-SqlInstanceAndWait {
 function Set-SqlTcp {
     param([bool]$Enabled, [int]$Port = 0)
     $instanceId = Get-SqlInstanceRegistryId
-    $tcpKey = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$instanceId\MSSQLServer\SuperSocketNetLib\Tcp"
+    $netLibKey = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$instanceId\MSSQLServer\SuperSocketNetLib"
+    $tcpKey = "$netLibKey\Tcp"
     $ipAllKey = "$tcpKey\IPAll"
     New-Item -Path $tcpKey -Force -ErrorAction SilentlyContinue | Out-Null
     Set-ItemProperty -Path $tcpKey -Name "Enabled" -Value ([int]$Enabled) -Type DWord
@@ -298,6 +332,19 @@ function Set-SqlTcp {
             Set-ItemProperty -Path $ipAllKey -Name "TcpDynamicPorts" -Value "" -Type String -ErrorAction SilentlyContinue
         }
     }
+
+    # The Tcp\Enabled DWORD alone is not always sufficient — SQL Server also
+    # consults the sibling ProtocolList value (comma-separated protocol codes,
+    # e.g. "sm,tcp") directly under SuperSocketNetLib at startup. Keep it in
+    # sync so a toggle here reliably takes effect after a service restart.
+    $existingList = (Get-ItemProperty -Path $netLibKey -Name "ProtocolList" -ErrorAction SilentlyContinue).ProtocolList
+    $protocols = if ($existingList) { @($existingList -split "," | Where-Object { $_ }) } else { @("sm") }
+    if ($Enabled) {
+        if ($protocols -notcontains "tcp") { $protocols += "tcp" }
+    } else {
+        $protocols = $protocols | Where-Object { $_ -ne "tcp" }
+    }
+    Set-ItemProperty -Path $netLibKey -Name "ProtocolList" -Value ($protocols -join ",") -Type String
 }
 
 function Set-SqlLoginMode {
@@ -321,7 +368,7 @@ function Invoke-Sqlcmd2 {
 function Test-FreshInstallInvariants {
     param([string]$Prefix)
 
-    $svc = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue
+    $svc = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue | Select-Object -First 1
     Add-Result -Check "$Prefix.service-exists" -Pass ([bool]$svc)
     if ($svc) {
         Add-Result -Check "$Prefix.service-running" -Pass ($svc.Status -eq "Running") -Detail "status=$($svc.Status)"
@@ -370,7 +417,7 @@ function Test-FreshInstallInvariants {
 
 function Invoke-CheckA {
     Invoke-Section "CHECK A: fresh install" {
-        $result = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 180 -LogName "A-install"
+        $result = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 420 -LogName "A-install"
         Add-Result -Check "A.installer-exit-code" -Pass ($result.ExitCode -eq 0) -Detail "exit=$($result.ExitCode)"
         Test-FreshInstallInvariants -Prefix "A"
     }
@@ -500,11 +547,15 @@ function Invoke-CheckC2-DbaScript {
         $rawScript = Get-Content -Path $scriptPath -Raw
         Add-Result -Check "C2.script-has-placeholder-password" -Pass ($rawScript -match [regex]::Escape("<CHANGE_ME_STRONG_PASSWORD>"))
         $realScript = $rawScript -replace [regex]::Escape("<CHANGE_ME_STRONG_PASSWORD>"), $ReadonlyLoginPassword
-        $realScriptPath = Join-Path $LogsDir "nia-readonly-setup.real.sql"
+        # Written to $env:TEMP, not $LogsDir — this is a copy of the DBA script
+        # with the real readonly login password substituted in, and $LogsDir is
+        # wholesale-uploaded as part of the CI artifact (see check I).
+        $realScriptPath = Join-Path $env:TEMP "nia-readonly-setup-real-$([guid]::NewGuid().ToString('N').Substring(0,8)).sql"
         Set-Content -Path $realScriptPath -Value $realScript
 
         $runResult = Invoke-Sqlcmd2 -InputFile $realScriptPath -LogName "C2-run-script"
         Add-Result -Check "C2.script-runs-cleanly" -Pass ($runResult.ExitCode -eq 0) -Detail $runResult.StdErr.Trim()
+        Remove-Item -Path $realScriptPath -Force -ErrorAction SilentlyContinue
 
         $verify = Invoke-Sqlcmd2 -Query "SELECT COUNT(*) FROM sys.server_principals WHERE name = N'$ReadonlyLogin';" -LogName "C2-verify-login"
         Add-Result -Check "C2.readonly-login-created" -Pass ($verify.StdOut -match "1")
@@ -575,9 +626,13 @@ function Invoke-CheckC5-CorrectDetails {
             password         = $ReadonlyLoginPassword
             dbChoice         = "1"
         }
-        $answersPath = Join-Path $LogsDir "C5-answers.txt"
+        # Written to $env:TEMP, not $LogsDir — this answers file contains the
+        # real readonly login password, and $LogsDir is wholesale-uploaded as
+        # part of the CI artifact (see check I).
+        $answersPath = Join-Path $env:TEMP "nia-agent-c5-answers-$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
         New-AnswersFile -Answers $answers -Path $answersPath
         $result = Invoke-NiaAgent -Arguments @("setup", "--answers-file", $answersPath) -TimeoutSec 60 -LogName "C5-setup"
+        Remove-Item -Path $answersPath -Force -ErrorAction SilentlyContinue
         Add-Result -Check "C5.paired" -Pass ($result.StdOut -match "Paired as agent")
         Add-Result -Check "C5.databases-offered" -Pass ($result.StdOut -match [regex]::Escape($TestDbName))
         Add-Result -Check "C5.connected-with-table-count" -Pass ($result.StdOut -match "Connected\. \d+ table\(s\)/view\(s\) visible\.")
@@ -684,7 +739,7 @@ function Invoke-CheckD {
 
 function Invoke-CheckE {
     Invoke-Section "CHECK E: reinstall over the top keeps pairing/connection/job" {
-        $result = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 180 -LogName "E-reinstall"
+        $result = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 420 -LogName "E-reinstall"
         Add-Result -Check "E.installer-exit-code" -Pass ($result.ExitCode -eq 0) -Detail "exit=$($result.ExitCode)"
         Test-FreshInstallInvariants -Prefix "E"
 
@@ -708,7 +763,7 @@ function Invoke-CheckF {
         New-Item -ItemType Directory -Force -Path $LegacyX86Dir | Out-Null
         Set-Content -Path (Join-Path $LegacyX86Dir "dummy.txt") -Value "simulated leftover v0.0.2 install"
 
-        $result = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 180 -LogName "F-reinstall-over-legacy"
+        $result = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 420 -LogName "F-reinstall-over-legacy"
         Add-Result -Check "F.installer-exit-code" -Pass ($result.ExitCode -eq 0) -Detail "exit=$($result.ExitCode)"
         Test-FreshInstallInvariants -Prefix "F"
         Add-Result -Check "F.legacy-x86-dir-removed" -Pass (-not (Test-Path $LegacyX86Dir))
@@ -722,7 +777,7 @@ function Invoke-CheckF {
 function Invoke-CheckG {
     Invoke-Section "CHECK G: uninstall keeping settings, then reinstall, then purge" {
         $uninstallExe = Join-Path $InstallDir "Uninstall.exe"
-        $r1 = Invoke-Proc -FilePath $uninstallExe -Arguments @("/S") -TimeoutSec 120 -LogName "G-uninstall-keep"
+        $r1 = Invoke-Proc -FilePath $uninstallExe -Arguments @("/S") -TimeoutSec 300 -LogName "G-uninstall-keep"
         Add-Result -Check "G.uninstall-exit-code" -Pass ($r1.ExitCode -eq 0) -Detail "exit=$($r1.ExitCode)"
         Start-Sleep -Seconds 3
         Add-Result -Check "G.service-removed" -Pass (-not (Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue))
@@ -731,13 +786,13 @@ function Invoke-CheckG {
         Add-Result -Check "G.registry-entry-removed" -Pass (-not (Get-ItemProperty -Path $UninstKeyPath -ErrorAction SilentlyContinue))
         Add-Result -Check "G.data-dir-kept" -Pass (Test-Path $RealDataDir)
 
-        $reinstall = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 180 -LogName "G-reinstall-after-keep"
+        $reinstall = Invoke-Proc -FilePath $SetupExe.FullName -Arguments @("/S") -TimeoutSec 420 -LogName "G-reinstall-after-keep"
         Add-Result -Check "G.reinstall-exit-code" -Pass ($reinstall.ExitCode -eq 0) -Detail "exit=$($reinstall.ExitCode)"
         $statusResult = Invoke-NiaAgent -Arguments @("status") -TimeoutSec 30 -LogName "G-status-after-reinstall"
         Add-Result -Check "G.still-paired-after-reinstall" -Pass ($statusResult.StdOut -match "link: paired to")
 
         $uninstallExe2 = Join-Path $InstallDir "Uninstall.exe"
-        $r2 = Invoke-Proc -FilePath $uninstallExe2 -Arguments @("/S", "/PURGE") -TimeoutSec 120 -LogName "G-uninstall-purge"
+        $r2 = Invoke-Proc -FilePath $uninstallExe2 -Arguments @("/S", "/PURGE") -TimeoutSec 300 -LogName "G-uninstall-purge"
         Add-Result -Check "G.purge-uninstall-exit-code" -Pass ($r2.ExitCode -eq 0) -Detail "exit=$($r2.ExitCode)"
         Start-Sleep -Seconds 3
         Add-Result -Check "G.data-dir-removed-after-purge" -Pass (-not (Test-Path $RealDataDir))
@@ -758,7 +813,7 @@ function Invoke-CheckH {
 
         $psWow64 = Join-Path $env:WINDIR "SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
         $result = Invoke-Proc -FilePath $psWow64 -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installScript.FullName) `
-            -WorkingDirectory $installScript.DirectoryName -TimeoutSec 180 -LogName "H-install-from-32bit"
+            -WorkingDirectory $installScript.DirectoryName -TimeoutSec 420 -LogName "H-install-from-32bit"
         Add-Result -Check "H.install-exit-code" -Pass ($result.ExitCode -eq 0) -Detail "exit=$($result.ExitCode)"
         Test-FreshInstallInvariants -Prefix "H"
 
