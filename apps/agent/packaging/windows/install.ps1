@@ -144,6 +144,23 @@ function Write-Log {
     Add-Content -Path $LogFile -Value $line
 }
 
+# Run #12 showed install.ps1's own process disappearing less than half a
+# second after its very first Wait-ServiceRunning status log line, on all
+# 4 install attempts in that run, with no "FAILED at step" line, nothing
+# in the NSIS-captured stdout/stderr, and nothing else in this log --
+# i.e. a terminating exception that is currently invisible everywhere.
+# A script-scope trap catches a terminating error raised anywhere in this
+# script's call stack (including inside functions like Wait-ServiceRunning
+# that have no try/catch of their own) and gives us one last chance to
+# write out exactly what it was before the process exits, instead of it
+# vanishing silently as it has been.
+trap {
+    Write-Log "UNCAUGHT EXCEPTION: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
+    Write-Log "  at: $($_.InvocationInfo.PositionMessage -replace "`r?`n", ' | ')"
+    Write-Log "  stack: $($_.ScriptStackTrace -replace "`r?`n", ' | ')"
+    exit 1
+}
+
 function Fail {
     param([string]$Step, [string]$Detail)
     Write-Log "FAILED at step '$Step': $Detail"
