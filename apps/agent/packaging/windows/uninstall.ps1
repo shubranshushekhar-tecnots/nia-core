@@ -5,10 +5,17 @@
 
 param(
     [switch]$Purge,
-    [string]$InstallDir = "$env:ProgramFiles\NiaAgent"
+    [string]$InstallDir
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $InstallDir) {
+    # Always the true 64-bit Program Files — see install.ps1's header
+    # comment for why $env:ProgramFiles alone isn't safe here.
+    $ProgramFiles64 = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+    $InstallDir = Join-Path $ProgramFiles64 "NiaAgent"
+}
 
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {

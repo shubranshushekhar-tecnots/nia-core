@@ -40,6 +40,7 @@ ShowInstDetails show
 ShowUninstDetails show
 
 Var DataDir
+Var PowerShellExe
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -76,6 +77,24 @@ Function RunSetupNow
   Exec '"$SYSDIR\cmd.exe" /k ""$INSTDIR\nia-agent.exe" setup"'
 FunctionEnd
 
+; makensis builds a plain 32-bit installer executable, so on 64-bit
+; Windows this process runs under WOW64 — meaning $SYSDIR is silently
+; redirected to SysWOW64, and a naive "$SYSDIR\...\powershell.exe" would
+; launch 32-bit PowerShell. That 32-bit PowerShell then sees $env:ProgramFiles
+; as "Program Files (x86)", which is exactly how v0.0.2 ended up with
+; install.ps1 computing a different install folder than the one this
+; installer actually extracted files into. Fix: use the "Sysnative" alias,
+; which bypasses WOW64 redirection and always points at the real 64-bit
+; System32 — but only exists for WOW64 processes, so fall back to the
+; plain System32 path if it's not there (this installer running natively).
+Function GetPowerShellExe
+  ${If} ${FileExists} "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    StrCpy $PowerShellExe "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  ${Else}
+    StrCpy $PowerShellExe "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+  ${EndIf}
+FunctionEnd
+
 ; Patches the "Run as administrator" compatibility bit into a .lnk file
 ; (byte offset 0x15, bit 0x20 — the documented shortcut link-flags byte).
 ; The agent's data folder is ACL'd to Administrators + its own virtual
@@ -104,7 +123,8 @@ Section "Install" SEC01
   File "${STAGE_DIR}\VERSION.txt"
 
   DetailPrint "Registering and starting the nia-agent service (stop -> replace -> start if upgrading)..."
-  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\install.ps1"'
+  Call GetPowerShellExe
+  nsExec::ExecToLog '"$PowerShellExe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\install.ps1" -InPlace'
   Pop $0
   ${If} $0 != 0
     MessageBox MB_OK|MB_ICONSTOP "Installing the nia-agent service failed. See the log at $DataDir\install.log (or %TEMP%\nia-agent-install.log if that folder could not be written) for which step failed, or run install.ps1 manually from $INSTDIR as Administrator."

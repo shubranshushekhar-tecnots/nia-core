@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const script = readFileSync(path.join(here, "install.ps1"), "utf8");
 const serviceXml = readFileSync(path.join(here, "nia-agent-service.xml"), "utf8");
+const nsis = readFileSync(path.join(here, "installer.nsi"), "utf8");
 
 describe("packaging/windows/nia-agent-service.xml", () => {
   // Regression test: a <serviceaccount> element makes WinSW resolve "NT
@@ -69,5 +70,61 @@ describe("packaging/windows/install.ps1", () => {
     );
     expect(configCatchBlock).toContain("Remove-ServiceQuietly");
     expect(aclCatchBlock).toContain("Remove-ServiceQuietly");
+  });
+
+  // Regression test for the real-Windows-11 failure: the installer
+  // extracted files to the true 64-bit Program Files, but a 32-bit
+  // install.ps1 process (launched via a WOW64-redirected $SYSDIR) computed
+  // its install dir from $env:ProgramFiles, which WOW64 processes see as
+  // "Program Files (x86)" — two different folders for the same install.
+  it("launches 64-bit PowerShell via Sysnative and passes -InPlace", () => {
+    expect(nsis).toContain('"$WINDIR\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe"');
+    expect(nsis).toContain("-File \"$INSTDIR\\install.ps1\" -InPlace");
+  });
+
+  // In-place mode (used by the installer) must use its own folder as the
+  // install dir and never copy into it or delete it — the installer
+  // already staged the files there via NSIS's own File command.
+  it("in-place mode uses its own folder and never copies or deletes it", () => {
+    expect(script).toContain("[switch]$InPlace");
+    expect(script).toContain("$InstallDir = $ScriptDir");
+
+    const copyBranchStart = script.indexOf("if ($InPlace) {", script.indexOf("Write-Log \"install.ps1 starting"));
+    const inPlaceBranch = script.slice(copyBranchStart, script.indexOf("} else {", copyBranchStart));
+    expect(inPlaceBranch).toContain("in-place mode");
+    expect(inPlaceBranch).not.toContain("Copy-Item");
+    expect(inPlaceBranch).not.toContain("Remove-Item -Recurse -Force $InstallDir");
+  });
+
+  // Replacing an existing service (any upgrade) must, in order: try a
+  // graceful stop with a timeout, fall back to ending the process tree by
+  // pid if that timed out, then delete the service and wait for it to
+  // actually disappear before continuing — never just fire-and-forget the
+  // stop/delete calls like 0.0.2 did.
+  it("replaces an existing service by stopping (with timeout), ending its process tree, deleting, then waiting — in that order", () => {
+    const stopIndex = script.indexOf("sc.exe stop nia-agent");
+    const stopTimeoutIndex = script.indexOf('if (-not $stopped) {');
+    const endProcessIndex = script.indexOf("Stop-ProcessTreeById -ParentId");
+    const deleteIndex = script.indexOf("sc.exe delete nia-agent");
+    const waitGoneIndex = script.indexOf("Wait-ServiceGone -TimeoutSec 30");
+
+    for (const index of [stopIndex, stopTimeoutIndex, endProcessIndex, deleteIndex, waitGoneIndex]) {
+      expect(index).toBeGreaterThan(-1);
+    }
+    expect(stopIndex).toBeLessThan(stopTimeoutIndex);
+    expect(stopTimeoutIndex).toBeLessThan(endProcessIndex);
+    expect(endProcessIndex).toBeLessThan(deleteIndex);
+    expect(deleteIndex).toBeLessThan(waitGoneIndex);
+  });
+
+  it("ends the service's process tree by pid, never by image name", () => {
+    expect(script).toContain("Stop-Process -Id $_.ProcessId -Force");
+    expect(script).toContain("Stop-Process -Id $ParentId -Force");
+  });
+
+  it("stops with a plain message instead of continuing if the service is still marked for deletion", () => {
+    expect(script).toContain(
+      "An older Nia Core Agent service is still being removed. Close the Services window and Task Manager, or restart Windows, then run the installer again.",
+    );
   });
 });
