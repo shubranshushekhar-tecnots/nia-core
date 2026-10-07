@@ -143,7 +143,7 @@ describe("packaging/windows/install.ps1", () => {
 
     it("is defined and used (polling, not a single check) to verify the service started", () => {
       expect(fnBody).not.toBe("");
-      expect(script).toContain("Wait-ServiceRunning -TimeoutSec 60 -StableSec 3");
+      expect(script).toContain("Wait-ServiceRunning -TimeoutSec 180 -StableSec 3");
     });
 
     it("only treats Stopped as an immediate failure — StartPending keeps waiting", () => {

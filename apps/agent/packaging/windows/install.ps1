@@ -185,12 +185,22 @@ function Wait-ServiceRunning {
     # continuously Running for $StableSec seconds; fail as soon as it
     # reaches Stopped, or once $TimeoutSec elapses without reaching that
     # stable point.
+    #
+    # Confirmed in CI: a `ServiceController` object returned by `Get-Service`
+    # caches its `.Status` snapshot from the moment it was constructed — on a
+    # loaded CI runner, re-querying `Get-Service -Name` in a tight 1s loop
+    # repeatedly returned a stale status (this loop timed out reporting
+    # "Running" never stabilized, while an `sc.exe query` run immediately
+    # afterwards in a fresh process showed RUNNING the whole time). Calling
+    # `.Refresh()` on the same object before reading `.Status` forces it to
+    # re-read the SCM's live state instead of serving the cached snapshot.
     param([int]$TimeoutSec, [int]$StableSec)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $runningSince = $null
     $lastStatus = "<not found>"
     while ((Get-Date) -lt $deadline) {
         $svc = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue
+        if ($svc) { $svc.Refresh() }
         $lastStatus = if ($svc) { $svc.Status } else { "<not found>" }
         if ($lastStatus -eq "Stopped") {
             Write-Log "  wait-service-running: status Stopped — failing"

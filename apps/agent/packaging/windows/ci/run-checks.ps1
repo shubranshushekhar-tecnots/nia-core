@@ -514,7 +514,8 @@ function Invoke-CheckB3 {
     Invoke-Section "CHECK B3: expired/wrong pairing code gives a plain message" {
         $homeDir = New-ThrowawayHome -Suffix "b3"
         $answers = @{
-            pairing = "00000000-0000-0000-0000-000000000000.bogus-code-never-issued"
+            pairing     = "00000000-0000-0000-0000-000000000000.bogus-code-never-issued"
+            platformUrl = $FakePlatformUrl
         }
         $answersPath = Join-Path $homeDir "answers.txt"
         New-AnswersFile -Answers $answers -Path $answersPath
@@ -582,10 +583,23 @@ function Invoke-CheckC1-TcpDisabled {
 function Enable-SqlTcpForTesting {
     Invoke-Section "setup: enable SQL Server TCP/IP for subsequent checks" {
         Set-SqlTcp -Enabled $true -Port 14330
+        Write-SqlTcpRegistryDiagnostics
         $restarted = Restart-SqlInstanceAndWait -TimeoutSec 90
         Add-Result -Check "setup.sql-tcp-enabled-and-restarted" -Pass $restarted
         $script:SqlTcpPort = 14330
     }
+}
+
+function Write-SqlTcpRegistryDiagnostics {
+    # Ground-truth dump requested after the TcpKeepAlive theory alone didn't
+    # resolve the TDSSNIClient 0x2/0x8 failure in an earlier run — print the
+    # exact registry state SQL Server will read on the next restart instead
+    # of guessing again blind.
+    $instanceId = Get-SqlInstanceRegistryId
+    $netLibKey = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$instanceId\MSSQLServer\SuperSocketNetLib"
+    Write-Host "---- Diagnostic: SuperSocketNetLib registry state before restart ----"
+    Write-Host "ProtocolList: $((Get-ItemProperty -Path $netLibKey -Name 'ProtocolList' -ErrorAction SilentlyContinue).ProtocolList)"
+    & reg.exe query "HKLM\SOFTWARE\Microsoft\Microsoft SQL Server\$instanceId\MSSQLServer\SuperSocketNetLib\Tcp" /s 2>&1 | Write-Host
 }
 
 function Invoke-CheckC2-DbaScript {

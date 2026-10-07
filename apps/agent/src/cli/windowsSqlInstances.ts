@@ -37,10 +37,15 @@ export async function detectWindowsSqlInstances(): Promise<WindowsSqlInstance[]>
  * block per key, each followed by its indented `name    REG_TYPE    value`
  * lines. The `Instance Names\SQL` block maps each instance's display name
  * to its instance id (e.g. "SQLEXPRESS" -> "MSSQL15.SQLEXPRESS"); that
- * instance id's own `...\MSSQLServer\SuperSocketNetLib\Tcp\IPAll` block
- * carries the port it actually listens on. A missing IPAll block, or one
- * where both `TcpPort` and `TcpDynamicPorts` are blank, means TCP/IP is
- * disabled for that instance.
+ * instance id's own `...\MSSQLServer\SuperSocketNetLib\Tcp` block's
+ * `Enabled` DWORD is the actual protocol on/off switch — its `IPAll`
+ * sub-block's `TcpPort`/`TcpDynamicPorts` only carry the port once TCP/IP
+ * is enabled. A missing `Tcp` block, an `Enabled` value other than `0x1`,
+ * or a missing `IPAll` block all mean TCP/IP is disabled for that
+ * instance. Note SQL Server Express ships with TCP/IP disabled out of the
+ * box but still leaves `IPAll\TcpDynamicPorts` set to the literal string
+ * "0" (its placeholder for "assign dynamically once enabled") — that must
+ * not be read as a real port 0, so `Enabled` is checked first and wins.
  */
 export function parseWindowsSqlInstancesFromRegistry(dump: string): WindowsSqlInstance[] {
   const blocks = splitIntoBlocks(dump);
@@ -50,10 +55,16 @@ export function parseWindowsSqlInstancesFromRegistry(dump: string): WindowsSqlIn
 
   const instances: WindowsSqlInstance[] = [];
   for (const { name, value: instanceId } of namesBlock.values) {
+    const tcpBlock = blocks.find((b) =>
+      new RegExp(`\\\\${escapeRegExp(instanceId)}\\\\MSSQLServer\\\\SuperSocketNetLib\\\\Tcp$`, "i").test(b.key),
+    );
+    const enabledValue = tcpBlock ? findValue(tcpBlock.values, "Enabled") : undefined;
+    const protocolEnabled = enabledValue !== undefined && /^0x0*1$/i.test(enabledValue.trim());
+
     const ipAllBlock = blocks.find((b) =>
       new RegExp(`\\\\${escapeRegExp(instanceId)}\\\\MSSQLServer\\\\SuperSocketNetLib\\\\Tcp\\\\IPAll$`, "i").test(b.key),
     );
-    if (!ipAllBlock) {
+    if (!protocolEnabled || !ipAllBlock) {
       instances.push({ name, instanceId, tcpEnabled: false });
       continue;
     }
