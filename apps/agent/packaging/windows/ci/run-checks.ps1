@@ -346,47 +346,60 @@ function Restart-SqlInstanceAndWait {
     return $false
 }
 
+function Get-SqlWmiNamespace {
+    # The SQL Server WMI configuration provider versions its namespace per
+    # major release (ComputerManagement16 for SQL 2022, 15 for 2019, etc.) —
+    # discover the actual namespace instead of hardcoding a version, since
+    # this must work against whatever SQL Server Express release the CI
+    # runner's install step pulled.
+    $ns = Get-CimInstance -Namespace "root\Microsoft\SqlServer" -ClassName "__NAMESPACE" -ErrorAction Stop |
+        Where-Object { $_.Name -like "ComputerManagement*" } |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if (-not $ns) { throw "could not find a root\Microsoft\SqlServer\ComputerManagement* WMI namespace" }
+    return "root\Microsoft\SqlServer\$($ns.Name)"
+}
+
 function Set-SqlTcp {
     param([bool]$Enabled, [int]$Port = 0)
-    $instanceId = Get-SqlInstanceRegistryId
-    $netLibKey = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$instanceId\MSSQLServer\SuperSocketNetLib"
-    $tcpKey = "$netLibKey\Tcp"
-    $ipAllKey = "$tcpKey\IPAll"
-    New-Item -Path $tcpKey -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-ItemProperty -Path $tcpKey -Name "Enabled" -Value ([int]$Enabled) -Type DWord
-    # SNI's TDSSNIClient reads a "TcpKeepAlive" DWORD directly under the Tcp
-    # key on every startup where tcp is in ProtocolList, not just when first
-    # configuring it through SQL Server Configuration Manager (which writes
-    # this value as a side effect of its UI, unlike a bare registry toggle).
-    # Missing it fails SQL Server startup outright with "TDSSNIClient
-    # initialization failed with error 0x2, status code 0x8/0x1 ... Unable to
-    # retrieve 'TcpKeepAlive' registry setting" (0x2 = ERROR_FILE_NOT_FOUND)
-    # -> "Could not start the network library" -> service fails to start.
-    # Confirmed by reproducing exactly this failure in CI before adding this.
-    Set-ItemProperty -Path $tcpKey -Name "TcpKeepAlive" -Value 30000 -Type DWord
+    # A hand-rolled registry-only toggle (writing Tcp\Enabled, Tcp\IPAll\
+    # {TcpPort,TcpDynamicPorts} and ProtocolList directly) proved
+    # insufficient: Write-SqlTcpRegistryDiagnostics confirmed it left only
+    # the Tcp and Tcp\IPAll subkeys in place, with none of the per-network-
+    # interface IP1/IP2/etc. subkeys that a real SQL Server Configuration
+    # Manager toggle always creates — and SQL Server startup kept failing
+    # with "TDSSNIClient initialization failed ... Unable to retrieve
+    # 'TcpKeepAlive' registry setting" even with TcpKeepAlive correctly set.
+    # Go through the actual SQL Server WMI configuration provider instead —
+    # the same one SQL Server Configuration Manager itself uses — so the
+    # full registry structure is produced correctly instead of being
+    # reverse-engineered by hand. See:
+    # https://learn.microsoft.com/en-us/sql/relational-databases/wmi-provider-configuration-classes/servernetworkprotocol-class/servernetworkprotocol-class
+    # https://learn.microsoft.com/en-us/archive/blogs/joscot/setting-the-sql-tcpport-value-via-powershell-and-wmi
+    $namespace = Get-SqlWmiNamespace
+    $protocolFilter = "InstanceName='$SqlInstanceName' AND ProtocolName='Tcp'"
+    $protocol = Get-CimInstance -Namespace $namespace -ClassName ServerNetworkProtocol -Filter $protocolFilter -ErrorAction Stop
+    if (-not $protocol) { throw "WMI ServerNetworkProtocol not found for instance $SqlInstanceName" }
+    Invoke-CimMethod -InputObject $protocol -MethodName $(if ($Enabled) { "SetEnable" } else { "SetDisable" }) | Out-Null
+
     if ($Enabled) {
-        New-Item -Path $ipAllKey -Force -ErrorAction SilentlyContinue | Out-Null
-        Set-ItemProperty -Path $ipAllKey -Name "TcpPort" -Value "$Port" -Type String
-        Set-ItemProperty -Path $ipAllKey -Name "TcpDynamicPorts" -Value "" -Type String
-    } else {
-        if (Test-Path $ipAllKey) {
-            Set-ItemProperty -Path $ipAllKey -Name "TcpPort" -Value "" -Type String -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $ipAllKey -Name "TcpDynamicPorts" -Value "" -Type String -ErrorAction SilentlyContinue
-        }
+        $portFilter = "InstanceName='$SqlInstanceName' AND IpAddressName='IPAll' AND ProtocolName='Tcp' AND PropertyName='TcpPort'"
+        $portProp = Get-CimInstance -Namespace $namespace -ClassName ServerNetworkProtocolProperty -Filter $portFilter -ErrorAction Stop
+        Invoke-CimMethod -InputObject $portProp -MethodName SetStringValue -Arguments @{ StrValue = "$Port" } | Out-Null
+
+        $dynFilter = "InstanceName='$SqlInstanceName' AND IpAddressName='IPAll' AND ProtocolName='Tcp' AND PropertyName='TcpDynamicPorts'"
+        $dynProp = Get-CimInstance -Namespace $namespace -ClassName ServerNetworkProtocolProperty -Filter $dynFilter -ErrorAction Stop
+        Invoke-CimMethod -InputObject $dynProp -MethodName SetStringValue -Arguments @{ StrValue = "" } | Out-Null
     }
 
-    # The Tcp\Enabled DWORD alone is not always sufficient — SQL Server also
-    # consults the sibling ProtocolList value (comma-separated protocol codes,
-    # e.g. "sm,tcp") directly under SuperSocketNetLib at startup. Keep it in
-    # sync so a toggle here reliably takes effect after a service restart.
-    $existingList = (Get-ItemProperty -Path $netLibKey -Name "ProtocolList" -ErrorAction SilentlyContinue).ProtocolList
-    $protocols = if ($existingList) { @($existingList -split "," | Where-Object { $_ }) } else { @("sm") }
-    if ($Enabled) {
-        if ($protocols -notcontains "tcp") { $protocols += "tcp" }
-    } else {
-        $protocols = $protocols | Where-Object { $_ -ne "tcp" }
-    }
-    Set-ItemProperty -Path $netLibKey -Name "ProtocolList" -Value ($protocols -join ",") -Type String
+    # SNI's TDSSNIClient also reads a "TcpKeepAlive" DWORD directly under the
+    # Tcp key on every startup where tcp is in ProtocolList — confirmed by
+    # reproducing the startup failure in CI before adding this — and the WMI
+    # SetEnable() call above does not set it as a side effect, so keep
+    # writing it directly as a belt-and-suspenders fallback.
+    $instanceId = Get-SqlInstanceRegistryId
+    $tcpKey = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$instanceId\MSSQLServer\SuperSocketNetLib\Tcp"
+    Set-ItemProperty -Path $tcpKey -Name "TcpKeepAlive" -Value 30000 -Type DWord
 }
 
 function Set-SqlLoginMode {
@@ -594,7 +607,11 @@ function Write-SqlTcpRegistryDiagnostics {
     # Ground-truth dump requested after the TcpKeepAlive theory alone didn't
     # resolve the TDSSNIClient 0x2/0x8 failure in an earlier run — print the
     # exact registry state SQL Server will read on the next restart instead
-    # of guessing again blind.
+    # of guessing again blind. That run revealed Tcp\IP1/IP2/etc. subkeys
+    # were missing entirely (only Tcp and Tcp\IPAll existed) after the old
+    # registry-only toggle; Set-SqlTcp now goes through the WMI provider
+    # instead specifically to produce those — the `/s` recursive dump below
+    # is what confirms (or disproves) that on the next run.
     $instanceId = Get-SqlInstanceRegistryId
     $netLibKey = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$instanceId\MSSQLServer\SuperSocketNetLib"
     Write-Host "---- Diagnostic: SuperSocketNetLib registry state before restart ----"

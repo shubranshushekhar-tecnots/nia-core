@@ -147,9 +147,9 @@ describe("packaging/windows/install.ps1", () => {
     });
 
     it("only treats Stopped as an immediate failure — StartPending keeps waiting", () => {
-      expect(fnBody).toContain('$lastStatus -eq "Stopped"');
+      expect(fnBody).toContain('$lastStatus -eq "STOPPED"');
       expect(fnBody).toContain("return $false");
-      expect(fnBody).not.toMatch(/StartPending[\s\S]{0,40}return \$false/);
+      expect(fnBody).not.toMatch(/START_PENDING[\s\S]{0,40}return \$false/);
     });
 
     it("requires the Running status to hold for a stable period before succeeding", () => {
@@ -160,6 +160,21 @@ describe("packaging/windows/install.ps1", () => {
     it("polls once a second up to a timeout", () => {
       expect(fnBody).toContain("Start-Sleep -Seconds 1");
       expect(fnBody).toContain("$deadline");
+    });
+
+    // Regression test: a `ServiceController` object from `Get-Service`
+    // proved unreliable in CI — twice, including after adding `.Refresh()`
+    // — reporting a stale `.Status` for an entire 180s polling loop while a
+    // fresh `sc.exe query` process showed the true state throughout. Must
+    // poll via `sc.exe query` text parsing instead, never `Get-Service`.
+    it("polls via sc.exe query instead of Get-Service/ServiceController", () => {
+      expect(fnBody).toContain("Get-ServiceStateViaScQuery");
+      // NB: fnBody legitimately contains "Get-Service" (as a substring of its
+      // own call to "Get-ServiceStateViaScQuery") and "ServiceController" (in
+      // its explanatory doc-comment prose) — assert against the actual old-API
+      // invocation/type-reference shapes instead of the bare substrings.
+      expect(fnBody).not.toMatch(/Get-Service\s+(-Name\s+)?["']?nia-agent/);
+      expect(fnBody).not.toMatch(/\[System\.ServiceProcess\.ServiceController\]|New-Object.*ServiceController/);
     });
   });
 

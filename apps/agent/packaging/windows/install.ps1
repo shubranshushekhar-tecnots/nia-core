@@ -174,6 +174,17 @@ function Wait-ServiceGone {
     return $false
 }
 
+function Get-ServiceStateViaScQuery {
+    # `sc.exe query` calls QueryServiceStatusEx directly against the SCM in
+    # a fresh process every time, with no object-level caching to go stale.
+    # Returns the STATE token (e.g. "RUNNING", "START_PENDING", "STOPPED")
+    # or "<not found>" if the service isn't registered / the query failed.
+    $output = & sc.exe query nia-agent 2>&1
+    $stateLine = $output | Where-Object { $_ -match "STATE\s*:\s*\d+\s*(\S+)" } | Select-Object -First 1
+    if ($stateLine -and $stateLine -match "STATE\s*:\s*\d+\s*(\S+)") { return $matches[1] }
+    return "<not found>"
+}
+
 function Wait-ServiceRunning {
     # WinSW's `start` returns as soon as it has asked the SCM to start the
     # service, not once the service has actually finished starting — on a
@@ -186,33 +197,32 @@ function Wait-ServiceRunning {
     # reaches Stopped, or once $TimeoutSec elapses without reaching that
     # stable point.
     #
-    # Confirmed in CI: a `ServiceController` object returned by `Get-Service`
-    # caches its `.Status` snapshot from the moment it was constructed — on a
-    # loaded CI runner, re-querying `Get-Service -Name` in a tight 1s loop
-    # repeatedly returned a stale status (this loop timed out reporting
-    # "Running" never stabilized, while an `sc.exe query` run immediately
-    # afterwards in a fresh process showed RUNNING the whole time). Calling
-    # `.Refresh()` on the same object before reading `.Status` forces it to
-    # re-read the SCM's live state instead of serving the cached snapshot.
+    # Confirmed in CI (twice): a `ServiceController` object returned by
+    # `Get-Service` can report a stale `.Status` that never changes across
+    # an entire 180s polling loop on a loaded CI runner, while `sc.exe
+    # query` run immediately afterwards in a fresh process correctly showed
+    # RUNNING — and calling `.Refresh()` on the `ServiceController` before
+    # reading `.Status` did NOT fix it (still timed out reporting "last
+    # status: Running" with a live `sc.exe query` showing RUNNING the same
+    # instant). So this polls `sc.exe query` directly instead of
+    # `Get-Service`/`ServiceController` at all.
     param([int]$TimeoutSec, [int]$StableSec)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $runningSince = $null
     $lastStatus = "<not found>"
     while ((Get-Date) -lt $deadline) {
-        $svc = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue
-        if ($svc) { $svc.Refresh() }
-        $lastStatus = if ($svc) { $svc.Status } else { "<not found>" }
-        if ($lastStatus -eq "Stopped") {
-            Write-Log "  wait-service-running: status Stopped — failing"
+        $lastStatus = Get-ServiceStateViaScQuery
+        if ($lastStatus -eq "STOPPED") {
+            Write-Log "  wait-service-running: status STOPPED — failing"
             return $false
         }
-        if ($lastStatus -eq "Running") {
+        if ($lastStatus -eq "RUNNING") {
             if (-not $runningSince) { $runningSince = Get-Date }
             if (((Get-Date) - $runningSince).TotalSeconds -ge $StableSec) {
                 return $true
             }
         } else {
-            # StartPending, etc. — not a failure, just not there yet.
+            # START_PENDING, etc. — not a failure, just not there yet.
             $runningSince = $null
         }
         Start-Sleep -Seconds 1
