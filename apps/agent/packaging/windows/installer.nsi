@@ -41,6 +41,7 @@ ShowUninstDetails show
 
 Var DataDir
 Var PowerShellExe
+Var CmdExe
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
@@ -74,7 +75,8 @@ Function un.onInit
 FunctionEnd
 
 Function RunSetupNow
-  Exec '"$SYSDIR\cmd.exe" /k ""$INSTDIR\nia-agent.exe" setup"'
+  Call GetCmdExe
+  Exec '"$CmdExe" /k ""$INSTDIR\nia-agent.exe" setup"'
 FunctionEnd
 
 ; makensis builds a plain 32-bit installer executable, so on 64-bit
@@ -92,6 +94,20 @@ Function GetPowerShellExe
     StrCpy $PowerShellExe "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
   ${Else}
     StrCpy $PowerShellExe "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+  ${EndIf}
+FunctionEnd
+
+; Same WOW64 problem as GetPowerShellExe above, for cmd.exe: a plain
+; "$SYSDIR\cmd.exe" resolves to SysWOW64 under this 32-bit installer
+; process, launching the 32-bit cmd.exe instead of the native 64-bit one.
+; Harmless for running nia-agent.exe itself (CreateProcess works across
+; bitness for a separate child exe), but inconsistent with this installer's
+; "64-bit only, always" rule, so resolve it the same way.
+Function GetCmdExe
+  ${If} ${FileExists} "$WINDIR\Sysnative\cmd.exe"
+    StrCpy $CmdExe "$WINDIR\Sysnative\cmd.exe"
+  ${Else}
+    StrCpy $CmdExe "$WINDIR\System32\cmd.exe"
   ${EndIf}
 FunctionEnd
 
@@ -134,8 +150,9 @@ Section "Install" SEC01
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\${START_MENU_DIR}"
-  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Setup.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\nia-agent.exe" setup"' "$INSTDIR\nia-agent.exe" 0
-  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Status.lnk" "$SYSDIR\cmd.exe" '/k ""$INSTDIR\nia-agent.exe" status"' "$INSTDIR\nia-agent.exe" 0
+  Call GetCmdExe
+  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Setup.lnk" "$CmdExe" '/k ""$INSTDIR\nia-agent.exe" setup"' "$INSTDIR\nia-agent.exe" 0
+  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Status.lnk" "$CmdExe" '/k ""$INSTDIR\nia-agent.exe" status"' "$INSTDIR\nia-agent.exe" 0
   Push "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Setup.lnk"
   Call MarkShortcutElevated
   Push "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Status.lnk"

@@ -157,6 +157,82 @@ function Wait-ServiceGone {
     return $false
 }
 
+function Wait-ServiceRunning {
+    # WinSW's `start` returns as soon as it has asked the SCM to start the
+    # service, not once the service has actually finished starting — on a
+    # real Windows 11 host, Get-Service still reported StartPending at the
+    # instant checked right after `start` returned, while `sc.exe query` a
+    # minute later showed RUNNING. So: poll once a second for up to
+    # $TimeoutSec, treating StartPending (or any other transitional state)
+    # as "keep waiting"; succeed only once the service has been
+    # continuously Running for $StableSec seconds; fail as soon as it
+    # reaches Stopped, or once $TimeoutSec elapses without reaching that
+    # stable point.
+    param([int]$TimeoutSec, [int]$StableSec)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $runningSince = $null
+    $lastStatus = "<not found>"
+    while ((Get-Date) -lt $deadline) {
+        $svc = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue
+        $lastStatus = if ($svc) { $svc.Status } else { "<not found>" }
+        if ($lastStatus -eq "Stopped") {
+            Write-Log "  wait-service-running: status Stopped — failing"
+            return $false
+        }
+        if ($lastStatus -eq "Running") {
+            if (-not $runningSince) { $runningSince = Get-Date }
+            if (((Get-Date) - $runningSince).TotalSeconds -ge $StableSec) {
+                return $true
+            }
+        } else {
+            # StartPending, etc. — not a failure, just not there yet.
+            $runningSince = $null
+        }
+        Start-Sleep -Seconds 1
+    }
+    Write-Log "  wait-service-running: timed out after ${TimeoutSec}s (last status: $lastStatus)"
+    return $false
+}
+
+function Write-ServiceFailureDiagnostics {
+    # Captures everything needed to diagnose a real start failure before
+    # Remove-ServiceQuietly deletes the service and that evidence goes
+    # with it: the service's last exit code, the tail of both the WinSW
+    # wrapper's logs and the agent's own log (same folder, see
+    # nia-agent-service.xml), and any recent Application event-log
+    # entries for it. Best-effort throughout — a diagnostics failure must
+    # never block the actual cleanup/Fail that follows it.
+    Write-Log "collecting failure diagnostics before removing the service"
+    try {
+        $queryOutput = & sc.exe query nia-agent 2>&1
+        $queryOutput | ForEach-Object { Write-Log "  sc query: $_" }
+        $queryOutput | Where-Object { $_ -match "WIN32_EXIT_CODE|SERVICE_EXIT_CODE" } | ForEach-Object {
+            Write-Log "  last exit code: $($_.Trim())"
+        }
+    } catch {
+        Write-Log "  WARN  sc.exe query failed: $($_.Exception.Message)"
+    }
+
+    $LogsDirForDiag = Join-Path $DataDir "logs"
+    foreach ($logName in @("nia-agent.wrapper.log", "nia-agent.err.log", "nia-agent.out.log", "agent.log")) {
+        $logPath = Join-Path $LogsDirForDiag $logName
+        if (Test-Path $logPath) {
+            Write-Log "  last 20 lines of ${logName}:"
+            Get-Content -Path $logPath -Tail 20 -ErrorAction SilentlyContinue | ForEach-Object { Write-Log "    $_" }
+        } else {
+            Write-Log "  ($logName not found at $logPath)"
+        }
+    }
+
+    try {
+        $events = Get-EventLog -LogName Application -Source "nia-agent" -Newest 20 -ErrorAction Stop
+        Write-Log "  recent Application event log entries for nia-agent:"
+        $events | ForEach-Object { Write-Log "    $($_.TimeGenerated.ToString('o')) [$($_.EntryType)] $($_.Message)" }
+    } catch {
+        Write-Log "  (no Application event log entries found for nia-agent, or Get-EventLog failed: $($_.Exception.Message))"
+    }
+}
+
 function Stop-ProcessTreeById {
     # Ends the service's wrapper process and its child (the agent process
     # WinSW spawned) by pid — never by image name, since multiple
@@ -312,20 +388,23 @@ try {
     Fail "start service" $_.Exception.Message
 }
 
+if (-not (Wait-ServiceRunning -TimeoutSec 60 -StableSec 3)) {
+    Write-ServiceFailureDiagnostics
+    Remove-ServiceQuietly
+    $finalSvc = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue
+    $finalStatus = if ($finalSvc) { $finalSvc.Status } else { "<not found>" }
+    Fail "verify service running" "service did not reach a stable Running state within 60s (last status: $finalStatus)"
+}
+
 $qcOutput = & sc.exe qc nia-agent 2>&1
 $qcOutput | ForEach-Object { Write-Log "  sc qc: $_" }
 $startNameLine = $qcOutput | Where-Object { $_ -match "SERVICE_START_NAME" } | Select-Object -First 1
-$svc = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue
-if (-not $svc -or $svc.Status -ne "Running") {
-    $status = if ($svc) { $svc.Status } else { "<not found>" }
-    Remove-ServiceQuietly
-    Fail "verify service running" "Get-Service reported status '$status'"
-}
 if (-not $startNameLine -or $startNameLine -notmatch [regex]::Escape($ServiceAccount)) {
+    Write-ServiceFailureDiagnostics
     Remove-ServiceQuietly
     Fail "verify service account" "sc.exe qc did not report SERVICE_START_NAME as $ServiceAccount (got: $startNameLine)"
 }
-Write-Log "step d) verified nia-agent is Running under $ServiceAccount"
+Write-Log "step d) verified nia-agent is Running (stable for 3s) under $ServiceAccount"
 
 if ($serviceWasRunning) {
     Write-Host "upgraded and restarted nia-agent"

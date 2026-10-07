@@ -127,4 +127,72 @@ describe("packaging/windows/install.ps1", () => {
       "An older Nia Core Agent service is still being removed. Close the Services window and Task Manager, or restart Windows, then run the installer again.",
     );
   });
+
+  // Regression test for the real-Windows-11 failure: `Get-Service`
+  // reported 'StartPending' immediately after `nia-agent-service.exe
+  // start` returned, but `sc.exe query` a minute later showed RUNNING —
+  // a single immediate check is a false failure. The verify step must
+  // poll instead, treating StartPending as "keep waiting" rather than
+  // a failure, succeed once Running has held for a few seconds, and
+  // only fail on Stopped or on a timeout.
+  describe("Wait-ServiceRunning", () => {
+    const fnBody = script.slice(
+      script.indexOf("function Wait-ServiceRunning"),
+      script.indexOf("function Write-ServiceFailureDiagnostics"),
+    );
+
+    it("is defined and used (polling, not a single check) to verify the service started", () => {
+      expect(fnBody).not.toBe("");
+      expect(script).toContain("Wait-ServiceRunning -TimeoutSec 60 -StableSec 3");
+    });
+
+    it("only treats Stopped as an immediate failure — StartPending keeps waiting", () => {
+      expect(fnBody).toContain('$lastStatus -eq "Stopped"');
+      expect(fnBody).toContain("return $false");
+      expect(fnBody).not.toMatch(/StartPending[\s\S]{0,40}return \$false/);
+    });
+
+    it("requires the Running status to hold for a stable period before succeeding", () => {
+      expect(fnBody).toContain("$runningSince");
+      expect(fnBody).toContain("TotalSeconds -ge $StableSec");
+    });
+
+    it("polls once a second up to a timeout", () => {
+      expect(fnBody).toContain("Start-Sleep -Seconds 1");
+      expect(fnBody).toContain("$deadline");
+    });
+  });
+
+  // On a real start failure, the evidence (exit code, logs, event log)
+  // must be captured before Remove-ServiceQuietly deletes the service —
+  // not after, when it's gone.
+  describe("Write-ServiceFailureDiagnostics", () => {
+    it("is defined and called before Remove-ServiceQuietly in both post-start verify steps", () => {
+      const verifyRunningBlock = script.slice(
+        script.indexOf("if (-not (Wait-ServiceRunning"),
+        script.indexOf("$qcOutput = & sc.exe qc nia-agent"),
+      );
+      const verifyAccountBlock = script.slice(
+        script.indexOf("if (-not $startNameLine"),
+        script.indexOf("Write-Log \"step d) verified"),
+      );
+      for (const block of [verifyRunningBlock, verifyAccountBlock]) {
+        const diagIndex = block.indexOf("Write-ServiceFailureDiagnostics");
+        const removeIndex = block.indexOf("Remove-ServiceQuietly");
+        expect(diagIndex).toBeGreaterThan(-1);
+        expect(removeIndex).toBeGreaterThan(-1);
+        expect(diagIndex).toBeLessThan(removeIndex);
+      }
+    });
+
+    it("captures the service's exit code, log tails, and event log entries", () => {
+      const fnBody = script.slice(
+        script.indexOf("function Write-ServiceFailureDiagnostics"),
+        script.indexOf("Write-Log \"install.ps1 starting\""),
+      );
+      expect(fnBody).toContain("sc.exe query nia-agent");
+      expect(fnBody).toContain("Get-Content -Path $logPath -Tail 20");
+      expect(fnBody).toContain("Get-EventLog -LogName Application -Source \"nia-agent\"");
+    });
+  });
 });

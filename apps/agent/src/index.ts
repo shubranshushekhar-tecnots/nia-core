@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import readline from "node:readline";
 import { parseArgs } from "node:util";
 import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
 import {
@@ -34,6 +35,16 @@ import { AGENT_VERSION } from "./generated/version.js";
 import { InvalidPairingCodeError, InvalidPlatformUrlError, pair, PairingRejectedError, unpair } from "./link/pairing.js";
 import { readLinkState } from "./ops/linkState.js";
 import { createConsoleSetupIO, runGuidedSetup } from "./cli/setupCommand.js";
+
+function waitForEnter(prompt: string): Promise<void> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(prompt, () => {
+      rl.close();
+      resolve();
+    });
+  });
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -742,7 +753,22 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "setup") {
-    await runGuidedSetup(createConsoleSetupIO());
+    // On Windows, setup is launched from a Start Menu shortcut or the
+    // installer's finish page, both running `cmd /k` in its own window —
+    // nothing the user is watching to notice a `nia-agent.exe` process
+    // exit. So once the wizard finishes (success, a caught setup error,
+    // or an uncaught crash), hold the window open with a visible summary
+    // or error and wait for Enter instead of letting the process (and
+    // with it `cmd /k`'s otherwise-empty window) end on its own.
+    try {
+      await runGuidedSetup(createConsoleSetupIO());
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+    if (process.platform === "win32") {
+      await waitForEnter("\nPress Enter to close this window...");
+    }
     return;
   }
 
