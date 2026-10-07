@@ -77,16 +77,18 @@ $ErrorActionPreference = "Stop"
 # pwsh (PowerShell 7+) parent -- as happens under GitHub Actions'
 # `shell: pwsh` default, and will happen for any automation that drives
 # the installer from pwsh -- $env:PSModulePath is inherited from that
-# parent and does not include this (Windows PowerShell 5.1) process's own
-# system modules directory. Confirmed on a real run: that silently broke
-# auto-loading of built-in modules like Microsoft.PowerShell.Security,
-# making Get-Acl/Set-Acl below fail with "the module could not be
-# loaded" even though the module is right there on disk. Make sure it's
-# always on the path, regardless of what launched this process.
-$winPSModulesDir = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\Modules"
-if ($env:PSModulePath -notlike "*$winPSModulesDir*") {
-    $env:PSModulePath = "$winPSModulesDir;$env:PSModulePath"
-}
+# parent and already contains pwsh's own copy of
+# Microsoft.PowerShell.Security alongside this (Windows PowerShell 5.1)
+# process's copy. Simply prepending the WinPS5.1 directory is NOT enough
+# to fix this (confirmed on a real run) -- WinPS5.1 still finds pwsh's
+# copy too and refuses to load the module at all due to duplicate
+# extended type data between the two copies, failing Get-Acl/Set-Acl
+# below with "the module could not be loaded" even though the command
+# was found. The only reliable fix is to throw away whatever
+# $env:PSModulePath this process inherited and reset it to the clean,
+# machine-level default (which only ever contains WinPS5.1's own module
+# directories), regardless of what launched this process.
+$env:PSModulePath = [Environment]::GetEnvironmentVariable("PSModulePath", "Machine")
 
 # Relaunch under 64-bit PowerShell if this process is 32-bit on 64-bit
 # Windows. "Sysnative" is a virtual alias that bypasses the WOW64

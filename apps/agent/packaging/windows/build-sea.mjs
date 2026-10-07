@@ -23,9 +23,20 @@
 //      using it — this is the executable nia-agent.exe is built from.
 //   4. postject-inject the blob into a copy of that node.exe.
 //
-// Pinned to the same Node major/minor the repo's other packaging targets
-// use (apps/agent/Dockerfile: node:22-alpine) and the version installed on
-// this build machine, for a reproducible, verifiable build.
+// Node's SEA docs are explicit that the blob and the node.exe it's injected
+// into must come from the EXACT same Node build ("The version of the Node.js
+// binary used to produce the blob must be the same as the one to which the
+// blob will be injected" -- mismatches crash at startup with "FATAL ERROR:
+// v8::ToLocalChecked Empty MaybeLocal", confirmed via nodejs/node#60327).
+// Step 2 below always generates the blob with whichever `node` is currently
+// running this script (`process.execPath`) -- so NODE_VERSION here MUST
+// track that exact same build, not an independently-pinned constant: CI's
+// `actions/setup-node@v4` with a floating `node-version: 22` resolves to
+// whatever the latest 22.x release is on the day the workflow runs, which
+// silently drifts away from any hardcoded version over time and reproduces
+// this exact crash. Deriving it from `process.version` instead guarantees
+// blob and binary always match, regardless of which Node actually runs the
+// build.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, rmSync } from "node:fs";
@@ -37,7 +48,7 @@ const agentDir = path.resolve(here, "../../");
 const repoRoot = path.resolve(agentDir, "../../");
 const distDir = path.join(here, "dist");
 
-const NODE_VERSION = "22.15.0";
+const NODE_VERSION = process.version.slice(1); // "v22.15.0" -> "22.15.0"
 const NODE_ZIP_NAME = `node-v${NODE_VERSION}-win-x64.zip`;
 const NODE_ZIP_URL = `https://nodejs.org/dist/v${NODE_VERSION}/${NODE_ZIP_NAME}`;
 const NODE_SHASUMS_URL = `https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt`;

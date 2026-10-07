@@ -409,7 +409,14 @@ function Test-FreshInstallInvariants {
 
     $qc = & sc.exe qc nia-agent 2>&1
     $startName = ($qc | Where-Object { $_ -match "SERVICE_START_NAME" } | Select-Object -First 1)
-    Add-Result -Check "$Prefix.service-account" -Pass ($startName -match [regex]::Escape($ServiceAccount)) -Detail "$startName"
+    # $startName is $null when the service doesn't exist (e.g. install failed
+    # before registering it) -- but it's $null via an empty Where-Object/
+    # Select-Object pipeline result, not a literal $null, and -match on that
+    # particular flavor of "nothing" returns an empty array rather than
+    # $false, which then fails to bind to Add-Result's [bool]$Pass parameter
+    # ("Cannot convert value System.Object[] to type System.Boolean").
+    # Confirmed by local repro. Force it back to a real boolean.
+    Add-Result -Check "$Prefix.service-account" -Pass ([bool]($startName -match [regex]::Escape($ServiceAccount))) -Detail "$startName"
 
     Add-Result -Check "$Prefix.install-dir" -Pass (Test-Path (Join-Path $InstallDir "nia-agent.exe")) -Detail $InstallDir
     Add-Result -Check "$Prefix.legacy-x86-dir-absent" -Pass (-not (Test-Path $LegacyX86Dir))
