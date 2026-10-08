@@ -6554,3 +6554,15 @@ across concurrently-run integration test files, intermittently raising
 "Cannot remove or demote the last owner of an organization". Fixed by
 giving the second file a distinct `run_id` and setting
 `fileParallelism: false` in `vitest.integration.config.ts`.
+
+## Windows installer CI harness: check D3's deadline raised from 100s to 160s
+
+`apps/agent/packaging/windows/ci/run-checks.ps1`'s check D3 waits for the
+live agent service to reconcile a newly-added job. The agent's reconcile
+loop runs on a fixed interval, and separately a job can only be picked up
+at the next cron-minute boundary — worst case that's a 60s reconcile
+interval plus up to another 60s to the next cron minute, i.e. up to 120s
+before the agent even starts acting on the job, leaving only 20s of
+margin under the old 100s deadline. Raised to 160s to give that
+documented worst-case latency (120s) real margin instead of a check that
+is tight by construction.
