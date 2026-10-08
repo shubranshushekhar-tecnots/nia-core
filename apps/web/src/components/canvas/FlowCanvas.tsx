@@ -1393,7 +1393,7 @@ function CanvasInner({
                   aria-pressed={copilotOpen}
                   title={copilotOpen ? 'Hide Nia AI' : 'Show Nia AI'}
                 >
-                  <Logo size={16} showWordmark={false} />
+                  <Logo size={16} showWordmark={false} src="/splash-icon.png" />
                 </button>
                 <button
                   type="button"

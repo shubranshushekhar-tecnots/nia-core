@@ -130,7 +130,7 @@ export default function CopilotSidebar({
       />
       <div style={copilotHeaderStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Logo size={22} showWordmark={false} />
+          <Logo size={22} showWordmark={false} src="/splash-icon.png" />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             <span style={copilotTitleStyle}>Nia AI</span>
             <span style={copilotSubtitleStyle}>Ask anything about your workflow</span>

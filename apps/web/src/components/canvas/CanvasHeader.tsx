@@ -302,7 +302,7 @@ export default function CanvasHeader({
         aria-pressed={copilotOpen}
         title={copilotOpen ? 'Hide Nia AI' : 'Show Nia AI'}
       >
-        <Logo size={18} showWordmark={false} />
+        <Logo size={18} showWordmark={false} src="/splash-icon.png" />
       </button>
 
       {!readOnly && (

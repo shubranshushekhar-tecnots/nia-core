@@ -76,7 +76,7 @@ export default function ConsoleShell({
       <div style={consoleStaffBarStyle} />
       <header style={consoleTopBarStyle}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/splash-icon.png" alt="Nia" style={consoleBrandMarkStyle} />
+        <img src="/logo-mark.png" alt="Nia" style={consoleBrandMarkStyle} />
         <span style={consoleBrandTextStyle}>Nia Console</span>
         <span style={consoleStaffBadgeStyle}>ADMIN</span>
         <span style={consoleTopBarSpacerStyle} />

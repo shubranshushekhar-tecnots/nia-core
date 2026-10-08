@@ -778,7 +778,7 @@ export default function CommandBar({
 
       {!(threadOpen && allMessages.length > 0) && (
         <div style={emptyStateStyle} data-testid="command-bar-empty-state">
-          <Logo size={28} showWordmark={false} />
+          <Logo size={28} showWordmark={false} src="/splash-icon.png" />
           <span style={emptyStateGreetingStyle}>Hi, I&apos;m Nia AI</span>
           <span style={emptyStateSubtextStyle}>
             Ask anything about your workflow, mention a node with @, or start a message with / to propose a change.
