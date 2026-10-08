@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { test, expect, type Page } from '@playwright/test';
-import { Pool } from 'pg';
+import { Pool, Client } from 'pg';
 import { personas } from './fixtures/personas';
 
 /**
@@ -18,17 +18,26 @@ import { personas } from './fixtures/personas';
  * Same style/helpers as agentDelivery.spec.ts (gotoSeededWorkflow,
  * loadWebEnv, runCli/startAgent/stopAgent, the SQL Server harness,
  * saveGraphViaApi/getAccessToken/currentWorkflowId). The existing "Dev
- * sandbox (supabase)" destination connection is reused read-only (no write
- * grant provisioned): a write grant is never actually reached here, because
- * packages/schemas/src/pushdown.ts's manifestDialect() has no case for
- * "sqlserver-agent" yet, so apps/worker/src/lib/etl/runEtl.ts's very first
- * dialect-lookup check fails before any write-grant resolution is ever
- * attempted (see docs/plans/route1-design.md, a known/tracked gap that
- * requires apps/worker changes out of this slice's scope). Provisioning a
- * grant here would also 403 regardless: canvasA is "member" in the
- * canvas-e2e org, and grants.create/confirm require individual/admin/owner
- * (packages/schemas/src/can.ts) — a deliberate, documented access rule, not
- * a bug to work around.
+ * sandbox (supabase)" destination connection is reused for its read-side
+ * config (host/port/database), but a real write grant must now be in
+ * place: packages/schemas/src/pushdown.ts's manifestDialect() has no case
+ * for "sqlserver-agent", but apps/worker/src/lib/etl/runEtl.ts resolves
+ * that to the "structured" pseudo-dialect instead (see
+ * docs/plans/route1-complete.md) — so the run proceeds all the way to
+ * write-grant resolution.
+ *
+ * canvasA ("member" in canvas-e2e) cannot call grants.create/confirm
+ * (packages/schemas/src/can.ts requires individual/admin/owner) — a
+ * deliberate access rule this test does not touch. Instead, this test's
+ * own setup provisions a throwaway write-capable Postgres role on the
+ * sandbox destination DB, stores its credential the same way the product
+ * does (a real `POST /connections` call, which canvasA's "member" role can
+ * make — connections.create is all-role), and inserts a confirmed
+ * `write_grants` row directly (service-role-equivalent, same as this
+ * file's other direct `pool.query` fixture rows below) pointing at that
+ * credential. No RLS policy or RPC is bypassed or changed; this only
+ * supplies data a real admin/owner would otherwise have supplied through
+ * the (unchanged) grants.create/confirm RPCs.
  */
 async function gotoSeededWorkflow(page: Page, projectName: string, workflowName: string) {
   await page.goto('/app/projects');
@@ -79,9 +88,13 @@ const MSSQL_DATABASE = 'nia_extract_test';
 const MSSQL_USER = 'sa';
 const MSSQL_PASSWORD = 'N!aExtractTest_2026';
 
-// The confirmed, current error text from apps/worker/src/lib/etl/runEtl.ts's
-// first (dialect-lookup) check — see this file's header comment.
-const EXPECTED_DIALECT_GAP_MESSAGE = 'has no supported query dialect';
+// docker-compose.yml's dev-postgres host-published port (sandbox db) — same
+// coordinates apps/worker/scripts/write-smoke.ts uses to provision a
+// scratch write role, from the host, for the write-grant fixture below.
+const SANDBOX_PG_HOST_PORT = { host: 'localhost', port: 5433, database: 'sandbox', user: 'postgres', password: 'devroot' };
+const WRITE_ROLE_USER = `nia_write_e2e_r1_${NOW}`;
+const WRITE_ROLE_PASSWORD = `nia_write_e2e_r1_pw_${NOW}`;
+const WRITE_CRED_CONNECTION_NAME = `Write cred E2E R1 ${NOW}`;
 
 function runCli(args: string[], home: string): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
@@ -157,6 +170,109 @@ async function latestWorkflowRun(
   return { status: row.status, rowsProcessed: row.rows_processed, durationMs: row.duration_ms, error: row.error };
 }
 
+/**
+ * Provisions a throwaway write-capable Postgres role on the sandbox
+ * destination db, connecting from the host via dev-postgres's published
+ * port — same pattern as write-smoke.ts's provisionScratchTableAndRole,
+ * but granting CREATE (not just INSERT/UPDATE on one pre-existing table)
+ * since apps/worker's ensureDestination.ts issues a real CREATE TABLE for
+ * a brand-new destination entity like DEST_TABLE_NAME.
+ */
+async function provisionWriteRole(): Promise<void> {
+  const client = new Client(SANDBOX_PG_HOST_PORT);
+  await client.connect();
+  try {
+    await client.query(`create role ${WRITE_ROLE_USER} with login password '${WRITE_ROLE_PASSWORD}'`);
+    await client.query(`grant connect on database sandbox to ${WRITE_ROLE_USER}`);
+    await client.query(`grant usage, create on schema public to ${WRITE_ROLE_USER}`);
+    // The staging/upsert path provisions its own "nia" schema for staging
+    // tables (create-schema-nia preflight check) — the admin-run grant DDL
+    // the worker's own error message points at, applied here since this is
+    // a scratch role this test owns end-to-end.
+    await client.query(`create schema if not exists "nia"`);
+    await client.query(`grant usage, create on schema "nia" to ${WRITE_ROLE_USER}`);
+  } finally {
+    await client.end();
+  }
+}
+
+/** Drops the destination table the run created, then the scratch write role. */
+async function dropWriteRoleAndTable(destTableName: string): Promise<void> {
+  const client = new Client(SANDBOX_PG_HOST_PORT);
+  await client.connect();
+  try {
+    await client.query(`drop table if exists public.${destTableName}`);
+    const { rowCount } = await client.query('select 1 from pg_roles where rolname = $1', [WRITE_ROLE_USER]);
+    if (rowCount) {
+      await client.query(`drop owned by ${WRITE_ROLE_USER}`);
+      await client.query(`drop role if exists ${WRITE_ROLE_USER}`);
+    }
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Stores the write role's credential the same way the product does — a
+ * real `POST /connections` call (canvasA's "member" role can make this;
+ * connections.create is all-role, see packages/schemas/src/can.ts) — then
+ * reads back the resulting `vault_secret_ref` directly (it is an internal
+ * column, never returned by the API) and inserts a confirmed write_grants
+ * row for `destConnectionId` pointing at it. Returns both ids for cleanup.
+ */
+async function provisionWriteGrantFixture(
+  page: Page,
+  pool: Pool,
+  apiUrl: string,
+  authHeaders: Record<string, string>,
+  destConnectionId: string,
+  granterEmail: string,
+): Promise<{ writeCredConnId: string; writeGrantId: string }> {
+  const createRes = await page.request.post(`${apiUrl}/connections`, {
+    headers: authHeaders,
+    data: {
+      connectorId: 'supabase',
+      displayName: WRITE_CRED_CONNECTION_NAME,
+      fields: {
+        host: 'dev-postgres',
+        port: 5432,
+        database: 'sandbox',
+        ssl: false,
+        user: WRITE_ROLE_USER,
+        password: WRITE_ROLE_PASSWORD,
+      },
+    },
+  });
+  expect(createRes.ok(), `write-cred connection create should succeed: ${createRes.status()} ${await createRes.text()}`).toBeTruthy();
+  const writeCredConnId = (await createRes.json()).id as string;
+
+  const { rows: vaultRows } = await pool.query('select vault_secret_ref from public.connections where id = $1', [writeCredConnId]);
+  const vaultRef = vaultRows[0]?.vault_secret_ref as string | undefined;
+  if (!vaultRef) throw new Error(`write-cred connection ${writeCredConnId} has no vault_secret_ref`);
+
+  const { rows: userRows } = await pool.query('select id from public."user" where email = $1', [granterEmail]);
+  const granterId = userRows[0]?.id as string | undefined;
+  if (!granterId) throw new Error(`could not find public.user row for ${granterEmail}`);
+
+  // connector-supabase's write pool cache is keyed
+  // `connectionId:write:credVersion` (services/connector-supabase/src/
+  // pool-manager.ts) and lives for the life of that long-running service
+  // process, not just this test run — cred_version's table default (1)
+  // would collide with a pool any earlier run (including a failed one)
+  // already cached for this same reused destConnectionId, serving this
+  // run stale, now-invalid credentials. Forcing a fresh max+1 per
+  // destConnectionId guarantees a new cache key every run.
+  const { rows: grantRows } = await pool.query(
+    `insert into public.write_grants (connection_id, granted_by_user_id, scope, confirmed_at, write_credential_vault_ref, cred_version)
+     values ($1, $2, $3, now(), $4, (select coalesce(max(cred_version), 0) + 1 from public.write_grants where connection_id = $1))
+     returning id`,
+    [destConnectionId, granterId, JSON.stringify({ schemas: ['public'] }), vaultRef],
+  );
+  const writeGrantId = grantRows[0].id as string;
+
+  return { writeCredConnId, writeGrantId };
+}
+
 test.describe('Route 1: normal worker-dispatched run from a local-database-via-agent source', () => {
   test.beforeAll(async ({}, testInfo) => {
     testInfo.setTimeout(5 * 60 * 1000);
@@ -174,6 +290,9 @@ test.describe('Route 1: normal worker-dispatched run from a local-database-via-a
     let agentChild: ChildProcess | null = null;
     let agentId: string | null = null;
     let destConnId: string | null = null;
+    let writeCredConnId: string | null = null;
+    let writeGrantId: string | null = null;
+    let writeRoleProvisioned = false;
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     const apiUrl = process.env.API_INTERNAL_URL ?? 'http://localhost:4001';
 
@@ -267,8 +386,9 @@ test.describe('Route 1: normal worker-dispatched run from a local-database-via-a
         await expect(srcDialog).not.toBeVisible({ timeout: 10_000 });
 
         // Reuse the existing "Dev sandbox (supabase)" destination
-        // connection read-only — no write grant provisioned (see this
-        // file's header comment for why one is never reached/needed here).
+        // connection's config, but it needs a real, confirmed write grant
+        // now that the structured-dialect gap is closed (see this file's
+        // header comment) — provision one via this test's own fixture.
         const authHeaders = { Authorization: `Bearer ${await getAccessToken(page)}` };
         const connsRes = await page.request.get(`${apiUrl}/connections`, { headers: authHeaders });
         expect(connsRes.ok(), `GET connections should succeed: ${connsRes.status()} ${await connsRes.text()}`).toBeTruthy();
@@ -276,6 +396,12 @@ test.describe('Route 1: normal worker-dispatched run from a local-database-via-a
         const destConn = conns.find((c) => c.connectorId === 'supabase');
         expect(destConn, 'an existing supabase/Postgres destination connection should exist').toBeTruthy();
         destConnId = destConn!.id;
+
+        await provisionWriteRole();
+        writeRoleProvisioned = true;
+        const grant = await provisionWriteGrantFixture(page, pool, apiUrl, authHeaders, destConnId, personas.canvasA.email);
+        writeCredConnId = grant.writeCredConnId;
+        writeGrantId = grant.writeGrantId;
       }, { timeout: 3 * 60 * 1000 });
 
       // b) The workflow graph, saved through the API only: dbo.order_lines
@@ -356,17 +482,15 @@ test.describe('Route 1: normal worker-dispatched run from a local-database-via-a
       }, { timeout: 3 * 60 * 1000 });
 
       // d) Run the workflow the normal way (the UI "Run checks" + "Run"
-      // buttons — the run/cancel/stream API is cookie-authed, not usable via Bearer
-      // page.request calls). Today this is EXPECTED to fail fast: the
-      // "sqlserver-agent" source connector has no entry in
-      // packages/schemas/src/pushdown.ts's manifestDialect(), so
-      // apps/worker/src/lib/etl/runEtl.ts's very first check rejects the
-      // run before any row is read, with a clear, specific error — not a
-      // hang and not a silent/garbled failure. Closing this gap requires
-      // apps/worker changes, out of this slice's scope (see this file's
-      // header comment and docs/plans/route1-design.md).
+      // buttons — the run/cancel/stream API is cookie-authed, not usable
+      // via Bearer page.request calls). The structured-dialect gap is now
+      // closed (runEtl.ts resolves "sqlserver-agent" to the "structured"
+      // pseudo-dialect) and a confirmed write grant was provisioned in
+      // step a), so this run is expected to actually read the agent's
+      // 10,000-row local table and write it to the real Postgres
+      // destination.
       let runOutcome: { status: string; rowsProcessed: number; durationMs: number | null; error: unknown } | undefined;
-      await test.step('d) run now: fails fast with the documented dialect-gap error (apps/worker fix out of scope)', async () => {
+      await test.step('d) run now: succeeds end-to-end (structured-dialect gap closed, write grant provisioned)', async () => {
         await page.reload();
         // "Run" is gated on a fresh "Run checks" pass (FlowCanvas.tsx's
         // runEnabled: !checksStale && failingChecks === 0) — the graph was
@@ -388,27 +512,25 @@ test.describe('Route 1: normal worker-dispatched run from a local-database-via-a
 
         runOutcome = await latestWorkflowRun(pool, workflowId);
 
-        expect(runOutcome?.status, `run outcome: ${JSON.stringify(runOutcome)}`).toBe('failed');
-        const errorMessage = (runOutcome?.error as { message?: string } | null)?.message ?? '';
-        expect(errorMessage).toContain(EXPECTED_DIALECT_GAP_MESSAGE);
+        expect(runOutcome?.status, `run outcome: ${JSON.stringify(runOutcome)}`).toBe('succeeded');
+        expect(runOutcome?.rowsProcessed, `run outcome: ${JSON.stringify(runOutcome)}`).toBeGreaterThan(0);
       }, { timeout: 3 * 60 * 1000 });
 
-      // e) Rows per second for that run — N/A: the run above fails before
-      // any row is read (see step d)'s comment), so there is no throughput
-      // to measure.
-      await test.step('e) report rows per second (N/A — run failed before reading any rows)', async () => {
-        console.log('T2 Part 2 step e) rows/sec: N/A — run failed at the dialect-lookup check before reading any rows');
+      // e) Rows per second for the successful run in d).
+      await test.step('e) report rows per second', async () => {
+        const rows = runOutcome?.rowsProcessed ?? 0;
+        const ms = runOutcome?.durationMs ?? 0;
+        const rowsPerSec = ms > 0 ? rows / (ms / 1000) : null;
+        console.log(`T2 Part 2 step e) rows/sec: ${rowsPerSec ?? 'N/A'} (rows=${rows}, durationMs=${ms})`);
+        expect(rowsPerSec, `durationMs should be a positive number alongside rowsProcessed=${rows}`).not.toBeNull();
+        expect(rowsPerSec!).toBeGreaterThan(0);
       }, { timeout: 3 * 60 * 1000 });
 
-      // f) Stopping the agent mid a second run. Because the dialect-gap
-      // failure in d)/e) happens at the very start of runEtl.ts, before the
-      // worker ever dispatches to the agent, killing the agent here cannot
-      // change *why* the run fails — it is expected to fail the same way,
-      // just as fast, regardless of agent state. This does still honestly
-      // exercise the outcome asked for (fails with a clear message, does
-      // not hang) but is NOT a meaningful test of actual agent-offline
-      // interruption semantics until the dialect gap is closed.
-      await test.step('f) stopping the agent mid-run: second run still fails fast with a clear message and does not hang', async () => {
+      // f) Stopping the agent mid a second run. Now that the run actually
+      // reaches the agent-dispatch phase, killing the agent partway
+      // through genuinely exercises agent-offline interruption semantics:
+      // the run is expected to fail with a clear error, not hang.
+      await test.step('f) stopping the agent mid-run: second run fails with a clear message and does not hang', async () => {
         const workflowId = currentWorkflowId(page);
         await page.reload();
         // Checks aren't stale here (nothing changed the graph since step
@@ -439,9 +561,24 @@ test.describe('Route 1: normal worker-dispatched run from a local-database-via-a
         (agentChild as ChildProcess).kill('SIGKILL');
       }
       rmSync(home, { recursive: true, force: true });
-      // No write grant or destination table was ever created (see this
-      // file's header comment), so there is nothing extra to revoke/drop
-      // beyond the source connection/agent/pairing-code rows below.
+      // Reverse order of provisioning: the write_grants row and its
+      // throwaway credential connection/secret first, then the Postgres
+      // role + any destination table it created, then the usual source
+      // connection/agent/pairing-code rows.
+      if (writeGrantId) {
+        await pool.query('delete from public.write_grants where id = $1', [writeGrantId]);
+      }
+      if (writeCredConnId) {
+        const { rows } = await pool.query('select vault_secret_ref from public.connections where id = $1', [writeCredConnId]);
+        const vaultRef = rows[0]?.vault_secret_ref as string | undefined;
+        await pool.query('delete from public.connections where id = $1', [writeCredConnId]);
+        if (vaultRef) {
+          await pool.query('delete from public.nia_secrets where id = $1', [vaultRef]);
+        }
+      }
+      if (writeRoleProvisioned) {
+        await dropWriteRoleAndTable(DEST_TABLE_NAME);
+      }
       await pool.query('delete from public.connections where display_name = $1', [SOURCE_CONNECTION_NAME]);
       if (agentId) {
         await pool.query('delete from public.platform_agents where id = $1', [agentId]);

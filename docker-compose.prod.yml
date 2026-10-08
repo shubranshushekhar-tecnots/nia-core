@@ -10,22 +10,14 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
       - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Auth
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is not set in .env}
       - SITE_URL=${WEB_ORIGIN:?WEB_ORIGIN is not set in .env}
-
-      # API (fixed internal address, do not change)
       - API_INTERNAL_URL=http://niacore-api:4001
 
     networks:
-      - niacore-network
+      - niacore-dev
 
     depends_on:
       niacore-api:
@@ -49,7 +41,7 @@ services:
       - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
 
     networks:
-      - niacore-network
+      - niacore-dev
 
     depends_on:
       niacore-web:
@@ -68,34 +60,17 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4001
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
       - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Redis
       - REDIS_URL=${REDIS_URL:?REDIS_URL is not set in .env}
-
-      # Auth
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is not set in .env}
       - API_URL=${API_URL:?API_URL is not set in .env}
       - WEB_ORIGIN=${WEB_ORIGIN:?WEB_ORIGIN is not set in .env}
-
-      # Secrets
       - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
       - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
-
-      # NIA Gateway
       - NIA_GATEWAY_API_KEY=${NIA_GATEWAY_API_KEY:?NIA_GATEWAY_API_KEY is not set in .env}
       - NIA_GATEWAY_BASE_URL=${NIA_GATEWAY_BASE_URL:?NIA_GATEWAY_BASE_URL is not set in .env}
       - NIA_GATEWAY_MODEL=${NIA_GATEWAY_MODEL:?NIA_GATEWAY_MODEL is not set in .env}
-
-      # Payments (Subscription Phase 4) — OFF by default. RAZORPAY_* are
-      # optional while PAYMENTS_ENABLED=false; apps/api's env.ts only
-      # requires them once that flag is flipped to true. See DEPLOYMENT.md's
-      # "Payments" section for how to turn this on later.
       - PAYMENTS_ENABLED=${PAYMENTS_ENABLED:-false}
       - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
       - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
@@ -104,7 +79,7 @@ services:
       - RAZORPAY_PRO_YEARLY_PLAN_ID=${RAZORPAY_PRO_YEARLY_PLAN_ID:-}
 
     networks:
-      - niacore-network
+      - niacore-dev
 
     depends_on:
       niacore-redis:
@@ -128,25 +103,15 @@ services:
 
     environment:
       - NODE_ENV=production
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
       - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Redis
       - REDIS_URL=${REDIS_URL:?REDIS_URL is not set in .env}
-
-      # Secrets
       - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
       - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
-
-      # NIA Gateway
       - NIA_GATEWAY_API_KEY=${NIA_GATEWAY_API_KEY:?NIA_GATEWAY_API_KEY is not set in .env}
 
     networks:
-      - niacore-network
+      - niacore-dev
 
     depends_on:
       niacore-redis:
@@ -165,20 +130,13 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4010
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
       - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Secrets
       - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
       - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
 
-    # Alias is required: api and worker call this service as "connector-mysql"
     networks:
-      niacore-network:
+      niacore-dev:
         aliases:
           - connector-mysql
 
@@ -200,20 +158,13 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4020
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
       - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Secrets
       - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
       - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
 
-    # Alias is required: api and worker call this service as "connector-mongodb"
     networks:
-      niacore-network:
+      niacore-dev:
         aliases:
           - connector-mongodb
 
@@ -235,20 +186,13 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4030
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
       - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Secrets
       - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
       - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
 
-    # Alias is required: api and worker call this service as "connector-supabase"
     networks:
-      niacore-network:
+      niacore-dev:
         aliases:
           - connector-supabase
 
@@ -259,10 +203,6 @@ services:
       retries: 3
       start_period: 10s
 
-  # Agent-canvas integration, Slice 1 ("Link") — public listener for the
-  # desktop agent (docs/plans/agent-canvas-integration.md B.2/B.3). Routed
-  # to from niacore-proxy's /agent-api/ location (deploy/nginx/nginx.conf),
-  # never reached directly by a browser.
   niacore-agent-bridge:
     image: ${AGENT_BRIDGE_IMAGE_VERSION:?AGENT_BRIDGE_IMAGE_VERSION is not set in .env}
     container_name: niacore-agent-bridge
@@ -274,21 +214,13 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4040
-      # Slice C1 — internal-only listener (/test, /introspect, /execute for
-      # the sqlserver_agent connector); never published via niacore-proxy or
-      # any port mapping below, same posture as every connector-* service.
       - INTERNAL_PORT=4041
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
       - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
       - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
 
-    # Alias is required: niacore-proxy calls this service as "agent-bridge"
     networks:
-      niacore-network:
+      niacore-dev:
         aliases:
           - agent-bridge
 
@@ -304,7 +236,6 @@ services:
     container_name: niacore-redis
     restart: unless-stopped
 
-    # noeviction: queued jobs live in Redis and must never be evicted
     command: >
       redis-server
       --appendonly yes
@@ -323,13 +254,13 @@ services:
       retries: 5
 
     networks:
-      - niacore-network
+      - niacore-dev
 
 volumes:
   niacore_redis_data:
 
 networks:
-  niacore-network:
+  niacore-dev:
     driver: bridge
     enable_ipv6: true
     ipam:

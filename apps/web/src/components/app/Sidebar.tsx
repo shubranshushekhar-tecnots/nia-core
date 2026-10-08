@@ -42,7 +42,6 @@ import {
   NxCollapseIcon,
   NxConnectionsIcon,
   NxDashboardIcon,
-  NxDocsIcon,
   NxHomeIcon,
   NxMembersIcon,
   NxProjectsIcon,
@@ -396,6 +395,21 @@ export default function Sidebar({
       </div>
 
       <div style={navRailFooterStyle()}>
+        <Link
+          href="/app/settings"
+          className={`nx-wipe${pathname === '/app/settings' ? ' nx-active-cell' : ''}`}
+          style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
+          aria-label="Settings"
+          title={wide ? 'Settings' : undefined}
+          onMouseEnter={(e) => showHoverLabel(e, 'Settings')}
+          onMouseLeave={hideHoverLabel}
+          onFocus={(e) => showHoverLabel(e, 'Settings')}
+          onBlur={hideHoverLabel}
+        >
+          <NxSettingsIcon size={20} />
+          {wide && <span style={navRailBtnLabelStyle}>Settings</span>}
+        </Link>
+
         {canBilling && (
           <a
             href="/app/billing"
@@ -412,36 +426,6 @@ export default function Sidebar({
             {wide && <span style={navRailBtnLabelStyle}>Billing</span>}
           </a>
         )}
-
-        <Link
-          href="/app/settings"
-          className={`nx-wipe${pathname === '/app/settings' ? ' nx-active-cell' : ''}`}
-          style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
-          aria-label="Settings"
-          title={wide ? 'Settings' : undefined}
-          onMouseEnter={(e) => showHoverLabel(e, 'Settings')}
-          onMouseLeave={hideHoverLabel}
-          onFocus={(e) => showHoverLabel(e, 'Settings')}
-          onBlur={hideHoverLabel}
-        >
-          <NxSettingsIcon size={20} />
-          {wide && <span style={navRailBtnLabelStyle}>Settings</span>}
-        </Link>
-
-        <a
-          href="/docs/agent"
-          className="nx-wipe"
-          style={{ ...navRailBtnStyle(wide), textDecoration: 'none' }}
-          aria-label="Docs"
-          title={wide ? 'Docs' : undefined}
-          onMouseEnter={(e) => showHoverLabel(e, 'Docs')}
-          onMouseLeave={hideHoverLabel}
-          onFocus={(e) => showHoverLabel(e, 'Docs')}
-          onBlur={hideHoverLabel}
-        >
-          <NxDocsIcon size={20} />
-          {wide && <span style={navRailBtnLabelStyle}>Docs</span>}
-        </a>
 
         <button
           type="button"
