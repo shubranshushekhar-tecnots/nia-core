@@ -1,115 +1,58 @@
+x-niacore: &niacore
+  restart: unless-stopped
+  env_file: .env
+  networks:
+    - niacore-dev
+
 services:
-  niacore-web:
-    image: ${WEB_IMAGE_VERSION:?WEB_IMAGE_VERSION is not set in .env}
-    container_name: niacore-web
+  niacore-postgres:
+    image: ${POSTGRES_IMAGE_VERSION:?set POSTGRES_IMAGE_VERSION in .env}
+    container_name: niacore-postgres
     restart: unless-stopped
-
-    env_file:
-      - .env
-
     environment:
-      - NODE_ENV=production
-      - PORT=3000
-
-      # Node DNS Fix
-      - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
-      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Auth
-      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is not set in .env}
-      - SITE_URL=${WEB_ORIGIN:?WEB_ORIGIN is not set in .env}
-
-      # API (fixed internal address, do not change)
-      - API_INTERNAL_URL=http://niacore-api:4001
-
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: niacore
+    volumes:
+      - niacore-pgdata17:/var/lib/postgresql/data
     networks:
-      - niacore-network
-
-    depends_on:
-      niacore-api:
-        condition: service_healthy
-
+      - niacore-dev
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health-web').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 30s
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d niacore"]
+      interval: 5s
       timeout: 5s
-      retries: 3
+      retries: 10
       start_period: 20s
 
-  niacore-proxy:
-    image: nginx:1.27-alpine
-    container_name: niacore-proxy
+  niacore-redis:
+    image: redis:7-alpine
+    container_name: niacore-redis
     restart: unless-stopped
-    ports:
-      - "${PROXY_PORT:-80}:80"
-
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction --timeout 0 --tcp-keepalive 60
     volumes:
-      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-
+      - niacore-redisdata:/data
     networks:
-      - niacore-network
-
-    depends_on:
-      niacore-web:
-        condition: service_healthy
-      niacore-agent-bridge:
-        condition: service_healthy
+      - niacore-dev
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   niacore-api:
-    image: ${API_IMAGE_VERSION:?API_IMAGE_VERSION is not set in .env}
+    <<: *niacore
+    image: ${API_IMAGE_VERSION:?set API_IMAGE_VERSION in .env}
     container_name: niacore-api
-    restart: unless-stopped
-
-    env_file:
-      - .env
-
     environment:
       - NODE_ENV=production
-      - PORT=4001
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
-      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Redis
-      - REDIS_URL=${REDIS_URL:?REDIS_URL is not set in .env}
-
-      # Auth
-      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is not set in .env}
-      - API_URL=${API_URL:?API_URL is not set in .env}
-      - WEB_ORIGIN=${WEB_ORIGIN:?WEB_ORIGIN is not set in .env}
-
-      # Secrets
-      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
-
-      # NIA Gateway
-      - NIA_GATEWAY_API_KEY=${NIA_GATEWAY_API_KEY:?NIA_GATEWAY_API_KEY is not set in .env}
-      - NIA_GATEWAY_BASE_URL=${NIA_GATEWAY_BASE_URL:?NIA_GATEWAY_BASE_URL is not set in .env}
-      - NIA_GATEWAY_MODEL=${NIA_GATEWAY_MODEL:?NIA_GATEWAY_MODEL is not set in .env}
-
-      # Payments (Subscription Phase 4) — OFF by default. RAZORPAY_* are
-      # optional while PAYMENTS_ENABLED=false; apps/api's env.ts only
-      # requires them once that flag is flipped to true. See DEPLOYMENT.md's
-      # "Payments" section for how to turn this on later.
+      - PORT=4001
       - PAYMENTS_ENABLED=${PAYMENTS_ENABLED:-false}
-      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
-      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
-      - RAZORPAY_WEBHOOK_SECRET=${RAZORPAY_WEBHOOK_SECRET:-}
-      - RAZORPAY_PRO_MONTHLY_PLAN_ID=${RAZORPAY_PRO_MONTHLY_PLAN_ID:-}
-      - RAZORPAY_PRO_YEARLY_PLAN_ID=${RAZORPAY_PRO_YEARLY_PLAN_ID:-}
-
-    networks:
-      - niacore-network
-
     depends_on:
+      niacore-postgres:
+        condition: service_healthy
       niacore-redis:
         condition: service_healthy
-
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -118,70 +61,78 @@ services:
       start_period: 60s
 
   niacore-worker:
-    image: ${WORKER_IMAGE_VERSION:?WORKER_IMAGE_VERSION is not set in .env}
+    <<: *niacore
+    image: ${WORKER_IMAGE_VERSION:?set WORKER_IMAGE_VERSION in .env}
     container_name: niacore-worker
-    restart: unless-stopped
     stop_grace_period: 60s
-
-    env_file:
-      - .env
-
     environment:
       - NODE_ENV=production
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
-      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Redis
-      - REDIS_URL=${REDIS_URL:?REDIS_URL is not set in .env}
-
-      # Secrets
-      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
-
-      # NIA Gateway
-      - NIA_GATEWAY_API_KEY=${NIA_GATEWAY_API_KEY:?NIA_GATEWAY_API_KEY is not set in .env}
-
-    networks:
-      - niacore-network
-
     depends_on:
       niacore-redis:
         condition: service_healthy
       niacore-api:
         condition: service_healthy
 
-  niacore-connector-mysql:
-    image: ${CONNECTOR_MYSQL_IMAGE_VERSION:?CONNECTOR_MYSQL_IMAGE_VERSION is not set in .env}
-    container_name: niacore-connector-mysql
-    restart: unless-stopped
-
-    env_file:
-      - .env
-
+  niacore-web:
+    <<: *niacore
+    image: ${WEB_IMAGE_VERSION:?set WEB_IMAGE_VERSION in .env}
+    container_name: niacore-web
     environment:
       - NODE_ENV=production
-      - PORT=4010
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
+      - PORT=3000
+      - SITE_URL=${WEB_ORIGIN:?set WEB_ORIGIN in .env}
+      - API_INTERNAL_URL=http://niacore-api:4001
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-3000}:3000"
+    depends_on:
+      niacore-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health-web').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
-      # Database
-      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Secrets
-      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
-
-    # Alias is required: api and worker call this service as "connector-mysql"
+  niacore-agent-bridge:
+    <<: *niacore
+    image: ${AGENT_BRIDGE_IMAGE_VERSION:?set AGENT_BRIDGE_IMAGE_VERSION in .env}
+    container_name: niacore-agent-bridge
+    environment:
+      - NODE_ENV=production
+      - NODE_OPTIONS=--dns-result-order=ipv4first
+      - PORT=4040
+      - INTERNAL_PORT=4041
+    ports:
+      - "127.0.0.1:${BRIDGE_HOST_PORT:-4040}:4040"
     networks:
-      niacore-network:
+      niacore-dev:
+        aliases:
+          - agent-bridge
+    depends_on:
+      niacore-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4040/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  niacore-connector-mysql:
+    <<: *niacore
+    image: ${CONNECTOR_MYSQL_IMAGE_VERSION:?set CONNECTOR_MYSQL_IMAGE_VERSION in .env}
+    container_name: niacore-connector-mysql
+    environment:
+      - NODE_ENV=production
+      - NODE_OPTIONS=--dns-result-order=ipv4first
+      - PORT=4010
+    networks:
+      niacore-dev:
         aliases:
           - connector-mysql
-
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4010/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -190,33 +141,17 @@ services:
       start_period: 10s
 
   niacore-connector-mongodb:
-    image: ${CONNECTOR_MONGODB_IMAGE_VERSION:?CONNECTOR_MONGODB_IMAGE_VERSION is not set in .env}
+    <<: *niacore
+    image: ${CONNECTOR_MONGODB_IMAGE_VERSION:?set CONNECTOR_MONGODB_IMAGE_VERSION in .env}
     container_name: niacore-connector-mongodb
-    restart: unless-stopped
-
-    env_file:
-      - .env
-
     environment:
       - NODE_ENV=production
-      - PORT=4020
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
-      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Secrets
-      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
-
-    # Alias is required: api and worker call this service as "connector-mongodb"
+      - PORT=4020
     networks:
-      niacore-network:
+      niacore-dev:
         aliases:
           - connector-mongodb
-
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4020/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -225,33 +160,17 @@ services:
       start_period: 10s
 
   niacore-connector-supabase:
-    image: ${CONNECTOR_SUPABASE_IMAGE_VERSION:?CONNECTOR_SUPABASE_IMAGE_VERSION is not set in .env}
+    <<: *niacore
+    image: ${CONNECTOR_SUPABASE_IMAGE_VERSION:?set CONNECTOR_SUPABASE_IMAGE_VERSION in .env}
     container_name: niacore-connector-supabase
-    restart: unless-stopped
-
-    env_file:
-      - .env
-
     environment:
       - NODE_ENV=production
-      - PORT=4030
-
-      # Node DNS Fix
       - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
-      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-
-      # Secrets
-      - NIA_SECRET_MASTER_KEY=${NIA_SECRET_MASTER_KEY:?NIA_SECRET_MASTER_KEY is not set in .env}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
-
-    # Alias is required: api and worker call this service as "connector-supabase"
+      - PORT=4030
     networks:
-      niacore-network:
+      niacore-dev:
         aliases:
           - connector-supabase
-
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4030/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -259,81 +178,15 @@ services:
       retries: 3
       start_period: 10s
 
-  # Agent-canvas integration, Slice 1 ("Link") — public listener for the
-  # desktop agent (docs/plans/agent-canvas-integration.md B.2/B.3). Routed
-  # to from niacore-proxy's /agent-api/ location (deploy/nginx/nginx.conf),
-  # never reached directly by a browser.
-  niacore-agent-bridge:
-    image: ${AGENT_BRIDGE_IMAGE_VERSION:?AGENT_BRIDGE_IMAGE_VERSION is not set in .env}
-    container_name: niacore-agent-bridge
-    restart: unless-stopped
-
-    env_file:
-      - .env
-
-    environment:
-      - NODE_ENV=production
-      - PORT=4040
-      # Slice C1 — internal-only listener (/test, /introspect, /execute for
-      # the sqlserver_agent connector); never published via niacore-proxy or
-      # any port mapping below, same posture as every connector-* service.
-      - INTERNAL_PORT=4041
-
-      # Node DNS Fix
-      - NODE_OPTIONS=--dns-result-order=ipv4first
-
-      # Database
-      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is not set in .env}
-      - WRITE_DISPATCH_SIGNING_SECRET=${WRITE_DISPATCH_SIGNING_SECRET:?WRITE_DISPATCH_SIGNING_SECRET is not set in .env}
-
-    # Alias is required: niacore-proxy calls this service as "agent-bridge"
-    networks:
-      niacore-network:
-        aliases:
-          - agent-bridge
-
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4040/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  niacore-redis:
-    image: redis:7-alpine
-    container_name: niacore-redis
-    restart: unless-stopped
-
-    # noeviction: queued jobs live in Redis and must never be evicted
-    command: >
-      redis-server
-      --appendonly yes
-      --maxmemory 256mb
-      --maxmemory-policy noeviction
-      --timeout 0
-      --tcp-keepalive 60
-
-    volumes:
-      - niacore_redis_data:/data
-
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-    networks:
-      - niacore-network
-
 volumes:
-  niacore_redis_data:
+  niacore-pgdata17:
+  niacore-redisdata:
 
 networks:
-  niacore-network:
+  niacore-dev:
     driver: bridge
     enable_ipv6: true
     ipam:
-      driver: default
       config:
         - subnet: 172.29.0.0/16
         - subnet: "2001:db8:3::/64"

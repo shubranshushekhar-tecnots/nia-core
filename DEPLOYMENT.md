@@ -7,13 +7,14 @@ publishes images; infra owns hosting, orchestration, TLS, DNS, and scaling.
 
 | Service | Image / Dockerfile | Build context | Start command | Port | Health check | Internal-only |
 |---|---|---|---|---|---|---|
-| `niacore-proxy` | `nginx:alpine` (upstream, not built) | — | — | `${PROXY_PORT:-80}` | — (nginx itself; no app-level check) | No — the only publicly reachable service |
-| `niacore-web` | `apps/web/Dockerfile` → `${WEB_IMAGE_VERSION}` | repo root | `node apps/web/server.js` (Next.js standalone output) | 3000 | `GET /api/health-web` | Yes |
+| `niacore-web` | `apps/web/Dockerfile` → `${WEB_IMAGE_VERSION}` | repo root | `node apps/web/server.js` (Next.js standalone output) | 3000 | `GET /api/health-web` | No — published at `127.0.0.1:${WEB_HOST_PORT:-3000}` |
 | `niacore-api` | `apps/api/Dockerfile` → `${API_IMAGE_VERSION}` | repo root | `docker-entrypoint.sh` (migrates, then `node dist/index.js`) | 4001 | `GET /health` | Yes |
 | `niacore-worker` | `apps/worker/Dockerfile` → `${WORKER_IMAGE_VERSION}` | repo root | `node dist/index.js` | — (no HTTP server; pure BullMQ consumer) | none (no HTTP surface) | Yes |
+| `niacore-agent-bridge` | `services/agent-bridge/Dockerfile` → `${AGENT_BRIDGE_IMAGE_VERSION}` | repo root | `node dist/index.js` | 4040 | `GET /health` | No — published at `127.0.0.1:${BRIDGE_HOST_PORT:-4040}` |
 | `niacore-connector-mysql` | `services/connector-mysql/Dockerfile` → `${CONNECTOR_MYSQL_IMAGE_VERSION}` | repo root | `node services/connector-mysql/dist/index.js` | 4010 | `GET /health` | Yes |
 | `niacore-connector-mongodb` | `services/connector-mongodb/Dockerfile` → `${CONNECTOR_MONGODB_IMAGE_VERSION}` | repo root | `node services/connector-mongodb/dist/index.js` | 4020 | `GET /health` | Yes |
 | `niacore-connector-supabase` | `services/connector-supabase/Dockerfile` → `${CONNECTOR_SUPABASE_IMAGE_VERSION}` | repo root | `node services/connector-supabase/dist/index.js` | 4030 | `GET /health` | Yes |
+| `niacore-postgres` | `docker/postgres/Dockerfile` → `${POSTGRES_IMAGE_VERSION}` | repo root | upstream `postgres:17-alpine` entrypoint | 5432 | `pg_isready` | Yes |
 | `niacore-redis` | `redis:7-alpine` (upstream, not built) | — | — | 6379 | `redis-cli ping` | Yes |
 
 Service keys, `container_name`, and image-version vars all carry the
@@ -24,6 +25,14 @@ hostname contract, see below, and must not be renamed.
 "Internal-only" means: no `ports:` published in `docker-compose.prod.yml`,
 so the service is unreachable from outside the Docker host. It does
 **not** mean no internet egress — see "Network requirements" below.
+
+**No `niacore-proxy` container ships in `docker-compose.prod.yml`.** The
+server's own reverse proxy must terminate TLS and forward the public
+domain to `127.0.0.1:${WEB_HOST_PORT:-3000}` (niacore-web), plus
+`/agent-api/` to `127.0.0.1:${BRIDGE_HOST_PORT:-4040}` (niacore-agent-bridge)
+for the desktop agent's pairing/check-in traffic — using the same
+`proxy_read_timeout`/`proxy_send_timeout`/`client_max_body_size` settings
+as `deploy/nginx/nginx.conf`.
 
 ### Request routing (apps/web on docker-compose.prod.yml)
 
