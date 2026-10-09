@@ -24,15 +24,23 @@
 //
 // Pinned to the same Node version as the Windows build (22.15.0) for a
 // reproducible, verifiable build across all three platform targets.
+//
+// The SEA blob also embeds the built agent UI (`apps/agent/ui/dist`, see
+// Phase 2) via Node's SEA `assets` map (packaging/shared/seaAssets.mjs
+// builds it) -- `staticAssets.ts`'s `loadUiAsset()` reads these back via
+// `node:sea`'s `getAsset()` at runtime, so the final binary serves the
+// desktop UI with no separate files to ship alongside it.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, rmSync, chmodSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildUiAssetsMap } from "../shared/seaAssets.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentDir = path.resolve(here, "../../");
 const distDir = path.join(here, "dist");
+const uiDistDir = path.join(agentDir, "ui", "dist");
 
 const NODE_VERSION = "22.15.0";
 const NODE_TAR_NAME = `node-v${NODE_VERSION}-darwin-arm64.tar.gz`;
@@ -62,6 +70,10 @@ async function main() {
   console.log("[2/5] generating the SEA preparation blob...");
   const seaConfigPath = path.join(distDir, "sea-config.json");
   const blobPath = path.join(distDir, "sea-prep.blob");
+  // Embeds the built agent UI (apps/agent/ui/dist) into the SEA blob,
+  // keyed by forward-slash relative path -- read back at runtime by
+  // staticAssets.ts's loadUiAsset() via node:sea's getAsset().
+  const assets = buildUiAssetsMap(uiDistDir);
   writeFileSync(
     seaConfigPath,
     JSON.stringify(
@@ -69,6 +81,7 @@ async function main() {
         main: bundlePath,
         output: blobPath,
         disableExperimentalSEAWarning: true,
+        assets,
       },
       null,
       2,

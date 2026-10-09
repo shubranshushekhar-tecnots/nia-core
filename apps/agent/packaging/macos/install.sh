@@ -125,4 +125,9 @@ Next steps:
   launchctl print $DOMAIN/$LABEL
 EOF
   fi
+  cat <<EOF
+
+Day-to-day, open the agent's own UI any time with:
+  NIA_AGENT_HOME="$HOME_DIR" "$EXE_PATH" open
+EOF
 fi

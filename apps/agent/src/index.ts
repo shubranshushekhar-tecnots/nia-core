@@ -36,6 +36,7 @@ import { AGENT_VERSION } from "./generated/version.js";
 import { InvalidPairingCodeError, InvalidPlatformUrlError, pair, PairingRejectedError, unpair } from "./link/pairing.js";
 import { readLinkState } from "./ops/linkState.js";
 import { createConsoleSetupIO, createFileSetupIO, runGuidedSetup } from "./cli/setupCommand.js";
+import { AgentNotRunningError, runOpen } from "./cli/openCommand.js";
 
 function waitForEnter(prompt: string): Promise<void> {
   return new Promise((resolve) => {
@@ -836,8 +837,22 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "open") {
+    try {
+      await runOpen();
+    } catch (err) {
+      if (err instanceof AgentNotRunningError) {
+        console.error(err.message);
+        process.exitCode = 1;
+        return;
+      }
+      throw err;
+    }
+    return;
+  }
+
   console.error(
-    "usage: nia-agent setup [--answers-file <path>] | nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent destinations <allow|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent pair --code <code> --url <platform> | nia-agent unpair | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent version",
+    "usage: nia-agent setup [--answers-file <path>] | nia-agent connection <add|test|list|remove> ... | nia-agent job <add|test|list|remove|update|run|pause|resume> ... | nia-agent destinations <allow|list|remove> ... | nia-agent sql readonly ... | nia-agent doctor [connectionId] | nia-agent pair --code <code> --url <platform> | nia-agent unpair | nia-agent status | nia-agent healthcheck | nia-agent start | nia-agent open | nia-agent version",
   );
   process.exitCode = 1;
 }

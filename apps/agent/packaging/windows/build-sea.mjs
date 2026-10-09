@@ -23,6 +23,12 @@
 //      using it — this is the executable nia-agent.exe is built from.
 //   4. postject-inject the blob into a copy of that node.exe.
 //
+// The SEA blob also embeds the built agent UI (`apps/agent/ui/dist`, see
+// Phase 2) via Node's SEA `assets` map (packaging/shared/seaAssets.mjs
+// builds it) -- `staticAssets.ts`'s `loadUiAsset()` reads these back via
+// `node:sea`'s `getAsset()` at runtime, so the final binary serves the
+// desktop UI with no separate files to ship alongside it.
+//
 // Node's SEA docs are explicit that the blob and the node.exe it's injected
 // into must come from the EXACT same Node build ("The version of the Node.js
 // binary used to produce the blob must be the same as the one to which the
@@ -42,11 +48,13 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildUiAssetsMap } from "../shared/seaAssets.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentDir = path.resolve(here, "../../");
 const repoRoot = path.resolve(agentDir, "../../");
 const distDir = path.join(here, "dist");
+const uiDistDir = path.join(agentDir, "ui", "dist");
 
 const NODE_VERSION = process.version.slice(1); // "v22.15.0" -> "22.15.0"
 const NODE_ZIP_NAME = `node-v${NODE_VERSION}-win-x64.zip`;
@@ -75,6 +83,10 @@ async function main() {
   console.log("[2/4] generating the SEA preparation blob...");
   const seaConfigPath = path.join(distDir, "sea-config.json");
   const blobPath = path.join(distDir, "sea-prep.blob");
+  // Embeds the built agent UI (apps/agent/ui/dist) into the SEA blob,
+  // keyed by forward-slash relative path -- read back at runtime by
+  // staticAssets.ts's loadUiAsset() via node:sea's getAsset().
+  const assets = buildUiAssetsMap(uiDistDir);
   writeFileSync(
     seaConfigPath,
     JSON.stringify(
@@ -82,6 +94,7 @@ async function main() {
         main: bundlePath,
         output: blobPath,
         disableExperimentalSEAWarning: true,
+        assets,
       },
       null,
       2,

@@ -182,6 +182,15 @@ Section "Install" SEC01
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\${START_MENU_DIR}"
+  ; Plain-open shortcut (Phase 2 M2): the one most users ever need. It
+  ; just runs `nia-agent.exe open`, which trades the on-disk bearer token
+  ; for a 60s single-use OTC and opens the agent's own UI in the default
+  ; browser -- no admin elevation needed (unlike Setup/Status below),
+  ; since reading the already-ACL'd local-api\ token only requires the
+  ; read-only ACE install.ps1 already grants the installing user, not
+  ; membership in Administrators.
+  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk" "$INSTDIR\nia-agent.exe" 'open' "$INSTDIR\nia-agent.exe" 0
+
   ; Deliberately NOT using $CmdExe/GetCmdExe here. GetCmdExe's Sysnative
   ; resolution exists to work around THIS installer process's own WOW64
   ; redirection when IT launches cmd.exe directly (RunSetupNow, below) --
@@ -196,11 +205,15 @@ Section "Install" SEC01
   ; the shortcut just silently fails to launch. The plain System32 path
   ; below is valid from any process, any bitness, and is what both
   ; shortcuts must use.
-  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Setup.lnk" "$WINDIR\System32\cmd.exe" '/k ""$INSTDIR\nia-agent.exe" setup"' "$INSTDIR\nia-agent.exe" 0
-  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Status.lnk" "$WINDIR\System32\cmd.exe" '/k ""$INSTDIR\nia-agent.exe" status"' "$INSTDIR\nia-agent.exe" 0
-  Push "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Setup.lnk"
+  ;
+  ; Renamed to "(advanced)" (Phase 2 M2) now that the plain "Nia Core
+  ; Agent.lnk" above covers normal day-to-day use -- these two remain for
+  ; re-running the setup wizard or checking raw CLI status text.
+  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent (advanced) - Setup.lnk" "$WINDIR\System32\cmd.exe" '/k ""$INSTDIR\nia-agent.exe" setup"' "$INSTDIR\nia-agent.exe" 0
+  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent (advanced) - Status.lnk" "$WINDIR\System32\cmd.exe" '/k ""$INSTDIR\nia-agent.exe" status"' "$INSTDIR\nia-agent.exe" 0
+  Push "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent (advanced) - Setup.lnk"
   Call MarkShortcutElevated
-  Push "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Status.lnk"
+  Push "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent (advanced) - Status.lnk"
   Call MarkShortcutElevated
 
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
@@ -245,8 +258,9 @@ Section "Uninstall"
     RMDir /r "$DataDir"
   ${EndIf}
 
-  Delete "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Setup.lnk"
-  Delete "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Status.lnk"
+  Delete "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk"
+  Delete "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent (advanced) - Setup.lnk"
+  Delete "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent (advanced) - Status.lnk"
   RMDir "$SMPROGRAMS\${START_MENU_DIR}"
 
   DeleteRegKey HKLM "${UNINST_KEY}"

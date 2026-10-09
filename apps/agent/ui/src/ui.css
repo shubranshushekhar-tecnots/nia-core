@@ -1,0 +1,311 @@
+@font-face {
+  font-family: "Satoshi";
+  src: url("/fonts/satoshi/satoshi-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Satoshi";
+  src: url("/fonts/satoshi/satoshi-500.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Satoshi";
+  src: url("/fonts/satoshi/satoshi-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Satoshi";
+  src: url("/fonts/satoshi/satoshi-900.woff2") format("woff2");
+  font-weight: 900;
+  font-display: swap;
+}
+
+/* Bridges the agent UI's own token names to the existing design-system
+   palettes so we never invent new colors: light mode reuses the existing
+   app-shell Indigo/Slate light tokens (`[data-app-theme][data-om-theme=
+   'light']` in packages/ui/src/theme.css -- the only light palette that
+   exists), dark mode reuses the existing Precision Dark `--nx-*` tokens
+   (`html[data-nx-theme='dark'] [data-app-theme]` -- the only dark palette
+   that exists; om-theme itself has no real dark variant). theme.ts sets
+   data-nx-theme on <html> and data-app-theme/data-om-theme on <body> to
+   satisfy both selectors at once. */
+body[data-om-theme="light"] {
+  --agent-bg: var(--bg);
+  --agent-surface: var(--surface);
+  --agent-text: var(--text);
+  --agent-text-muted: var(--text-2);
+  --agent-border: var(--line);
+  --agent-accent: var(--ign);
+}
+
+body[data-om-theme="dark"] {
+  --agent-bg: var(--nx-bg);
+  --agent-surface: var(--nx-surface);
+  --agent-text: var(--nx-ink);
+  --agent-text-muted: var(--nx-ink-2);
+  --agent-border: var(--nx-line);
+  --agent-accent: var(--nx-blue-panel);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--agent-bg);
+  color: var(--agent-text);
+  font-family: "Satoshi", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.agent-shell {
+  display: flex;
+  height: 100%;
+}
+
+.agent-boot-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+
+.agent-session-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  padding: 8px 16px;
+  text-align: center;
+  background: var(--agent-accent);
+  color: var(--agent-bg);
+  font-weight: 500;
+}
+
+.agent-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 200px;
+  flex-shrink: 0;
+  padding: 16px 8px;
+  border-right: 1px solid var(--agent-border);
+  background: var(--agent-surface);
+}
+
+.agent-nav-item {
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--agent-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-nav-item:hover {
+  background: var(--agent-border);
+}
+
+.agent-nav-item--active {
+  background: var(--agent-accent);
+  color: var(--agent-bg);
+}
+
+.agent-main {
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+}
+
+.agent-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 900px;
+}
+
+.agent-screen--narrow {
+  max-width: 420px;
+}
+
+.agent-text-muted {
+  color: var(--agent-text-muted);
+}
+
+.agent-error {
+  color: #d64545;
+}
+
+.agent-success {
+  color: #3fae5a;
+  font-weight: 500;
+}
+
+.agent-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  margin: 4px 0;
+  border: 1px solid var(--agent-border);
+  border-radius: 6px;
+  background: var(--agent-bg);
+  color: var(--agent-text);
+  font: inherit;
+}
+
+.agent-input--inline {
+  display: inline-block;
+  width: auto;
+  margin: 0;
+}
+
+.agent-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.9em;
+}
+
+.agent-button {
+  padding: 8px 14px;
+  border: 1px solid var(--agent-border);
+  border-radius: 6px;
+  background: var(--agent-bg);
+  color: var(--agent-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-button--small {
+  padding: 2px 8px;
+  font-size: 0.85em;
+}
+
+.agent-button--primary {
+  background: var(--agent-accent);
+  color: var(--agent-bg);
+  border-color: var(--agent-accent);
+}
+
+.agent-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.agent-button-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-list-item {
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid var(--agent-border);
+  border-radius: 6px;
+  background: var(--agent-bg);
+  color: var(--agent-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-list-item--active {
+  border-color: var(--agent-accent);
+}
+
+.agent-plain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-pill {
+  display: inline-block;
+  width: fit-content;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+
+.agent-pill--connected {
+  background: #3fae5a33;
+  color: #3fae5a;
+}
+
+.agent-pill--notConnected {
+  background: var(--agent-border);
+  color: var(--agent-text-muted);
+}
+
+.agent-pill--problem {
+  background: #d6454533;
+  color: #d64545;
+}
+
+.agent-browser {
+  display: flex;
+  gap: 16px;
+}
+
+.agent-browser-tables {
+  width: 260px;
+  flex-shrink: 0;
+}
+
+.agent-browser-preview {
+  flex: 1;
+  overflow: auto;
+}
+
+.agent-table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.agent-table th,
+.agent-table td {
+  border: 1px solid var(--agent-border);
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.agent-log-tail {
+  flex: 1;
+  overflow: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  background: var(--agent-surface);
+  border: 1px solid var(--agent-border);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.agent-log-line--error {
+  color: #d64545;
+}
+
+.agent-log-line--warn {
+  color: #d6a845;
+}

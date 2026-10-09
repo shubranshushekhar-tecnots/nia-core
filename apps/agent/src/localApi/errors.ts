@@ -50,3 +50,17 @@ export class ForbiddenError extends ApiError {
     super(403, "forbidden", message);
   }
 }
+
+/** `POST /ui/session`: the one-time code was missing, already used, or expired. */
+export class OtcInvalidError extends ApiError {
+  constructor(message = "That code has expired or already been used.") {
+    super(400, "otcInvalid", message);
+  }
+}
+
+/** Thrown by router.ts for `auth: "session"` routes when the `nia_ui_session` cookie is missing, unknown, or past its 12h inactivity window. */
+export class SessionExpiredError extends ApiError {
+  constructor(message = "Open Nia Agent again from the Start menu / Applications.") {
+    super(401, "sessionExpired", message);
+  }
+}

@@ -31,6 +31,9 @@ import { buildTablesRoutes } from "./localApi/routes/tables.js";
 import { buildDestinationsRoutes } from "./localApi/routes/destinations.js";
 import { buildLogsRoutes } from "./localApi/routes/logs.js";
 import { buildDiagnosticsRoutes } from "./localApi/routes/diagnostics.js";
+import { buildOtcRoutes, buildUiSessionRoutes } from "./localApi/routes/uiAuth.js";
+import { mirrorRoutesForUi } from "./localApi/uiProxyRoutes.js";
+import { buildUiStaticHandler } from "./localApi/uiStaticHandler.js";
 
 export interface AgentLoopOptions {
   dir?: string;
@@ -59,7 +62,14 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
   // control channel if this fails to bind, but jobs/scheduler/check-in
   // must keep running regardless (see localApi/server.ts's doc comment).
   const localApiDeps = { dir, agentVersion: options.agentVersion, logger };
-  const localApiRoutes: RouteDefinition[] = [
+  // Built once and reused by both the bearer originals and their
+  // `/ui/api/*` mirrors below, so e.g. `/pair`'s rate limiter is one
+  // shared budget regardless of which caller (CLI-driven bearer request
+  // or browser-driven session request) hits it -- intentional, see
+  // uiProxyRoutes.ts. `/otc` stays bearer-only (only `nia-agent open`,
+  // which already read the real token off disk, can mint a code) and is
+  // deliberately excluded from `mirrorableRoutes` / never mirrored.
+  const mirrorableRoutes: RouteDefinition[] = [
     ...buildStatusRoutes(localApiDeps),
     ...buildPairRoutes(localApiDeps),
     ...buildServersRoutes(),
@@ -69,11 +79,18 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     ...buildLogsRoutes(localApiDeps),
     ...buildDiagnosticsRoutes(localApiDeps),
   ];
+  const localApiRoutes: RouteDefinition[] = [
+    ...mirrorableRoutes,
+    ...buildOtcRoutes(),
+    ...mirrorRoutesForUi(mirrorableRoutes),
+    ...buildUiSessionRoutes(),
+  ];
   const localApi = await createLocalApiServer({
     dir,
     apiToken: loadOrCreateApiToken(dir),
     routes: localApiRoutes,
     logger,
+    staticHandler: buildUiStaticHandler(),
   });
 
   let linkSession: LinkSession | undefined;
