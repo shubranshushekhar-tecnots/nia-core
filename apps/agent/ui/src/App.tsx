@@ -5,15 +5,18 @@ import { Pairing } from "./screens/Pairing";
 import { ConnectDatabase } from "./screens/ConnectDatabase";
 import { DatabaseBrowser } from "./screens/DatabaseBrowser";
 import { Home } from "./screens/Home";
+import { Workflows } from "./screens/Workflows";
+import { WorkflowDetail } from "./screens/WorkflowDetail";
 import { Logs } from "./screens/Logs";
 import { Settings } from "./screens/Settings";
 
-export type Screen = "pairing" | "connect" | "browse" | "home" | "logs" | "settings";
+export type Screen = "pairing" | "connect" | "browse" | "home" | "workflows" | "logs" | "settings";
 
 const NAV_ITEMS: { screen: Screen; label: string }[] = [
   { screen: "home", label: "Home" },
   { screen: "connect", label: "Connect database" },
   { screen: "browse", label: "Browse" },
+  { screen: "workflows", label: "Workflows" },
   { screen: "pairing", label: "Pairing" },
   { screen: "logs", label: "Logs" },
   { screen: "settings", label: "Settings" },
@@ -30,6 +33,7 @@ export function App({ bootError }: AppProps) {
   const [loading, setLoading] = useState(true);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [browseConnectionId, setBrowseConnectionId] = useState<string | undefined>(undefined);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | undefined>(undefined);
 
   useEffect(() => onSessionExpired(() => setSessionExpired(true)), []);
 
@@ -78,7 +82,10 @@ export function App({ bootError }: AppProps) {
           <button
             key={item.screen}
             className={item.screen === screen ? "agent-nav-item agent-nav-item--active" : "agent-nav-item"}
-            onClick={() => setScreen(item.screen)}
+            onClick={() => {
+              setScreen(item.screen);
+              if (item.screen !== "workflows") setSelectedWorkflowId(undefined);
+            }}
           >
             {item.label}
           </button>
@@ -100,6 +107,12 @@ export function App({ bootError }: AppProps) {
             )}
             {screen === "browse" && <DatabaseBrowser connectionId={browseConnectionId} />}
             {screen === "home" && <Home />}
+            {screen === "workflows" &&
+              (selectedWorkflowId ? (
+                <WorkflowDetail workflowId={selectedWorkflowId} onBack={() => setSelectedWorkflowId(undefined)} />
+              ) : (
+                <Workflows onOpen={setSelectedWorkflowId} />
+              ))}
             {screen === "logs" && <Logs />}
             {screen === "settings" && <Settings />}
           </>

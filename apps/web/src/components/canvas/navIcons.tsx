@@ -1,4 +1,4 @@
-import type { IconComponent } from './icons';
+import type { IconComponent } from '@nia/canvas-view';
 
 /**
  * Chrome/nav icon set — separate from icons.tsx (which is explicitly scoped

@@ -3,8 +3,7 @@
 import { Position, type NodeProps } from '@xyflow/react';
 import type { CanvasNode, NodeStatusKind } from '@/lib/canvas/mapping';
 import { useCanvasStore } from '@/lib/canvas/store';
-import { getConnectorIcon } from './icons';
-import { Port } from './Port';
+import { getConnectorIcon, Port } from '@nia/canvas-view';
 
 // One component for all 3 GraphNodeTypes (source/transform/destination) —
 // branches on data.graphNodeType for color/handle layout, per the plan's

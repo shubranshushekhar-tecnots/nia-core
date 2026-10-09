@@ -22,7 +22,7 @@ import TransformEditor from './TransformEditor';
 import MappingEditor from './MappingEditor';
 import ProfileTab from './ProfileTab';
 import { KIND_COLOR, KIND_LABEL } from './GraphFlowNode';
-import { getConnectorIcon } from './icons';
+import { getConnectorIcon } from '@nia/canvas-view';
 import {
   configPanelAlertCardStyle,
   configPanelDeleteBtnStyle,

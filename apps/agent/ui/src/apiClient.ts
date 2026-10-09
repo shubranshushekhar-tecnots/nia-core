@@ -331,3 +331,97 @@ export interface DiagnosticsResponse {
 export function getDiagnostics(): Promise<DiagnosticsResponse> {
   return request("/diagnostics");
 }
+
+// ---- workflows ----
+
+/** Bridge-reported statuses, plus the agent-local-only "running" overlay (localApi/routes/workflows.ts). */
+export type WorkflowStatus = "ok" | "failing" | "paused" | "rejected" | "waiting";
+export type LocalWorkflowStatus = WorkflowStatus | "running";
+
+export interface WorkflowLastRun {
+  status: "ok" | "failed";
+  finishedAt: string;
+  rowsSent: number;
+  errorClass: string | null;
+}
+
+export interface WorkflowSummary {
+  workflowId: string;
+  setupId: string;
+  name: string;
+  status: LocalWorkflowStatus;
+  errorClass: string | null;
+  rejectionReason: string | null;
+  nextRunAt: string | null;
+  lastRun: WorkflowLastRun | null;
+}
+
+export interface WorkflowRun {
+  id: string;
+  runId: string;
+  status: "ok" | "failed";
+  rowsSent: number;
+  rowsDeleted: number;
+  mode: string | null;
+  durationMs: number;
+  errorClass: string | null;
+  startedAt: string;
+  finishedAt: string;
+}
+
+export type SanitizedGraphNodeType = "source" | "transform" | "destination";
+
+export interface SanitizedGraphNode {
+  id: string;
+  type: SanitizedGraphNodeType;
+  position: { x: number; y: number };
+  manifestName: string | null;
+  connectionLabel: string | null;
+  region: string | null;
+  entityLabel: string | null;
+  writeModeLabel: string | null;
+  resolved: boolean;
+  unknownReason: string | null;
+}
+
+export interface SanitizedGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
+}
+
+export interface SanitizedGraph {
+  workflowId: string;
+  version: number;
+  nodes: SanitizedGraphNode[];
+  edges: SanitizedGraphEdge[];
+}
+
+export interface WorkflowActionBody {
+  kind: "run_now" | "pause" | "resume";
+  params?: Record<string, string>;
+  fullReload?: boolean;
+}
+
+export function listWorkflows(): Promise<{ workflows: WorkflowSummary[]; offline: boolean }> {
+  return request("/workflows");
+}
+
+export function getWorkflow(workflowId: string): Promise<{ workflow: WorkflowSummary; platformUrl?: string; offline: boolean }> {
+  return request(`/workflows/${encodeURIComponent(workflowId)}`);
+}
+
+export function listWorkflowRuns(workflowId: string, limit?: number): Promise<{ runs: WorkflowRun[]; offline: boolean }> {
+  const qs = limit ? `?limit=${limit}` : "";
+  return request(`/workflows/${encodeURIComponent(workflowId)}/runs${qs}`);
+}
+
+export function getWorkflowGraph(workflowId: string): Promise<{ graph: SanitizedGraph; offline: boolean }> {
+  return request(`/workflows/${encodeURIComponent(workflowId)}/graph`);
+}
+
+export function postWorkflowAction(workflowId: string, body: WorkflowActionBody): Promise<{ ok: true }> {
+  return postJson(`/workflows/${encodeURIComponent(workflowId)}/actions`, body);
+}

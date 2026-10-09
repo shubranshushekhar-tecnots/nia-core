@@ -80,6 +80,33 @@ describe("JobScheduler", () => {
     await scheduler.stop();
   });
 
+  it("isRunning is true only while a run is actually in flight", async () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const j = job();
+    let resolveRun: (() => void) | undefined;
+    const runJob = vi.fn(
+      () =>
+        new Promise<SchedulerJobOutcome>((resolve) => {
+          resolveRun = () => resolve(OK);
+        }),
+    );
+    const scheduler = new JobScheduler({ dir, logger, loadJobs: () => [j], runJob });
+    expect(scheduler.isRunning(j.id)).toBe(false); // not started yet -- unknown to the scheduler
+    scheduler.start();
+    expect(scheduler.isRunning(j.id)).toBe(false); // known now, but no tick has fired yet
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(scheduler.isRunning(j.id)).toBe(true); // tick fired, run in flight
+    resolveRun?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(scheduler.isRunning(j.id)).toBe(false); // settled
+    await scheduler.stop();
+  });
+
+  it("isRunning is false for a job id the scheduler doesn't know about", async () => {
+    const scheduler = new JobScheduler({ dir, logger, loadJobs: () => [], runJob: vi.fn(async (): Promise<SchedulerJobOutcome> => OK) });
+    expect(scheduler.isRunning("unknown-job")).toBe(false);
+  });
+
   it("a 401 pauses the job; later ticks are skipped until job resume", async () => {
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     const j = job();

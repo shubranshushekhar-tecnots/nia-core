@@ -26,7 +26,7 @@ import {
   commandMenuTabBtnStyle,
   commandMenuTabStripStyle,
 } from './styles';
-import { CATEGORY_ICONS, type IconComponent } from './icons';
+import { CATEGORY_ICONS, type IconComponent } from '@nia/canvas-view';
 import { ChatIcon, ConnectionsIcon, RunsIcon } from './navIcons';
 import { AggregateIcon, EyeIcon, FilterIcon, MapFieldsIcon, PulseIcon, SparkleIcon, StopSquareIcon } from './commandIcons';
 

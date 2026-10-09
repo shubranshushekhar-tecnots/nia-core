@@ -155,15 +155,21 @@ const SetupReportBody = z
     message: "exactly one of appliedVersion or rejectionReason is required",
   });
 
-// Workflows screen (agent app) — same shape as apps/api's AgentSetupActionRequest
-// (agentSetupActions.ts): run_now carries optional param overrides and the two
-// escape-hatch flags, pause/resume carry nothing else.
-const WorkflowActionBody = z.object({
-  kind: z.enum(["run_now", "pause", "resume"]),
-  params: z.record(z.string(), z.string()).optional(),
-  fullReload: z.boolean().optional(),
-  allowMassDelete: z.boolean().optional(),
-});
+// Workflows screen (agent app) — deliberately narrower than apps/api's
+// AgentSetupActionRequest: `allowMassDelete` is NOT accepted from the
+// agent app at all. The mass-delete guard exists so a human reviews the
+// situation on the website (which shows the rows that would be deleted)
+// before overriding it — the agent app has no such review UI, so it must
+// never be able to request the override. `.strict()` makes any request
+// that includes an `allowMassDelete` key (true or false) fail parsing
+// outright, rather than silently stripping it.
+const WorkflowActionBody = z
+  .object({
+    kind: z.enum(["run_now", "pause", "resume"]),
+    params: z.record(z.string(), z.string()).optional(),
+    fullReload: z.boolean().optional(),
+  })
+  .strict();
 
 type ConsumeResult = {
   status: "ok" | "not_found" | "locked" | "used" | "expired" | "incorrect";
@@ -1021,6 +1027,65 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
     };
   });
 
+  // Run history for the detail screen — same columns/ordering/limit as
+  // apps/api's listAgentSetupRuns (agentSetupActions.ts), scoped the same
+  // "mine only" way as every other route here instead of assertWorkflowInScope.
+  app.get<{ Params: { workflowId: string }; Querystring: { limit?: string } }>(
+    "/agent-api/workflows/:workflowId/runs",
+    async (req) => {
+      const agentKey = extractAgentKey(req.headers.authorization);
+      const agent = await resolveAgentFromKey(agentKey);
+      if (!agent) throw new HttpError(401, "agent key is invalid or revoked");
+
+      const { rows: setupRows } = await withServiceRole(dbPool, (db) =>
+        db.query<{ id: string }>(
+          `select id from public.agent_setups
+           where workflow_id = $1 and agent_id = $2 and source = 'platform' and unpublished_at is null`,
+          [req.params.workflowId, agent.id],
+        ),
+      );
+      if (setupRows.length === 0) throw new HttpError(404, "workflow not found");
+
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 50);
+      const { rows } = await withServiceRole(dbPool, (db) =>
+        db.query<{
+          id: string;
+          run_id: string;
+          status: "ok" | "failed";
+          rows_sent: number;
+          rows_deleted: number;
+          mode: string | null;
+          duration_ms: number;
+          error_class: string | null;
+          started_at: string;
+          finished_at: string;
+        }>(
+          `select r.id, r.run_id, r.status, r.rows_sent, r.rows_deleted, r.mode, r.duration_ms, r.error_class, r.started_at, r.finished_at
+           from public.agent_setup_runs r
+           where r.agent_setup_id = $1
+           order by r.started_at desc
+           limit $2`,
+          [setupRows[0]!.id, limit],
+        ),
+      );
+
+      return {
+        runs: rows.map((row) => ({
+          id: row.id,
+          runId: row.run_id,
+          status: row.status,
+          rowsSent: row.rows_sent,
+          rowsDeleted: row.rows_deleted,
+          mode: row.mode,
+          durationMs: row.duration_ms,
+          errorClass: row.error_class,
+          startedAt: row.started_at,
+          finishedAt: row.finished_at,
+        })),
+      };
+    },
+  );
+
   app.get<{ Params: { workflowId: string } }>("/agent-api/workflows/:workflowId/graph", async (req) => {
     const agentKey = extractAgentKey(req.headers.authorization);
     const agent = await resolveAgentFromKey(agentKey);
@@ -1070,22 +1135,59 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
     };
   });
 
-  app.post<{ Params: { workflowId: string } }>("/agent-api/workflows/:workflowId/actions", async (req) => {
+  app.post<{ Params: { workflowId: string } }>("/agent-api/workflows/:workflowId/actions", async (req, reply) => {
     const agentKey = extractAgentKey(req.headers.authorization);
     const agent = await resolveAgentFromKey(agentKey);
     if (!agent) throw new HttpError(401, "agent key is invalid or revoked");
 
-    const body = WorkflowActionBody.parse(req.body);
+    // `.strict()` rejects an `allowMassDelete` key outright (see comment on
+    // WorkflowActionBody above) — surfaced here as a deliberate 400 rather
+    // than left to fall through as an uncaught ZodError (which Fastify's
+    // default handler would otherwise serialize as a 500).
+    const parsed = WorkflowActionBody.safeParse(req.body);
+    if (!parsed.success) {
+      if (
+        parsed.error.issues.some(
+          (issue) => issue.code === "unrecognized_keys" && issue.keys.includes("allowMassDelete"),
+        )
+      ) {
+        return reply.code(400).send({ kind: "badRequest", message: "Mass-delete approval is only possible on the website." });
+      }
+      throw parsed.error;
+    }
+    const body = parsed.data;
+
+    // A `resume` requested from the agent app must never lift a pause
+    // that was caused by the mass-delete guard — that guard exists
+    // specifically so a human reviews the affected rows on the website
+    // (which has the review UI) before overriding it; the agent app has
+    // no such review step, so this path is blocked outright rather than
+    // silently resuming into a dangerous run. A workflow this agent
+    // doesn't own looks identical to "not paused" here (no rows), which
+    // is fine — it still 404s a line further down once the RPC itself
+    // can't find a matching setup.
+    if (body.kind === "resume") {
+      const { rows: stateRows } = await withServiceRole(dbPool, (db) =>
+        db.query<{ platform_job_state: Record<string, unknown> | null }>(
+          `select platform_job_state from public.agent_setups
+           where workflow_id = $1 and agent_id = $2 and source = 'platform' and unpublished_at is null`,
+          [req.params.workflowId, agent.id],
+        ),
+      );
+      const jobState = stateRows[0]?.platform_job_state;
+      if (jobState?.["state"] === "paused" && jobState?.["errorClass"] === "massDelete") {
+        throw new HttpError(403, "paused by the mass-delete guard — review and resume from the website");
+      }
+    }
 
     // Reuses the exact guard+insert+notify logic the website's own
     // create_agent_setup_action_task RPC delegates to (0077, private
     // helper scoped by agent_id + workflow_id) — a workflow/agent pair
     // with no matching published setup, or an unsupported kind, raises
-    // inside the function and lands here as a 404; the mass-delete guard
-    // (allowMassDelete without platform_job_state saying
-    // paused/massDelete) also raises and is reported the same way, since
-    // neither case should be distinguishable from "not yours" to a caller
-    // probing for workflow ids.
+    // inside the function and lands here as a 404. `allowMassDelete` is
+    // never sent here (rejected by WorkflowActionBody above), so the
+    // helper's own mass-delete override branch can never be reached from
+    // this route.
     let taskId: string;
     try {
       const { rows } = await withServiceRole(dbPool, (db) =>
@@ -1093,7 +1195,7 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
           agent.id,
           req.params.workflowId,
           body.kind,
-          JSON.stringify({ params: body.params, fullReload: body.fullReload, allowMassDelete: body.allowMassDelete }),
+          JSON.stringify({ params: body.params, fullReload: body.fullReload }),
         ]),
       );
       taskId = rows[0]?.id ?? "";
@@ -1119,7 +1221,6 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
             workflowId: req.params.workflowId,
             kind: body.kind,
             fullReload: body.fullReload,
-            allowMassDelete: body.allowMassDelete,
             hostName: agent.hostName,
           }),
         ],
