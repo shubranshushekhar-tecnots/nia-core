@@ -40,9 +40,11 @@ needed for a normal install.
 
 That's it — the agent is installed as a Windows service (running under
 its own restricted account, not an administrator) and starts
-automatically from then on. Find **"Nia Core Agent Setup"** and **"Nia
-Core Agent Status"** in the Start Menu any time you need to run the
-wizard again or check in. To uninstall, use **Settings → Apps →
+automatically from then on. Find **"Nia Core Agent"** in the Start Menu
+any time you want to open the agent's own screen (status, connections,
+logs). **"Nia Core Agent (advanced) - Setup"** and **"Nia Core Agent
+(advanced) - Status"** are also there if you need to re-run the wizard
+or check in from the command line. To uninstall, use **Settings → Apps →
 Nia Core Agent → Uninstall** — it asks whether to keep or delete the
 agent's stored configuration.
 
@@ -60,7 +62,9 @@ agent's stored configuration.
 
 That's it — the agent runs under your own macOS user account (no
 administrator rights needed), starts immediately, and restarts itself at
-login or if it ever stops unexpectedly.
+login or if it ever stops unexpectedly. Open the agent's own screen any
+time with `./nia-agent open` (installed to the folder `install.sh`
+printed at the end).
 
 > **Security warning — unsigned build.** This build is only ad-hoc
 > signed, **not** signed with an Apple Developer ID. On any other Mac,

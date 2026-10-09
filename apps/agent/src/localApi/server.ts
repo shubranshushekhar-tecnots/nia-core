@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { Logger } from "../ops/logger.js";
 import { writePortFile } from "./portFile.js";
-import { createRouter, type RouteDefinition } from "./router.js";
+import { createRouter, type RouteDefinition, type StaticHandler } from "./router.js";
 
 /** Unregistered, and confirmed unused elsewhere in this repo (grepped against 3306/5432/14330/4455/4456/etc.). */
 export const DEFAULT_LOCAL_API_PORT = 57415;
@@ -13,6 +13,8 @@ export interface LocalApiServerOptions {
   apiToken: string;
   routes: RouteDefinition[];
   logger: Logger;
+  /** Serves the agent UI's built static files (M1) -- `undefined` falls through to a plain 404 for every GET that matches no route, same as before Phase 2. */
+  staticHandler?: StaticHandler;
 }
 
 export interface LocalApiServerHandle {
@@ -46,7 +48,7 @@ function tryListen(server: http.Server, port: number): Promise<BindOutcome> {
  * never binds (see agentLoop.ts's caller).
  */
 export async function createLocalApiServer(options: LocalApiServerOptions): Promise<LocalApiServerHandle | undefined> {
-  const handleRequest = createRouter(options.routes, options.apiToken);
+  const handleRequest = createRouter(options.routes, options.apiToken, options.staticHandler);
   const server = http.createServer((req, res) => {
     void handleRequest(req, res);
   });

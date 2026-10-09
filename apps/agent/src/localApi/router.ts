@@ -1,7 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tokensMatch } from "./authToken.js";
-import { ApiError, BadRequestError, ForbiddenError, RateLimitedError, UnauthorizedError } from "./errors.js";
+import { ApiError, BadRequestError, ForbiddenError, RateLimitedError, SessionExpiredError, UnauthorizedError } from "./errors.js";
 import type { RateLimiter } from "./rateLimit.js";
+import { touchSession } from "./sessionStore.js";
 
 export type HttpMethod = "GET" | "POST" | "DELETE";
 
@@ -9,6 +10,8 @@ export interface RouteContext {
   params: Record<string, string>;
   query: URLSearchParams;
   body: unknown;
+  /** Lets a handler set response headers (e.g. `Set-Cookie`) before the router writes the JSON envelope -- see routes/uiAuth.ts. */
+  res: ServerResponse;
 }
 
 export type RouteHandler = (ctx: RouteContext) => Promise<unknown> | unknown;
@@ -22,8 +25,33 @@ export interface RouteDefinition {
   rateLimiter?: RateLimiter;
   /** Set only for the one streaming route (`GET /logs/stream`) — writes directly to `res`, bypasses the `{kind,message}`/JSON envelope entirely. Auth/rate-limit still run first. */
   sse?: (ctx: RouteContext, res: ServerResponse) => void;
-  /** EventSource can't set an `Authorization` header — this route may authenticate via `?token=` instead. Every other route requires the header. */
+  /** EventSource can't set an `Authorization` header — this route may authenticate via `?token=` instead. Every other route requires the header. Ignored for `auth: "session"` routes (the browser sends the session cookie automatically, same-origin). */
   allowQueryToken?: boolean;
+  /**
+   * `"bearer"` (default, unchanged): `Authorization: Bearer <token>` (or
+   * `?token=` if `allowQueryToken`). `"session"`: the `nia_ui_session`
+   * cookie, refreshed via `touchSession` on every request (12h sliding
+   * inactivity window) -- used by `/ui/api/*` (uiProxyRoutes.ts). Mutating
+   * (`POST`/`DELETE`) session routes additionally require the
+   * `X-Nia-UI: 1` header as CSRF defense (a cross-origin page's form/fetch
+   * can't set a custom header without triggering a CORS preflight, which
+   * this server will never answer since it sends no CORS headers at all).
+   * `"none"`: no auth at all, only `/ui/session` itself (minting the
+   * session in the first place) and static assets.
+   */
+  auth?: "bearer" | "session" | "none";
+}
+
+/** Lazily-parsed, never logged (it's a credential): finds one cookie by name out of the raw `Cookie` header. */
+function readCookie(req: IncomingMessage, name: string): string | undefined {
+  const header = req.headers.cookie;
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx === -1) continue;
+    if (part.slice(0, idx).trim() === name) return part.slice(idx + 1).trim();
+  }
+  return undefined;
 }
 
 function matchPath(pattern: string, pathname: string): Record<string, string> | null {
@@ -111,7 +139,49 @@ function isAllowedHost(req: IncomingMessage): boolean {
  * logging the raw URL anywhere would put the token in the agent's own
  * log file. If a path is ever logged, log `url.pathname` only.
  */
-export function createRouter(routes: RouteDefinition[], apiToken: string) {
+export interface StaticAsset {
+  data: Buffer;
+  contentType: string;
+}
+
+/**
+ * Only consulted for a GET that matched no route -- `/` plus every UI
+ * static path (JS/CSS/fonts/favicon/...). The second parameter lets `/`
+ * decide between the real app shell and a plain "open from the Start
+ * menu" fallback page; everything else is served regardless, since it's
+ * not sensitive. Despite the name, `createRouter` passes `true` here not
+ * just for an already-valid session but also for a first-ever visit
+ * carrying `?otc=...` -- the app shell's own JS is what actually trades
+ * that code for the session cookie via `POST /ui/session`, so it must
+ * be allowed to load before a session exists.
+ */
+export type StaticHandler = (pathname: string, hasValidSession: boolean) => Promise<StaticAsset | undefined>;
+
+function hasValidUiSession(req: IncomingMessage): boolean {
+  const cookie = readCookie(req, "nia_ui_session");
+  return cookie ? touchSession(cookie) : false;
+}
+
+/**
+ * Tiny method+path matcher — every route runs through, in order: Host
+ * header check (DNS rebinding defense, 403 on mismatch) → auth (bearer
+ * token by default, timing-safe compare; or session cookie + CSRF header
+ * for `auth: "session"` routes; or none for `auth: "none"`) → rate limit
+ * (if the route has one) → JSON body parse (GET/DELETE never read a
+ * body) → handler → `{kind,message}` error envelope on throw (errors.ts's
+ * `ApiError` subclasses map to their own status code; anything else
+ * becomes a generic 500 `{kind:"internal",...}` so a raw stack/driver
+ * message — which might carry a password — never reaches the response
+ * body). A GET matching no route falls through to `staticHandler`, if
+ * given, before a 404.
+ *
+ * This function (and everything it calls) must never log `req.url` or
+ * any query string -- `GET /logs/stream?token=...` is the one route that
+ * carries the bearer token in the URL (EventSource can't set headers), so
+ * logging the raw URL anywhere would put the token in the agent's own
+ * log file. If a path is ever logged, log `url.pathname` only.
+ */
+export function createRouter(routes: RouteDefinition[], apiToken: string, staticHandler?: StaticHandler) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!isAllowedHost(req)) {
       const err = new ForbiddenError();
@@ -130,9 +200,15 @@ export function createRouter(routes: RouteDefinition[], apiToken: string) {
       if (route.method !== method) continue;
 
       try {
-        const headerToken = extractBearerToken(req);
-        const token = route.allowQueryToken ? (headerToken ?? url.searchParams.get("token") ?? undefined) : headerToken;
-        if (!token || !tokensMatch(token, apiToken)) throw new UnauthorizedError();
+        const auth = route.auth ?? "bearer";
+        if (auth === "bearer") {
+          const headerToken = extractBearerToken(req);
+          const token = route.allowQueryToken ? (headerToken ?? url.searchParams.get("token") ?? undefined) : headerToken;
+          if (!token || !tokensMatch(token, apiToken)) throw new UnauthorizedError();
+        } else if (auth === "session") {
+          if (!hasValidUiSession(req)) throw new SessionExpiredError();
+          if ((method === "POST" || method === "DELETE") && req.headers["x-nia-ui"] !== "1") throw new ForbiddenError();
+        }
 
         if (route.rateLimiter && !route.rateLimiter.tryHit()) throw new RateLimitedError();
 
@@ -140,6 +216,7 @@ export function createRouter(routes: RouteDefinition[], apiToken: string) {
           params,
           query: url.searchParams,
           body: method === "GET" || method === "DELETE" ? undefined : await readJsonBody(req),
+          res,
         };
 
         if (route.sse) {
@@ -157,6 +234,20 @@ export function createRouter(routes: RouteDefinition[], apiToken: string) {
         sendJson(res, 500, { kind: "internal", message: "internal error" });
       }
       return;
+    }
+
+    if (!matchedPath && method === "GET" && staticHandler) {
+      // A first-ever `/?otc=...` visit (no session cookie yet) must still
+      // see the real app shell -- only its own JS can trade that code for
+      // a session via POST /ui/session. `url.searchParams.has` alone is
+      // enough; the OTC itself is still single-use/60s-TTL/bearer-minted,
+      // so a bare `?otc=` with no real code gets nothing from `/ui/session`.
+      const asset = await staticHandler(url.pathname, hasValidUiSession(req) || url.searchParams.has("otc"));
+      if (asset) {
+        res.writeHead(200, { "content-type": asset.contentType, "content-length": asset.data.length });
+        res.end(asset.data);
+        return;
+      }
     }
 
     sendJson(res, matchedPath ? 405 : 404, { kind: matchedPath ? "methodNotAllowed" : "notFound", message: matchedPath ? "method not allowed" : "not found" });
