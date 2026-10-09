@@ -1,4 +1,4 @@
-import type { IconComponent } from './icons';
+import type { IconComponent } from '@nia/canvas-view';
 
 /**
  * Icon set for CommandMenu.tsx's "/" command rows only — kept separate from

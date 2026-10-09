@@ -13,6 +13,7 @@ import { SetupManager } from "./link/setupManager.js";
 import { TaskResultsClient } from "./link/taskResultsClient.js";
 import { TaskRunner } from "./link/taskRunner.js";
 import { HttpAgentTransport } from "./link/transport.js";
+import { WorkflowsClient } from "./link/workflowsClient.js";
 import { Logger } from "./ops/logger.js";
 import { buildMonitoringHeartbeatPayload, MonitoringHeartbeatScheduler, type JobHeartbeatSource } from "./ops/monitoringHeartbeat.js";
 import { recordCheckInSuccess, recordRevoked } from "./ops/linkState.js";
@@ -31,6 +32,7 @@ import { buildTablesRoutes } from "./localApi/routes/tables.js";
 import { buildDestinationsRoutes } from "./localApi/routes/destinations.js";
 import { buildLogsRoutes } from "./localApi/routes/logs.js";
 import { buildDiagnosticsRoutes } from "./localApi/routes/diagnostics.js";
+import { buildWorkflowsRoutes } from "./localApi/routes/workflows.js";
 import { buildOtcRoutes, buildUiSessionRoutes } from "./localApi/routes/uiAuth.js";
 import { mirrorRoutesForUi } from "./localApi/uiProxyRoutes.js";
 import { buildUiStaticHandler } from "./localApi/uiStaticHandler.js";
@@ -58,10 +60,43 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
   const logger = options.logger ?? new Logger(defaultLogDir(dir));
   recordAgentStarted(dir);
 
+  // Declared before localApiDeps (not where it's set, further below)
+  // purely so the getWorkflowsClient/getPlatformUrl closures below can
+  // close over one variable, rather than needing a separate indirection
+  // layer — the closures are only ever invoked per-request, long after
+  // applyLink has had a chance to assign it.
+  let linkSession: LinkSession | undefined;
+
+  // Constructed here (ahead of its original position, further below)
+  // only so `localApiDeps.scheduler` below can hold the real instance —
+  // `scheduler.start()` still happens at the original spot once the
+  // local API server/routes exist. The object reference never changes
+  // afterward, so routes/workflows.ts calling `isRunning()` through it
+  // works identically regardless of start() ordering.
+  const scheduler = new JobScheduler({
+    dir,
+    logger,
+    loadJobs: () => loadSchedulerJobs(dir),
+    runJob: (job, signal, forceReplace, extra) => runSchedulerJob(job, signal, forceReplace, dir, extra),
+    maxConcurrentRuns: loadConfig(dir).maxConcurrentRuns,
+    // Slice: wake a held check-in the moment a run report lands, instead of waiting for it to finish holding on its own.
+    onRunRecorded: () => linkSession?.checkInLoop.wake(),
+  });
+
   // Phase 1 (local control API) — never fatal: a desktop app loses its
   // control channel if this fails to bind, but jobs/scheduler/check-in
   // must keep running regardless (see localApi/server.ts's doc comment).
-  const localApiDeps = { dir, agentVersion: options.agentVersion, logger };
+  const localApiDeps = {
+    dir,
+    agentVersion: options.agentVersion,
+    logger,
+    // Workflows screen (agent app) — undefined whenever unpaired/no live
+    // link, same "not paired" signal routes/workflows.ts uses to return a
+    // clear response instead of erroring.
+    getWorkflowsClient: () => linkSession?.workflowsClient,
+    getPlatformUrl: () => linkSession?.platformUrl,
+    scheduler,
+  };
   // Built once and reused by both the bearer originals and their
   // `/ui/api/*` mirrors below, so e.g. `/pair`'s rate limiter is one
   // shared budget regardless of which caller (CLI-driven bearer request
@@ -78,6 +113,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     ...buildDestinationsRoutes(localApiDeps),
     ...buildLogsRoutes(localApiDeps),
     ...buildDiagnosticsRoutes(localApiDeps),
+    ...buildWorkflowsRoutes(localApiDeps),
   ];
   const localApiRoutes: RouteDefinition[] = [
     ...mirrorableRoutes,
@@ -93,17 +129,6 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     staticHandler: buildUiStaticHandler(),
   });
 
-  let linkSession: LinkSession | undefined;
-
-  const scheduler = new JobScheduler({
-    dir,
-    logger,
-    loadJobs: () => loadSchedulerJobs(dir),
-    runJob: (job, signal, forceReplace, extra) => runSchedulerJob(job, signal, forceReplace, dir, extra),
-    maxConcurrentRuns: loadConfig(dir).maxConcurrentRuns,
-    // Slice: wake a held check-in the moment a run report lands, instead of waiting for it to finish holding on its own.
-    onRunRecorded: () => linkSession?.checkInLoop.wake(),
-  });
   scheduler.start();
 
   const monitoring = new MonitoringHeartbeatScheduler(
@@ -174,6 +199,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
 
 interface LinkSession {
   checkInLoop: CheckInLoop;
+  workflowsClient: WorkflowsClient;
+  platformUrl: string;
   stop: () => Promise<void>;
 }
 
@@ -198,6 +225,7 @@ function buildLinkSession(
   const taskRunner = new TaskRunner(taskResultsClient, logger, dir, scheduler, uploadClient);
   const setupClient = new SetupClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
   const setupManager = new SetupManager({ setupClient, logger, dir });
+  const workflowsClient = new WorkflowsClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
   const checkInLoop = new CheckInLoop({
     transport,
     agentVersion,
@@ -221,12 +249,15 @@ function buildLinkSession(
 
   return {
     checkInLoop,
+    workflowsClient,
+    platformUrl: link.platformUrl,
     stop: async () => {
       await checkInLoop.stop();
       await transport.close();
       await taskResultsClient.close();
       await setupClient.close();
       await uploadClient.close();
+      await workflowsClient.close();
     },
   };
 }

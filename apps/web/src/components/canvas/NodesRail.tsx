@@ -21,7 +21,7 @@ import {
   railSectionHeaderStyle,
   railShellStyle,
 } from './styles';
-import { getConnectorIcon, TriggerIcon } from './icons';
+import { getConnectorIcon, TriggerIcon } from '@nia/canvas-view';
 import { PanelToggleIcon } from './navIcons';
 
 // Same source of truth as GraphFlowNode.tsx's KIND_COLOR — kept local since

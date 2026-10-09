@@ -64,3 +64,10 @@ export class SessionExpiredError extends ApiError {
     super(401, "sessionExpired", message);
   }
 }
+
+/** Workflows screen (agent app): a mutating action (`POST /workflows/:id/actions`) has no "last known" fallback to return (unlike the read routes), so it surfaces this instead of a 5xx whenever there's no live link to the platform or the bridge call itself failed transiently. */
+export class OfflineError extends ApiError {
+  constructor(message = "not connected to the platform right now -- try again once the agent is back online") {
+    super(503, "offline", message);
+  }
+}

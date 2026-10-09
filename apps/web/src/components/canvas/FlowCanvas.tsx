@@ -51,7 +51,7 @@ import { buildActivityFeed, type ActivityItem } from '@/lib/canvas/activityFeed'
 import Logo from '@/components/Logo';
 import Sidebar from '@/components/app/Sidebar';
 import GraphFlowNode from './GraphFlowNode';
-import CanvasEdgeComponent from './CanvasEdge';
+import { CanvasEdge as CanvasEdgeComponent } from '@nia/canvas-view';
 import CanvasToolbar, { type InteractionMode } from './CanvasToolbar';
 import NodesRail, { PALETTE_DRAG_MIME, type PaletteDragPayload } from './NodesRail';
 import NodeConfigPanel from './NodeConfigPanel';
