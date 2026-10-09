@@ -70,6 +70,42 @@ describe("agent-bridge workflows routes (route-level)", () => {
       expect(listParams).toEqual(["agent-1"]);
     });
 
+    it("converts lastRun.rowsSent to a number even when pg returns it as a bigint string", async () => {
+      const app = await freshApp();
+      mockQuery.mockResolvedValueOnce({ rows: [AGENT_ROW] }); // resolveAgentFromKey
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            setup_id: "setup-1",
+            workflow_id: "wf-mine",
+            name: "ETL kill-resume smoke",
+            wanted_version: 2,
+            applied_version: 2,
+            rejection_reason: null,
+            platform_job_state: { state: "ok" },
+          },
+        ],
+      });
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            agent_setup_id: "setup-1",
+            status: "ok",
+            finished_at: "2026-01-01T00:00:00.000Z",
+            rows_sent: "9007199254740993", // bigint column — pg driver returns this as a string
+            error_class: null,
+          },
+        ],
+      });
+
+      const response = await app.inject({ method: "GET", url: "/agent-api/workflows", headers: AUTH_HEADER });
+
+      expect(response.statusCode).toBe(200);
+      const { lastRun } = response.json().workflows[0];
+      expect(lastRun.rowsSent).toBe(9007199254740993);
+      expect(typeof lastRun.rowsSent).toBe("number");
+    });
+
     it("returns an empty list (no second query) when this agent has no published workflows", async () => {
       const app = await freshApp();
       mockQuery.mockResolvedValueOnce({ rows: [AGENT_ROW] }); // resolveAgentFromKey
@@ -147,6 +183,41 @@ describe("agent-bridge workflows routes (route-level)", () => {
       const [ownershipSql, ownershipParams] = mockQuery.mock.calls[1]!;
       expect(ownershipSql).toContain("agent_setups");
       expect(ownershipParams).toEqual(["wf-mine", "agent-1"]);
+    });
+
+    it("converts rows_sent/rows_deleted to numbers even when pg returns them as bigint strings", async () => {
+      const app = await freshApp();
+      mockQuery.mockResolvedValueOnce({ rows: [AGENT_ROW] }); // resolveAgentFromKey
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: "setup-1" }] }); // ownership check — mine
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          {
+            id: "run-1",
+            run_id: "run-id-1",
+            status: "ok",
+            rows_sent: "9007199254740993", // bigint column — pg driver returns this as a string
+            rows_deleted: "0",
+            mode: "incremental",
+            duration_ms: 1200,
+            error_class: null,
+            started_at: "2026-10-09T00:00:00.000Z",
+            finished_at: "2026-10-09T00:00:01.200Z",
+          },
+        ],
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/agent-api/workflows/wf-mine/runs",
+        headers: AUTH_HEADER,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const [run] = response.json().runs;
+      expect(run.rowsSent).toBe(9007199254740993);
+      expect(run.rowsDeleted).toBe(0);
+      expect(typeof run.rowsSent).toBe("number");
+      expect(typeof run.rowsDeleted).toBe("number");
     });
 
     it("clamps an oversized ?limit to the 50-row ceiling", async () => {

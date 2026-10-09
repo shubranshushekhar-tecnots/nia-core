@@ -995,7 +995,8 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
         agent_setup_id: string;
         status: "ok" | "failed";
         finished_at: string;
-        rows_sent: number;
+        // bigint column — pg returns this as a string, not a number
+        rows_sent: string;
         error_class: string | null;
       }>(
         `select distinct on (agent_setup_id) agent_setup_id, status, finished_at, rows_sent, error_class
@@ -1020,7 +1021,7 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
           rejectionReason: derived.rejectionReason,
           nextRunAt: derived.nextRunAt,
           lastRun: lastRun
-            ? { status: lastRun.status, finishedAt: lastRun.finished_at, rowsSent: lastRun.rows_sent, errorClass: lastRun.error_class }
+            ? { status: lastRun.status, finishedAt: lastRun.finished_at, rowsSent: Number(lastRun.rows_sent), errorClass: lastRun.error_class }
             : null,
         };
       }),
@@ -1052,8 +1053,9 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
           id: string;
           run_id: string;
           status: "ok" | "failed";
-          rows_sent: number;
-          rows_deleted: number;
+          // bigint columns — pg returns these as strings, not numbers
+          rows_sent: string;
+          rows_deleted: string;
           mode: string | null;
           duration_ms: number;
           error_class: string | null;
@@ -1074,8 +1076,8 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
           id: row.id,
           runId: row.run_id,
           status: row.status,
-          rowsSent: row.rows_sent,
-          rowsDeleted: row.rows_deleted,
+          rowsSent: Number(row.rows_sent),
+          rowsDeleted: Number(row.rows_deleted),
           mode: row.mode,
           durationMs: row.duration_ms,
           errorClass: row.error_class,
