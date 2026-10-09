@@ -353,6 +353,22 @@ export default function CanvasHeader({
             {agentPublish.state === 'applied' && `Applied · v${agentPublish.appliedVersion}`}
             {agentPublish.state === 'rejected' && 'Rejected'}
           </span>
+          {agentPublish.state === 'rejected' && agentPublish.rejectionReason && (
+            <span
+              style={{
+                flex: 'none',
+                fontSize: 11.5,
+                color: 'var(--nx-danger-text)',
+                maxWidth: 320,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={agentPublish.rejectionReason}
+            >
+              {agentPublish.rejectionReason}
+            </span>
+          )}
           {agentPublish.state !== 'unpublished' && !readOnly && (
             <button
               type="button"

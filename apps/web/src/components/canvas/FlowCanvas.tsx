@@ -43,7 +43,7 @@ import { getWorkflowGraph, putWorkflowGraph, GraphApiError, type WorkflowGraphRe
 import { applyPlan, applyPlanDiff, listAppliedPlans, revertPlan, CopilotApiError } from '@/lib/api/copilotClient';
 import { runWorkflowChecks, getLatestCheckRun, listCheckRuns, ChecksApiError } from '@/lib/api/checksClient';
 import { startWorkflowRun, streamRun, cancelWorkflowRun, RunApiError } from '@/lib/api/runsClient';
-import { getAgentSetupState, unpublishAgentSetup, AgentSetupApiError } from '@/lib/api/agentSetupClient';
+import { getAgentSetupState, unpublishAgentSetup, listAgentSetupRuns, AgentSetupApiError } from '@/lib/api/agentSetupClient';
 import { computePublishGate, isAgentDeliveredWorkflow, isAgentDestinationManifest } from '@/lib/canvas/agentDelivery';
 import { useCanvasStore } from '@/lib/canvas/store';
 import { useChatSession } from '@/lib/chat/useChatSession';
@@ -1027,9 +1027,35 @@ function CanvasInner({
     queryFn: () => listCheckRuns(workflow.id),
     staleTime: Infinity,
   });
+  // Agent-delivered workflows never get a "RUN CHECKS" history (checks are
+  // disabled for them — see ChecksDock's agentDelivered branch), so their
+  // real run history lives in agent_setup_runs instead. Without this, the
+  // Logs tab and the "last run" meta line stayed stuck on "NOT RUN YET"
+  // even after real agent runs, because they only ever looked at
+  // workflow_check_runs.
+  const agentRunsQueryKey = useMemo(() => ['agent-setup-runs-log', workflow.id], [workflow.id]);
+  const { data: agentRunsHistory } = useQuery({
+    queryKey: agentRunsQueryKey,
+    queryFn: () => listAgentSetupRuns(workflow.id),
+    enabled: isAgentDelivered,
+    staleTime: Infinity,
+  });
+  const agentRunActivity = useMemo<ActivityItem[]>(
+    () =>
+      (agentRunsHistory ?? []).map((run) => ({
+        time: run.finishedAt,
+        text:
+          run.status === 'ok'
+            ? `Agent run — ${run.rowsSent.toLocaleString()} row(s) sent`
+            : `Agent run failed — ${run.errorClass ?? 'error'}`,
+        kind: 'run',
+      })),
+    [agentRunsHistory],
+  );
+  const latestAgentRunAt = agentRunsHistory?.[0]?.finishedAt ?? null;
   const activityFeed = useMemo(
-    () => buildActivityFeed(checkRunsHistory ?? [], chatSession.messages, runActivity),
-    [checkRunsHistory, chatSession.messages, runActivity],
+    () => buildActivityFeed(checkRunsHistory ?? [], chatSession.messages, [...runActivity, ...agentRunActivity]),
+    [checkRunsHistory, chatSession.messages, runActivity, agentRunActivity],
   );
 
   const handleRunChecks = useCallback(async () => {
@@ -1431,7 +1457,7 @@ function CanvasInner({
               running={checksRunning}
               error={checksError}
               results={isAgentDelivered ? null : latestCheckRun?.results ?? null}
-              ranAt={isAgentDelivered ? null : latestCheckRun?.ranAt ?? null}
+              ranAt={isAgentDelivered ? latestAgentRunAt : latestCheckRun?.ranAt ?? null}
               stale={!isAgentDelivered && checksStale}
               nodeCount={nodes.length}
               edgeCount={edges.length}

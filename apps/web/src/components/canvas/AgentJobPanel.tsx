@@ -39,13 +39,26 @@ import { headerRunChecksCellStyle } from './styles';
 const PLAIN_ERROR_CLASS: Record<string, string> = {
   massDelete: 'paused — a run would delete an unusually large share of rows',
   config: 'a configuration problem',
-  transient: 'a temporary error — the agent will retry',
+  transient: 'a temporary error',
   credentials: 'a credentials problem',
 };
 
-function plainErrorClass(errorClass: string | null): string | null {
+/**
+ * By the time the platform learns about an errorClass of "transient", the
+ * agent has already exhausted its own in-process retry backoff for that
+ * run (apps/agent/src/scheduler/jobScheduler.ts only persists/report the
+ * outcome once the 1/5/15 min backoff is spent) — so "the agent will
+ * retry" is only true if the job has a real next scheduled occurrence
+ * (nextRunAt). Without one (e.g. an unscheduled, run-on-demand job) no
+ * further attempt is coming until someone runs it again.
+ */
+function plainErrorClass(errorClass: string | null, nextRunAt?: string | null): string | null {
   if (!errorClass) return null;
-  return PLAIN_ERROR_CLASS[errorClass] ?? errorClass;
+  const base = PLAIN_ERROR_CLASS[errorClass] ?? errorClass;
+  if (errorClass === 'transient') {
+    return nextRunAt ? `${base} — the agent will retry` : `${base} — run it again when ready, no automatic retry is scheduled`;
+  }
+  return base;
 }
 
 function formatTime(iso: string | null | undefined): string {
@@ -329,10 +342,13 @@ export default function AgentJobPanel({
   return (
     <div style={panelStyle}>
       <div style={rowStyle}>
-        <span style={badgeStyle(jobState?.state)} title={jobState ? plainErrorClass(jobState.errorClass) ?? jobState.state : 'No reports yet'}>
+        <span
+          style={badgeStyle(jobState?.state)}
+          title={jobState ? plainErrorClass(jobState.errorClass, jobState.nextRunAt) ?? jobState.state : 'No reports yet'}
+        >
           {jobState ? jobState.state : 'No reports yet'}
         </span>
-        {jobState?.errorClass && <span style={dimStyle}>{plainErrorClass(jobState.errorClass)}</span>}
+        {jobState?.errorClass && <span style={dimStyle}>{plainErrorClass(jobState.errorClass, jobState.nextRunAt)}</span>}
         <span style={dimStyle}>Last run: {formatTime(jobState?.lastRunAt)}</span>
         <span style={dimStyle}>Next run: {formatTime(jobState?.nextRunAt)}</span>
         <button type="button" onClick={() => setHistoryOpen((v) => !v)} style={linkButtonStyle}>
