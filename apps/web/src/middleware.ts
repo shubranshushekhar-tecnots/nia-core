@@ -1,13 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getSessionCookie } from "better-auth/cookies";
 
-// Paths reachable while signed out. `/dev` is the hero-preview sandbox
-// (apps/web/src/app/dev), not a real app route. `/downloads` and `/docs`
-// are the public agent download/documentation pages — DownloadsPage reads
-// `signedIn` itself to decide what to show, it does not require the
-// middleware to gate the route.
+// Paths reachable while signed out. `/downloads` and `/docs` are the public
+// agent download/documentation pages — DownloadsPage reads `signedIn`
+// itself to decide what to show, it does not require the middleware to
+// gate the route.
 const PUBLIC_PATHS = new Set(["/", "/login", "/signup"]);
-const PUBLIC_PREFIXES = ["/dev", "/downloads", "/docs"];
+const PUBLIC_PREFIXES = ["/downloads", "/docs"];
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.has(pathname) || PUBLIC_PREFIXES.some((p) => pathname.startsWith(p));
@@ -31,13 +30,6 @@ function isApiPath(pathname: string): boolean {
  */
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-
-  // /dev is the hero-preview sandbox, not a real app route — must not be
-  // reachable once real customer data is in play. 404 rather than redirect
-  // so it doesn't even reveal the route exists.
-  if (process.env.NODE_ENV === "production" && pathname.startsWith("/dev")) {
-    return new NextResponse(null, { status: 404 });
-  }
 
   const hasSession = Boolean(getSessionCookie(request));
 
