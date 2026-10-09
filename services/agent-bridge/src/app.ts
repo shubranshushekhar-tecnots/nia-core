@@ -3,7 +3,16 @@ import { z } from "zod";
 import { gunzipSync } from "node:zlib";
 import { withServiceRole } from "@nia/db";
 import { decryptSecret, parseMasterKey, type EncryptedSecret } from "@nia/secrets";
-import { Column, StructuredQueryCursor, isAgentVersionTooOld, MIN_AGENT_VERSION } from "@nia/schemas";
+import {
+  Column,
+  StructuredQueryCursor,
+  isAgentVersionTooOld,
+  MIN_AGENT_VERSION,
+  GraphDoc,
+  getConnectorManifest,
+  type GraphDoc as GraphDocType,
+  type GraphNode as GraphNodeType,
+} from "@nia/schemas";
 import { dbPool } from "./db.js";
 import { generateAgentKey, sha256Hex } from "./crypto.js";
 import { DbAgentTransport, type AgentTransport } from "./transport.js";
@@ -146,6 +155,16 @@ const SetupReportBody = z
     message: "exactly one of appliedVersion or rejectionReason is required",
   });
 
+// Workflows screen (agent app) — same shape as apps/api's AgentSetupActionRequest
+// (agentSetupActions.ts): run_now carries optional param overrides and the two
+// escape-hatch flags, pause/resume carry nothing else.
+const WorkflowActionBody = z.object({
+  kind: z.enum(["run_now", "pause", "resume"]),
+  params: z.record(z.string(), z.string()).optional(),
+  fullReload: z.boolean().optional(),
+  allowMassDelete: z.boolean().optional(),
+});
+
 type ConsumeResult = {
   status: "ok" | "not_found" | "locked" | "used" | "expired" | "incorrect";
   org_id: string | null;
@@ -191,16 +210,129 @@ function extractAgentKey(authHeader: string | undefined): string {
 
 async function resolveAgentFromKey(
   agentKey: string,
-): Promise<{ id: string; createdByUserId: string; orgId: string | null; ownerId: string | null } | null> {
+): Promise<{ id: string; createdByUserId: string; orgId: string | null; ownerId: string | null; hostName: string | null } | null> {
   const agentKeyHash = sha256Hex(agentKey);
   const { rows } = await withServiceRole(dbPool, (db) =>
-    db.query<{ id: string; created_by_user_id: string; org_id: string | null; owner_id: string | null }>(
-      `select id, created_by_user_id, org_id, owner_id from public.platform_agents where agent_key_hash = $1 and status <> 'revoked'`,
+    db.query<{ id: string; created_by_user_id: string; org_id: string | null; owner_id: string | null; host_name: string | null }>(
+      `select id, created_by_user_id, org_id, owner_id, host_name from public.platform_agents where agent_key_hash = $1 and status <> 'revoked'`,
       [agentKeyHash],
     ),
   );
   const row = rows[0];
-  return row ? { id: row.id, createdByUserId: row.created_by_user_id, orgId: row.org_id, ownerId: row.owner_id } : null;
+  return row
+    ? { id: row.id, createdByUserId: row.created_by_user_id, orgId: row.org_id, ownerId: row.owner_id, hostName: row.host_name }
+    : null;
+}
+
+type WorkflowStatus = "ok" | "failing" | "paused" | "rejected" | "waiting";
+
+/**
+ * Mirrors apps/api/src/services/agentSetups.ts's toState() precedence
+ * exactly (wanted_version <= applied_version wins first, folding in the
+ * live job state; otherwise a stored rejection beats plain "waiting") —
+ * same status a user would see on the website for this setup, just
+ * flattened to one enum since the agent app has no separate "applied"
+ * concept to show.
+ */
+function deriveWorkflowStatus(row: {
+  wanted_version: number;
+  applied_version: number;
+  rejection_reason: string | null;
+  platform_job_state: Record<string, unknown> | null;
+}): { status: WorkflowStatus; errorClass: string | null; rejectionReason: string | null; nextRunAt: string | null } {
+  if (row.wanted_version <= row.applied_version) {
+    const jobState = row.platform_job_state;
+    const rawState = jobState?.["state"];
+    const status: WorkflowStatus = rawState === "failing" ? "failing" : rawState === "paused" ? "paused" : "ok";
+    return {
+      status,
+      errorClass: typeof jobState?.["errorClass"] === "string" ? (jobState["errorClass"] as string) : null,
+      rejectionReason: null,
+      nextRunAt: typeof jobState?.["nextRunAt"] === "string" ? (jobState["nextRunAt"] as string) : null,
+    };
+  }
+  if (row.rejection_reason) {
+    return { status: "rejected", errorClass: null, rejectionReason: row.rejection_reason, nextRunAt: null };
+  }
+  return { status: "waiting", errorClass: null, rejectionReason: null, nextRunAt: null };
+}
+
+/** Same host-region regex as apps/web/src/lib/connections/types.ts's connectionRegion — reimplemented standalone here (tiny, pragmatic duplication) rather than pulling apps/web's connections module into agent-bridge. */
+const CONNECTION_REGION_PATTERN = /\b([a-z]{2}-[a-z]+-\d)\b/;
+
+type SanitizedGraphNode = {
+  id: string;
+  type: "source" | "transform" | "destination";
+  position: { x: number; y: number };
+  manifestName: string | null;
+  connectionLabel: string | null;
+  region: string | null;
+  entityLabel: string | null;
+  writeModeLabel: string | null;
+  resolved: boolean;
+  unknownReason: string | null;
+};
+
+/**
+ * Allowlist mapper for GET /agent-api/workflows/:workflowId/graph — the
+ * ONLY place the sanitized response is built. Every field is read
+ * individually off `node`/`connection`; `node.config` and the
+ * connection's raw `config`/`vault_secret_ref` are never spread or
+ * passed through, so it's structurally impossible for a future config
+ * field to leak here by accident. Mirrors apps/web/src/lib/canvas/
+ * mapping.ts's resolveCanvasNode + GraphFlowNode.tsx's readEntityLabel/
+ * readWriteMode wording exactly, so the agent app's canvas reads the same
+ * as the website's for the parts that have no live check-run data.
+ */
+function mapGraphNodeForAgent(
+  node: GraphNodeType,
+  connectionsById: Map<string, { id: string; display_name: string; config: Record<string, unknown> }>,
+): SanitizedGraphNode {
+  const manifest = node.manifestId ? getConnectorManifest(node.manifestId) : undefined;
+  const connection = node.connectionId ? connectionsById.get(node.connectionId) : undefined;
+
+  let resolved = true;
+  let unknownReason: string | null = null;
+  if (node.manifestId && !manifest) {
+    resolved = false;
+    unknownReason = `Unknown tool "${node.manifestId}"`;
+  } else if (node.connectionId && !connection) {
+    resolved = false;
+    unknownReason = "Connection not found";
+  }
+
+  const host = typeof connection?.config["host"] === "string" ? (connection.config["host"] as string) : undefined;
+  const database = typeof connection?.config["database"] === "string" ? (connection.config["database"] as string) : undefined;
+  const secondary = host && database ? `${host}/${database}` : host ?? database;
+  const connectionLabel = connection ? (secondary ? `${connection.display_name} (${secondary})` : connection.display_name) : null;
+  const region = host ? host.match(CONNECTION_REGION_PATTERN)?.[1] ?? null : null;
+
+  const entity = node.config["entity"];
+  const entityName =
+    entity && typeof entity === "object" && "name" in entity && typeof (entity as { name: unknown }).name === "string"
+      ? ((entity as { name: string }).name as string)
+      : undefined;
+  const entityNamespace =
+    entity && typeof entity === "object" && "namespace" in entity && typeof (entity as { namespace: unknown }).namespace === "string"
+      ? ((entity as { namespace: string }).namespace as string)
+      : undefined;
+  const entityLabel = entityName ? (entityNamespace ? `${entityNamespace}.${entityName}` : entityName) : null;
+
+  const writeMode = node.config["writeMode"];
+  const writeModeLabel = writeMode === "direct" ? "Direct write" : writeMode === "staged" ? "Staged write" : null;
+
+  return {
+    id: node.id,
+    type: node.type,
+    position: node.position,
+    manifestName: manifest?.name ?? null,
+    connectionLabel,
+    region,
+    entityLabel,
+    writeModeLabel: node.type === "destination" ? writeModeLabel : null,
+    resolved,
+    unknownReason,
+  };
 }
 
 /**
@@ -817,6 +949,182 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
         ),
       );
     }
+
+    return { ok: true as const };
+  });
+
+  // Workflows screen (agent app) — Slice: list this agent's platform-
+  // published workflows, a read-only sanitized graph for one, and an
+  // action (run now / pause / resume) request, all scoped to
+  // agent_setups.agent_id = agent.id. A workflow id for a different
+  // agent/org is always a 404 here, same posture as the setup routes
+  // above — never distinguishable from "doesn't exist".
+  app.get("/agent-api/workflows", async (req) => {
+    const agentKey = extractAgentKey(req.headers.authorization);
+    const agent = await resolveAgentFromKey(agentKey);
+    if (!agent) throw new HttpError(401, "agent key is invalid or revoked");
+
+    const { rows } = await withServiceRole(dbPool, (db) =>
+      db.query<{
+        setup_id: string;
+        workflow_id: string;
+        name: string;
+        wanted_version: number;
+        applied_version: number;
+        rejection_reason: string | null;
+        platform_job_state: Record<string, unknown> | null;
+      }>(
+        `select s.id as setup_id, s.workflow_id, w.name, s.wanted_version, s.applied_version, s.rejection_reason, s.platform_job_state
+         from public.agent_setups s
+         join public.workflows w on w.id = s.workflow_id
+         where s.agent_id = $1 and s.source = 'platform' and s.unpublished_at is null
+         order by w.name asc`,
+        [agent.id],
+      ),
+    );
+    if (rows.length === 0) return { workflows: [] as unknown[] };
+
+    const { rows: runRows } = await withServiceRole(dbPool, (db) =>
+      db.query<{
+        agent_setup_id: string;
+        status: "ok" | "failed";
+        finished_at: string;
+        rows_sent: number;
+        error_class: string | null;
+      }>(
+        `select distinct on (agent_setup_id) agent_setup_id, status, finished_at, rows_sent, error_class
+         from public.agent_setup_runs
+         where agent_setup_id = any($1::uuid[])
+         order by agent_setup_id, started_at desc`,
+        [rows.map((row) => row.setup_id)],
+      ),
+    );
+    const lastRunBySetupId = new Map(runRows.map((run) => [run.agent_setup_id, run]));
+
+    return {
+      workflows: rows.map((row) => {
+        const derived = deriveWorkflowStatus(row);
+        const lastRun = lastRunBySetupId.get(row.setup_id);
+        return {
+          workflowId: row.workflow_id,
+          setupId: row.setup_id,
+          name: row.name,
+          status: derived.status,
+          errorClass: derived.errorClass,
+          rejectionReason: derived.rejectionReason,
+          nextRunAt: derived.nextRunAt,
+          lastRun: lastRun
+            ? { status: lastRun.status, finishedAt: lastRun.finished_at, rowsSent: lastRun.rows_sent, errorClass: lastRun.error_class }
+            : null,
+        };
+      }),
+    };
+  });
+
+  app.get<{ Params: { workflowId: string } }>("/agent-api/workflows/:workflowId/graph", async (req) => {
+    const agentKey = extractAgentKey(req.headers.authorization);
+    const agent = await resolveAgentFromKey(agentKey);
+    if (!agent) throw new HttpError(401, "agent key is invalid or revoked");
+
+    const { rows: setupRows } = await withServiceRole(dbPool, (db) =>
+      db.query<{ id: string }>(
+        `select id from public.agent_setups
+         where workflow_id = $1 and agent_id = $2 and source = 'platform' and unpublished_at is null`,
+        [req.params.workflowId, agent.id],
+      ),
+    );
+    if (setupRows.length === 0) throw new HttpError(404, "workflow not found");
+
+    const { rows: graphRows } = await withServiceRole(dbPool, (db) =>
+      db.query<{ graph: unknown; version: number }>(`select graph, version from public.workflow_graphs where workflow_id = $1`, [
+        req.params.workflowId,
+      ]),
+    );
+    const graphRow = graphRows[0];
+    const graph: GraphDocType = graphRow ? GraphDoc.parse(graphRow.graph) : GraphDoc.parse({});
+
+    const connectionIds = [...new Set(graph.nodes.map((node) => node.connectionId).filter((id): id is string => Boolean(id)))];
+    const connRows = connectionIds.length
+      ? (
+          await withServiceRole(dbPool, (db) =>
+            db.query<{ id: string; display_name: string; config: Record<string, unknown> }>(
+              `select id, display_name, config from public.connections where id = any($1::uuid[])`,
+              [connectionIds],
+            ),
+          )
+        ).rows
+      : [];
+    const connectionsById = new Map(connRows.map((row) => [row.id, row]));
+
+    return {
+      workflowId: req.params.workflowId,
+      version: graphRow?.version ?? 0,
+      nodes: graph.nodes.map((node) => mapGraphNodeForAgent(node, connectionsById)),
+      edges: graph.edges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        sourceHandle: edge.sourceHandle,
+        targetHandle: edge.targetHandle,
+      })),
+    };
+  });
+
+  app.post<{ Params: { workflowId: string } }>("/agent-api/workflows/:workflowId/actions", async (req) => {
+    const agentKey = extractAgentKey(req.headers.authorization);
+    const agent = await resolveAgentFromKey(agentKey);
+    if (!agent) throw new HttpError(401, "agent key is invalid or revoked");
+
+    const body = WorkflowActionBody.parse(req.body);
+
+    // Reuses the exact guard+insert+notify logic the website's own
+    // create_agent_setup_action_task RPC delegates to (0077, private
+    // helper scoped by agent_id + workflow_id) — a workflow/agent pair
+    // with no matching published setup, or an unsupported kind, raises
+    // inside the function and lands here as a 404; the mass-delete guard
+    // (allowMassDelete without platform_job_state saying
+    // paused/massDelete) also raises and is reported the same way, since
+    // neither case should be distinguishable from "not yours" to a caller
+    // probing for workflow ids.
+    let taskId: string;
+    try {
+      const { rows } = await withServiceRole(dbPool, (db) =>
+        db.query<{ id: string }>(`select id from private.create_agent_setup_action_task($1, $2, $3, $4::jsonb)`, [
+          agent.id,
+          req.params.workflowId,
+          body.kind,
+          JSON.stringify({ params: body.params, fullReload: body.fullReload, allowMassDelete: body.allowMassDelete }),
+        ]),
+      );
+      taskId = rows[0]?.id ?? "";
+    } catch {
+      throw new HttpError(404, "workflow not found");
+    }
+    if (!taskId) throw new HttpError(404, "workflow not found");
+
+    // Distinct action name from the website's own agent_setup.action_requested
+    // (0074/0076's RPC path) so the two sources are always distinguishable
+    // in the trail, attributed to the agent's created_by_user_id (no real
+    // acting user session here) with the requesting host — never a
+    // param value, same "never a secret/row/param value" rule as 0076.
+    await withServiceRole(dbPool, (db) =>
+      db.query(
+        `insert into public.audit_log (org_id, owner_id, actor, action, detail)
+         values ($1, $2, $3, 'agent_setup.action_requested_by_agent', $4::jsonb)`,
+        [
+          agent.orgId,
+          agent.ownerId,
+          agent.createdByUserId,
+          JSON.stringify({
+            workflowId: req.params.workflowId,
+            kind: body.kind,
+            fullReload: body.fullReload,
+            allowMassDelete: body.allowMassDelete,
+            hostName: agent.hostName,
+          }),
+        ],
+      ),
+    );
 
     return { ok: true as const };
   });

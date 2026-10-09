@@ -349,6 +349,11 @@ export class JobScheduler {
    * "started" immediately — the run's own outcome surfaces later
    * through the normal run report, exactly like any other tick.
    */
+  /** True only while a run for this job (a scheduled tick, a replace tick, or an earlier `runNow`) is actually in flight — read-only, never mutated by a caller. Unknown job id: false. */
+  isRunning(jobId: string): boolean {
+    return this.runtimes.get(jobId)?.running ?? false;
+  }
+
   runNow(jobId: string, forceReplace: boolean, extra?: RunNowExtra): { ok: true } | { ok: false; error: string } {
     let runtime = this.runtimes.get(jobId);
     // A job just added/updated via SetupManager (e.g. right after a
