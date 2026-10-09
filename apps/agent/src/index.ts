@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import readline from "node:readline";
 import { parseArgs } from "node:util";
 import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
+import { parseServerAddress } from "./cli/serverAddress.js";
 import {
   addJob,
   listJobs,
@@ -128,15 +129,20 @@ async function main(argv: string[]): Promise<void> {
     });
     const sourceTimeZone = values["source-timezone"] as string | undefined;
     if (!values.id || !values.label || !values.host || !values.database || !values.user || !values.password || !sourceTimeZone) {
-      console.error("usage: nia-agent connection add --id <id> --label <label> --host <host> --database <db> --user <user> --password <password> --source-timezone <iana-name> [--port <n>] [--encrypt true|false] [--allow-legacy-tls true|false] [--trust-server-certificate true|false]");
+      console.error(
+        "usage: nia-agent connection add --id <id> --label <label> --host <host> --database <db> --user <user> --password <password> --source-timezone <iana-name> [--port <n>] [--encrypt true|false] [--allow-legacy-tls true|false] [--trust-server-certificate true|false]\n" +
+          '  --host accepts a plain host, "HOST\\INSTANCE" (named instance, resolved via SQL Browser), or "HOST,PORT"',
+      );
       process.exitCode = 1;
       return;
     }
+    const address = parseServerAddress(values.host as string);
     const entry = addConnection({
       id: values.id as string,
       label: values.label as string,
-      host: values.host as string,
-      port: values.port ? Number(values.port) : undefined,
+      host: address.host,
+      port: address.port ?? (values.port ? Number(values.port) : undefined),
+      instanceName: address.instanceName,
       database: values.database as string,
       user: values.user as string,
       password: values.password as string,
@@ -151,7 +157,10 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "connection" && subcommand === "list") {
     for (const entry of listConnections()) {
-      console.log(`${entry.id}\t${entry.label}\t${entry.sqlserver.host}:${entry.sqlserver.port ?? 1433}/${entry.sqlserver.database}`);
+      const address = entry.sqlserver.instanceName
+        ? `${entry.sqlserver.host}\\${entry.sqlserver.instanceName}`
+        : `${entry.sqlserver.host}:${entry.sqlserver.port ?? 1433}`;
+      console.log(`${entry.id}\t${entry.label}\t${address}/${entry.sqlserver.database}`);
     }
     return;
   }

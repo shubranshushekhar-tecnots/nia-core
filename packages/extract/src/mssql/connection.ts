@@ -3,6 +3,15 @@ import sql from "mssql";
 export interface MssqlConnectionConfig {
   server: string;
   port?: number;
+  /**
+   * A named SQL Server instance (e.g. "SQL2008ERP" for
+   * "TALLYSERVER\SQL2008ERP") resolved via the SQL Server Browser
+   * service (UDP 1434) instead of a fixed `port` -- mutually exclusive
+   * with `port`; when set, `port` is ignored (tedious itself rejects a
+   * config carrying both). Leave unset for a plain host or a
+   * "host,port" address.
+   */
+  instanceName?: string;
   database: string;
   user: string;
   password: string;
@@ -47,12 +56,15 @@ export interface MssqlConnectionConfig {
 export function buildPoolConfig(config: MssqlConnectionConfig): sql.config {
   return {
     server: config.server,
-    port: config.port ?? 1433,
+    // Omit `port` entirely for a named instance -- SQL Browser resolves
+    // the actual port, and tedious throws if both are given together.
+    ...(config.instanceName ? {} : { port: config.port ?? 1433 }),
     database: config.database,
     user: config.user,
     password: config.password,
     connectionTimeout: config.connectTimeoutMs ?? 15_000,
     options: {
+      ...(config.instanceName ? { instanceName: config.instanceName } : {}),
       encrypt: config.encrypt ?? true,
       trustServerCertificate: config.trustServerCertificate ?? false,
       // Never rely on driver-side timezone conversion for naive datetime

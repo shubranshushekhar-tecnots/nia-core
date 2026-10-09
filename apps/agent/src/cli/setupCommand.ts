@@ -10,6 +10,7 @@ import { readLinkState } from "../ops/linkState.js";
 import { addConnection, testConnection as testConnectionById, listConnections, type AddConnectionInput } from "./connectionCommands.js";
 import { parsePairingInput } from "./pairingInput.js";
 import { readSecretFromStdin } from "./securePrompt.js";
+import { parseServerAddress } from "./serverAddress.js";
 import { ensureServiceRunning, type ServiceEnsureResult } from "./serviceControl.js";
 import { runSqlReadonly, type RunSqlReadonlyInput } from "./sqlReadonlyCommand.js";
 import { testSqlLoginAndListDatabases, type SqlLoginTestInput, type SqlLoginTestResult } from "./sqlLoginTest.js";
@@ -236,7 +237,10 @@ export async function pairingStep(io: SetupIO, deps: SetupDeps): Promise<void> {
   io.print("Paste the pairing command shown on your Agents page, or just the code.");
 
   for (;;) {
-    const raw = await io.ask("Pairing command or code", undefined, "pairing");
+    // Masked (not echoed) like a password — a pairing code is itself a
+    // secret: whoever has it can pair an agent as this organization. It's
+    // never printed back anywhere after this, including in error messages.
+    const raw = await io.askSecret("Pairing command or code", "pairing");
     const parsed = parsePairingInput(raw);
     if (!parsed) {
       io.print("That doesn't look like a pairing command or code — try again.");
@@ -254,11 +258,25 @@ export async function pairingStep(io: SetupIO, deps: SetupDeps): Promise<void> {
   }
 }
 
+/**
+ * A pairing code that's already been consumed or has expired can never
+ * succeed on retry, unlike a mistyped one — re-prompting "try again" for
+ * the SAME code would just repeat the same rejection forever. Both of
+ * the backend's exact messages (services/agent-bridge/src/app.ts) are
+ * matched here to add that guidance; neither ever contains the code
+ * itself, so there's nothing to redact.
+ */
 function describePairingError(err: unknown): string {
-  if (err instanceof InvalidPlatformUrlError || err instanceof InvalidPairingCodeError || err instanceof PairingRejectedError) {
-    return err.message;
+  const message =
+    err instanceof InvalidPlatformUrlError || err instanceof InvalidPairingCodeError || err instanceof PairingRejectedError
+      ? err.message
+      : err instanceof Error
+        ? err.message
+        : String(err);
+  if (/already been used|has expired/i.test(message)) {
+    return `${message} Create a new pairing code from Agents → Add agent on Nia Core, then run this again.`;
   }
-  return err instanceof Error ? err.message : String(err);
+  return message;
 }
 
 function isLocalHost(host: string): boolean {
@@ -273,43 +291,87 @@ function toConnectionId(database: string, existing: ConnectionEntry[]): string {
   return `${base}-${n}`;
 }
 
+/** `nia-agent setup`'s normal free-text server question — asked directly on macOS/Linux, and as the win32 fallback when no local SQL Server instance was auto-detected (or the user types their own address instead of picking one). */
+const HOST_QUESTION = 'Database server (hostname, "HOST\\INSTANCE" for a named instance, or "HOST,PORT")';
+
+/**
+ * Win32-only: presents every locally-installed SQL Server instance (read
+ * from the registry) as a numbered list with "localhost" fixed as option
+ * 1, so a user can just press Enter/type a number instead of typing a
+ * hostname at all — the guiding rule for this step is "minimum hassle,
+ * automatic by default". Picking a running instance also resolves its
+ * port directly, skipping the separate port question entirely. Typing
+ * anything that isn't one of the listed numbers is treated as a literal
+ * server address, same as the plain host question this replaces.
+ */
+async function pickWindowsHost(
+  io: SetupIO,
+  deps: SetupDeps,
+): Promise<{ hostInput: string; detectedPort?: number; pickedInstanceLoginMode?: number }> {
+  const instances = await deps.detectWindowsSqlInstances();
+  if (instances.length === 0) {
+    return { hostInput: await io.ask(HOST_QUESTION, "localhost", "host") };
+  }
+
+  io.print("SQL Server instance(s) found on this machine:");
+  io.print("  1. localhost");
+  instances.forEach((inst, i) => {
+    const portLabel = inst.tcpEnabled ? `port ${inst.port}` : "TCP/IP disabled";
+    io.print(`  ${i + 2}. ${inst.name} (${inst.instanceId}) — ${portLabel}`);
+  });
+  const choice = await io.ask(`Pick a number, or type a server address (same formats as before)`, "1", "host");
+  const trimmed = choice.trim();
+  const num = Number(trimmed);
+  const isListChoice = trimmed !== "" && Number.isInteger(num) && num >= 1 && num <= instances.length + 1;
+
+  if (!isListChoice) return { hostInput: trimmed || "localhost" };
+  if (num === 1) return { hostInput: "localhost" };
+
+  const picked = instances[num - 2]!;
+  if (!picked.tcpEnabled) {
+    io.print(
+      `TCP/IP is disabled for ${picked.name}. To enable it: open SQL Server Configuration Manager -> SQL Server Network Configuration -> Protocols for ${picked.instanceId} -> enable TCP/IP -> restart the SQL Server service.`,
+    );
+    return { hostInput: "localhost", pickedInstanceLoginMode: picked.loginMode };
+  }
+  return { hostInput: "localhost", detectedPort: picked.port, pickedInstanceLoginMode: picked.loginMode };
+}
+
+/** The databases every SQL Server install ships with — never what a customer actually wants synced, so Change 2b hides them from the pick-a-database list entirely. */
+const SYSTEM_DATABASES = new Set(["master", "tempdb", "model", "msdb"]);
+
 /** Exported for the database-step test. */
 export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> {
   io.print("");
   io.print("Now let's connect to your database.");
 
-  const host = await io.ask("Database server", "localhost", "host");
-  let port = Number((await io.ask("Port", "1433", "port")).trim()) || 1433;
+  // On win32, try to save the user from typing a hostname at all; every
+  // other platform keeps the plain free-text question unchanged.
+  const picked =
+    deps.platform === "win32" ? await pickWindowsHost(io, deps) : { hostInput: await io.ask(HOST_QUESTION, "localhost", "host") };
+
+  const address = parseServerAddress(picked.hostInput);
+  const host = address.host;
+  let instanceName = address.instanceName;
+  let port: number | undefined = picked.detectedPort ?? address.port;
 
   // Set only when a local Windows SQL Server instance was auto-detected and
-  // picked below -- used after a failed login attempt to tell "this server
+  // picked above -- used after a failed login attempt to tell "this server
   // only accepts Windows sign-in" apart from "wrong password", which the
   // driver's own error can't do (see WindowsSqlInstance.loginMode's doc
   // comment for why).
-  let pickedInstanceLoginMode: number | undefined;
+  const pickedInstanceLoginMode = picked.pickedInstanceLoginMode;
 
-  if (deps.platform === "win32" && isLocalHost(host)) {
-    const instances = await deps.detectWindowsSqlInstances();
-    if (instances.length > 0) {
-      io.print("Found SQL Server instance(s) on this machine:");
-      instances.forEach((inst, i) => {
-        const portLabel = inst.tcpEnabled ? `port ${inst.port}` : "TCP/IP disabled";
-        io.print(`  ${i + 1}. ${inst.name} (${inst.instanceId}) — ${portLabel}`);
-      });
-      const choice = await io.ask("Pick a number, or leave blank to use the port above", "", "sqlInstanceChoice");
-      const picked = instances[Number(choice) - 1];
-      if (picked) {
-        pickedInstanceLoginMode = picked.loginMode;
-        if (!picked.tcpEnabled) {
-          io.print(
-            `TCP/IP is disabled for ${picked.name}. To enable it: open SQL Server Configuration Manager -> SQL Server Network Configuration -> Protocols for ${picked.instanceId} -> enable TCP/IP -> restart the SQL Server service.`,
-          );
-        } else {
-          port = picked.port!;
-        }
-      }
-    }
+  // A named instance (bug 2) skips the port question entirely — SQL Browser
+  // resolves it — and an explicit "HOST,PORT" address, or a win32 instance
+  // pick whose port is already known, already answered it.
+  if (instanceName) {
+    io.print(`Using named instance "${instanceName}" on ${host} — its port will be resolved via SQL Server Browser (UDP 1434).`);
+  } else if (port === undefined) {
+    port = Number((await io.ask("Port", "1433", "port")).trim()) || 1433;
   }
+
+  if (!instanceName) io.print(`Using port ${port}.`);
 
   for (;;) {
     const user = await io.ask("Database username (leave blank if you don't have one yet)", "", "username");
@@ -336,47 +398,120 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
     // same trade-off SSMS/Azure Data Studio make by default for local
     // instances. Never do this for a host the user typed as a remote
     // address; that's exactly the MITM exposure the strict default exists
-    // to prevent.
-    const trustServerCertificate = isLocalHost(host) ? true : undefined;
+    // to prevent. May still be flipped on below after an explicit prompt,
+    // for a remote server whose self-signed cert the user chooses to trust.
+    let trustServerCertificate: boolean | undefined = isLocalHost(host) ? true : undefined;
+    let allowLegacyTls: boolean | undefined;
+    let result: SqlLoginTestResult | undefined;
 
-    const result = await deps.testSqlLogin({ host, port, user, password, trustServerCertificate });
-    if (!result.ok) {
+    // The login attempt below can legitimately take several seconds (up to
+    // `connectionTimeout`, 15s) with nothing printed in between -- on a slow
+    // or unreachable server this reads exactly like "setup went silent after
+    // the password prompt". Print something before every attempt so there's
+    // always a visible sign the wizard is still working, not stuck.
+    io.print(`Connecting to ${host}...`);
+
+    // Retries the SAME credentials with adjusted TLS settings (never
+    // re-prompts for username/password) — a certificate or legacy-TLS
+    // problem is never fixed by a different login, so looping back to
+    // "try the username and password again" for one would be actively
+    // misleading. Only a genuinely credential-shaped failure (wrong
+    // password, Windows-auth-only, etc.) falls through to the outer loop
+    // below, which re-asks for a login.
+    //
+    // Per the "minimum hassle" rule, neither a self-signed certificate nor
+    // an old TLS version is ever asked about — both have exactly one safe
+    // response for a database server the customer themselves configured
+    // (trust it / allow it), so the wizard just does that silently and
+    // retries, same credentials, with no question and no visible error in
+    // between. Whatever actually worked is reported in one line once the
+    // login succeeds, and is saved only for this one connection — never
+    // flipped on globally.
+    let autoTrustedCertificate = false;
+    let autoAllowedLegacyTls = false;
+    for (;;) {
+      result = await deps.testSqlLogin({ host, instanceName, port, user, password, trustServerCertificate, allowLegacyTls });
+      if (result.ok) break;
+
       // A local instance in Windows-only auth mode rejects every SQL login
       // (right password or wrong) before it even checks the password --
       // and that rejection is indistinguishable, over the wire, from a
       // wrong-password failure (see loginMode's doc comment). When we
       // already know the mode from the registry, trust that over the
       // driver's necessarily-generic error text.
+      const kind = pickedInstanceLoginMode === 1 ? "windowsAuthOnly" : result.kind;
+
+      if (kind === "tlsCertUntrusted" && trustServerCertificate !== true) {
+        trustServerCertificate = true;
+        autoTrustedCertificate = true;
+        continue;
+      }
+
+      if (kind === "tlsProtocolTooOld" && allowLegacyTls !== true) {
+        allowLegacyTls = true;
+        autoAllowedLegacyTls = true;
+        continue;
+      }
+
       const reason =
-        pickedInstanceLoginMode === 1
-          ? "password logins are switched off on this server (it only accepts Windows sign-in)"
-          : result.reason;
+        pickedInstanceLoginMode === 1 ? "password logins are switched off on this server (it only accepts Windows sign-in)" : result.reason;
       io.print(`Couldn't log in: ${reason}`);
-      io.print("Let's try the username and password again.");
+      break;
+    }
+
+    if (!result?.ok) {
+      io.print("Let's try again.");
       continue;
     }
+
+    const connectedQualifier =
+      autoTrustedCertificate && autoAllowedLegacyTls
+        ? " (using the server's own certificate, older server – compatibility mode on)"
+        : autoTrustedCertificate
+          ? " (using the server's own certificate)"
+          : autoAllowedLegacyTls
+            ? " (older server – compatibility mode on)"
+            : "";
+
     if (result.databases.length === 0) {
       io.print("That login works, but can't see any databases. Ask your DBA to grant it access, then try again.");
       continue;
     }
 
-    io.print("Databases this login can see:");
-    result.databases.forEach((name, i) => io.print(`  ${i + 1}. ${name}`));
-    const dbChoice = await io.ask("Pick a number", undefined, "dbChoice");
-    const database = result.databases[Number(dbChoice) - 1];
-    if (!database) {
-      io.print("That's not one of the numbers above — let's try again.");
-      continue;
+    // Every SQL Server install ships master/tempdb/model/msdb — never what
+    // a customer actually wants synced, so they're hidden from the pick
+    // list entirely (requirement 2b). Falling back to typing a name is
+    // reserved for when listing leaves nothing real to pick from.
+    const pickableDatabases = result.databases.filter((name) => !SYSTEM_DATABASES.has(name.toLowerCase()));
+    let database: string;
+    if (pickableDatabases.length > 0) {
+      io.print("Databases this login can see:");
+      pickableDatabases.forEach((name, i) => io.print(`  ${i + 1}. ${name}`));
+      const dbChoice = await io.ask("Pick a number", undefined, "dbChoice");
+      const picked = pickableDatabases[Number(dbChoice) - 1];
+      if (!picked) {
+        io.print("That's not one of the numbers above — let's try again.");
+        continue;
+      }
+      database = picked;
+    } else {
+      io.print("That login works, but the only databases visible are SQL Server's own system databases.");
+      const typed = await io.ask("Database name", undefined, "dbName");
+      if (!typed) {
+        io.print("Let's try again.");
+        continue;
+      }
+      database = typed;
     }
 
     const defaultTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const sourceTimeZone = await io.ask("Time zone this database server runs in", defaultTimeZone, "timezone");
 
     const id = toConnectionId(database, deps.listConnections());
-    deps.addConnection({ id, label: database, host, port, database, user, password, sourceTimeZone, trustServerCertificate });
+    deps.addConnection({ id, label: database, host, port, instanceName, database, user, password, sourceTimeZone, trustServerCertificate, allowLegacyTls });
     const testResult = await deps.testConnection(id);
     if (testResult.ok) {
-      io.print(`Connected. ${testResult.tableCount} table(s)/view(s) visible.`);
+      io.print(`Connected${connectedQualifier}. ${testResult.tableCount} table(s)/view(s) visible.`);
     } else {
       io.print(`Added the connection, but a follow-up check failed: ${testResult.error}`);
     }

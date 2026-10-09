@@ -121,6 +121,14 @@ FunctionEnd
 ; Harmless for running nia-agent.exe itself (CreateProcess works across
 ; bitness for a separate child exe), but inconsistent with this installer's
 ; "64-bit only, always" rule, so resolve it the same way.
+;
+; Only correct for an Exec/nsExec call made by THIS (32-bit) installer
+; process itself -- RunSetupNow, below, is its one remaining caller. Never
+; use $CmdExe for a CreateShortCut target: a persisted .lnk's target string
+; is read later by whatever process the user double-clicks it from (a
+; native 64-bit Explorer on this installer's 64-bit-only target, where
+; "Sysnative" isn't a valid path at all) -- see the Section "Install"
+; shortcut-creation comment for the bug this distinction fixes.
 Function GetCmdExe
   ${If} ${FileExists} "$WINDIR\Sysnative\cmd.exe"
     StrCpy $CmdExe "$WINDIR\Sysnative\cmd.exe"
@@ -174,9 +182,22 @@ Section "Install" SEC01
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\${START_MENU_DIR}"
-  Call GetCmdExe
-  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Setup.lnk" "$CmdExe" '/k ""$INSTDIR\nia-agent.exe" setup"' "$INSTDIR\nia-agent.exe" 0
-  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Status.lnk" "$CmdExe" '/k ""$INSTDIR\nia-agent.exe" status"' "$INSTDIR\nia-agent.exe" 0
+  ; Deliberately NOT using $CmdExe/GetCmdExe here. GetCmdExe's Sysnative
+  ; resolution exists to work around THIS installer process's own WOW64
+  ; redirection when IT launches cmd.exe directly (RunSetupNow, below) --
+  ; but CreateShortCut never launches anything, it just writes a target
+  ; path string into a .lnk file, so no redirection applies to it either
+  ; way. Baking in the Sysnative-resolved path was the actual bug behind
+  ; "the Setup/Status shortcut does nothing the second time": `Sysnative`
+  ; is an alias that only exists for WOW64 (32-bit) processes -- Explorer
+  ; itself is a native 64-bit process on this installer's 64-bit-only
+  ; target, so when IT later resolves a shortcut whose target is literally
+  ; "C:\Windows\Sysnative\cmd.exe", that path doesn't exist for it at all;
+  ; the shortcut just silently fails to launch. The plain System32 path
+  ; below is valid from any process, any bitness, and is what both
+  ; shortcuts must use.
+  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Setup.lnk" "$WINDIR\System32\cmd.exe" '/k ""$INSTDIR\nia-agent.exe" setup"' "$INSTDIR\nia-agent.exe" 0
+  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Status.lnk" "$WINDIR\System32\cmd.exe" '/k ""$INSTDIR\nia-agent.exe" status"' "$INSTDIR\nia-agent.exe" 0
   Push "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Setup.lnk"
   Call MarkShortcutElevated
   Push "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent Status.lnk"

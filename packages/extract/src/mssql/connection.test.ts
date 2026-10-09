@@ -39,4 +39,14 @@ describe("buildPoolConfig", () => {
     expect(config.port).toBe(1433);
     expect(config.connectionTimeout).toBe(15_000);
   });
+
+  it("omits port and sets options.instanceName for a named instance", () => {
+    const config = buildPoolConfig({ ...base, instanceName: "SQL2008ERP", port: 1433 });
+    expect(config.port).toBeUndefined();
+    expect(config.options?.instanceName).toBe("SQL2008ERP");
+  });
+
+  it("leaves options.instanceName unset for a plain host/port", () => {
+    expect(buildPoolConfig(base).options?.instanceName).toBeUndefined();
+  });
 });

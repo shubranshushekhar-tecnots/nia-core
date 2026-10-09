@@ -44,6 +44,8 @@ export interface AddConnectionInput {
   label: string;
   host: string;
   port?: number;
+  /** Named instance (e.g. "SQL2008ERP") -- mutually exclusive with `port`. */
+  instanceName?: string;
   database: string;
   user: string;
   password: string;
@@ -66,6 +68,7 @@ export function addConnection(input: AddConnectionInput, dir = defaultHomeDir())
   const sqlserver: SqlServerConnectionConfig = {
     host: input.host,
     port: input.port,
+    instanceName: input.instanceName,
     database: input.database,
     encrypt: input.encrypt,
     allowLegacyTls: input.allowLegacyTls,
@@ -127,6 +130,7 @@ export async function testConnection(id: string, dir = defaultHomeDir()): Promis
     const pool = await connect({
       server: entry.sqlserver.host,
       port: entry.sqlserver.port,
+      instanceName: entry.sqlserver.instanceName,
       database: entry.sqlserver.database,
       user: credentials.user,
       password: credentials.password,

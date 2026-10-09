@@ -11,6 +11,8 @@ import type { JobFilterCondition } from "../planometry/parameters.js";
 export interface SqlServerConnectionConfig {
   host: string;
   port?: number;
+  /** Named instance (e.g. "SQL2008ERP") resolved via SQL Browser -- mutually exclusive with `port`; set at most one. */
+  instanceName?: string;
   database: string;
   encrypt?: boolean;
   allowLegacyTls?: boolean;

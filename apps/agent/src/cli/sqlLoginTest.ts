@@ -2,32 +2,56 @@ import { connect } from "@nia/extract/mssql";
 
 export interface SqlLoginTestInput {
   host: string;
+  /** Named instance (e.g. "SQL2008ERP") -- mutually exclusive with `port`. */
+  instanceName?: string;
   port?: number;
   user: string;
   password: string;
   encrypt?: boolean;
   trustServerCertificate?: boolean;
+  allowLegacyTls?: boolean;
 }
 
-export type SqlLoginTestResult = { ok: true; databases: string[] } | { ok: false; reason: string };
+/**
+ * What kind of problem a failed login/connect attempt was, so
+ * `databaseStep` can react differently per kind instead of always
+ * looping back to "try the username and password again" -- e.g. offer
+ * to trust a self-signed certificate, or offer legacy-TLS compatibility,
+ * neither of which a wrong username/password would ever fix.
+ */
+export type SqlLoginFailureKind =
+  | "wrongCredentials"
+  | "windowsAuthOnly"
+  | "unreachable"
+  | "wrongPortOrInstance"
+  | "tlsCertUntrusted"
+  | "tlsProtocolTooOld"
+  | "databaseNotFound"
+  | "unknown";
+
+export type SqlLoginTestResult =
+  | { ok: true; databases: string[] }
+  | { ok: false; reason: string; kind: SqlLoginFailureKind };
 
 /**
  * `nia-agent setup`'s database step: connects to `master` with the given
  * login (no database chosen yet) and lists every database that login can
  * see, via `HAS_DBACCESS` — same read-only, no-write probe style as
  * cli/doctorChecks.ts's `probeSqlServer`. Never throws; failures are
- * classified into a plain reason by `classifySqlLoginError`.
+ * classified into a plain reason + `kind` by `classifySqlLoginError`.
  */
 export async function testSqlLoginAndListDatabases(input: SqlLoginTestInput): Promise<SqlLoginTestResult> {
   try {
     const pool = await connect({
       server: input.host,
+      instanceName: input.instanceName,
       port: input.port,
       database: "master",
       user: input.user,
       password: input.password,
       encrypt: input.encrypt,
       trustServerCertificate: input.trustServerCertificate,
+      allowLegacyTls: input.allowLegacyTls,
     });
     try {
       const result = await pool.request().query<{ name: string }>(
@@ -38,12 +62,30 @@ export async function testSqlLoginAndListDatabases(input: SqlLoginTestInput): Pr
       await pool.close();
     }
   } catch (err) {
-    return { ok: false, reason: classifySqlLoginError(err) };
+    return { ok: false, ...classifySqlLoginError(err) };
   }
 }
 
+/**
+ * Checked before the generic cert-untrusted regex below: a protocol-
+ * version handshake failure (the client and server share no TLS version
+ * in common at all -- exactly what happens against SQL Server 2008's
+ * TLS 1.0-only stack under Node 22's OpenSSL 3.x, which refuses to even
+ * attempt TLS 1.0 unless `allowLegacyTls` lowers the minimum version) is
+ * a fundamentally different problem from "the certificate itself isn't
+ * trusted": trusting the certificate can never fix a protocol mismatch,
+ * only `allowLegacyTls` can. Node/OpenSSL's actual wording for this
+ * varies by version/platform -- "wrong version number" is OpenSSL's
+ * classic `SSL_ERROR_SSL` text, "unsupported protocol" is the newer
+ * OpenSSL 3.x wording, "EPROTO" is the Node-level error code tedious
+ * surfaces it under.
+ */
+const TLS_PROTOCOL_PATTERN = /wrong version number|unsupported protocol|EPROTO/i;
+
+const TLS_CERT_PATTERN = /ssl|tls|certificate|handshake|self signed/i;
+
 /** Exported for unit testing without a real SQL Server. Never includes the password — only `err`'s own message/code. */
-export function classifySqlLoginError(err: unknown): string {
+export function classifySqlLoginError(err: unknown): { reason: string; kind: SqlLoginFailureKind } {
   const code = (err as { code?: string } | undefined)?.code;
   const message = err instanceof Error ? err.message : String(err);
 
@@ -56,21 +98,46 @@ export function classifySqlLoginError(err: unknown): string {
   // previous regex here (matching "windows authentication") never once
   // matched and fell through to the generic ELOGIN "wrong password" case.
   if (/not associated with a trusted sql server connection/i.test(message)) {
-    return "password logins are switched off on this server (it only accepts Windows sign-in)";
+    return { kind: "windowsAuthOnly", reason: "password logins are switched off on this server (it only accepts Windows sign-in)" };
+  }
+  // "Cannot open database "X" requested by the login" -- the login itself
+  // is fine, but the specific database it tried to default into doesn't
+  // exist or isn't visible to it. Checked before the generic ELOGIN case
+  // below since both are technically login-phase failures from tedious's
+  // point of view.
+  if (/cannot open database/i.test(message)) {
+    return { kind: "databaseNotFound", reason: "that login worked, but the database it tried to open doesn't exist (or this login can't see it)" };
   }
   if (code === "ELOGIN") {
-    return "wrong username or password";
+    return { kind: "wrongCredentials", reason: "wrong username or password" };
+  }
+  if (TLS_PROTOCOL_PATTERN.test(message)) {
+    return {
+      kind: "tlsProtocolTooOld",
+      reason:
+        "this server only supports an old TLS version (common on SQL Server 2008/2008 R2) that this agent doesn't accept by default — it can connect anyway in a lower-security \"legacy server compatibility\" mode if you trust this network",
+    };
   }
   // Checked before the generic ESOCKET/timeout bucket below: a TLS/certificate
   // handshake failure (e.g. the server's default self-signed certificate isn't
   // trusted) also surfaces from tedious as ESOCKET, and would otherwise be
   // misreported as a plain unreachable-host error — same distinction
   // doctorChecks.ts's TLS_ERROR_PATTERN already makes for `agent doctor`.
-  if (/ssl|tls|certificate|handshake|self signed/i.test(message)) {
-    return "couldn't verify this server's TLS certificate (it's likely self-signed) — ask your DBA for a trusted certificate, or re-run setup against this server once it's reachable on your local network";
+  if (TLS_CERT_PATTERN.test(message)) {
+    return {
+      kind: "tlsCertUntrusted",
+      reason: "couldn't verify this server's TLS certificate (it's likely self-signed) — ask your DBA for a trusted certificate, or trust this server's certificate if it's on your own network",
+    };
   }
-  if (code === "ESOCKET" || code === "ETIMEOUT" || /ECONNREFUSED|getaddrinfo|timed? ?out/i.test(message)) {
-    return "server not reachable on that host/port";
+  // A connection actively refused (as opposed to timing out / DNS failing)
+  // means the host itself answered but nothing is listening on that exact
+  // port -- usually a wrong port, or a named instance that needs its own
+  // port/SQL Browser rather than the default.
+  if (code === "ECONNREFUSED" || /ECONNREFUSED/.test(message)) {
+    return { kind: "wrongPortOrInstance", reason: "that host is reachable, but nothing is listening on that port — check the port, or if this is a named instance, its own port or SQL Browser" };
   }
-  return message;
+  if (code === "ESOCKET" || code === "ETIMEOUT" || /getaddrinfo|timed? ?out/i.test(message)) {
+    return { kind: "unreachable", reason: "server not reachable on that host/port" };
+  }
+  return { kind: "unknown", reason: message };
 }
