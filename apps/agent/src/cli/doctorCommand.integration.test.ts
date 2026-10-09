@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { connect } from "@nia/extract/mssql";
-import { addConnection } from "./connectionCommands.js";
+import { addConnection } from "../core/connections.js";
 import { buildReadonlySetupScript } from "./sqlReadonlyScript.js";
 import { runDoctor } from "./doctorCommand.js";
 

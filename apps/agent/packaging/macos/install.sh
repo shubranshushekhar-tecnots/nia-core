@@ -66,6 +66,29 @@ chmod 755 "$EXE_PATH"
 mkdir -p "$LOG_DIR"
 chmod 700 "$LOG_DIR"
 
+# The local API's token and port files (see config/paths.ts's localApiDir())
+# get an extra ACL entry on --system installs only: the daemon runs as
+# root, but the token must still be readable by the user who ran the
+# installer so their own (non-root) desktop app can use the local API
+# without needing to run as root itself. A --user install has no such
+# split -- the daemon and the desktop app both already run as the same
+# logged-in user -- so this is skipped there; plain owner-only 700 is
+# already correct. Pre-creating the folder here (rather than leaving it to
+# the agent's own lazy mkdir on first run) means the ACL is in place before
+# the token file is ever written.
+LOCAL_API_DIR="$HOME_DIR/local-api"
+mkdir -p "$LOCAL_API_DIR"
+chmod 700 "$LOCAL_API_DIR"
+if [[ "$SYSTEM" == true ]]; then
+  INSTALLING_USER="${SUDO_USER:-}"
+  if [[ -n "$INSTALLING_USER" ]]; then
+    chmod +a "$INSTALLING_USER allow read,readattr,execute,search,file_inherit,directory_inherit" "$LOCAL_API_DIR"
+  else
+    echo "warning: could not determine the installing user (SUDO_USER is unset) -- the local API token will not be readable by any non-root account. Re-run via 'sudo ./install.sh --system' from a normal user's login session, or grant access manually:" >&2
+    echo "  sudo chmod +a \"<username> allow read,readattr,execute,search,file_inherit,directory_inherit\" \"$LOCAL_API_DIR\"" >&2
+  fi
+fi
+
 mkdir -p "$PLIST_DIR"
 sed \
   -e "s|__NIA_AGENT_LABEL__|$LABEL|g" \

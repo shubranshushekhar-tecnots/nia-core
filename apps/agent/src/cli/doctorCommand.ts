@@ -1,11 +1,11 @@
-import { defaultHomeDir, defaultLogDir, defaultSpoolDir, keyFilePath } from "../config/paths.js";
+import { defaultHomeDir, defaultLogDir, defaultSpoolDir, keyFilePath, localApiDir } from "../config/paths.js";
 import { findConnection, loadConfig } from "../config/store.js";
 import { loadOrCreateMasterKey } from "../secrets/keyfile.js";
 import { LocalSecretStore } from "../secrets/store.js";
 import { readJobState } from "../ops/state.js";
 import { checkCancelVisibility, checkDiskSpace, checkLoginPermissions, checkTargetReachable, checkTargetSchema, probeSqlServer, type CheckResult } from "./doctorChecks.js";
 import { testJob } from "./jobCommands.js";
-import { checkPathPermissions } from "./permissionChecks.js";
+import { checkPathPermissions, loadLocalApiExtraAllowedIdentities } from "./permissionChecks.js";
 
 export interface ConnectionDoctorReport {
   connectionId: string;
@@ -51,6 +51,7 @@ export async function runDoctor(connectionId: string | undefined, dir = defaultH
         checkPathPermissions("secrets keyfile", keyFilePath(dir)),
         checkPathPermissions("spool directory", defaultSpoolDir(dir)),
         checkPathPermissions("log directory", defaultLogDir(dir)),
+        checkPathPermissions("local-api directory", localApiDir(dir), loadLocalApiExtraAllowedIdentities(dir)),
       ])),
     );
 

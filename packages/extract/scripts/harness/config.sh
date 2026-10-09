@@ -4,7 +4,9 @@
 # started/stopped by start.sh/stop.sh, never part of the dev sandbox.
 export NIA_EXTRACT_MSSQL_CONTAINER="nia-extract-mssql-test"
 export NIA_EXTRACT_MSSQL_HOST="localhost"
-export NIA_EXTRACT_MSSQL_PORT="14330"
+# Overridable so the harness can run on a different host port when 14330 is
+# already taken by something else (e.g. an unrelated long-lived container).
+export NIA_EXTRACT_MSSQL_PORT="${NIA_EXTRACT_MSSQL_PORT:-14330}"
 export NIA_EXTRACT_MSSQL_USER="sa"
 # Throwaway local test container only, torn down after every run — not a
 # real secret.

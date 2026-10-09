@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifySqlLoginError } from "./sqlLoginTest.js";
+import { classifySqlLoginError } from "./sqlLogin.js";
 
 function errWithCode(code: string, message = code): Error {
   const err = new Error(message) as Error & { code: string };

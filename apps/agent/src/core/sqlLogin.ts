@@ -66,6 +66,74 @@ export async function testSqlLoginAndListDatabases(input: SqlLoginTestInput): Pr
   }
 }
 
+export interface SqlLoginAutoRetryResult {
+  result: SqlLoginTestResult;
+  /** True if a `tlsCertUntrusted` failure was silently retried with `trustServerCertificate: true`. */
+  autoTrustedCertificate: boolean;
+  /** True if a `tlsProtocolTooOld` failure was silently retried with `allowLegacyTls: true`. */
+  autoAllowedLegacyTls: boolean;
+}
+
+/**
+ * Shared by `cli/setupCommand.ts`'s `databaseStep` and the local API's
+ * `POST /connections/test` route: retries the SAME credentials with
+ * adjusted TLS settings (never re-prompts/re-sends a different login) —
+ * a certificate or legacy-TLS problem is never fixed by a different
+ * login. Per the "minimum hassle" rule, neither a self-signed
+ * certificate nor an old TLS version is ever surfaced as a question to
+ * the caller — both have exactly one safe response for a database
+ * server the customer themselves configured (trust it / allow it), so
+ * this silently does that and retries; what was auto-enabled is
+ * reported back via `autoTrustedCertificate`/`autoAllowedLegacyTls` so
+ * the caller can tell the user what happened, without ever asking a
+ * question first.
+ *
+ * `pickedInstanceLoginMode` (Windows only): when the caller already
+ * knows -- from the registry, via `detectWindowsSqlInstances` -- that
+ * the picked instance is in Windows-only auth mode, that's trusted over
+ * the driver's necessarily-generic "Login failed" error (see
+ * `WindowsSqlInstance.loginMode`'s doc comment for why), and the
+ * returned `result`'s `kind`/`reason` are overridden to `windowsAuthOnly`
+ * accordingly.
+ */
+export async function testSqlLoginWithAutoRetry(
+  testSqlLogin: (input: SqlLoginTestInput) => Promise<SqlLoginTestResult>,
+  input: SqlLoginTestInput,
+  pickedInstanceLoginMode?: number,
+): Promise<SqlLoginAutoRetryResult> {
+  let trustServerCertificate = input.trustServerCertificate;
+  let allowLegacyTls = input.allowLegacyTls;
+  let autoTrustedCertificate = false;
+  let autoAllowedLegacyTls = false;
+  let result: SqlLoginTestResult;
+
+  for (;;) {
+    result = await testSqlLogin({ ...input, trustServerCertificate, allowLegacyTls });
+    if (result.ok) break;
+
+    const kind = pickedInstanceLoginMode === 1 ? "windowsAuthOnly" : result.kind;
+
+    if (kind === "tlsCertUntrusted" && trustServerCertificate !== true) {
+      trustServerCertificate = true;
+      autoTrustedCertificate = true;
+      continue;
+    }
+
+    if (kind === "tlsProtocolTooOld" && allowLegacyTls !== true) {
+      allowLegacyTls = true;
+      autoAllowedLegacyTls = true;
+      continue;
+    }
+
+    if (pickedInstanceLoginMode === 1 && kind !== result.kind) {
+      result = { ok: false, kind: "windowsAuthOnly", reason: "password logins are switched off on this server (it only accepts Windows sign-in)" };
+    }
+    break;
+  }
+
+  return { result, autoTrustedCertificate, autoAllowedLegacyTls };
+}
+
 /**
  * Checked before the generic cert-untrusted regex below: a protocol-
  * version handshake failure (the client and server share no TLS version

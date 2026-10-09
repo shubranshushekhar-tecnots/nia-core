@@ -2,8 +2,8 @@
 import { readFileSync } from "node:fs";
 import readline from "node:readline";
 import { parseArgs } from "node:util";
-import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./cli/connectionCommands.js";
-import { parseServerAddress } from "./cli/serverAddress.js";
+import { addConnection, ConnectionInUseError, listConnections, removeConnection, testConnection } from "./core/connections.js";
+import { parseServerAddress } from "./core/serverAddress.js";
 import {
   addJob,
   listJobs,

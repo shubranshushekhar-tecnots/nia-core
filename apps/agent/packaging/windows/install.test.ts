@@ -72,6 +72,48 @@ describe("packaging/windows/install.ps1", () => {
     expect(aclCatchBlock).toContain("Remove-ServiceQuietly");
   });
 
+  // Step c2: the local-api subfolder (token + port files) must get its own
+  // ACL, separate from the main data dir, granting read-only access to the
+  // installing user's SID (not just service + Administrators) — see
+  // paths.ts's localApiDir() doc comment for why a plain Administrators-only
+  // grant isn't enough for a non-elevated desktop app to read it.
+  describe("step c2 (local-api subfolder ACL)", () => {
+    const step2Index = script.indexOf("# Step c2)");
+    const step2Block = script.slice(step2Index, script.indexOf("# Step d)"));
+
+    it("runs after step c's data-dir ACL and before step d's service start", () => {
+      const setAclIndex = script.indexOf("Set-Acl $DataDir $acl");
+      const startIndex = script.indexOf("& $ServiceExe start");
+      expect(step2Index).toBeGreaterThan(-1);
+      expect(setAclIndex).toBeLessThan(step2Index);
+      expect(step2Index).toBeLessThan(startIndex);
+    });
+
+    it("creates a local-api subfolder under the data dir", () => {
+      expect(step2Block).toContain('$LocalApiDir = Join-Path $DataDir "local-api"');
+      expect(step2Block).toContain("New-Item -ItemType Directory -Force -Path $LocalApiDir");
+    });
+
+    it("grants the service and Administrators full control, and the installing user read-only, by SID", () => {
+      expect(step2Block).toContain("([Security.Principal.WindowsIdentity]::GetCurrent()).User");
+      expect(step2Block).toContain('FileSystemAccessRule($serviceSid, "FullControl"');
+      expect(step2Block).toContain('FileSystemAccessRule($administratorsSid, "FullControl"');
+      expect(step2Block).toContain('FileSystemAccessRule($installingUserSid, "ReadAndExecute"');
+      expect(step2Block).toContain("Set-Acl $LocalApiDir $localApiAcl");
+    });
+
+    it("records the installing user's resolved identity in a marker file for `nia-agent doctor`", () => {
+      expect(step2Block).toContain('$markerPath = Join-Path $LocalApiDir "installing-user.json"');
+      expect(step2Block).toContain("identity = $installingUserName");
+      expect(step2Block).toContain("ConvertTo-Json -Compress");
+    });
+
+    it("removes the service on local-api permission failure instead of leaving it behind", () => {
+      expect(step2Block).toContain("Remove-ServiceQuietly");
+      expect(step2Block).toContain('Fail "set local-api directory permissions"');
+    });
+  });
+
   // Regression test for the real-Windows-11 failure: the installer
   // extracted files to the true 64-bit Program Files, but a 32-bit
   // install.ps1 process (launched via a WOW64-redirected $SYSDIR) computed

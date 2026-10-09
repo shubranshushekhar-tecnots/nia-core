@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWindowsSqlInstancesFromRegistry } from "./windowsSqlInstances.js";
+import { parseWindowsSqlInstancesFromRegistry } from "./sqlDiscovery.js";
 
 /** Shaped like real `reg query "HKLM\...\Microsoft SQL Server" /s` output for a default instance (dynamic port) plus a named instance (static port). */
 const TWO_INSTANCE_DUMP = `

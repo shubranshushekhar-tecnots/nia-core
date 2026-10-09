@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs";
 import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
+import { localApiInstallingUserFilePath } from "../config/paths.js";
 import type { CheckResult } from "./doctorChecks.js";
 
 const execFileAsync = promisify(execFile);
@@ -21,7 +23,11 @@ const execFileAsync = promisify(execFile);
  */
 const WINDOWS_ALLOWED_IDENTITIES = [/^NT SERVICE\\NIA-AGENT$/i, /^BUILTIN\\ADMINISTRATORS$/i];
 
-export async function checkPathPermissions(label: string, targetPath: string): Promise<CheckResult> {
+export async function checkPathPermissions(
+  label: string,
+  targetPath: string,
+  extraAllowedWindowsIdentities: RegExp[] = [],
+): Promise<CheckResult> {
   const name = `${label} permissions`;
   let info;
   try {
@@ -34,7 +40,7 @@ export async function checkPathPermissions(label: string, targetPath: string): P
   }
 
   if (process.platform === "win32") {
-    return checkWindowsAcl(name, targetPath);
+    return checkWindowsAcl(name, targetPath, extraAllowedWindowsIdentities);
   }
   return checkPosixMode(name, targetPath, info.mode, info.isDirectory());
 }
@@ -53,12 +59,12 @@ function checkPosixMode(name: string, targetPath: string, mode: number, isDirect
   };
 }
 
-async function checkWindowsAcl(name: string, targetPath: string): Promise<CheckResult> {
+async function checkWindowsAcl(name: string, targetPath: string, extraAllowedWindowsIdentities: RegExp[] = []): Promise<CheckResult> {
   const fix = `icacls "${targetPath}" /inheritance:r /grant:r "NT SERVICE\\nia-agent:(OI)(CI)F" "BUILTIN\\Administrators:(OI)(CI)F"`;
   try {
     const { stdout } = await execFileAsync("icacls", [targetPath]);
     const identities = parseIcaclsIdentities(stdout, targetPath);
-    const unexpected = findUnexpectedWindowsIdentities(identities);
+    const unexpected = findUnexpectedWindowsIdentities(identities, extraAllowedWindowsIdentities);
     return {
       name,
       pass: unexpected.length === 0,
@@ -74,9 +80,37 @@ async function checkWindowsAcl(name: string, targetPath: string): Promise<CheckR
   }
 }
 
-/** Exported for unit testing without a Windows host — e.g. asserts that a service account reverting to NT AUTHORITY\SYSTEM or LocalSystem gets flagged, not silently allowed. */
-export function findUnexpectedWindowsIdentities(identities: string[]): string[] {
-  return identities.filter((id) => !WINDOWS_ALLOWED_IDENTITIES.some((re) => re.test(id)));
+/**
+ * Exported for unit testing without a Windows host — e.g. asserts that a
+ * service account reverting to NT AUTHORITY\SYSTEM or LocalSystem gets
+ * flagged, not silently allowed. `extraAllowed` is for the one directory
+ * (`localApiDir()`) whose ACL legitimately has a third identity — the
+ * user who ran install.ps1 — see `loadLocalApiExtraAllowedIdentities`.
+ */
+export function findUnexpectedWindowsIdentities(identities: string[], extraAllowed: RegExp[] = []): string[] {
+  const allowed = [...WINDOWS_ALLOWED_IDENTITIES, ...extraAllowed];
+  return identities.filter((id) => !allowed.some((re) => re.test(id)));
+}
+
+/**
+ * Reads the `DOMAIN\user` (or local `user`) identity `install.ps1` recorded
+ * for whoever ran it, so `checkPathPermissions("local-api directory", ...)`
+ * knows that one extra ACE is expected on `localApiDir()` beyond the
+ * service account and Administrators. Deliberately not gated on
+ * `process.platform === "win32"` -- the marker file simply won't exist on
+ * macOS/Linux or on an unpacked/non-installer run, so this naturally
+ * returns `[]` there without needing to mock `process.platform` in tests.
+ */
+export function loadLocalApiExtraAllowedIdentities(dir: string): RegExp[] {
+  try {
+    const raw = fs.readFileSync(localApiInstallingUserFilePath(dir), "utf8");
+    const parsed = JSON.parse(raw) as { identity?: unknown };
+    if (typeof parsed.identity !== "string" || parsed.identity.length === 0) return [];
+    const escaped = parsed.identity.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return [new RegExp(`^${escaped}$`, "i")];
+  } catch {
+    return [];
+  }
 }
 
 /** Exported for unit testing without a Windows host. icacls prints the path followed by the first ACE on one line, then one indented "identity:(flags)perm" line per further ACE, ending in a blank line + a "Successfully processed..." summary. */

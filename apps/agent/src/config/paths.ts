@@ -72,3 +72,47 @@ export function linkStateFilePath(dir = defaultHomeDir()): string {
 export function runReportOutboxFilePath(dir = defaultHomeDir()): string {
   return path.join(dir, "run-report-outbox.json");
 }
+
+/**
+ * Phase 1 (local control API) — the token and port files live in their
+ * own subfolder, separate from the rest of the data dir, with its own
+ * (tighter but differently-scoped) ACL: on Windows, `install.ps1` grants
+ * the service account + Administrators full control (same as the main
+ * data dir) *plus* read-only access to the one user account that ran
+ * the installer. That third grant only exists here, never on the main
+ * data dir — see docs/agent-local-api.md for why (a non-elevated
+ * desktop-app process has Administrators as deny-only in its UAC-
+ * filtered token, so a grant to that group alone isn't enough; a grant
+ * to the specific user SID is, and doesn't require elevating).
+ */
+export function localApiDir(dir = defaultHomeDir()): string {
+  return path.join(dir, "local-api");
+}
+
+/** Written on every successful bind of the local HTTP server, so a desktop app can discover the actual port (default + fallback range) without guessing. */
+export function localApiPortFilePath(dir = defaultHomeDir()): string {
+  return path.join(localApiDir(dir), "port.json");
+}
+
+/**
+ * The random bearer token every local API request must carry, generated
+ * once and reused across restarts (same pattern as `keyFilePath`'s
+ * `master.key`). Permissions are inherited from `localApiDir()`'s own
+ * ACL, not the main data dir's — see docs/agent-local-api.md.
+ */
+export function localApiTokenFilePath(dir = defaultHomeDir()): string {
+  return path.join(localApiDir(dir), "token");
+}
+
+/**
+ * Windows only, written by `install.ps1`: the resolved account name
+ * (`DOMAIN\user`) of whoever ran the installer, so `nia-agent doctor`
+ * knows the one extra identity expected on `localApiDir()`'s ACL beyond
+ * the service account and Administrators. Absent on macOS/Linux, and
+ * absent everywhere if the agent was never installed via `install.ps1`
+ * (e.g. run unpacked from a zip) — `doctor`'s check treats a missing
+ * file as "no extra identity expected", not a failure.
+ */
+export function localApiInstallingUserFilePath(dir = defaultHomeDir()): string {
+  return path.join(localApiDir(dir), "installing-user.json");
+}

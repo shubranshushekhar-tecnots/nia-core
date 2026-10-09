@@ -1,8 +1,14 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checkPathPermissions, findUnexpectedWindowsIdentities, parseIcaclsIdentities } from "./permissionChecks.js";
+import { localApiInstallingUserFilePath } from "../config/paths.js";
+import {
+  checkPathPermissions,
+  findUnexpectedWindowsIdentities,
+  loadLocalApiExtraAllowedIdentities,
+  parseIcaclsIdentities,
+} from "./permissionChecks.js";
 
 describe("checkPathPermissions", () => {
   let dir: string;
@@ -98,5 +104,78 @@ describe("findUnexpectedWindowsIdentities", () => {
     expect(findUnexpectedWindowsIdentities(["NT SERVICE\\nia-agent", "BUILTIN\\Administrators", "BUILTIN\\Users"])).toEqual([
       "BUILTIN\\Users",
     ]);
+  });
+
+  // The local-api directory legitimately has a third identity -- the user
+  // who ran install.ps1 -- passed in via extraAllowed (loaded from the
+  // installing-user.json marker file by loadLocalApiExtraAllowedIdentities).
+  it("allows an extra identity when passed via extraAllowed", () => {
+    expect(
+      findUnexpectedWindowsIdentities(
+        ["NT SERVICE\\nia-agent", "BUILTIN\\Administrators", "CONTOSO\\jdoe"],
+        [/^CONTOSO\\jdoe$/i],
+      ),
+    ).toEqual([]);
+  });
+
+  it("still flags identities not covered by extraAllowed", () => {
+    expect(
+      findUnexpectedWindowsIdentities(
+        ["NT SERVICE\\nia-agent", "BUILTIN\\Administrators", "BUILTIN\\Users"],
+        [/^CONTOSO\\jdoe$/i],
+      ),
+    ).toEqual(["BUILTIN\\Users"]);
+  });
+});
+
+describe("loadLocalApiExtraAllowedIdentities", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "nia-agent-permcheck-marker-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("returns [] when the marker file doesn't exist (macOS/Linux, or an unpacked/non-installer run)", () => {
+    expect(loadLocalApiExtraAllowedIdentities(dir)).toEqual([]);
+  });
+
+  it("returns a case-insensitive exact-match regex for the recorded identity", async () => {
+    const markerPath = localApiInstallingUserFilePath(dir);
+    await mkdir(path.dirname(markerPath), { recursive: true });
+    await writeFile(markerPath, JSON.stringify({ identity: "CONTOSO\\jdoe" }));
+
+    const [identity] = loadLocalApiExtraAllowedIdentities(dir);
+    expect(identity).toBeDefined();
+    expect(identity!.test("CONTOSO\\jdoe")).toBe(true);
+    expect(identity!.test("contoso\\jdoe")).toBe(true);
+    expect(identity!.test("CONTOSO\\other")).toBe(false);
+  });
+
+  it("escapes regex metacharacters in the recorded identity", async () => {
+    const markerPath = localApiInstallingUserFilePath(dir);
+    await mkdir(path.dirname(markerPath), { recursive: true });
+    await writeFile(markerPath, JSON.stringify({ identity: "CONTOSO\\j.doe" }));
+
+    const [identity] = loadLocalApiExtraAllowedIdentities(dir);
+    expect(identity!.test("CONTOSO\\j.doe")).toBe(true);
+    expect(identity!.test("CONTOSOXjXdoe")).toBe(false);
+  });
+
+  it("returns [] for malformed JSON or a missing/empty identity field", async () => {
+    const markerPath = localApiInstallingUserFilePath(dir);
+    await mkdir(path.dirname(markerPath), { recursive: true });
+
+    await writeFile(markerPath, "not json");
+    expect(loadLocalApiExtraAllowedIdentities(dir)).toEqual([]);
+
+    await writeFile(markerPath, JSON.stringify({}));
+    expect(loadLocalApiExtraAllowedIdentities(dir)).toEqual([]);
+
+    await writeFile(markerPath, JSON.stringify({ identity: "" }));
+    expect(loadLocalApiExtraAllowedIdentities(dir)).toEqual([]);
   });
 });

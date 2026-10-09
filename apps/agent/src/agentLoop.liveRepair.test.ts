@@ -6,7 +6,7 @@ import { FakePlatformServer } from "./testing/fakePlatformServer.js";
 
 const { runAgentLoop } = await import("./agentLoop.js");
 const { pair } = await import("./link/pairing.js");
-const { addConnection } = await import("./cli/connectionCommands.js");
+const { addConnection } = await import("./core/connections.js");
 
 /**
  * Reproduces exactly what the Windows CI harness's check C5 + check D1 do,

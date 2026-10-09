@@ -4,17 +4,17 @@ import readline from "node:readline";
 import { defaultHomeDir } from "../config/paths.js";
 import { loadConfig } from "../config/store.js";
 import type { ConnectionEntry } from "../config/types.js";
+import { addConnection, testConnection as testConnectionById, listConnections, type AddConnectionInput } from "../core/connections.js";
+import { parseServerAddress } from "../core/serverAddress.js";
+import { testSqlLoginAndListDatabases, testSqlLoginWithAutoRetry, type SqlLoginTestInput, type SqlLoginTestResult } from "../core/sqlLogin.js";
+import { detectWindowsSqlInstances, type WindowsSqlInstance } from "../core/sqlDiscovery.js";
 import { allowDestinationHost } from "../destinations/allowedHosts.js";
 import { InvalidPairingCodeError, InvalidPlatformUrlError, pair, PairingRejectedError, type PairInput, type PairResult } from "../link/pairing.js";
 import { readLinkState } from "../ops/linkState.js";
-import { addConnection, testConnection as testConnectionById, listConnections, type AddConnectionInput } from "./connectionCommands.js";
 import { parsePairingInput } from "./pairingInput.js";
 import { readSecretFromStdin } from "./securePrompt.js";
-import { parseServerAddress } from "./serverAddress.js";
 import { ensureServiceRunning, type ServiceEnsureResult } from "./serviceControl.js";
 import { runSqlReadonly, type RunSqlReadonlyInput } from "./sqlReadonlyCommand.js";
-import { testSqlLoginAndListDatabases, type SqlLoginTestInput, type SqlLoginTestResult } from "./sqlLoginTest.js";
-import { detectWindowsSqlInstances, type WindowsSqlInstance } from "./windowsSqlInstances.js";
 
 /**
  * `nia-agent setup`'s interaction surface — kept separate from Node's
@@ -400,9 +400,11 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
     // address; that's exactly the MITM exposure the strict default exists
     // to prevent. May still be flipped on below after an explicit prompt,
     // for a remote server whose self-signed cert the user chooses to trust.
+    // SQL Server auto-generates a self-signed certificate for encrypted
+    // connections whenever none is explicitly configured; see
+    // `testSqlLoginWithAutoRetry`'s doc comment for the full trade-off.
     let trustServerCertificate: boolean | undefined = isLocalHost(host) ? true : undefined;
     let allowLegacyTls: boolean | undefined;
-    let result: SqlLoginTestResult | undefined;
 
     // The login attempt below can legitimately take several seconds (up to
     // `connectionTimeout`, 15s) with nothing printed in between -- on a slow
@@ -411,55 +413,16 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
     // always a visible sign the wizard is still working, not stuck.
     io.print(`Connecting to ${host}...`);
 
-    // Retries the SAME credentials with adjusted TLS settings (never
-    // re-prompts for username/password) — a certificate or legacy-TLS
-    // problem is never fixed by a different login, so looping back to
-    // "try the username and password again" for one would be actively
-    // misleading. Only a genuinely credential-shaped failure (wrong
-    // password, Windows-auth-only, etc.) falls through to the outer loop
-    // below, which re-asks for a login.
-    //
-    // Per the "minimum hassle" rule, neither a self-signed certificate nor
-    // an old TLS version is ever asked about — both have exactly one safe
-    // response for a database server the customer themselves configured
-    // (trust it / allow it), so the wizard just does that silently and
-    // retries, same credentials, with no question and no visible error in
-    // between. Whatever actually worked is reported in one line once the
-    // login succeeds, and is saved only for this one connection — never
-    // flipped on globally.
-    let autoTrustedCertificate = false;
-    let autoAllowedLegacyTls = false;
-    for (;;) {
-      result = await deps.testSqlLogin({ host, instanceName, port, user, password, trustServerCertificate, allowLegacyTls });
-      if (result.ok) break;
+    const { result, autoTrustedCertificate, autoAllowedLegacyTls } = await testSqlLoginWithAutoRetry(
+      deps.testSqlLogin,
+      { host, instanceName, port, user, password, trustServerCertificate, allowLegacyTls },
+      pickedInstanceLoginMode,
+    );
+    trustServerCertificate = autoTrustedCertificate ? true : trustServerCertificate;
+    allowLegacyTls = autoAllowedLegacyTls ? true : allowLegacyTls;
 
-      // A local instance in Windows-only auth mode rejects every SQL login
-      // (right password or wrong) before it even checks the password --
-      // and that rejection is indistinguishable, over the wire, from a
-      // wrong-password failure (see loginMode's doc comment). When we
-      // already know the mode from the registry, trust that over the
-      // driver's necessarily-generic error text.
-      const kind = pickedInstanceLoginMode === 1 ? "windowsAuthOnly" : result.kind;
-
-      if (kind === "tlsCertUntrusted" && trustServerCertificate !== true) {
-        trustServerCertificate = true;
-        autoTrustedCertificate = true;
-        continue;
-      }
-
-      if (kind === "tlsProtocolTooOld" && allowLegacyTls !== true) {
-        allowLegacyTls = true;
-        autoAllowedLegacyTls = true;
-        continue;
-      }
-
-      const reason =
-        pickedInstanceLoginMode === 1 ? "password logins are switched off on this server (it only accepts Windows sign-in)" : result.reason;
-      io.print(`Couldn't log in: ${reason}`);
-      break;
-    }
-
-    if (!result?.ok) {
+    if (!result.ok) {
+      io.print(`Couldn't log in: ${result.reason}`);
       io.print("Let's try again.");
       continue;
     }

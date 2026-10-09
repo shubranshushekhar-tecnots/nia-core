@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { addConnection, ConnectionInUseError, InvalidTimeZoneError, listConnections, removeConnection } from "./connectionCommands.js";
+import { addConnection, ConnectionInUseError, InvalidTimeZoneError, listConnections, removeConnection } from "./connections.js";
 import { loadConfig, saveConfig, upsertJob } from "../config/store.js";
 import type { SyncJobEntry } from "../config/types.js";
 import { LocalSecretStore } from "../secrets/store.js";

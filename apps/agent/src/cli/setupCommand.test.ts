@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ConnectionEntry } from "../config/types.js";
 import type { PairInput } from "../link/pairing.js";
 import { PairingRejectedError } from "../link/pairing.js";
+import type { SqlLoginTestInput } from "../core/sqlLogin.js";
 import { createFileSetupIO, databaseStep, MissingAnswerError, pairingStep, type SetupDeps, type SetupIO } from "./setupCommand.js";
-import type { SqlLoginTestInput } from "./sqlLoginTest.js";
 
 /** A scripted `SetupIO`: `ask`/`askSecret` return the next answer in order (both draw from the same queue — the wizard never needs to tell them apart), `print` is captured for assertions. Throws loudly if a step asks for more answers than the test provided, instead of hanging. */
 function createFakeIO(answers: string[]): { io: SetupIO; printed: string[] } {

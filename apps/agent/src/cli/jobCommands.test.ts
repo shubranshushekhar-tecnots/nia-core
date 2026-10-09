@@ -16,7 +16,7 @@ vi.mock("@nia/extract/mssql", () => ({
   introspectCatalog: introspectCatalogMock,
 }));
 
-const { addConnection } = await import("./connectionCommands.js");
+const { addConnection } = await import("../core/connections.js");
 const { addJob, listJobs, removeJob, testJob, updateJob } = await import("./jobCommands.js");
 const { secretsFilePath, configFilePath } = await import("../config/paths.js");
 const { loadOrCreateMasterKey } = await import("../secrets/keyfile.js");

@@ -17,7 +17,7 @@ vi.mock("@nia/extract/mssql", () => ({
   introspectCatalog: introspectCatalogMock,
 }));
 
-const { addConnection } = await import("../cli/connectionCommands.js");
+const { addConnection } = await import("../core/connections.js");
 const { listJobs, updateJob } = await import("../cli/jobCommands.js");
 const { loadConfig, saveConfig, upsertJob } = await import("../config/store.js");
 const { allowDestinationHost } = await import("../destinations/allowedHosts.js");

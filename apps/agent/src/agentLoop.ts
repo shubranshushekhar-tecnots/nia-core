@@ -20,6 +20,17 @@ import { readJobState, recordAgentStarted } from "./ops/state.js";
 import { loadOrCreateMasterKey } from "./secrets/keyfile.js";
 import { LocalSecretStore } from "./secrets/store.js";
 import { JobScheduler, type RunNowExtra, type SchedulerJob, type SchedulerJobOutcome } from "./scheduler/jobScheduler.js";
+import { loadOrCreateApiToken } from "./localApi/authToken.js";
+import { createLocalApiServer } from "./localApi/server.js";
+import type { RouteDefinition } from "./localApi/router.js";
+import { buildStatusRoutes } from "./localApi/routes/status.js";
+import { buildPairRoutes } from "./localApi/routes/pair.js";
+import { buildServersRoutes } from "./localApi/routes/servers.js";
+import { buildConnectionsRoutes } from "./localApi/routes/connections.js";
+import { buildTablesRoutes } from "./localApi/routes/tables.js";
+import { buildDestinationsRoutes } from "./localApi/routes/destinations.js";
+import { buildLogsRoutes } from "./localApi/routes/logs.js";
+import { buildDiagnosticsRoutes } from "./localApi/routes/diagnostics.js";
 
 export interface AgentLoopOptions {
   dir?: string;
@@ -43,6 +54,27 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
   const dir = options.dir ?? defaultHomeDir();
   const logger = options.logger ?? new Logger(defaultLogDir(dir));
   recordAgentStarted(dir);
+
+  // Phase 1 (local control API) — never fatal: a desktop app loses its
+  // control channel if this fails to bind, but jobs/scheduler/check-in
+  // must keep running regardless (see localApi/server.ts's doc comment).
+  const localApiDeps = { dir, agentVersion: options.agentVersion, logger };
+  const localApiRoutes: RouteDefinition[] = [
+    ...buildStatusRoutes(localApiDeps),
+    ...buildPairRoutes(localApiDeps),
+    ...buildServersRoutes(),
+    ...buildConnectionsRoutes(localApiDeps),
+    ...buildTablesRoutes(localApiDeps),
+    ...buildDestinationsRoutes(localApiDeps),
+    ...buildLogsRoutes(localApiDeps),
+    ...buildDiagnosticsRoutes(localApiDeps),
+  ];
+  const localApi = await createLocalApiServer({
+    dir,
+    apiToken: loadOrCreateApiToken(dir),
+    routes: localApiRoutes,
+    logger,
+  });
 
   let linkSession: LinkSession | undefined;
 
@@ -119,6 +151,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     linkWatcher.stop();
     await scheduler.stop();
     await linkSession?.stop();
+    await localApi?.close();
   }
 }
 

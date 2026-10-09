@@ -126,6 +126,10 @@ $ServiceExe = Join-Path $InstallDir "nia-agent-service.exe"
 # ever changes.
 $ServiceAccount = "NT SERVICE\nia-agent"
 $AdministratorsSidString = "S-1-5-32-544"
+# Resolved once, up front (not per-SID-use) so both the data-dir ACL
+# (step c) and the separate local-api subfolder ACL (step c2) share the
+# exact same SID object, by well-known SID rather than by name.
+$administratorsSid = New-Object Security.Principal.SecurityIdentifier($AdministratorsSidString)
 
 # Every step logs to the data folder; if that folder can't be created or
 # written yet, fall back to %TEMP% so a failure is never silent.
@@ -474,7 +478,6 @@ try {
     # the master keyfile, and spool chunk files containing customer data.
     $acl = Get-Acl $DataDir
     $acl.SetAccessRuleProtection($true, $false)
-    $administratorsSid = New-Object Security.Principal.SecurityIdentifier($AdministratorsSidString)
     foreach ($identity in @($serviceSid, $administratorsSid)) {
         $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
         $acl.AddAccessRule($rule)
@@ -490,6 +493,40 @@ try {
     Fail "set data directory permissions" $_.Exception.Message
 }
 Write-Log "step c) locked down $DataDir to $ServiceAccount and Administrators"
+
+try {
+    # Step c2) The local API's token and port files get their own ACL,
+    # separate from the rest of $DataDir: service (full), Administrators
+    # (full), and read-only for the SID of whoever is running this
+    # installer right now. A non-elevated process under an admin account
+    # carries a UAC-filtered token where Administrators is deny-only, so
+    # granting that group alone would force a desktop app to elevate just
+    # to read its own agent's token/port -- granting the specific user SID
+    # (present in a token regardless of UAC filtering) avoids that without
+    # widening the main data directory's ACL at all. The installing user's
+    # resolved name is also recorded in a marker file so `nia-agent doctor`
+    # knows which extra identity to expect here.
+    $installingUserSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User
+    $LocalApiDir = Join-Path $DataDir "local-api"
+    New-Item -ItemType Directory -Force -Path $LocalApiDir | Out-Null
+    $localApiAcl = Get-Acl $LocalApiDir
+    $localApiAcl.SetAccessRuleProtection($true, $false)
+    $serviceFullControl = New-Object Security.AccessControl.FileSystemAccessRule($serviceSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $adminsFullControl = New-Object Security.AccessControl.FileSystemAccessRule($administratorsSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $installingUserReadOnly = New-Object Security.AccessControl.FileSystemAccessRule($installingUserSid, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $localApiAcl.AddAccessRule($serviceFullControl)
+    $localApiAcl.AddAccessRule($adminsFullControl)
+    $localApiAcl.AddAccessRule($installingUserReadOnly)
+    Set-Acl $LocalApiDir $localApiAcl
+
+    $installingUserName = $installingUserSid.Translate([Security.Principal.NTAccount]).Value
+    $markerPath = Join-Path $LocalApiDir "installing-user.json"
+    (@{ identity = $installingUserName } | ConvertTo-Json -Compress) | Out-File -FilePath $markerPath -Encoding utf8 -Force
+} catch {
+    Remove-ServiceQuietly
+    Fail "set local-api directory permissions" $_.Exception.Message
+}
+Write-Log "step c2) locked down $LocalApiDir to $ServiceAccount (full), Administrators (full), and $installingUserName (read-only)"
 
 # Step d) Start, then verify it is actually running under the virtual account.
 try {
