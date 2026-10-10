@@ -371,4 +371,85 @@ describe("runSync", () => {
     expect(spoolFiles).toEqual([]);
     expect(server.getRows(handle.tableId)).toEqual([]);
   });
+
+  /**
+   * Regression coverage for the real "SQL Server -> Planometry" migration
+   * path (the v3-era equivalent of this, sync/runSync.integration.test.ts,
+   * was deleted during the v4 migration — see decisions.md's slice A1 test-
+   * removal note — and never replaced with anything that exercises every
+   * SQL Server native-type shape end to end again). Source row values here
+   * are shaped exactly as packages/extract/src/mssql's real pipeline
+   * produces them (nativeTypeMapping.ts's castToText rule + buildSelectSql.ts's
+   * CONVERT/CAST expressions): decimal/money/bigint arrive as exact-digit
+   * strings, int/float as native JS numbers, datetime2 as a no-offset
+   * "yyyy-mm-dd hh:mi:ss.mmm" string, date as a plain "yyyy-mm-dd" string,
+   * and bit as a native boolean — pushed through the real formatForTarget.ts
+   * + requestBuilder.ts + replaceLoad.ts pipeline into a real (fake) server.
+   */
+  it("every SQL Server native-type shape survives a real push to Planometry", async () => {
+    const columns = [
+      { name: "id", type: "Number" as const, isKey: true },
+      { name: "name", type: "Text" as const, isKey: false },
+      { name: "priceDecimal", type: "Number" as const, isKey: false },
+      { name: "priceMoney", type: "Number" as const, isKey: false },
+      { name: "bigCount", type: "Number" as const, isKey: false },
+      { name: "ratio", type: "Number" as const, isKey: false },
+      { name: "isActive", type: "Boolean" as const, isKey: false },
+      { name: "createdAt", type: "DateTime" as const, isKey: false },
+      { name: "bornOn", type: "Date" as const, isKey: false },
+    ];
+    const handle = server.createTable({ columns });
+    const job = baseJob(handle, {
+      mapping: columns.map((c) => ({ source: c.name, target: c.name })),
+      targetSchemaSnapshot: { columns, keyColumns: ["id"] },
+    });
+
+    const result = await runSync(
+      baseOptions(job, handle.pushKey, {
+        sourceColumnTypes: {
+          id: "number",
+          name: "text",
+          priceDecimal: "number",
+          priceMoney: "number",
+          bigCount: "number",
+          ratio: "number",
+          isActive: "boolean",
+          createdAt: "datetime",
+          bornOn: "date",
+        },
+        sourceTimeZone: "UTC",
+        readSourceRows: rowsSource([
+          {
+            id: 42,
+            name: "Héllo 😀 Wörld",
+            priceDecimal: "12345.6700", // decimal(10,4), CAST AS VARCHAR(MAX)
+            priceMoney: "19.9900", // money, CONVERT(..., 2) — 4 decimal digits
+            bigCount: "9223372036854775807", // bigint max, CAST AS VARCHAR(MAX)
+            ratio: 3.14159, // float/real — driver-native JS number
+            isActive: true, // bit — driver-native JS boolean
+            createdAt: "2024-01-15 10:30:00.123", // datetime2, CONVERT(..., 121)
+            bornOn: "2024-01-15",
+          },
+        ]),
+      }),
+    );
+
+    expect(result.outcome).toBe("completed");
+    // Every "Number" target column is wire-encoded as an exact-digit string
+    // (formatForTarget.ts's plainNumericString), including a native-JS-number
+    // source like this int `id` column — never a native JS number on the wire.
+    expect(server.getRows(handle.tableId)).toEqual([
+      {
+        id: "42",
+        name: "Héllo 😀 Wörld",
+        priceDecimal: "12345.6700",
+        priceMoney: "19.9900",
+        bigCount: "9223372036854775807",
+        ratio: "3.14159",
+        isActive: true,
+        createdAt: "2024-01-15T10:30:00.123Z",
+        bornOn: "2024-01-15",
+      },
+    ]);
+  });
 });
