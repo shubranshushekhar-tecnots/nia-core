@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
   nxDocsCodeChipStyle,
@@ -6,6 +7,11 @@ import {
   nxDocsNoticeStyle,
   nxDocsPStyle,
 } from '@/components/docs/styles';
+
+export const metadata: Metadata = {
+  title: 'Use a local database on the Canvas',
+  description: 'Add the connection, browse tables, map fields, and publish a job.',
+};
 
 export default function LocalDatabaseCanvasPage() {
   return (

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getProjectDetail, getSidebarProjects } from '@/lib/api/dashboardServer';
@@ -7,6 +8,12 @@ import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
 import ProjectDetailClient from '@/components/app/ProjectDetailClient';
 import { mainColStyle, nxConnScrollStyle } from '@/components/app/styles';
+
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const { id } = await params;
+  const project = await getProjectDetail(id);
+  return { title: project?.name ?? 'Project' };
+}
 
 export default async function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

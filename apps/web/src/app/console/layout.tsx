@@ -1,6 +1,10 @@
+import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 import { pingConsole } from '@/lib/api/consoleServer';
 import { ApiError } from '@/lib/api/server';
+
+// Staff-only, never indexable.
+export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 // Per-staff-session gate (never prerenderable) — same reasoning as
 // app/app/layout.tsx: there is no anonymous/static version of a /console/*

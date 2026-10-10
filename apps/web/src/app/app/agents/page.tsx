@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth/session';
 import { can } from '@nia/schemas';
 import { getAgents } from '@/lib/api/agentsServer';
@@ -10,6 +11,7 @@ import { homeScrollStyle, mainColStyle } from '@/components/app/styles';
 import AgentsClient from '@/components/agents/AgentsClient';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Agents' };
 
 export default async function AgentsPage() {
   const user = await requireUser();

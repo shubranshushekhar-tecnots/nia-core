@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { acceptInvite } from '@/lib/invites/actions';
@@ -11,6 +12,7 @@ import {
 } from '@/components/members/styles';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Accept invite', robots: { index: false, follow: false } };
 
 // /invite/<token> requires sign-in — enforced by middleware.ts's
 // PUBLIC_PATHS (any non-public path with no session cookie redirects to

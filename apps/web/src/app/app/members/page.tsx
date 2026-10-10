@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth/session';
 import { can } from '@nia/schemas';
 import { listMembers } from '@/lib/members/actions';
@@ -13,6 +14,8 @@ import {
   nxMembersNoPermissionTextStyle,
 } from '@/components/members/styles';
 import MembersClient from '@/components/members/MembersClient';
+
+export const metadata: Metadata = { title: 'Members' };
 
 export const dynamic = 'force-dynamic';
 

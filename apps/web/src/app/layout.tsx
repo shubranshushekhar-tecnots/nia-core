@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Geist, Inter, Inter_Tight, Archivo } from 'next/font/google';
 import { ThemeProvider } from 'next-themes';
 import '@fontsource/bricolage-grotesque/400.css';
@@ -37,9 +37,39 @@ const inter = Inter({ subsets: ['latin'], weight: ['400', '500'], variable: '--f
 // own wght axis renders correctly.
 const archivo = Archivo({ subsets: ['latin'], weight: 'variable', axes: ['wdth'], variable: '--font-archivo' });
 
+// SITE_URL is the same env var auth.ts/agents/actions.ts already treat as
+// this app's single source of truth for its public origin (see
+// memory/MEMORY.md); falls back to the local dev port only so metadataBase
+// still resolves to a valid URL when SITE_URL isn't set (e.g. a bare build).
+const siteUrl = process.env.SITE_URL || 'http://localhost:3100';
+const description =
+  'Nia Core connects your databases (including on-premise SQL Server, via a secure agent) to the tools your team uses, safely and automatically.';
+
 export const metadata: Metadata = {
-  title: 'Nia Core',
-  description: 'Draw the ETL pipeline, schedule it, and wake up to dashboards that filled themselves.',
+  metadataBase: new URL(siteUrl),
+  title: {
+    template: '%s · Nia Core',
+    default: 'Nia Core · Move your business data, safely',
+  },
+  description,
+  openGraph: {
+    type: 'website',
+    siteName: 'Nia Core',
+    title: 'Nia Core · Move your business data, safely',
+    description,
+    images: [{ url: '/og-image.png', width: 1200, height: 630, alt: 'Nia Core' }],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Nia Core · Move your business data, safely',
+    description,
+    images: ['/og-image.png'],
+  },
+  manifest: '/site.webmanifest',
+};
+
+export const viewport: Viewport = {
+  themeColor: '#131A26',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth/session';
 import { getSidebarProjects } from '@/lib/api/dashboardServer';
 import { getConnectorCatalog, getConnectorInstalls, getConnections } from '@/lib/api/connectionsServer';
@@ -6,6 +7,8 @@ import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
 import ConnectionsClient from '@/components/app/ConnectionsClient';
 import { nxConnScrollStyle, mainColStyle } from '@/components/app/styles';
+
+export const metadata: Metadata = { title: 'Connections' };
 
 export default async function ConnectionsPage() {
   const user = await requireUser();

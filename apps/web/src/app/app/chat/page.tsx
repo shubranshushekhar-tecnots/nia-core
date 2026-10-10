@@ -1,8 +1,11 @@
+import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getSidebarProjects } from '@/lib/api/dashboardServer';
 import { getConnections } from '@/lib/api/connectionsServer';
 import { getConversations } from '@/lib/api/chatServer';
+
+export const metadata: Metadata = { title: 'Chat' };
 import AppShell from '@/components/app/AppShell';
 import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';

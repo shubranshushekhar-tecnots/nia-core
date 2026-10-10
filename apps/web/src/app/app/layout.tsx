@@ -1,5 +1,9 @@
+import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth/session";
 import SuspendedOrgPage from "@/components/app/SuspendedOrgPage";
+
+// Every /app/* page is per-user/per-org data behind auth — never indexable.
+export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 // Every page under app/app/* is per-user (requireUser()/getSessionUser()
 // reads the caller's session + org membership from the DB), so none of

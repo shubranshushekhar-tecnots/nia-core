@@ -1,7 +1,10 @@
+import type { Metadata } from 'next';
 import { getSessionUser } from '@/lib/auth/session';
 import { getConsoleUsageData } from '@/lib/api/consoleServer';
 import ConsoleShell from '@/components/console/ConsoleShell';
 import ConsoleUsageClient from '@/components/console/ConsoleUsageClient';
+
+export const metadata: Metadata = { title: 'Console · Usage' };
 
 // Console v2 Slice 5: reached via ConsoleShell's 'usage' nav entry (see its
 // own doc comment). Page.tsx fetches the unfiltered (all orgs, all time)

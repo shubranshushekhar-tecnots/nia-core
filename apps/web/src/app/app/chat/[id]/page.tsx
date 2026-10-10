@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getSidebarProjects } from '@/lib/api/dashboardServer';
@@ -8,6 +9,8 @@ import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
 import ChatClient from '@/components/app/ChatClient';
 import { mainColStyle } from '@/components/app/styles';
+
+export const metadata: Metadata = { title: 'Chat' };
 
 // Dev-only — see ../page.tsx's header comment.
 export default async function ChatConversationPage({ params }: { params: Promise<{ id: string }> }) {

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
   nxDocsCodeChipStyle,
@@ -6,6 +7,11 @@ import {
   nxDocsNoticeStyle,
   nxDocsPStyle,
 } from '@/components/docs/styles';
+
+export const metadata: Metadata = {
+  title: 'Getting started',
+  description: 'The whole journey in five steps, from download to your first synced table.',
+};
 
 export default function GettingStartedPage() {
   return (

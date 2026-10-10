@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
   nxDocsCodeChipStyle,
@@ -8,6 +9,11 @@ import {
   nxDocsTdStyle,
   nxDocsThStyle,
 } from '@/components/docs/styles';
+
+export const metadata: Metadata = {
+  title: 'Monitoring and control',
+  description: 'The Agents page, job states, pausing, forcing a full reload, error states.',
+};
 
 export default function MonitoringPage() {
   return (

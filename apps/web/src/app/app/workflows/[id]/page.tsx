@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { getSidebarProjects, getWorkflowDetail } from '@/lib/api/dashboardServer';
@@ -6,6 +7,12 @@ import { getWorkflowGraph } from '@/lib/api/workflowGraphServer';
 import { getWorkflowConversation } from '@/lib/api/chatServer';
 import CanvasQueryProvider from '@/components/canvas/CanvasQueryProvider';
 import FlowCanvas from '@/components/canvas/FlowCanvas';
+
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const { id } = await params;
+  const workflow = await getWorkflowDetail(id);
+  return { title: workflow?.name ?? 'Workflow' };
+}
 
 // Canvas redesign (designs/canvasredesign.html): this route renders its own
 // chrome — FlowCanvas's own CanvasHeader (merged header) instead of

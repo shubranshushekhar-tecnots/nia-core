@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
@@ -7,6 +8,11 @@ import {
   nxDocsNoticeStyle,
   nxDocsPStyle,
 } from '@/components/docs/styles';
+
+export const metadata: Metadata = {
+  title: 'Install on macOS',
+  description: 'Unzip, clear the Gatekeeper warning, run the guided setup, verify it checked in.',
+};
 
 export default function InstallMacosPage() {
   return (

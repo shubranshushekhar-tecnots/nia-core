@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
@@ -6,6 +7,11 @@ import {
   nxDocsListStyle,
   nxDocsPStyle,
 } from '@/components/docs/styles';
+
+export const metadata: Metadata = {
+  title: 'Install on Linux',
+  description: 'Unpack, run the guided setup, start the agent, verify it checked in.',
+};
 
 export default function InstallLinuxPage() {
   return (

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
   nxDocsCodeChipStyle,
@@ -5,6 +6,11 @@ import {
   nxDocsListStyle,
   nxDocsPStyle,
 } from '@/components/docs/styles';
+
+export const metadata: Metadata = {
+  title: 'Security',
+  description: 'What leaves your network, what never does, the allow-list, revoking access.',
+};
 
 export default function SecurityPage() {
   return (

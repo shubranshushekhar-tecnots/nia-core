@@ -1,7 +1,10 @@
+import type { Metadata } from 'next';
 import { getSessionUser } from '@/lib/auth/session';
 import { getConsoleOrgs } from '@/lib/api/consoleServer';
 import ConsoleShell from '@/components/console/ConsoleShell';
 import ConsoleDirectoryClient from '@/components/console/ConsoleDirectoryClient';
+
+export const metadata: Metadata = { title: 'Console · Directory' };
 
 // Slice 1 (docs/plans/console-plan.md §5a): the Directory screen is the
 // only built Console screen, so it's the root /console page. layout.tsx has

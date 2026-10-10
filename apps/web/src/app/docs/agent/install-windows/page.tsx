@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
@@ -8,6 +9,11 @@ import {
   nxDocsNoticeStyle,
   nxDocsPStyle,
 } from '@/components/docs/styles';
+
+export const metadata: Metadata = {
+  title: 'Install on Windows',
+  description: 'Run the installer, answer the guided setup questions, verify it checked in.',
+};
 
 export default function InstallWindowsPage() {
   return (

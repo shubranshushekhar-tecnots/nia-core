@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
@@ -7,6 +8,11 @@ import {
   nxDocsNoticeStyle,
   nxDocsPStyle,
 } from '@/components/docs/styles';
+
+export const metadata: Metadata = {
+  title: 'Destinations',
+  description: 'Deliver to a Planometry table or an HTTPS endpoint, and allow it on the agent.',
+};
 
 export default function DestinationsPage() {
   return (

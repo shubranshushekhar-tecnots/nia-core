@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
@@ -7,6 +8,11 @@ import {
   nxDocsNoticeStyle,
   nxDocsPStyle,
 } from '@/components/docs/styles';
+
+export const metadata: Metadata = {
+  title: 'Connect a database',
+  description: 'What details you need, creating a read-only login, adding more databases later.',
+};
 
 export default function ConnectDatabasePage() {
   return (

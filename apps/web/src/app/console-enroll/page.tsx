@@ -1,8 +1,10 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { getSessionUser } from '@/lib/auth/session';
 import ConsoleEnrollClient from '@/components/console/ConsoleEnrollClient';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Console · Two-Factor Setup', robots: { index: false, follow: false } };
 
 // Console v1 Slice 4 (docs/plans/console-plan.md §4b, build order step 14):
 // deliberately a top-level route, NOT nested under /console — console/layout.tsx

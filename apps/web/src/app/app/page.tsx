@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth/session';
 import { getDashboardStats, getRecentRuns, getSidebarProjects } from '@/lib/api/dashboardServer';
 import { getPlanUsage } from '@/lib/billing/plan';
@@ -7,6 +8,8 @@ import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
 import HomeContent from '@/components/app/HomeContent';
 import { mainColStyle } from '@/components/app/styles';
+
+export const metadata: Metadata = { title: 'Dashboard' };
 
 export default async function AppHomePage() {
   const user = await requireUser();

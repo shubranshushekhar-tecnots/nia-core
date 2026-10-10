@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth/session';
 import { getProjectsList, getSidebarProjects } from '@/lib/api/dashboardServer';
 import AppShell from '@/components/app/AppShell';
@@ -5,6 +6,8 @@ import Sidebar from '@/components/app/Sidebar';
 import TopBar from '@/components/app/TopBar';
 import ProjectsListClient from '@/components/app/ProjectsListClient';
 import { mainColStyle, nxConnScrollStyle } from '@/components/app/styles';
+
+export const metadata: Metadata = { title: 'Projects' };
 
 export default async function ProjectsListPage() {
   const user = await requireUser();

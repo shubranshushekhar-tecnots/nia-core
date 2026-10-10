@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth/session';
 import { getSidebarProjects } from '@/lib/api/dashboardServer';
 import AppShell from '@/components/app/AppShell';
@@ -12,6 +13,8 @@ import {
   nxBillingProcessingTitleStyle,
   nxBillingTitleColStyle,
 } from '@/components/billing/styles';
+
+export const metadata: Metadata = { title: 'Upgrade processing' };
 
 export default async function BillingProcessingPage({
   params,

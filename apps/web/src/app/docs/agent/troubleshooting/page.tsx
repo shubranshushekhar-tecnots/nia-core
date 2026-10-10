@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { CodeBlock } from '@/components/docs/CodeBlock';
 import { DocsLayout } from '@/components/docs/DocsLayout';
 import {
@@ -6,6 +7,11 @@ import {
   nxDocsListStyle,
   nxDocsPStyle,
 } from '@/components/docs/styles';
+
+export const metadata: Metadata = {
+  title: 'Troubleshooting and uninstalling',
+  description: 'Common problems and how to remove the agent, per operating system.',
+};
 
 export default function TroubleshootingPage() {
   return (

@@ -1,7 +1,10 @@
+import type { Metadata } from 'next';
 import { getSessionUser } from '@/lib/auth/session';
 import { getConsoleStaff } from '@/lib/api/consoleServer';
 import ConsoleShell from '@/components/console/ConsoleShell';
 import ConsoleStaffClient from '@/components/console/ConsoleStaffClient';
+
+export const metadata: Metadata = { title: 'Console · Staff' };
 
 // Console redesign plan's Slice 5: reached via ConsoleShell's 'staff' nav
 // entry. Fetches the first page server-side; "Load more" paginates via a

@@ -1,7 +1,10 @@
+import type { Metadata } from 'next';
 import { getSessionUser } from '@/lib/auth/session';
 import { getConsoleModelPrices } from '@/lib/api/consoleServer';
 import ConsoleShell from '@/components/console/ConsoleShell';
 import ConsoleModelPricesClient from '@/components/console/ConsoleModelPricesClient';
+
+export const metadata: Metadata = { title: 'Console · Model prices' };
 
 export default async function ConsoleModelPricesPage() {
   const [user, page] = await Promise.all([getSessionUser(), getConsoleModelPrices()]);

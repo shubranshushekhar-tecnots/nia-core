@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { getSessionUser } from '@/lib/auth/session';
 import {
@@ -30,6 +31,12 @@ import ConsoleOrgDetailClient from '@/components/console/ConsoleOrgDetailClient'
 // a 500 page, matching layout.tsx's existing "never leak the console's
 // internals" posture. Only a genuine 404 is expected in normal use — a
 // staff session already passed layout.tsx's own ping check to get here.
+export async function generateMetadata({ params }: { params: Promise<{ orgId: string }> }): Promise<Metadata> {
+  const { orgId } = await params;
+  const org = await getConsoleOrg(orgId).catch(() => null);
+  return { title: org ? `Console · ${org.name}` : 'Console · Organizations' };
+}
+
 export default async function ConsoleOrgDetailPage({ params }: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await params;
 

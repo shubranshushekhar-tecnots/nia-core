@@ -1,7 +1,10 @@
+import type { Metadata } from 'next';
 import { getSessionUser } from '@/lib/auth/session';
 import { getConsoleAnnouncements } from '@/lib/api/consoleServer';
 import ConsoleShell from '@/components/console/ConsoleShell';
 import ConsoleAnnouncementsClient from '@/components/console/ConsoleAnnouncementsClient';
+
+export const metadata: Metadata = { title: 'Console · Announcements' };
 
 // Subscription Phase 5, Slice 3 (docs/plans/subscription-model.md, decision
 // 1): reached via ConsoleShell's 'notify' nav entry (see its own doc

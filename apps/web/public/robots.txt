@@ -1,0 +1,7 @@
+User-agent: *
+Disallow: /app/
+Disallow: /console/
+Disallow: /console-enroll
+Disallow: /onboarding
+Disallow: /invite/
+Allow: /

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth/session';
 import { getDashboardStats, getSidebarProjects } from '@/lib/api/dashboardServer';
 import { getPlanUsage } from '@/lib/billing/plan';
@@ -36,6 +37,8 @@ import {
   nxBillingUsageCardCellStyle,
   nxBillingUsageCardsRowStyle,
 } from '@/components/billing/styles';
+
+export const metadata: Metadata = { title: 'Billing' };
 
 function usagePct(used: number, limit: number | null): number {
   return limit === null ? 0 : Math.min(100, Math.round((100 * used) / limit));

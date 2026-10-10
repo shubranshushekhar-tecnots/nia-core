@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth/session';
 import { can } from '@nia/schemas';
 import { getSidebarProjects } from '@/lib/api/dashboardServer';
@@ -8,6 +9,7 @@ import { homeScrollStyle, mainColStyle } from '@/components/app/styles';
 import SettingsClient from '@/components/settings/SettingsClient';
 
 export const dynamic = 'force-dynamic';
+export const metadata: Metadata = { title: 'Settings' };
 
 // Phase 1: Profile (name editable, email read-only), Appearance (3-card,
 // the only theme control — the Sidebar's dropdown switcher was removed),

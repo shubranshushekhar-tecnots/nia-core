@@ -1,6 +1,9 @@
+import type { Metadata } from 'next';
 import DownloadsPage from '@/components/downloads/DownloadsPage';
 import { getDownloadManifest, getDownloadUrl } from '@/lib/downloads/manifest';
 import { getSessionUser } from '@/lib/auth/session';
+
+export const metadata: Metadata = { title: 'Downloads' };
 
 export const dynamic = 'force-dynamic';
 
