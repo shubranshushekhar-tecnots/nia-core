@@ -11,6 +11,7 @@ import {
   PreflightRequest,
   CreateEntityRequest,
   DropEntityRequest,
+  decodeBinaryWriteValues,
   type TabularResult,
   type WriteResponse,
   type StageResponse,
@@ -264,7 +265,13 @@ app.post("/write", async (req): Promise<WriteResponse> => {
   if (!grantActive) throw new HttpError(403, "no confirmed, unrevoked write grant covers this entity");
 
   const db = await getWriteDb(body.credential, body.config);
-  const ops = buildBulkWriteOps(body.columns, body.upsertKeys, body.rows);
+  // Bug fix (binary/blob columns, mirrors connector-mysql/connector-supabase's
+  // /write): any value tagged by serializeCellValue's encodeBinaryValue on
+  // the way out of a source connector's /execute (or this connector's own,
+  // for a Mongo->Mongo migration) must be decoded back to a real Buffer
+  // before bulkWrite sees it — the mongodb driver serializes a plain Buffer
+  // as genuine BSON Binary natively, so no further conversion is needed.
+  const ops = buildBulkWriteOps(body.columns, body.upsertKeys, decodeBinaryWriteValues(body.rows));
   const start = Date.now();
   const result = await db.collection(body.entity.name).bulkWrite(ops);
   const written = result.upsertedCount + result.matchedCount;

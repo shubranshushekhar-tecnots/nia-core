@@ -1,4 +1,5 @@
 import type { ColumnType } from "@nia/schemas";
+import { encodeBinaryValue } from "@nia/schemas";
 
 /**
  * Maps a flattened column's sampled values to a real ColumnType — no
@@ -49,12 +50,21 @@ export function resolveColumnType(isArrayColumn: boolean, values: unknown[]): Co
  * "2026-09-21T00:49:40.918Z") — worker-side `to_timestamp` (not `to_date`)
  * is what now conforms timestamp-kind columns, and it preserves that
  * precision natively.
+ *
+ * Bug fix (binary/blob columns, mirrors connector-mysql/connector-supabase's
+ * identical fix for mysql2/pg's Buffer return): a bare base64 string here
+ * was indistinguishable on write from a genuinely text-typed column, so a
+ * Binary-sourced value landed as a plain string on any destination instead
+ * of a real binary value — wrap it with @nia/schemas' encodeBinaryValue
+ * (same {__niaBytes,base64} shape connector-mysql's /write and
+ * connector-mongodb's own /write already decode via decodeBinaryWriteValues)
+ * so it round-trips losslessly instead of silently downgrading to text.
  */
 export function serializeCellValue(value: unknown): unknown {
   if (value && typeof value === "object" && "_bsontype" in value) {
     const tag = (value as { _bsontype: string })._bsontype;
     if (tag === "Binary") {
-      return (value as { toString: (enc: string) => string }).toString("base64");
+      return encodeBinaryValue(Buffer.from((value as unknown as { value: () => Uint8Array }).value()));
     }
     return String(value);
   }

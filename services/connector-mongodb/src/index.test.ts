@@ -11,9 +11,13 @@ import { describe, expect, it, vi } from "vitest";
 
 const toArrayMock = vi.fn();
 const aggregateMock = vi.fn(() => ({ toArray: toArrayMock }));
-const collectionMock = vi.fn(() => ({ aggregate: aggregateMock }));
+const bulkWriteMock = vi.fn(async () => ({ upsertedCount: 1, matchedCount: 0 }));
+const collectionMock = vi.fn(() => ({ aggregate: aggregateMock, bulkWrite: bulkWriteMock }));
+const verifyActiveWriteGrantMock = vi.fn(async () => true);
 vi.mock("./pool-manager.js", () => ({
   getDb: vi.fn(async () => ({ collection: collectionMock })),
+  getWriteDb: vi.fn(async () => ({ collection: collectionMock })),
+  verifyActiveWriteGrant: verifyActiveWriteGrantMock,
   evict: vi.fn(async () => true),
   poolCount: vi.fn(() => 0),
 }));
@@ -22,11 +26,13 @@ async function freshApp() {
   vi.resetModules();
   toArrayMock.mockReset();
   aggregateMock.mockClear();
+  bulkWriteMock.mockClear();
   collectionMock.mockClear();
+  verifyActiveWriteGrantMock.mockClear();
   process.env.WRITE_DISPATCH_SIGNING_SECRET = "a".repeat(32);
   const mod = await import("./index.js");
-  const { signReadContext } = await import("./writeSignature.js");
-  return { app: mod.app, signReadContext };
+  const { signReadContext, signWriteContext } = await import("./writeSignature.js");
+  return { app: mod.app, signReadContext, signWriteContext };
 }
 
 const baseCredential = { connectionId: "11111111-1111-1111-1111-111111111111", credVersion: 1, vaultRef: "v1" };
@@ -72,6 +78,31 @@ describe("connector-mongodb /execute (route-level)", () => {
     // Readable rendering, not a JSON-stuffed/double-encoded blob.
     expect(body.meta.executedQuery).toBe(`db.orders.aggregate(${JSON.stringify(pipeline)})`);
     expect(body.rows).toEqual([["1", 42]]);
+  });
+
+  it("wraps a BSON Binary field as a base64 WireBinaryValue, not a bare base64 string indistinguishable from text", async () => {
+    const { app, signReadContext } = await freshApp();
+
+    const payload = Buffer.from([0, 1, 2, 255, 254, 72, 101, 108, 108, 111]);
+    const fakeBinary = { _bsontype: "Binary", value: () => payload };
+    toArrayMock.mockResolvedValue([{ _id: "1", blob: fakeBinary }]);
+
+    const pipeline = [{ $match: {} }];
+    const query = { kind: "mongo" as const, collection: "files", pipeline };
+    const res = await app.inject({
+      method: "POST",
+      url: "/execute",
+      payload: {
+        credential: baseCredential,
+        config: baseConfig,
+        query,
+        context: readContext(signReadContext, "execute", query),
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.rows).toEqual([["1", { __niaBytes: true, base64: payload.toString("base64") }]]);
   });
 
   it("rejects a { kind: 'sql' } payload with a clear error instead of silently misreading it", async () => {
@@ -163,5 +194,50 @@ describe("connector-mongodb /preflight (route-level)", () => {
     expect(body.checks).toEqual([
       expect.objectContaining({ name: "stagedModeSupported", ok: false, message: expect.stringMatching(/does not support staged writes/) }),
     ]);
+  });
+});
+
+describe("connector-mongodb /write (route-level)", () => {
+  it("decodes a WireBinaryValue (__niaBytes/base64) back to a real Buffer before bulkWrite, so the driver stores genuine BSON Binary instead of a plain string", async () => {
+    const { app, signWriteContext } = await freshApp();
+
+    const payload = Buffer.from([0, 1, 2, 255, 254, 72, 101, 108, 108, 111]);
+    const columns = ["id", "payload"];
+    const issuedAt = Date.now();
+    const contextInput = {
+      connectionId: baseCredential.connectionId,
+      grantId: baseContext.grantId,
+      runId: baseContext.runId,
+      entity: baseEntity,
+      grantNamespace: baseEntity.namespace,
+      columns,
+      mode: "upsert" as const,
+      stagingEntity: null,
+      quarantineEntity: null,
+      issuedAt,
+    };
+    const signature = signWriteContext(contextInput, "a".repeat(32));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/write",
+      payload: {
+        credential: baseCredential,
+        config: baseConfig,
+        entity: baseEntity,
+        columns,
+        rows: [[1, { __niaBytes: true, base64: payload.toString("base64") }]],
+        upsertKeys: ["id"],
+        context: { ...contextInput, signature },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ written: 1 });
+    expect(bulkWriteMock).toHaveBeenCalledTimes(1);
+    const ops = bulkWriteMock.mock.calls[0]![0] as Array<{ replaceOne: { replacement: Record<string, unknown> } }>;
+    const writtenPayload = ops[0]!.replaceOne.replacement.payload;
+    expect(Buffer.isBuffer(writtenPayload)).toBe(true);
+    expect((writtenPayload as Buffer).equals(payload)).toBe(true);
   });
 });
