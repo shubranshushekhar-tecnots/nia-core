@@ -92,7 +92,7 @@ export function App({ bootError }: AppProps) {
 
   return (
     <div className="agent-shell">
-      {sessionExpired && <div className="agent-session-banner">Open Nia Agent again from the Start menu / Applications.</div>}
+      {sessionExpired && <div className="agent-session-banner">Open Nia Core Agent again from the Start menu / Applications.</div>}
       {pendingUpdate && !pendingUpdate.readyToInstall && (
         <div className="agent-session-banner">
           Version {pendingUpdate.version} is available.{" "}

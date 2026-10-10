@@ -32,19 +32,19 @@ const candidates = [
     dir: path.join(__dirname, "windows", "dist"),
   },
   {
-    name: `nia-agent-windows-${version}.zip`,
+    name: `nia-core-agent-windows-${version}.zip`,
     os: "windows",
     kind: "advanced",
     dir: path.join(__dirname, "windows", "dist"),
   },
   {
-    name: `nia-agent-macos-arm64-${version}.zip`,
+    name: `nia-core-agent-macos-arm64-${version}.zip`,
     os: "macos",
     kind: "primary",
     dir: path.join(__dirname, "macos", "dist"),
   },
   {
-    name: `nia-agent-linux-${version}.tar.gz`,
+    name: `nia-core-agent-linux-${version}.tar.gz`,
     os: "linux",
     kind: "primary",
     dir: path.join(__dirname, "linux", "dist"),

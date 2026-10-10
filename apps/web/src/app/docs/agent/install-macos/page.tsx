@@ -43,7 +43,7 @@ export default function InstallMacosPage() {
         <h2 style={nxDocsH2Style}>Install</h2>
         <ol style={nxDocsListStyle}>
           <li>
-            Download and unzip <span style={nxDocsCodeChipStyle}>nia-agent-macos-arm64-&lt;version&gt;.zip</span>{' '}
+            Download and unzip <span style={nxDocsCodeChipStyle}>nia-core-agent-macos-arm64-&lt;version&gt;.zip</span>{' '}
             from the{' '}
             <a href="/downloads" style={{ color: 'var(--nx-ink)' }}>
               downloads page

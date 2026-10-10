@@ -37,7 +37,7 @@ export default function InstallLinuxPage() {
         <h2 style={nxDocsH2Style}>Install</h2>
         <ol style={nxDocsListStyle}>
           <li>
-            Download <span style={nxDocsCodeChipStyle}>nia-agent-linux-&lt;version&gt;.tar.gz</span>{' '}
+            Download <span style={nxDocsCodeChipStyle}>nia-core-agent-linux-&lt;version&gt;.tar.gz</span>{' '}
             onto the target machine from the{' '}
             <a href="/downloads" style={{ color: 'var(--nx-ink)' }}>
               downloads page
@@ -46,7 +46,7 @@ export default function InstallLinuxPage() {
           </li>
           <li>
             Run, as root:
-            <CodeBlock code="sudo ./install.sh nia-agent-linux-<version>.tar.gz" />
+            <CodeBlock code="sudo ./install.sh nia-core-agent-linux-<version>.tar.gz" />
           </li>
           <li>
             When it asks <strong>&quot;Run guided setup now? [Y/n]&quot;</strong>, press Enter and
@@ -101,7 +101,7 @@ export default function InstallLinuxPage() {
       <section>
         <h2 style={nxDocsH2Style}>Advanced: typed-command install</h2>
         <p style={nxDocsPStyle}>
-          <span style={nxDocsCodeChipStyle}>sudo ./install.sh nia-agent-linux-&lt;version&gt;.tar.gz</span>{' '}
+          <span style={nxDocsCodeChipStyle}>sudo ./install.sh nia-core-agent-linux-&lt;version&gt;.tar.gz</span>{' '}
           does not start the agent by itself — run{' '}
           <span style={nxDocsCodeChipStyle}>sudo systemctl start nia-agent</span> afterward. Then,
           in order:

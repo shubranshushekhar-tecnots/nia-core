@@ -6,7 +6,7 @@
  */
 export class AgentNotRunningError extends Error {
   constructor() {
-    super("Nia Agent isn't running -- start it first.");
+    super("Nia Core Agent isn't running -- start it first.");
     this.name = "AgentNotRunningError";
   }
 }

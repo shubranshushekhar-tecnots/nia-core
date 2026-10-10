@@ -9,7 +9,7 @@ import { PROACTIVE_REMINT_INTERVAL_MS } from "./constants.js";
  * static fallback, and (redundantly with, not instead of, window.ts's existing 401 interceptor)
  * the SPA's own rendered expiry banner.
  */
-export const NO_SESSION_MARKER = "Open Nia Agent again from the Start menu / Applications.";
+export const NO_SESSION_MARKER = "Open Nia Core Agent again from the Start menu / Applications.";
 
 /** True if `bodyText` (e.g. `document.body.innerText` of the loaded page) is the "no session"
  * fallback page rather than the real agent UI. */

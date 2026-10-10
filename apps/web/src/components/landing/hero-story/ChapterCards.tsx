@@ -64,11 +64,11 @@ export default function ChapterCards() {
       </div>
 
       <div style={cardStyle('var(--c2, 0)')}>
-        <Eyebrow num="01" label="Extract · Nia Agent" />
+        <Eyebrow num="01" label="Extract · Nia Core Agent" />
         <Headline accent="Never in.">Out through the firewall.</Headline>
         <Divider />
         <p style={{ margin: 0, fontSize: 16, lineHeight: 1.6, color: '#475569' }}>
-          For databases on your own network, the Nia Agent runs on Windows, macOS or Linux, pairs with a one‑time code and only makes outgoing connections.
+          For databases on your own network, the Nia Core Agent runs on Windows, macOS or Linux, pairs with a one‑time code and only makes outgoing connections.
         </p>
       </div>
 

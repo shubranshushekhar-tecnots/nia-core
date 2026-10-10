@@ -152,7 +152,7 @@ FunctionEnd
 ; Function is only reachable from the former -- only "un."-prefixed
 ; Functions or macros can be used in both.
 !macro CloseAgentDesktopApp
-  DetailPrint "Closing Nia Agent if it's running..."
+  DetailPrint "Closing Nia Core Agent if it's running..."
   nsExec::ExecToLog 'taskkill /IM "Nia Agent.exe" /T'
   Pop $0
   Sleep 1500

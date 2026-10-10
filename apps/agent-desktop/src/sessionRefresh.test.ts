@@ -9,7 +9,7 @@ describe("isNoSessionPage", () => {
   });
 
   it("is false for the real agent UI's content", () => {
-    expect(isNoSessionPage("Nia Agent -- Workflows")).toBe(false);
+    expect(isNoSessionPage("Nia Core Agent -- Workflows")).toBe(false);
     expect(isNoSessionPage("")).toBe(false);
   });
 });

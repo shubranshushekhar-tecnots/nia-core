@@ -28,7 +28,7 @@ if (shouldQuitForSecondInstance(gotLock)) {
 
   app.on("activate", () => {
     // macOS: clicking the Dock icon when the window is hidden-to-tray should reopen it, same as
-    // the tray's "Open Nia Agent" item.
+    // the tray's "Open Nia Core Agent" item.
     if (mainWindow) handleSecondInstance(mainWindow.win);
   });
 

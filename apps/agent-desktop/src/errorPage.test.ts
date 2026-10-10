@@ -5,7 +5,7 @@ import { RETRY_MARKER_URL } from "./constants.js";
 describe("buildServiceNotRunningHtml", () => {
   it("contains the plain-words explanation and a Retry link to the internal marker URL", () => {
     const html = buildServiceNotRunningHtml();
-    expect(html).toContain("Nia Agent service isn't running");
+    expect(html).toContain("Nia Core Agent service isn't running");
     expect(html).toContain(`href="${RETRY_MARKER_URL}"`);
   });
 

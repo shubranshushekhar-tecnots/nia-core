@@ -13,7 +13,7 @@
 // --no-desktop to build a service-only bundle for dev/testing:
 //   node apps/agent/packaging/macos/build-bundle.mjs --no-desktop
 //
-// Produces apps/agent/packaging/macos/dist/nia-agent-macos-arm64-<version>.zip
+// Produces apps/agent/packaging/macos/dist/nia-core-agent-macos-arm64-<version>.zip
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -77,7 +77,7 @@ async function main() {
   }
 
   console.log("[3/3] zipping bundle...");
-  const zipName = `nia-agent-macos-arm64-${version}.zip`;
+  const zipName = `nia-core-agent-macos-arm64-${version}.zip`;
   const zipPath = path.join(distDir, zipName);
   rmSync(zipPath, { force: true });
   // -y preserves symlinks (none here) and, more importantly, file modes

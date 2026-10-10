@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Installs the Nia Agent as a systemd service. Run as root on the target
+# Installs the Nia Core Agent as a systemd service. Run as root on the target
 # Linux host, with a bundle tarball built by build-bundle.sh:
-#   sudo ./install.sh /path/to/nia-agent-linux-<version>.tar.gz
+#   sudo ./install.sh /path/to/nia-core-agent-linux-<version>.tar.gz
 #
 # Idempotent: safe to re-run with a newer tarball to upgrade in place
 # (stops the service, replaces /opt/nia-agent, restarts) — /etc/nia-agent
@@ -15,7 +15,7 @@ fi
 
 BUNDLE="${1:-}"
 if [[ -z "$BUNDLE" || ! -f "$BUNDLE" ]]; then
-  echo "usage: $0 <path-to-nia-agent-linux-VERSION.tar.gz>" >&2
+  echo "usage: $0 <path-to-nia-core-agent-linux-VERSION.tar.gz>" >&2
   exit 1
 fi
 

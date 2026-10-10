@@ -4,9 +4,9 @@ import type { DownloadManifestFile } from "./manifest";
 
 const FILES: DownloadManifestFile[] = [
   { name: "NiaCoreAgent-Setup-0.0.1.exe", os: "windows", kind: "primary", size: 29_600_000, sha256: "a".repeat(64) },
-  { name: "nia-agent-windows-0.0.1.zip", os: "windows", kind: "advanced", size: 42_900_000, sha256: "b".repeat(64) },
-  { name: "nia-agent-macos-arm64-0.0.1.zip", os: "macos", kind: "primary", size: 37_400_000, sha256: "c".repeat(64) },
-  { name: "nia-agent-linux-0.0.1.tar.gz", os: "linux", kind: "primary", size: 13_300_000, sha256: "d".repeat(64) },
+  { name: "nia-core-agent-windows-0.0.1.zip", os: "windows", kind: "advanced", size: 42_900_000, sha256: "b".repeat(64) },
+  { name: "nia-core-agent-macos-arm64-0.0.1.zip", os: "macos", kind: "primary", size: 37_400_000, sha256: "c".repeat(64) },
+  { name: "nia-core-agent-linux-0.0.1.tar.gz", os: "linux", kind: "primary", size: 13_300_000, sha256: "d".repeat(64) },
 ];
 
 describe("buildDownloadCards", () => {

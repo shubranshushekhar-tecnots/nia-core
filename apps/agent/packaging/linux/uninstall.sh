@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Uninstalls the Nia Agent systemd service. Leaves /etc/nia-agent (config,
+# Uninstalls the Nia Core Agent systemd service. Leaves /etc/nia-agent (config,
 # encrypted secrets, spool, logs, status) in place by default — pass
 # --purge to remove it too. Run as root.
 set -euo pipefail

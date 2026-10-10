@@ -60,7 +60,7 @@ export class OtcInvalidError extends ApiError {
 
 /** Thrown by router.ts for `auth: "session"` routes when the `nia_ui_session` cookie is missing, unknown, or past its 12h inactivity window. */
 export class SessionExpiredError extends ApiError {
-  constructor(message = "Open Nia Agent again from the Start menu / Applications.") {
+  constructor(message = "Open Nia Core Agent again from the Start menu / Applications.") {
     super(401, "sessionExpired", message);
   }
 }

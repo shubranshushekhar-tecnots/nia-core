@@ -9,10 +9,10 @@ import type { StaticAsset, StaticHandler } from "./router.js";
  * never itself fail to render.
  */
 const NO_SESSION_HTML = Buffer.from(
-  `<!doctype html><html><head><meta charset="utf-8"><title>Nia Agent</title></head>` +
+  `<!doctype html><html><head><meta charset="utf-8"><title>Nia Core Agent</title></head>` +
     `<body style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;` +
     `align-items:center;justify-content:center;height:100vh;margin:0;background:#131A26;color:#FAF7F2">` +
-    `<p>Open Nia Agent again from the Start menu / Applications.</p></body></html>`,
+    `<p>Open Nia Core Agent again from the Start menu / Applications.</p></body></html>`,
   "utf8",
 );
 

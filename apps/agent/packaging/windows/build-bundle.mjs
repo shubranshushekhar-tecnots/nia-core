@@ -18,7 +18,7 @@
 // skip its own Authenticode publisher-pinning check on this build's
 // self-updates.
 //
-// Produces apps/agent/packaging/windows/dist/nia-agent-windows-<version>.zip
+// Produces apps/agent/packaging/windows/dist/nia-core-agent-windows-<version>.zip
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, rmSync, cpSync } from "node:fs";
@@ -91,7 +91,7 @@ async function main() {
   );
 
   console.log("[3/3] zipping bundle...");
-  const zipName = `nia-agent-windows-${version}.zip`;
+  const zipName = `nia-core-agent-windows-${version}.zip`;
   const zipPath = path.join(distDir, zipName);
   rmSync(zipPath, { force: true });
   execFileSync("zip", ["-r", "-q", zipPath, "."], { cwd: stageDir });

@@ -7,7 +7,7 @@ describe("buildUiStaticHandler", () => {
     const asset = await handler("/", false);
     expect(asset).toBeDefined();
     expect(asset!.contentType).toContain("text/html");
-    expect(asset!.data.toString("utf8")).toContain("Open Nia Agent again");
+    expect(asset!.data.toString("utf8")).toContain("Open Nia Core Agent again");
   });
 
   it("falls back to the same page at / with a valid session if the UI bundle hasn't been built (no apps/agent/ui/dist yet)", async () => {

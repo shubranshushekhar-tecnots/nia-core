@@ -9,7 +9,7 @@ const execFileAsync = promisify(execFile);
 /** The one plain-word failure mode this command can hit -- everything else (network error, non-200, malformed body) collapses into this same message, since there is nothing more specific a non-technical user could act on. */
 export class AgentNotRunningError extends Error {
   constructor() {
-    super("Nia Agent isn't running -- start it first.");
+    super("Nia Core Agent isn't running -- start it first.");
     this.name = "AgentNotRunningError";
   }
 }

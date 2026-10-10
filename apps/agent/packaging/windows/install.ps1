@@ -1,4 +1,4 @@
-﻿# Installs the Nia Agent as a Windows service via WinSW.
+﻿# Installs the Nia Core Agent as a Windows service via WinSW.
 #
 # Two modes:
 #   - In-place (used by the NSIS installer, which passes -InPlace): the

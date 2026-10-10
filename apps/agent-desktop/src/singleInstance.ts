@@ -1,7 +1,7 @@
 /**
  * Single-instance + relaunch guarantee.
  *
- * `app.requestSingleInstanceLock()` is the only thing standing between "opening Nia Agent from the
+ * `app.requestSingleInstanceLock()` is the only thing standing between "opening Nia Core Agent from the
  * Start Menu always opens the window" and the real customer bug this app must never repeat (fixed
  * in fe07ebc for the CLI/NSIS side -- a stale/invalid shortcut path silently did nothing). Electron's
  * lock is a live OS-level lock (a listening socket / named mutex depending on platform) tied to the
@@ -30,7 +30,7 @@ export interface FocusableWindow {
 
 /**
  * Runs in the *first* (lock-holding) instance's "second-instance" handler -- i.e. this is what makes
- * "opening Nia Agent again" from the Start Menu/Finder/dock focus the existing window instead of
+ * "opening Nia Core Agent again" from the Start Menu/Finder/dock focus the existing window instead of
  * doing nothing or erroring, no matter whether the window is currently hidden-to-tray, minimized, or
  * already focused.
  */
