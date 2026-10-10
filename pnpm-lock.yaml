@@ -51,6 +51,9 @@ importers:
 
   apps/agent-desktop:
     devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.20.2
       electron:
         specifier: ^33.2.1
         version: 33.4.11
