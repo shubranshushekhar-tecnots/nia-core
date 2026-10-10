@@ -571,6 +571,15 @@ Invoke-Section "CHECK 8: auto-update" {
         if (Test-Path $updaterLog) {
             Copy-Item -Path $updaterLog -Destination (Join-Path $ArtifactsDir "check8.updater.log") -Force -ErrorAction SilentlyContinue
         }
+        # And the thin run-updater.cmd launcher's raw stdout/stderr -- the
+        # only place a failure BEFORE nia-agent-updater.ps1 itself ever ran
+        # a line (parse error, ExecutionPolicy/Group-Policy block, etc.)
+        # could possibly show up, since Task Scheduler attaches no console
+        # to a non-interactive task and would otherwise discard it silently.
+        $launcherLog = Join-Path $updateDir "launcher.log"
+        if (Test-Path $launcherLog) {
+            Copy-Item -Path $launcherLog -Destination (Join-Path $ArtifactsDir "check8.launcher.log") -Force -ErrorAction SilentlyContinue
+        }
         # Also grab the agent service's own log (handOffToExternalUpdater's
         # "update_handed_off_to_external_updater"/"update_handoff_failed"
         # events, and UpdateChecker's "update_check_failed"/

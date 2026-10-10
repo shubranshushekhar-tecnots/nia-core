@@ -607,8 +607,14 @@ Write-Log "step d) verified nia-agent is Running (stable for 3s) under $ServiceA
 # makes this idempotent across upgrades (replaces the prior definition
 # in place, same as the rest of this script's upgrade-in-place design).
 try {
-    $updaterScript = Join-Path $InstallDir "updater\nia-agent-updater.ps1"
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$updaterScript`""
+    # Invoked through run-updater.cmd (not powershell.exe directly) so any
+    # failure before nia-agent-updater.ps1's own logging/trap can even run
+    # (parse error, ExecutionPolicy/Group-Policy block, etc.) is still
+    # captured in update\launcher.log -- Task Scheduler attaches no console
+    # to a non-interactive task, so powershell.exe's own stdout/stderr would
+    # otherwise be silently discarded in exactly that failure mode.
+    $updaterLauncher = Join-Path $InstallDir "updater\run-updater.cmd"
+    $action = New-ScheduledTaskAction -Execute $updaterLauncher
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
     $taskDefinition = New-ScheduledTask -Action $action -Principal $principal -Settings $settings
