@@ -128,11 +128,57 @@ const EnvSchema = z
      */
     CHAT_EVENTS_LOG_TTL_MS: z.coerce.number().int().positive().default(600_000),
     CHAT_EVENTS_LOG_MAX_LEN: z.coerce.number().int().positive().default(5000),
+    /**
+     * Email Phase 1 (@nia/mail) — this is the process that actually sends:
+     * the `send_email` interactive job (lib/mail/sendEmail.ts) calls
+     * getMailTransport() with this same env. Identical group/validation
+     * to apps/api/src/env.ts's copy (that side only needs it for the
+     * `mail:test` CLI) — keep both in sync by hand.
+     */
+    MAIL_TRANSPORT: z.enum(["smtp", "graph", "log"]).optional().default("log"),
+    MAIL_FROM_NAME: z.string().optional().default("Nia Core"),
+    SMTP_HOST: z.string().optional(),
+    SMTP_PORT: z.coerce.number().int().positive().optional().default(587),
+    SMTP_SECURE: z.enum(["true", "false"]).optional().default("false"),
+    SMTP_USER: z.string().optional(),
+    SMTP_PASS: z.string().optional(),
+    SMTP_FROM: z.string().optional(),
+    MS_GRAPH_TENANT_ID: z.string().optional(),
+    MS_GRAPH_CLIENT_ID: z.string().optional(),
+    MS_GRAPH_CLIENT_SECRET: z.string().optional(),
+    MS_GRAPH_SENDER: z.string().optional(),
   })
   .refine((e) => !(e.NODE_ENV === "production" && e.CONNECTOR_DEV_HOST), {
     message:
       "CONNECTOR_DEV_HOST must not be set when NODE_ENV=production — it overrides every connector service host to a dev-only address.",
     path: ["CONNECTOR_DEV_HOST"],
+  })
+  .superRefine((e, ctx) => {
+    const requiredByTransport: Record<string, readonly [string, string | undefined][]> = {
+      smtp: [
+        ["SMTP_HOST", e.SMTP_HOST],
+        ["SMTP_USER", e.SMTP_USER],
+        ["SMTP_PASS", e.SMTP_PASS],
+        ["SMTP_FROM", e.SMTP_FROM],
+      ],
+      graph: [
+        ["MS_GRAPH_TENANT_ID", e.MS_GRAPH_TENANT_ID],
+        ["MS_GRAPH_CLIENT_ID", e.MS_GRAPH_CLIENT_ID],
+        ["MS_GRAPH_CLIENT_SECRET", e.MS_GRAPH_CLIENT_SECRET],
+        ["MS_GRAPH_SENDER", e.MS_GRAPH_SENDER],
+      ],
+    };
+    const required = requiredByTransport[e.MAIL_TRANSPORT];
+    if (!required) return;
+    for (const [key, value] of required) {
+      if (!value) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${key} is required when MAIL_TRANSPORT=${e.MAIL_TRANSPORT}.`,
+          path: [key],
+        });
+      }
+    }
   });
 
 export const env = EnvSchema.parse(process.env);

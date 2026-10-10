@@ -20,6 +20,7 @@ import { profileEntity } from "./lib/profile/profileEntity.js";
 import { registerStagingSweepSchedule } from "./lib/etl/stagingSweepSchedule.js";
 import { sweepStaleStaging } from "./lib/etl/stagingSweeper.js";
 import { proposeCleaning } from "./lib/clean/proposeCleaning.js";
+import { sendEmail } from "./lib/mail/sendEmail.js";
 import { env } from "./env.js";
 
 /**
@@ -131,6 +132,15 @@ const interactive = new Worker(
         // explicit `cleanBinding` field).
         console.log(`[interactive] clean_propose for workflow ${payload.workflowId} node ${payload.nodeId}`);
         return await proposeCleaning(payload.workflowId, payload.nodeId, payload.scope, payload.triggeredByUserId);
+      case "send_email":
+        // Email Phase 1 — lib/mail/sendEmail.ts owns rendering (via
+        // @nia/mail) and the actual transport call. Fire-and-forget: a
+        // failed send must never block the Server Action that enqueued
+        // it (see apps/web/src/lib/mail/mailQueue.ts), so this relies
+        // entirely on BullMQ's own attempts/backoff for retries rather
+        // than retrying anything itself.
+        console.log(`[interactive] send_email template=${payload.payload.template}`);
+        return await sendEmail(payload);
     }
   },
   { connection, concurrency: 10 },

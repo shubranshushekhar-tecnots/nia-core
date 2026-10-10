@@ -8,6 +8,7 @@ COPY packages/schemas/package.json packages/schemas/
 COPY packages/auth/package.json packages/auth/
 COPY packages/db/package.json packages/db/
 COPY packages/secrets/package.json packages/secrets/
+COPY packages/mail/package.json packages/mail/
 COPY apps/api/package.json apps/api/
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
@@ -15,15 +16,16 @@ COPY packages/schemas packages/schemas
 COPY packages/auth packages/auth
 COPY packages/db packages/db
 COPY packages/secrets packages/secrets
+COPY packages/mail packages/mail
 COPY apps/api apps/api
-RUN pnpm -r --filter @nia/schemas --filter @nia/auth --filter @nia/db --filter @nia/secrets --filter @nia/api build
+RUN pnpm -r --filter @nia/schemas --filter @nia/auth --filter @nia/db --filter @nia/secrets --filter @nia/mail --filter @nia/api build
 # Self-contained deploy: packages @nia/api + its resolved production deps
-# (including the workspace @nia/schemas dep, materialized from its own
-# dist/) into one flat directory — see apps/api/.npmignore and
-# packages/schemas/.npmignore for why an (empty) .npmignore is required in
-# every package `pnpm deploy` touches: its file-selection otherwise falls
-# back to the root .gitignore's blanket `dist/` rule, silently deploying
-# without the build output.
+# (including the workspace @nia/schemas and @nia/mail deps, materialized
+# from their own dist/) into one flat directory — see apps/api/.npmignore,
+# packages/schemas/.npmignore, and packages/mail/.npmignore for why an
+# (empty) .npmignore is required in every package `pnpm deploy` touches:
+# its file-selection otherwise falls back to the root .gitignore's blanket
+# `dist/` rule, silently deploying without the build output.
 RUN pnpm --filter=@nia/api --prod deploy /out
 
 FROM node:22-alpine AS runtime

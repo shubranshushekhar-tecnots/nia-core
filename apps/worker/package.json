@@ -54,6 +54,7 @@
     "@langchain/langgraph": "^0.2.44",
     "@nia/db": "workspace:*",
     "@nia/guardrails": "workspace:*",
+    "@nia/mail": "workspace:*",
     "@nia/schemas": "workspace:*",
     "@nia/secrets": "workspace:*",
     "@supabase/supabase-js": "^2.46.1",

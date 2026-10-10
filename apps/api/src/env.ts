@@ -271,6 +271,30 @@ const EnvSchema = z.object({
    */
   RAZORPAY_PRO_MONTHLY_PLAN_ID: z.string().optional(),
   RAZORPAY_PRO_YEARLY_PLAN_ID: z.string().optional(),
+  /**
+   * Email Phase 1 (@nia/mail) — selects which transport getMailTransport()
+   * builds. "log" (default) sends nothing, just logs {to, subject}; safe
+   * for every dev checkout. "smtp"/"graph" each require their own var
+   * group below (validated in the `.superRefine()` below, same pattern as
+   * PAYMENTS_ENABLED -> RAZORPAY_*). Only used directly here by
+   * `mail:test` (scripts/mail-test.ts) — the real send path is
+   * apps/worker, which validates the identical group independently.
+   */
+  MAIL_TRANSPORT: z.enum(["smtp", "graph", "log"]).optional().default("log"),
+  /** Display name used in the From header for every outgoing email. */
+  MAIL_FROM_NAME: z.string().optional().default("Nia Core"),
+  /** Required only if MAIL_TRANSPORT=smtp. STARTTLS on 587 when SMTP_SECURE=false; implicit TLS on 465 when true. */
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().positive().optional().default(587),
+  SMTP_SECURE: z.enum(["true", "false"]).optional().default("false"),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().optional(),
+  /** Required only if MAIL_TRANSPORT=graph — Microsoft Graph sendMail via client-credentials auth (no basic-auth SMTP). */
+  MS_GRAPH_TENANT_ID: z.string().optional(),
+  MS_GRAPH_CLIENT_ID: z.string().optional(),
+  MS_GRAPH_CLIENT_SECRET: z.string().optional(),
+  MS_GRAPH_SENDER: z.string().optional(),
 }).refine((e) => !(e.NODE_ENV === "production" && e.CONNECTOR_DEV_HOST), {
   message:
     "CONNECTOR_DEV_HOST must not be set when NODE_ENV=production — it overrides the connector service host to a dev-only address.",
@@ -293,6 +317,32 @@ const EnvSchema = z.object({
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `${key} is required when PAYMENTS_ENABLED=true.`,
+        path: [key],
+      });
+    }
+  }
+}).superRefine((e, ctx) => {
+  const requiredByTransport: Record<string, readonly [string, string | undefined][]> = {
+    smtp: [
+      ["SMTP_HOST", e.SMTP_HOST],
+      ["SMTP_USER", e.SMTP_USER],
+      ["SMTP_PASS", e.SMTP_PASS],
+      ["SMTP_FROM", e.SMTP_FROM],
+    ],
+    graph: [
+      ["MS_GRAPH_TENANT_ID", e.MS_GRAPH_TENANT_ID],
+      ["MS_GRAPH_CLIENT_ID", e.MS_GRAPH_CLIENT_ID],
+      ["MS_GRAPH_CLIENT_SECRET", e.MS_GRAPH_CLIENT_SECRET],
+      ["MS_GRAPH_SENDER", e.MS_GRAPH_SENDER],
+    ],
+  };
+  const required = requiredByTransport[e.MAIL_TRANSPORT];
+  if (!required) return;
+  for (const [key, value] of required) {
+    if (!value) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${key} is required when MAIL_TRANSPORT=${e.MAIL_TRANSPORT}.`,
         path: [key],
       });
     }

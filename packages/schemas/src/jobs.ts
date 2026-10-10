@@ -247,6 +247,52 @@ export const CleanProposeJob = z.object({
 });
 export type CleanProposeJob = z.infer<typeof CleanProposeJob>;
 
+/**
+ * Mirrors @nia/mail's `TemplatePayload` union exactly (template name + its
+ * data shape) — duplicated here, not imported, because packages/schemas is
+ * the queue-boundary contract and intentionally has zero deps beyond zod
+ * (every other job payload follows that same rule). Keep the two in sync by
+ * hand if a template's fields ever change. Nested (not flattened into
+ * SendEmailJob directly) so the outer InteractiveJob union can still
+ * discriminate cleanly on a single "kind" field.
+ */
+const MailTemplatePayload = z.discriminatedUnion("template", [
+  z.object({
+    template: z.literal("loginCode"),
+    data: z.object({ code: z.string(), expiresInMinutes: z.number() }),
+  }),
+  z.object({
+    template: z.literal("verifyEmail"),
+    data: z.object({ code: z.string(), expiresInMinutes: z.number() }),
+  }),
+  z.object({
+    template: z.literal("passwordReset"),
+    data: z.object({
+      code: z.string(),
+      expiresInMinutes: z.number(),
+      resetUrl: z.string(),
+    }),
+  }),
+  z.object({
+    template: z.literal("passwordChanged"),
+    data: z.object({ whenText: z.string() }),
+  }),
+]);
+
+/**
+ * Phase 1 — generic email send. Fire-and-forget on QUEUE_INTERACTIVE (not
+ * QUEUE_HEAVY): email send is cheap/fast and must never sit behind a
+ * backfill, and a failed send must never block the Server Action that
+ * triggered it (see apps/worker/src/lib/mail/sendEmail.ts). A malformed
+ * payload fails Zod validation at enqueue time, not deep inside the worker.
+ */
+export const SendEmailJob = z.object({
+  kind: z.literal("send_email"),
+  to: z.string().email(),
+  payload: MailTemplatePayload,
+});
+export type SendEmailJob = z.infer<typeof SendEmailJob>;
+
 export const InteractiveJob = z.discriminatedUnion("kind", [
   ChatQueryJob,
   CheckRunJob,
@@ -256,5 +302,6 @@ export const InteractiveJob = z.discriminatedUnion("kind", [
   PlanProposeJob,
   ProfileRunJob,
   CleanProposeJob,
+  SendEmailJob,
 ]);
 export type InteractiveJob = z.infer<typeof InteractiveJob>;

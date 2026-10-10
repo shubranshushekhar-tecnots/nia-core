@@ -16,11 +16,13 @@
     "staff:grant": "tsx src/scripts/manageStaff.ts grant",
     "staff:revoke": "tsx src/scripts/manageStaff.ts revoke",
     "staff:list": "tsx src/scripts/manageStaff.ts list",
-    "staff:reset-2fa": "tsx src/scripts/manageStaff.ts reset-2fa"
+    "staff:reset-2fa": "tsx src/scripts/manageStaff.ts reset-2fa",
+    "mail:test": "tsx src/scripts/mail-test.ts"
   },
   "dependencies": {
     "@nia/auth": "workspace:*",
     "@nia/db": "workspace:*",
+    "@nia/mail": "workspace:*",
     "@nia/schemas": "workspace:*",
     "@nia/secrets": "workspace:*",
     "bullmq": "^5.34.4",

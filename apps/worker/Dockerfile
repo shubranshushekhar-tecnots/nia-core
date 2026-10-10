@@ -8,6 +8,7 @@ COPY packages/schemas/package.json packages/schemas/
 COPY packages/guardrails/package.json packages/guardrails/
 COPY packages/db/package.json packages/db/
 COPY packages/secrets/package.json packages/secrets/
+COPY packages/mail/package.json packages/mail/
 COPY apps/worker/package.json apps/worker/
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
@@ -15,14 +16,15 @@ COPY packages/schemas packages/schemas
 COPY packages/guardrails packages/guardrails
 COPY packages/db packages/db
 COPY packages/secrets packages/secrets
+COPY packages/mail packages/mail
 COPY apps/worker apps/worker
-RUN pnpm -r --filter @nia/schemas --filter @nia/guardrails --filter @nia/db --filter @nia/secrets --filter @nia/worker build
+RUN pnpm -r --filter @nia/schemas --filter @nia/guardrails --filter @nia/db --filter @nia/secrets --filter @nia/mail --filter @nia/worker build
 # Self-contained deploy: packages @nia/worker + its resolved production
-# deps (including the workspace @nia/schemas, @nia/guardrails, @nia/db and
-# @nia/secrets deps, materialized from their own dist/) into one flat
-# directory — see apps/worker/.npmignore, packages/schemas/.npmignore,
-# packages/guardrails/.npmignore, packages/db/.npmignore, and
-# packages/secrets/.npmignore for why an (empty) .npmignore is required
+# deps (including the workspace @nia/schemas, @nia/guardrails, @nia/db,
+# @nia/secrets, and @nia/mail deps, materialized from their own dist/)
+# into one flat directory — see apps/worker/.npmignore,
+# packages/schemas/.npmignore, packages/guardrails/.npmignore, and
+# packages/mail/.npmignore for why an (empty) .npmignore is required
 # in every package `pnpm deploy` touches: its file-selection otherwise
 # falls back to the root .gitignore's blanket `dist/` rule, silently
 # deploying without the build output.
