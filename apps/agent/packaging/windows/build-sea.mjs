@@ -159,7 +159,15 @@ async function patchVersionInfo(exePath, agentDirPath) {
   }
   const version = JSON.parse(readFileSync(path.join(agentDirPath, "package.json"), "utf8")).version;
   const iconPath = path.resolve(agentDirPath, "..", "agent-desktop", "assets", "app-icon.ico");
-  const { rcedit } = await import("rcedit");
+  // rcedit's export shape has moved between named/default across major
+  // versions (and dual-package/platform module resolution can surface
+  // either), so resolve whichever is actually a function rather than
+  // assuming one specific shape.
+  const rceditModule = await import("rcedit");
+  const rcedit = typeof rceditModule.rcedit === "function" ? rceditModule.rcedit : rceditModule.default;
+  if (typeof rcedit !== "function") {
+    throw new Error(`[rcedit] could not resolve the rcedit() function from the "rcedit" package (got: ${JSON.stringify(Object.keys(rceditModule))})`);
+  }
   await rcedit(exePath, {
     icon: iconPath,
     "file-version": version,
