@@ -12,6 +12,8 @@ import {
   DropEntityRequest,
   rowsNeedJsonCoercion,
   coerceJsonWriteValues,
+  encodeBinaryValue,
+  decodeBinaryWriteValues,
   type TabularResult,
   type WriteResponse,
   type StageResponse,
@@ -165,6 +167,18 @@ app.post("/introspect", async (req) => {
   };
 });
 
+// Bug fix (binary/blob columns unreadable): mysql2 returns a real Node
+// Buffer for BINARY/VARBINARY/BLOB columns. Left as-is, Fastify's JSON
+// serialization falls back to Buffer.prototype.toJSON(), sending
+// `{"type":"Buffer","data":[...]}` over the wire — an object, not a
+// scalar. Wrapping with @nia/schemas' encodeBinaryValue (see binaryValue.ts)
+// tags the value unambiguously so the destination connector's /write route
+// can decode it back to a real Buffer via decodeBinaryWriteValues, without
+// needing a destination-column-type lookup.
+function encodeReadValue(value: unknown): unknown {
+  return Buffer.isBuffer(value) ? encodeBinaryValue(value) : value;
+}
+
 app.post("/execute", async (req): Promise<TabularResult> => {
   const body = ExecuteRequest.parse(req.body);
   verifyReadRequest("execute", body.credential.connectionId, body.context, body.query);
@@ -187,7 +201,7 @@ app.post("/execute", async (req): Promise<TabularResult> => {
   }));
   return {
     columns,
-    rows: capped.map((r) => columns.map((c) => r[c.name])),
+    rows: capped.map((r) => columns.map((c) => encodeReadValue(r[c.name]))),
     meta: {
       executedQuery: body.query.sql,
       connectionId: body.credential.connectionId,
@@ -302,14 +316,20 @@ app.post("/write", async (req): Promise<WriteResponse> => {
 
   const pool = await getWritePool(body.credential, body.config);
 
+  // Bug fix (binary/blob columns, mirrors /execute's encodeReadValue): any
+  // value tagged by encodeBinaryValue on the way out of a source connector's
+  // /execute must be decoded back to a real Buffer before it reaches
+  // mysql2 — done first so the JSON-coercion guard right below (which
+  // already excludes real Buffer instances) never sees the wrapper shape.
+  let rows: unknown[][] = decodeBinaryWriteValues(body.rows);
+
   // Phase (JSON write-layer guard): mysql2 stringifies a plain object/array
   // value via `.toString()` (producing the literal text "[object Object]")
   // rather than JSON-encoding it — only pay for a destination-column-type
   // lookup when the batch actually contains an object/array value; a normal
   // all-scalar write (every write today, and every existing test) never
   // triggers this query. See writeValueCoercion.ts's header comment.
-  let rows: unknown[][] = body.rows;
-  if (rowsNeedJsonCoercion(body.rows)) {
+  if (rowsNeedJsonCoercion(rows)) {
     const [typeRows] = await pool.query(
       `SELECT column_name AS column_name, data_type AS data_type
        FROM information_schema.columns
@@ -321,7 +341,7 @@ app.post("/write", async (req): Promise<WriteResponse> => {
         .filter((r) => r.data_type === "json")
         .map((r) => r.column_name),
     );
-    const coerced = coerceJsonWriteValues(body.columns, body.rows, (c) => jsonColumns.has(c));
+    const coerced = coerceJsonWriteValues(body.columns, rows, (c) => jsonColumns.has(c));
     if (!coerced.ok) throw new Error(coerced.error);
     rows = coerced.rows;
   }

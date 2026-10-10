@@ -64,6 +64,7 @@ export * from "./niaInference.js";
 // docs/plans/schema-layer.md's Part 3 plan-update entry.
 export * as niaExprType from "./niaExprType.js";
 export * from "./writeValueCoercion.js";
+export * from "./binaryValue.js";
 export * from "./destinationContract.js";
 export * from "./connectionErrorMessages.js";
 export * from "./appErrorMessages.js";

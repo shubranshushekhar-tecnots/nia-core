@@ -128,6 +128,28 @@ describe("connector-mysql /execute (route-level)", () => {
     expect(queryMock).not.toHaveBeenCalled();
     expect(res.json().message).toMatch(/only accepts sql queries, got kind: mongo/);
   });
+
+  it("wraps a BLOB column's real mysql2 Buffer as a base64 WireBinaryValue, not Buffer.toJSON()'s {type,data} shape", async () => {
+    const { app, signReadContext } = await freshApp();
+    const payload = Buffer.from([0, 1, 2, 255, 254, 72, 101, 108, 108, 111]);
+    queryMock.mockResolvedValue([[{ id: 1, payload }], [{ name: "id" }, { name: "payload" }]]);
+
+    const query = { kind: "sql" as const, sql: "SELECT id, payload FROM blob_repro WHERE id = 1", params: [] };
+    const res = await app.inject({
+      method: "POST",
+      url: "/execute",
+      payload: {
+        credential: baseCredential,
+        config: baseConfig,
+        query,
+        context: readContext(signReadContext, "execute", query),
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.rows).toEqual([[1, { __niaBytes: true, base64: payload.toString("base64") }]]);
+  });
 });
 
 describe("connector-mysql /write (route-level)", () => {
@@ -282,6 +304,40 @@ describe("connector-mysql /write (route-level)", () => {
     expect(res.json().message).toMatch(/destination type is not JSON — refusing to write it/);
     // Only the type-lookup query ran — no UPSERT was ever issued.
     expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("decodes a WireBinaryValue (__niaBytes/base64) back to a real Buffer before binding, instead of tripping the JSON-coercion guard", async () => {
+    const { app, signWriteContext } = await freshApp();
+    queryMock.mockResolvedValue([{ affectedRows: 1 }, undefined]);
+
+    const payload = Buffer.from([0, 1, 2, 255, 254, 72, 101, 108, 108, 111]);
+    const columns = ["id", "payload"];
+    const issuedAt = Date.now();
+    const signature = signWriteContext(
+      { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, ...stagingFields },
+      "a".repeat(32),
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/write",
+      payload: {
+        credential: baseCredential,
+        config: baseConfig,
+        entity,
+        columns,
+        rows: [[1, { __niaBytes: true, base64: payload.toString("base64") }]],
+        upsertKeys: ["id"],
+        context: { connectionId: baseCredential.connectionId, grantId: baseGrantId, entity, columns, issuedAt, signature, ...stagingFields },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ written: 1 });
+    // No destination-column-type lookup ran (decoded Buffer isn't flagged by
+    // rowsNeedJsonCoercion) — the only pool.query call is the UPSERT itself,
+    // bound with a real Buffer, not the wrapper object or a JSON string.
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(queryMock).toHaveBeenCalledWith(expect.objectContaining({ values: [1, payload] }));
   });
 
   it("writes a quarantine row (entity == context.quarantineEntity) via the fixed quarantine-table INSERT, not the upsert path", async () => {
