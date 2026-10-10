@@ -398,6 +398,8 @@ describe("GET /console/orgs/:orgId", () => {
       created_at: "2026-01-01T00:00:00.000Z",
       plan_id: "pro",
       plan_name: "Pro",
+      effective_plan_id: "pro",
+      effective_plan_name: "Pro",
       workflow_limit: 25,
       workflow_limit_override_set: false,
       workflow_limit_override: null,
@@ -405,7 +407,15 @@ describe("GET /console/orgs/:orgId", () => {
       project_limit_override_set: false,
       project_limit_override: null,
       rows_limit: 2000000,
+      grant_rows_per_month_set: false,
+      grant_rows_per_month: null,
       copilot_limit: 500,
+      grant_copilot_actions_per_month_set: false,
+      grant_copilot_actions_per_month: null,
+      grant_plan_id: null,
+      grant_expires_at: null,
+      grant_reason: null,
+      grant_expired: false,
       suspended_at: null,
       suspended_reason: null,
       suspended_by: null,
@@ -444,6 +454,8 @@ describe("GET /console/orgs/:orgId", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       planId: "pro",
       planTier: "Pro",
+      effectivePlanId: "pro",
+      effectivePlanTier: "Pro",
       status: "Active",
       workflowLimit: 25,
       workflowLimitOverrideSet: false,
@@ -457,6 +469,14 @@ describe("GET /console/orgs/:orgId", () => {
       rowsUsed: 150000,
       copilotLimit: 500,
       copilotUsed: 42,
+      grantPlanId: null,
+      grantRowsPerMonthOverrideSet: false,
+      grantRowsPerMonthOverride: null,
+      grantCopilotActionsPerMonthOverrideSet: false,
+      grantCopilotActionsPerMonthOverride: null,
+      grantExpiresAt: null,
+      grantReason: null,
+      grantExpired: false,
       runs30d: 12,
       suspendedAt: null,
       suspendedReason: null,
@@ -573,22 +593,38 @@ describe("GET /console/orgs/:orgId", () => {
 function mockPatchOrgPlanQuery(options: {
   orgExists: boolean;
   planExists?: boolean;
+  grantPlanExists?: boolean;
   planId?: string;
   workflowLimitOverrideSet?: boolean;
   workflowLimitOverride?: number | null;
   projectLimitOverrideSet?: boolean;
   projectLimitOverride?: number | null;
+  grantPlanId?: string | null;
+  grantCopilotActionsPerMonthOverrideSet?: boolean;
+  grantCopilotActionsPerMonthOverride?: number | null;
+  grantRowsPerMonthOverrideSet?: boolean;
+  grantRowsPerMonthOverride?: number | null;
+  grantExpiresAt?: string | null;
+  before?: Record<string, unknown> | null;
 }) {
   const {
     orgExists,
     planExists = true,
+    grantPlanExists = true,
     planId = "enterprise",
     workflowLimitOverrideSet = true,
     workflowLimitOverride = 100,
     projectLimitOverrideSet = true,
     projectLimitOverride = 50,
+    grantPlanId = null,
+    grantCopilotActionsPerMonthOverrideSet = false,
+    grantCopilotActionsPerMonthOverride = null,
+    grantRowsPerMonthOverrideSet = false,
+    grantRowsPerMonthOverride = null,
+    grantExpiresAt = null,
+    before = null,
   } = options;
-  const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+  const query = vi.fn(async (sql: string, params?: unknown[]) => {
     if (sql.includes("platform_staff")) return { rowCount: 1 };
     if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
     if (sql.includes("private.log_org_audit")) return { rows: [], rowCount: 0 };
@@ -596,7 +632,12 @@ function mockPatchOrgPlanQuery(options: {
       return { rows: orgExists ? [{ id: "org-1" }] : [], rowCount: orgExists ? 1 : 0 };
     }
     if (sql.includes("select id from public.plans")) {
-      return { rows: planExists ? [{ id: planId }] : [], rowCount: planExists ? 1 : 0 };
+      const queriedId = params?.[0];
+      const exists = queriedId === planId ? planExists : grantPlanExists;
+      return { rows: exists ? [{ id: queriedId }] : [], rowCount: exists ? 1 : 0 };
+    }
+    if (sql.includes("select plan_id, workflow_limit_set") && sql.includes("where org_id = $1")) {
+      return { rows: before ? [before] : [], rowCount: before ? 1 : 0 };
     }
     if (sql.includes("insert into public.org_plan")) {
       return {
@@ -607,6 +648,12 @@ function mockPatchOrgPlanQuery(options: {
             workflow_limit: workflowLimitOverride,
             project_limit_set: projectLimitOverrideSet,
             project_limit: projectLimitOverride,
+            grant_plan_id: grantPlanId,
+            grant_copilot_actions_per_month_set: grantCopilotActionsPerMonthOverrideSet,
+            grant_copilot_actions_per_month: grantCopilotActionsPerMonthOverride,
+            grant_rows_per_month_set: grantRowsPerMonthOverrideSet,
+            grant_rows_per_month: grantRowsPerMonthOverride,
+            grant_expires_at: grantExpiresAt,
           },
         ],
         rowCount: 1,
@@ -628,11 +675,18 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
     workflowLimitOverride: 100,
     projectLimitOverrideSet: true,
     projectLimitOverride: 50,
+    grantPlanId: "team",
+    grantCopilotActionsPerMonthOverrideSet: true,
+    grantCopilotActionsPerMonthOverride: 1000,
+    grantRowsPerMonthOverrideSet: true,
+    grantRowsPerMonthOverride: 5000000,
+    grantExpiresAt: null as string | null,
+    reason: "Promo trial",
   };
 
-  it("upserts org_plan and writes both audit rows with matching detail for a staff session", async () => {
+  it("upserts org_plan and writes both audit rows with matching { reason, before, after } detail for a staff session", async () => {
     getSession.mockResolvedValue(STAFF_SESSION);
-    const query = mockPatchOrgPlanQuery({ orgExists: true, ...fullBody });
+    const query = mockPatchOrgPlanQuery({ orgExists: true, before: null, ...fullBody });
 
     const started = await startServer(buildApp({ mountConsole: true }));
     server = started.server;
@@ -642,10 +696,24 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
       body: JSON.stringify(fullBody),
     });
 
+    const { reason, ...responseBody } = fullBody;
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(fullBody);
+    expect(await res.json()).toEqual(responseBody);
 
-    const detail = JSON.stringify(fullBody);
+    const after = {
+      plan_id: fullBody.planId,
+      workflow_limit_set: fullBody.workflowLimitOverrideSet,
+      workflow_limit: fullBody.workflowLimitOverride,
+      project_limit_set: fullBody.projectLimitOverrideSet,
+      project_limit: fullBody.projectLimitOverride,
+      grant_plan_id: fullBody.grantPlanId,
+      grant_copilot_actions_per_month_set: fullBody.grantCopilotActionsPerMonthOverrideSet,
+      grant_copilot_actions_per_month: fullBody.grantCopilotActionsPerMonthOverride,
+      grant_rows_per_month_set: fullBody.grantRowsPerMonthOverrideSet,
+      grant_rows_per_month: fullBody.grantRowsPerMonthOverride,
+      grant_expires_at: fullBody.grantExpiresAt,
+    };
+    const detail = JSON.stringify({ reason, before: null, after });
     const staffAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
     expect(staffAuditCall?.[1]).toEqual(["staff-1", "org.plan_update", null, orgId, detail]);
     const orgAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_org_audit"));
@@ -661,6 +729,12 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
       workflowLimitOverride: null,
       projectLimitOverrideSet: false,
       projectLimitOverride: null,
+      grantPlanId: null,
+      grantCopilotActionsPerMonthOverrideSet: false,
+      grantCopilotActionsPerMonthOverride: null,
+      grantRowsPerMonthOverrideSet: false,
+      grantRowsPerMonthOverride: null,
+      grantExpiresAt: null,
     });
 
     const started = await startServer(buildApp({ mountConsole: true }));
@@ -671,6 +745,13 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
       workflowLimitOverride: null,
       projectLimitOverrideSet: false,
       projectLimitOverride: null,
+      grantPlanId: null,
+      grantCopilotActionsPerMonthOverrideSet: false,
+      grantCopilotActionsPerMonthOverride: null,
+      grantRowsPerMonthOverrideSet: false,
+      grantRowsPerMonthOverride: null,
+      grantExpiresAt: null,
+      reason: "Clearing all overrides",
     };
     const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/plan`, {
       method: "PATCH",
@@ -678,8 +759,27 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
       body: JSON.stringify(body),
     });
 
+    const { reason, ...responseBody } = body;
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(body);
+    expect(await res.json()).toEqual(responseBody);
+  });
+
+  it("rejects a missing reason with a validation error, without upserting org_plan", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    withServiceRole.mockResolvedValue({ rowCount: 1 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const { reason: _reason, ...bodyWithoutReason } = fullBody;
+    const res = await fetch(`${started.baseUrl}/console/orgs/${orgId}/plan`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify(bodyWithoutReason),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+    expect(withServiceRole).toHaveBeenCalledOnce();
   });
 
   it("returns 404 for an org that does not exist, without writing any audit row", async () => {
@@ -702,7 +802,7 @@ describe("PATCH /console/orgs/:orgId/plan", () => {
 
   it("returns 400 for an unknown planId, without writing any audit row", async () => {
     getSession.mockResolvedValue(STAFF_SESSION);
-    const query = mockPatchOrgPlanQuery({ orgExists: true, planExists: false });
+    const query = mockPatchOrgPlanQuery({ orgExists: true, planExists: false, planId: "not-a-real-plan" });
 
     const started = await startServer(buildApp({ mountConsole: true }));
     server = started.server;
@@ -1372,6 +1472,7 @@ describe("GET /console/users", () => {
           email: "ada@example.com",
           orgCount: 2,
           createdAt: "2026-01-01T00:00:00.000Z",
+          orgs: [],
         },
       ],
       total: 1,
@@ -1386,8 +1487,44 @@ describe("GET /console/users", () => {
       "user.list",
       null,
       null,
-      JSON.stringify({ search: null, limit: 50, offset: 0, count: 1 }),
+      JSON.stringify({ search: null, role: null, plan: null, workspaceType: null, limit: 50, offset: 0, count: 1 }),
     ]);
+  });
+
+  // 0078: role/plan/workspaceType query params are forwarded as SQL filter
+  // params (and into the staff_audit_log detail) — the filtering logic
+  // itself lives in the CASE-WHEN SQL (exercised for real only by an
+  // integration test), so this proves the route wires the query params
+  // through correctly rather than silently dropping them.
+  it("forwards role/plan/workspaceType query params as filter params and into the audit detail", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes("count(*) as count")) return { rows: [{ count: "0" }], rowCount: 1 };
+      if (sql.includes('from public."user"')) return { rows: [], rowCount: 0 };
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users?role=admin&plan=pro&workspaceType=org`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+
+    const countCall = query.mock.calls.find((call) => call[0].includes("count(*) as count"));
+    expect(countCall?.[1]).toEqual(["", "admin", "pro", "org"]);
+
+    const auditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(auditCall?.[1]?.[4]).toBe(
+      JSON.stringify({ search: null, role: "admin", plan: "pro", workspaceType: "org", limit: 50, offset: 0, count: 0 }),
+    );
   });
 });
 
@@ -1410,6 +1547,7 @@ describe("GET /console/users/:userId", () => {
         org_name: "Acme Inc",
         role: "owner",
         created_at: "2026-01-02T00:00:00.000Z",
+        plan_id: "pro",
       },
     ];
     const query = vi.fn(async (sql: string, _params?: unknown[]) => {
@@ -1439,7 +1577,11 @@ describe("GET /console/users/:userId", () => {
       email: "ada@example.com",
       emailVerified: true,
       createdAt: "2026-01-01T00:00:00.000Z",
-      memberships: [{ orgId: "org-1", orgName: "Acme Inc", role: "owner", joinedAt: "2026-01-02T00:00:00.000Z" }],
+      workspaceType: "org",
+      memberships: [
+        { orgId: "org-1", orgName: "Acme Inc", role: "owner", joinedAt: "2026-01-02T00:00:00.000Z", planId: "pro" },
+      ],
+      individualPlan: null,
       sessionCount: 3,
       lastSignInAt: "2026-02-01T00:00:00.000Z",
     });
@@ -1473,6 +1615,7 @@ describe("GET /console/users/:userId", () => {
       if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
       if (sql.includes('from public."user"')) return { rows: [userRow], rowCount: 1 };
       if (sql.includes("from public.organization_members")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from public.owner_plan")) return { rows: [], rowCount: 0 };
       if (sql.includes('from public."session"')) {
         sessionSql = sql;
         return {
@@ -1502,13 +1645,349 @@ describe("GET /console/users/:userId", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Object.keys(body).sort()).toEqual(
-      ["id", "name", "email", "emailVerified", "createdAt", "memberships", "sessionCount", "lastSignInAt"].sort(),
+      [
+        "id",
+        "name",
+        "email",
+        "emailVerified",
+        "createdAt",
+        "workspaceType",
+        "memberships",
+        "individualPlan",
+        "sessionCount",
+        "lastSignInAt",
+      ].sort(),
     );
     const raw = JSON.stringify(body);
     expect(raw).not.toContain("superhashedsecretvalue");
     expect(raw).not.toContain("JBSWY3DPEHPK3PXP");
     expect(raw).not.toContain("sess_live_abc123secret");
     expect(sessionSql).not.toMatch(/\btoken\b|select \*/i);
+  });
+
+  // 0078: a user with zero org memberships (an individual workspace) gets
+  // an `individualPlan` block resolved from owner_plan — proving the
+  // snake_case -> camelCase mapping is correct end to end, same discipline
+  // as the org detail route's own override block.
+  it("returns an individualPlan block (resolved from owner_plan) for a user with zero org memberships", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+
+    const userRow = {
+      id: userId,
+      name: "Grace Hopper",
+      email: "grace@example.com",
+      email_verified: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+    };
+    const individualPlanRow = {
+      plan_id: "pro",
+      plan_name: "Pro",
+      effective_plan_id: "pro",
+      effective_plan_name: "Pro",
+      workflow_limit: 100,
+      project_limit: 50,
+      copilot_limit: 1000,
+      rows_limit: 5000000,
+      workflow_limit_set: false,
+      workflow_limit_override: null,
+      project_limit_set: false,
+      project_limit_override: null,
+      grant_plan_id: null,
+      grant_copilot_actions_per_month_set: true,
+      grant_copilot_actions_per_month: 1000,
+      grant_rows_per_month_set: false,
+      grant_rows_per_month: null,
+      grant_expires_at: null,
+      grant_reason: null,
+      grant_expired: false,
+    };
+    const query = vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("platform_staff")) return { rowCount: 1 };
+      if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+      if (sql.includes('from public."user"')) return { rows: [userRow], rowCount: 1 };
+      if (sql.includes("from public.organization_members")) return { rows: [], rowCount: 0 };
+      if (sql.includes("from public.owner_plan")) return { rows: [individualPlanRow], rowCount: 1 };
+      if (sql.includes('from public."session"')) {
+        return { rows: [{ count: "0", last_sign_in_at: null }], rowCount: 1 };
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+    withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+      fn({ query }),
+    );
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}`, {
+      headers: { authorization: "Bearer good-token" },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.workspaceType).toBe("individual");
+    expect(body.memberships).toEqual([]);
+    expect(body.individualPlan).toEqual({
+      planId: "pro",
+      planName: "Pro",
+      effectivePlanId: "pro",
+      effectivePlanName: "Pro",
+      workflowLimit: 100,
+      projectLimit: 50,
+      copilotLimit: 1000,
+      rowsLimit: 5000000,
+      workflowLimitOverrideSet: false,
+      workflowLimitOverride: null,
+      projectLimitOverrideSet: false,
+      projectLimitOverride: null,
+      grantPlanId: null,
+      grantCopilotActionsPerMonthOverrideSet: true,
+      grantCopilotActionsPerMonthOverride: 1000,
+      grantRowsPerMonthOverrideSet: false,
+      grantRowsPerMonthOverride: null,
+      grantExpiresAt: null,
+      grantReason: null,
+      grantExpired: false,
+    });
+  });
+});
+
+/**
+ * 0078 Console copilot/rows overrides. `PATCH /console/users/:userId/plan`
+ * — individual-workspace equivalent of `PATCH /console/orgs/:orgId/plan`,
+ * same shape of tests: upsert response, 404, validation, the
+ * USER_IS_ORG_MEMBER guard that's unique to this endpoint, and the single
+ * (no org) audit row.
+ */
+function mockPatchUserPlanQuery(options: {
+  userExists: boolean;
+  hasMembership?: boolean;
+  planExists?: boolean;
+  grantPlanExists?: boolean;
+  planId?: string;
+  workflowLimitOverrideSet?: boolean;
+  workflowLimitOverride?: number | null;
+  projectLimitOverrideSet?: boolean;
+  projectLimitOverride?: number | null;
+  grantPlanId?: string | null;
+  grantCopilotActionsPerMonthOverrideSet?: boolean;
+  grantCopilotActionsPerMonthOverride?: number | null;
+  grantRowsPerMonthOverrideSet?: boolean;
+  grantRowsPerMonthOverride?: number | null;
+  grantExpiresAt?: string | null;
+  before?: Record<string, unknown> | null;
+}) {
+  const {
+    userExists,
+    hasMembership = false,
+    planExists = true,
+    grantPlanExists = true,
+    planId = "pro",
+    workflowLimitOverrideSet = false,
+    workflowLimitOverride = null,
+    projectLimitOverrideSet = false,
+    projectLimitOverride = null,
+    grantPlanId = null,
+    grantCopilotActionsPerMonthOverrideSet = true,
+    grantCopilotActionsPerMonthOverride = 1000,
+    grantRowsPerMonthOverrideSet = false,
+    grantRowsPerMonthOverride = null,
+    grantExpiresAt = null,
+    before = null,
+  } = options;
+  const query = vi.fn(async (sql: string, params?: unknown[]) => {
+    if (sql.includes("platform_staff")) return { rowCount: 1 };
+    if (sql.includes("private.log_staff_action")) return { rows: [], rowCount: 0 };
+    if (sql.includes('select id from public."user"')) {
+      return { rows: userExists ? [{ id: "user-1" }] : [], rowCount: userExists ? 1 : 0 };
+    }
+    if (sql.includes("select org_id from public.organization_members")) {
+      return { rows: hasMembership ? [{ org_id: "org-1" }] : [], rowCount: hasMembership ? 1 : 0 };
+    }
+    if (sql.includes("select id from public.plans")) {
+      const queriedId = params?.[0];
+      const exists = queriedId === planId ? planExists : grantPlanExists;
+      return { rows: exists ? [{ id: queriedId }] : [], rowCount: exists ? 1 : 0 };
+    }
+    if (sql.includes("select plan_id, workflow_limit_set") && sql.includes("where user_id = $1")) {
+      return { rows: before ? [before] : [], rowCount: before ? 1 : 0 };
+    }
+    if (sql.includes("insert into public.owner_plan")) {
+      return {
+        rows: [
+          {
+            plan_id: planId,
+            workflow_limit_set: workflowLimitOverrideSet,
+            workflow_limit: workflowLimitOverride,
+            project_limit_set: projectLimitOverrideSet,
+            project_limit: projectLimitOverride,
+            grant_plan_id: grantPlanId,
+            grant_copilot_actions_per_month_set: grantCopilotActionsPerMonthOverrideSet,
+            grant_copilot_actions_per_month: grantCopilotActionsPerMonthOverride,
+            grant_rows_per_month_set: grantRowsPerMonthOverrideSet,
+            grant_rows_per_month: grantRowsPerMonthOverride,
+            grant_expires_at: grantExpiresAt,
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    throw new Error(`mockPatchUserPlanQuery: unexpected SQL: ${sql}`);
+  });
+  withServiceRole.mockImplementation(async (_pool: unknown, fn: (db: { query: typeof query }) => Promise<unknown>) =>
+    fn({ query }),
+  );
+  return query;
+}
+
+describe("PATCH /console/users/:userId/plan", () => {
+  const userId = "22222222-2222-2222-2222-222222222222";
+  const fullBody = {
+    planId: "pro",
+    workflowLimitOverrideSet: false,
+    workflowLimitOverride: null as number | null,
+    projectLimitOverrideSet: false,
+    projectLimitOverride: null as number | null,
+    grantPlanId: "team" as string | null,
+    grantCopilotActionsPerMonthOverrideSet: true,
+    grantCopilotActionsPerMonthOverride: 1000,
+    grantRowsPerMonthOverrideSet: false,
+    grantRowsPerMonthOverride: null as number | null,
+    grantExpiresAt: null as string | null,
+    reason: "Promo trial",
+  };
+
+  it("upserts owner_plan and writes one staff_audit_log row with { reason, before, after } detail for a staff session", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockPatchUserPlanQuery({ userExists: true, hasMembership: false, before: null, ...fullBody });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}/plan`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify(fullBody),
+    });
+
+    const { reason, ...responseBody } = fullBody;
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(responseBody);
+
+    const after = {
+      plan_id: fullBody.planId,
+      workflow_limit_set: fullBody.workflowLimitOverrideSet,
+      workflow_limit: fullBody.workflowLimitOverride,
+      project_limit_set: fullBody.projectLimitOverrideSet,
+      project_limit: fullBody.projectLimitOverride,
+      grant_plan_id: fullBody.grantPlanId,
+      grant_copilot_actions_per_month_set: fullBody.grantCopilotActionsPerMonthOverrideSet,
+      grant_copilot_actions_per_month: fullBody.grantCopilotActionsPerMonthOverride,
+      grant_rows_per_month_set: fullBody.grantRowsPerMonthOverrideSet,
+      grant_rows_per_month: fullBody.grantRowsPerMonthOverride,
+      grant_expires_at: fullBody.grantExpiresAt,
+    };
+    const detail = JSON.stringify({ reason, before: null, after });
+    const staffAuditCall = query.mock.calls.find((call) => call[0].includes("private.log_staff_action"));
+    expect(staffAuditCall?.[1]).toEqual(["staff-1", "user.plan_update", userId, null, detail]);
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_org_audit"))).toBe(false);
+  });
+
+  it("returns 400 USER_IS_ORG_MEMBER for a user with an org membership, without upserting owner_plan", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockPatchUserPlanQuery({ userExists: true, hasMembership: true });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}/plan`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify(fullBody),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("USER_IS_ORG_MEMBER");
+    expect(query.mock.calls.some((call) => call[0].includes("insert into public.owner_plan"))).toBe(false);
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_staff_action"))).toBe(false);
+  });
+
+  it("returns 404 for a user that does not exist, without writing any audit row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockPatchUserPlanQuery({ userExists: false });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/00000000-0000-0000-0000-000000000000/plan`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify(fullBody),
+    });
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.code).toBe("NOT_FOUND");
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_staff_action"))).toBe(false);
+  });
+
+  it("returns 400 for an unknown planId, without writing any audit row", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    const query = mockPatchUserPlanQuery({ userExists: true, hasMembership: false, planExists: false, planId: "not-a-real-plan" });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}/plan`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify({ ...fullBody, planId: "not-a-real-plan" }),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("INVALID_PLAN");
+    expect(query.mock.calls.some((call) => call[0].includes("private.log_staff_action"))).toBe(false);
+  });
+
+  it("rejects a missing reason with a validation error, without upserting owner_plan", async () => {
+    getSession.mockResolvedValue(STAFF_SESSION);
+    withServiceRole.mockResolvedValue({ rowCount: 1 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const { reason: _reason, ...bodyWithoutReason } = fullBody;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}/plan`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify(bodyWithoutReason),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+    expect(withServiceRole).toHaveBeenCalledOnce();
+  });
+
+  it("returns 403 for a non-staff session without ever upserting owner_plan", async () => {
+    getSession.mockResolvedValue({ user: { id: "user-1", email: "user@nia.dev" } });
+    withServiceRole.mockResolvedValue({ rowCount: 0 });
+
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}/plan`, {
+      method: "PATCH",
+      headers: { authorization: "Bearer good-token", "content-type": "application/json" },
+      body: JSON.stringify(fullBody),
+    });
+
+    expect(res.status).toBe(403);
+    expect(withServiceRole).toHaveBeenCalledOnce();
+  });
+
+  it("returns 401 for an unauthenticated request", async () => {
+    const started = await startServer(buildApp({ mountConsole: true }));
+    server = started.server;
+    const res = await fetch(`${started.baseUrl}/console/users/${userId}/plan`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(fullBody),
+    });
+
+    expect(res.status).toBe(401);
+    expect(withServiceRole).not.toHaveBeenCalled();
   });
 });
 

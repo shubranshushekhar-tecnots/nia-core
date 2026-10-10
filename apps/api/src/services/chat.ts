@@ -183,9 +183,6 @@ export async function listMessages(
  */
 export async function assertCopilotActionAllowed(pool: Pool, scope: WorkspaceScope, subjectId: string): Promise<void> {
   const isPersonal = !("orgId" in scope);
-  const table = isPersonal ? "owner_plan" : "org_plan";
-  const scopeColumn = isPersonal ? "user_id" : "org_id";
-  const scopeValue = isPersonal ? scope.ownerId : scope.orgId;
   const lockKey = isPersonal ? `owner:${scope.ownerId}` : `org:${scope.orgId}`;
 
   // withServiceRole here is the same "deliberate, narrow exception" to
@@ -206,12 +203,14 @@ export async function assertCopilotActionAllowed(pool: Pool, scope: WorkspaceSco
   await withServiceRole(pool, async (db) => {
     await db.query("select pg_advisory_xact_lock(hashtext($1))", [lockKey]);
 
-    const { rows: planRows } = await db.query<{ plan_name: string; action_limit: number | null }>(
-      `select pl.name as plan_name, pl.copilot_actions_per_month as action_limit
-       from public.${table} op
-       join public.plans pl on pl.id = op.plan_id
-       where op.${scopeColumn} = $1`,
-      [scopeValue],
+    // private.effective_plan (0078) is the single source of truth for the
+    // tri-state override + expiry resolution — shared with enforce_workflow_
+    // limit/enforce_project_limit, assertRowsLimitNotExceeded, and apps/
+    // worker's rowsLimitBlockMessage, instead of duplicating this CASE-WHEN
+    // logic per call site.
+    const { rows: planRows } = await db.query<{ plan_name: string; copilot_actions_per_month: number | null }>(
+      `select plan_name, copilot_actions_per_month from private.effective_plan($1, $2)`,
+      isPersonal ? [null, scope.ownerId] : [scope.orgId, null],
     );
     const plan = planRows[0];
     // Metered plans (limit not null) get a hard stop at 100% on every one
@@ -220,7 +219,7 @@ export async function assertCopilotActionAllowed(pool: Pool, scope: WorkspaceSco
     // skip the check, but still record below — usage is tracked per
     // workspace regardless of plan (decision 1), so Console (Slice 5) can
     // show it even for unmetered workspaces.
-    if (plan && plan.action_limit !== null) {
+    if (plan && plan.copilot_actions_per_month !== null) {
       const where = workspaceWhere(scope, 1);
       const { rows: usageRows } = await db.query<{ used: string | null }>(
         `select sum(quantity)::bigint as used
@@ -231,11 +230,11 @@ export async function assertCopilotActionAllowed(pool: Pool, scope: WorkspaceSco
         where.params,
       );
       const used = Number(usageRows[0]?.used ?? 0);
-      if (used >= plan.action_limit) {
+      if (used >= plan.copilot_actions_per_month) {
         throw new AppError(
           403,
           "COPILOT_LIMIT_EXCEEDED",
-          `Your ${plan.plan_name} plan includes ${plan.action_limit.toLocaleString()} Copilot actions a month, and this workspace has already used all of them. Upgrade to keep using Copilot this month.`,
+          `Your ${plan.plan_name} plan includes ${plan.copilot_actions_per_month.toLocaleString()} Copilot actions a month, and this workspace has already used all of them. Upgrade to keep using Copilot this month.`,
         );
       }
     }

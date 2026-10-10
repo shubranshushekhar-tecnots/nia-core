@@ -266,6 +266,18 @@ consoleRouter.get(
     const { orgId } = req.params as unknown as { orgId: string };
 
     const result = await withServiceRole(dbPool, async (db) => {
+      // Effective (grant + expiry aware) values come from
+      // private.effective_plan (0078) — the same function
+      // enforce_workflow_limit/enforce_project_limit/
+      // assertCopilotActionAllowed/assertRowsLimitNotExceeded/
+      // rowsLimitBlockMessage all resolve through, so a staff viewing an
+      // org with an expired grant sees it's already back on its base plan
+      // here too. plan_id/plan_name (base) come straight from org_plan/
+      // plans, separate from ep.plan_id/ep.plan_name (effective — the
+      // grant's plan while the grant is active, else identical to base).
+      // The raw op.grant_* columns are selected separately so the edit
+      // form can prefill exactly what's stored (expired or not — expiry
+      // doesn't clear the row, only its effect).
       const orgResult = await db.query<{
         id: string;
         name: string;
@@ -273,6 +285,8 @@ consoleRouter.get(
         created_at: string;
         plan_id: string;
         plan_name: string;
+        effective_plan_id: string;
+        effective_plan_name: string;
         workflow_limit: number | null;
         workflow_limit_override_set: boolean;
         workflow_limit_override: number | null;
@@ -280,7 +294,15 @@ consoleRouter.get(
         project_limit_override_set: boolean;
         project_limit_override: number | null;
         rows_limit: number | null;
+        grant_rows_per_month_set: boolean;
+        grant_rows_per_month: number | null;
         copilot_limit: number | null;
+        grant_copilot_actions_per_month_set: boolean;
+        grant_copilot_actions_per_month: number | null;
+        grant_plan_id: string | null;
+        grant_expires_at: string | null;
+        grant_reason: string | null;
+        grant_expired: boolean;
         suspended_at: string | null;
         suspended_reason: string | null;
         suspended_by: string | null;
@@ -292,22 +314,33 @@ consoleRouter.get(
            o.slug,
            o.created_at,
            op.plan_id,
-           pl.name as plan_name,
-           case when op.workflow_limit_set then op.workflow_limit else pl.workflow_limit end as workflow_limit,
+           bp.name as plan_name,
+           ep.plan_id as effective_plan_id,
+           ep.plan_name as effective_plan_name,
+           ep.workflow_limit,
            op.workflow_limit_set as workflow_limit_override_set,
            op.workflow_limit as workflow_limit_override,
-           case when op.project_limit_set then op.project_limit else pl.project_limit end as project_limit,
+           ep.project_limit,
            op.project_limit_set as project_limit_override_set,
            op.project_limit as project_limit_override,
-           pl.rows_per_month as rows_limit,
-           pl.copilot_actions_per_month as copilot_limit,
+           ep.rows_per_month as rows_limit,
+           op.grant_rows_per_month_set,
+           op.grant_rows_per_month,
+           ep.copilot_actions_per_month as copilot_limit,
+           op.grant_copilot_actions_per_month_set,
+           op.grant_copilot_actions_per_month,
+           op.grant_plan_id,
+           op.grant_expires_at,
+           op.grant_reason,
+           ep.expired as grant_expired,
            o.suspended_at,
            o.suspended_reason,
            o.suspended_by,
            su.name as suspended_by_name
          from public.organizations o
          join public.org_plan op on op.org_id = o.id
-         join public.plans pl on pl.id = op.plan_id
+         join public.plans bp on bp.id = op.plan_id
+         cross join lateral private.effective_plan(o.id, null) ep
          left join public."user" su on su.id = o.suspended_by
          where o.id = $1`,
         [orgId],
@@ -382,6 +415,8 @@ consoleRouter.get(
       createdAt: result.org.created_at,
       planId: result.org.plan_id,
       planTier: result.org.plan_name,
+      effectivePlanId: result.org.effective_plan_id,
+      effectivePlanTier: result.org.effective_plan_name,
       status: result.org.suspended_at === null ? "Active" : "Suspended",
       suspendedAt: result.org.suspended_at,
       suspendedReason: result.org.suspended_reason,
@@ -398,6 +433,14 @@ consoleRouter.get(
       rowsUsed: result.rowsUsed,
       copilotLimit: result.org.copilot_limit,
       copilotUsed: result.copilotUsed,
+      grantPlanId: result.org.grant_plan_id,
+      grantRowsPerMonthOverrideSet: result.org.grant_rows_per_month_set,
+      grantRowsPerMonthOverride: result.org.grant_rows_per_month,
+      grantCopilotActionsPerMonthOverrideSet: result.org.grant_copilot_actions_per_month_set,
+      grantCopilotActionsPerMonthOverride: result.org.grant_copilot_actions_per_month,
+      grantExpiresAt: result.org.grant_expires_at,
+      grantReason: result.org.grant_reason,
+      grantExpired: result.org.grant_expired,
       runs30d: result.runs30d,
       members: result.members.map((m) => ({
         userId: m.user_id,
@@ -412,16 +455,25 @@ consoleRouter.get(
 
 /**
  * Build order step 8 / Slice 3a (console-plan.md §3, §5, decision 6),
- * extended for subscription-model Phase 1. `PATCH /console/orgs/:orgId/plan`
- * — the only mutation slice 3a adds. Body now carries `planId` (org_plan's
- * new FK into the plans catalog) plus the four override fields, replacing
- * the old free-text `planTier`/`workflowLimit` shape now that org_plan is
- * guaranteed exactly one row per org (0050's backfill) resolved through the
- * plans join rather than storing its own tier name/limit directly.
- * `*LimitOverrideSet: false` means "inherit the plan's default" (the edit
- * form's "Clear override"); `true` with a null value means an explicit
- * unlimited override, `true` with a positive integer means an explicit cap
- * — same tri-state semantics as the enforcement triggers read.
+ * extended for subscription-model Phase 1 and 0078's grant redesign.
+ * `PATCH /console/orgs/:orgId/plan` is split into two independent pieces,
+ * both still written in one upsert:
+ *
+ * 1. `planId` — the org's BASE plan (org_plan.plan_id). This is normally
+ *    subscription-driven (apply_subscription_webhook,
+ *    0065_subscription_webhook_rpc.sql) but staff can still correct it
+ *    directly here (e.g. a webhook replay). It is never cleared by expiry.
+ * 2. `workflowLimitOverrideSet/Override`, `projectLimitOverrideSet/Override`
+ *    — permanent overrides (0050), untouched by any grant/expiry concept.
+ * 3. `grantPlanId` (nullable), `grantCopilotActionsPerMonthOverrideSet/
+ *    Override`, `grantRowsPerMonthOverrideSet/Override`, `grantExpiresAt` —
+ *    the staff "grant": a temporary plan-tier + copilot/rows override that
+ *    is active only while `grantExpiresAt` is null or in the future. Once
+ *    past, private.effective_plan() (0078) falls back to the base `planId`
+ *    above, not Free. `*OverrideSet: false` means "inherit the effective
+ *    plan's default" (the edit form's "Clear override"); `true` with a
+ *    null value means an explicit unlimited override, `true` with a
+ *    positive integer means an explicit cap.
  *
  * Upserts org_plan directly via withServiceRole (org_plan has no
  * authenticated write grant at all — 0042/0044 — write-only via
@@ -441,6 +493,18 @@ const patchOrgPlanBodySchema = z.object({
   workflowLimitOverride: z.number().int().positive().nullable(),
   projectLimitOverrideSet: z.boolean(),
   projectLimitOverride: z.number().int().positive().nullable(),
+  // 0078: staff "grant" — a temporary plan-tier + copilot/rows override,
+  // separate from the base planId above. grantExpiresAt is one column for
+  // the whole grant bundle (not per field) — when past, the grant as a
+  // whole is inactive and the effective plan reverts to the base planId,
+  // resolved by private.effective_plan everywhere.
+  grantPlanId: z.string().trim().min(1).max(40).nullable(),
+  grantCopilotActionsPerMonthOverrideSet: z.boolean(),
+  grantCopilotActionsPerMonthOverride: z.number().int().positive().nullable(),
+  grantRowsPerMonthOverrideSet: z.boolean(),
+  grantRowsPerMonthOverride: z.number().int().positive().nullable(),
+  grantExpiresAt: z.string().datetime({ offset: true }).nullable(),
+  reason: z.string().trim().min(1).max(500),
 });
 
 consoleRouter.patch(
@@ -457,12 +521,26 @@ consoleRouter.patch(
       workflowLimitOverride,
       projectLimitOverrideSet,
       projectLimitOverride,
+      grantPlanId,
+      grantCopilotActionsPerMonthOverrideSet,
+      grantCopilotActionsPerMonthOverride,
+      grantRowsPerMonthOverrideSet,
+      grantRowsPerMonthOverride,
+      grantExpiresAt,
+      reason,
     } = req.body as unknown as {
       planId: string;
       workflowLimitOverrideSet: boolean;
       workflowLimitOverride: number | null;
       projectLimitOverrideSet: boolean;
       projectLimitOverride: number | null;
+      grantPlanId: string | null;
+      grantCopilotActionsPerMonthOverrideSet: boolean;
+      grantCopilotActionsPerMonthOverride: number | null;
+      grantRowsPerMonthOverrideSet: boolean;
+      grantRowsPerMonthOverride: number | null;
+      grantExpiresAt: string | null;
+      reason: string;
     };
 
     const updated = await withServiceRole(dbPool, async (db) => {
@@ -472,36 +550,87 @@ consoleRouter.patch(
       const planExistsResult = await db.query<{ id: string }>(`select id from public.plans where id = $1`, [planId]);
       if (!planExistsResult.rows[0]) throw new AppError(400, "INVALID_PLAN", "Unknown plan id.");
 
+      if (grantPlanId !== null) {
+        const grantPlanExistsResult = await db.query<{ id: string }>(`select id from public.plans where id = $1`, [grantPlanId]);
+        if (!grantPlanExistsResult.rows[0]) throw new AppError(400, "INVALID_PLAN", "Unknown grant plan id.");
+      }
+
+      const beforeResult = await db.query<{
+        plan_id: string;
+        workflow_limit_set: boolean;
+        workflow_limit: number | null;
+        project_limit_set: boolean;
+        project_limit: number | null;
+        grant_plan_id: string | null;
+        grant_copilot_actions_per_month_set: boolean;
+        grant_copilot_actions_per_month: number | null;
+        grant_rows_per_month_set: boolean;
+        grant_rows_per_month: number | null;
+        grant_expires_at: string | null;
+      }>(`select plan_id, workflow_limit_set, workflow_limit, project_limit_set, project_limit, grant_plan_id, grant_copilot_actions_per_month_set, grant_copilot_actions_per_month, grant_rows_per_month_set, grant_rows_per_month, grant_expires_at from public.org_plan where org_id = $1`, [orgId]);
+      const before = beforeResult.rows[0] ?? null;
+
       const planResult = await db.query<{
         plan_id: string;
         workflow_limit_set: boolean;
         workflow_limit: number | null;
         project_limit_set: boolean;
         project_limit: number | null;
+        grant_plan_id: string | null;
+        grant_copilot_actions_per_month_set: boolean;
+        grant_copilot_actions_per_month: number | null;
+        grant_rows_per_month_set: boolean;
+        grant_rows_per_month: number | null;
+        grant_expires_at: string | null;
       }>(
         `insert into public.org_plan (
-           org_id, plan_id, workflow_limit_set, workflow_limit, project_limit_set, project_limit, updated_at, updated_by
+           org_id, plan_id, workflow_limit_set, workflow_limit, project_limit_set, project_limit,
+           grant_plan_id, grant_copilot_actions_per_month_set, grant_copilot_actions_per_month,
+           grant_rows_per_month_set, grant_rows_per_month, grant_expires_at, grant_reason,
+           updated_at, updated_by
          )
-         values ($1, $2, $3, $4, $5, $6, now(), $7)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), $14)
          on conflict (org_id) do update set
            plan_id = excluded.plan_id,
            workflow_limit_set = excluded.workflow_limit_set,
            workflow_limit = excluded.workflow_limit,
            project_limit_set = excluded.project_limit_set,
            project_limit = excluded.project_limit,
+           grant_plan_id = excluded.grant_plan_id,
+           grant_copilot_actions_per_month_set = excluded.grant_copilot_actions_per_month_set,
+           grant_copilot_actions_per_month = excluded.grant_copilot_actions_per_month,
+           grant_rows_per_month_set = excluded.grant_rows_per_month_set,
+           grant_rows_per_month = excluded.grant_rows_per_month,
+           grant_expires_at = excluded.grant_expires_at,
+           grant_reason = excluded.grant_reason,
            updated_at = now(),
            updated_by = excluded.updated_by
-         returning plan_id, workflow_limit_set, workflow_limit, project_limit_set, project_limit`,
-        [orgId, planId, workflowLimitOverrideSet, workflowLimitOverride, projectLimitOverrideSet, projectLimitOverride, authUser.id],
+         returning plan_id, workflow_limit_set, workflow_limit, project_limit_set, project_limit,
+           grant_plan_id, grant_copilot_actions_per_month_set, grant_copilot_actions_per_month,
+           grant_rows_per_month_set, grant_rows_per_month, grant_expires_at`,
+        [
+          orgId,
+          planId,
+          workflowLimitOverrideSet,
+          workflowLimitOverride,
+          projectLimitOverrideSet,
+          projectLimitOverride,
+          grantPlanId,
+          grantCopilotActionsPerMonthOverrideSet,
+          grantCopilotActionsPerMonthOverride,
+          grantRowsPerMonthOverrideSet,
+          grantRowsPerMonthOverride,
+          grantExpiresAt,
+          reason,
+          authUser.id,
+        ],
       );
       const plan = planResult.rows[0]!;
 
       const detail = JSON.stringify({
-        planId: plan.plan_id,
-        workflowLimitOverrideSet: plan.workflow_limit_set,
-        workflowLimitOverride: plan.workflow_limit,
-        projectLimitOverrideSet: plan.project_limit_set,
-        projectLimitOverride: plan.project_limit,
+        reason,
+        before,
+        after: plan,
       });
 
       await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
@@ -524,6 +653,12 @@ consoleRouter.patch(
       workflowLimitOverride: updated.workflow_limit,
       projectLimitOverrideSet: updated.project_limit_set,
       projectLimitOverride: updated.project_limit,
+      grantPlanId: updated.grant_plan_id,
+      grantCopilotActionsPerMonthOverrideSet: updated.grant_copilot_actions_per_month_set,
+      grantCopilotActionsPerMonthOverride: updated.grant_copilot_actions_per_month,
+      grantRowsPerMonthOverrideSet: updated.grant_rows_per_month_set,
+      grantRowsPerMonthOverride: updated.grant_rows_per_month,
+      grantExpiresAt: updated.grant_expires_at,
     });
   }),
 );
@@ -1132,6 +1267,15 @@ consoleRouter.get(
  */
 const listUsersQuerySchema = z.object({
   search: z.string().trim().optional(),
+  // 0078: filter by effective role/plan/workspace type. "role" compares
+  // against the user's oldest org membership's role (or "individual" for
+  // an org-less user); "plan"/"workspaceType" resolve through the same
+  // private.effective_plan() every enforcement point uses, so a filter
+  // for e.g. plan=pro reflects overrides/expiry exactly like the detail
+  // page does, not the raw plans.id stored on org_plan/owner_plan.
+  role: z.string().trim().min(1).max(40).optional(),
+  plan: z.string().trim().min(1).max(40).optional(),
+  workspaceType: z.enum(["individual", "org"]).optional(),
   limit: z.coerce.number().int().positive().max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
@@ -1145,17 +1289,51 @@ consoleRouter.get(
 
     const {
       search = "",
+      role = null,
+      plan = null,
+      workspaceType = null,
       limit = 50,
       offset = 0,
-    } = req.query as unknown as { search?: string; limit?: number; offset?: number };
+    } = req.query as unknown as {
+      search?: string;
+      role?: string | null;
+      plan?: string | null;
+      workspaceType?: "individual" | "org" | null;
+      limit?: number;
+      offset?: number;
+    };
+
+    // Shared across the count and data queries below: `orgs_agg` aggregates
+    // every org membership (with its effective plan, via a lateral call to
+    // private.effective_plan per membership) into a single json array
+    // ordered oldest-first; `orgs_agg.orgs->0` is therefore "the first org"
+    // the plan's filter/effective-role rules are defined against, and
+    // `owner_ep` is the private.effective_plan(null, u.id) fallback for a
+    // user with zero memberships (an "individual" workspace).
+    const joinsAndFilters = `
+      from public."user" u
+      left join lateral (
+        select
+          count(*) as org_count,
+          json_agg(
+            json_build_object('orgId', om.org_id, 'orgName', o.name, 'role', om.role, 'planId', ep.plan_id)
+            order by om.created_at asc
+          ) as orgs
+        from public.organization_members om
+        join public.organizations o on o.id = om.org_id
+        cross join lateral private.effective_plan(om.org_id, null) ep
+        where om.user_id = u.id
+      ) orgs_agg on true
+      left join lateral private.effective_plan(null, u.id) owner_ep on true
+      where ($1 = '' or u.name ilike '%' || $1 || '%' or u.email ilike '%' || $1 || '%')
+        and ($2::text is null or (case when coalesce(orgs_agg.org_count, 0) > 0 then orgs_agg.orgs->0->>'role' else 'individual' end) = $2)
+        and ($3::text is null or (case when coalesce(orgs_agg.org_count, 0) > 0 then orgs_agg.orgs->0->>'planId' else owner_ep.plan_id end) = $3)
+        and ($4::text is null or (case when coalesce(orgs_agg.org_count, 0) > 0 then 'org' else 'individual' end) = $4)
+    `;
+    const filterParams = [search, role, plan, workspaceType];
 
     const { rows, total } = await withServiceRole(dbPool, async (db) => {
-      const countResult = await db.query<{ count: string }>(
-        `select count(*) as count
-         from public."user" u
-         where ($1 = '' or u.name ilike '%' || $1 || '%' or u.email ilike '%' || $1 || '%')`,
-        [search],
-      );
+      const countResult = await db.query<{ count: string }>(`select count(*) as count ${joinsAndFilters}`, filterParams);
 
       const result = await db.query<{
         id: string;
@@ -1163,21 +1341,26 @@ consoleRouter.get(
         email: string;
         created_at: string;
         org_count: string;
+        orgs: { orgId: string; orgName: string; role: string; planId: string }[] | null;
+        effective_role: string;
+        effective_plan_id: string | null;
+        workspace_type: "individual" | "org";
       }>(
         `select
            u.id,
            u.name,
            u.email,
            u."createdAt" as created_at,
-           count(distinct om.org_id) as org_count
-         from public."user" u
-         left join public.organization_members om on om.user_id = u.id
-         where ($1 = '' or u.name ilike '%' || $1 || '%' or u.email ilike '%' || $1 || '%')
-         group by u.id
+           coalesce(orgs_agg.org_count, 0) as org_count,
+           orgs_agg.orgs as orgs,
+           case when coalesce(orgs_agg.org_count, 0) > 0 then orgs_agg.orgs->0->>'role' else 'individual' end as effective_role,
+           case when coalesce(orgs_agg.org_count, 0) > 0 then orgs_agg.orgs->0->>'planId' else owner_ep.plan_id end as effective_plan_id,
+           case when coalesce(orgs_agg.org_count, 0) > 0 then 'org' else 'individual' end as workspace_type
+         ${joinsAndFilters}
          order by u."createdAt" desc
-         limit $2
-         offset $3`,
-        [search, limit, offset],
+         limit $5
+         offset $6`,
+        [...filterParams, limit, offset],
       );
 
       await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
@@ -1185,7 +1368,7 @@ consoleRouter.get(
         "user.list",
         null,
         null,
-        JSON.stringify({ search: search || null, limit, offset, count: result.rowCount }),
+        JSON.stringify({ search: search || null, role, plan, workspaceType, limit, offset, count: result.rowCount }),
       ]);
 
       return { rows: result.rows, total: Number(countResult.rows[0]?.count ?? 0) };
@@ -1198,6 +1381,10 @@ consoleRouter.get(
         email: row.email,
         orgCount: Number(row.org_count),
         createdAt: row.created_at,
+        orgs: row.orgs ?? [],
+        workspaceType: row.workspace_type,
+        effectivePlanId: row.effective_plan_id,
+        effectiveRole: row.effective_role,
       })),
       total,
       limit,
@@ -1222,6 +1409,29 @@ consoleRouter.get(
  * isn't implemented for v1).
  */
 const userIdParamsSchema = z.object({ userId: z.string().uuid() });
+
+type IndividualPlanRow = {
+  plan_id: string;
+  plan_name: string;
+  effective_plan_id: string;
+  effective_plan_name: string;
+  workflow_limit: number | null;
+  project_limit: number | null;
+  copilot_limit: number | null;
+  rows_limit: number | null;
+  workflow_limit_set: boolean;
+  workflow_limit_override: number | null;
+  project_limit_set: boolean;
+  project_limit_override: number | null;
+  grant_plan_id: string | null;
+  grant_copilot_actions_per_month_set: boolean;
+  grant_copilot_actions_per_month: number | null;
+  grant_rows_per_month_set: boolean;
+  grant_rows_per_month: number | null;
+  grant_expires_at: string | null;
+  grant_reason: string | null;
+  grant_expired: boolean;
+};
 
 consoleRouter.get(
   "/users/:userId",
@@ -1250,15 +1460,20 @@ consoleRouter.get(
       if (!user) return null;
 
       const [membershipsResult, sessionResult] = await Promise.all([
+        // 0078: plan_id joined in via private.effective_plan per membership
+        // (same resolver as GET /orgs/:orgId) so the user detail page can
+        // show each org's *effective* plan without a second round trip.
         db.query<{
           org_id: string;
           org_name: string;
           role: string;
           created_at: string;
+          plan_id: string;
         }>(
-          `select om.org_id, o.name as org_name, om.role, om.created_at
+          `select om.org_id, o.name as org_name, om.role, om.created_at, ep.plan_id
            from public.organization_members om
            join public.organizations o on o.id = om.org_id
+           cross join lateral private.effective_plan(om.org_id, null) ep
            where om.user_id = $1
            order by om.created_at asc`,
           [userId],
@@ -1271,6 +1486,34 @@ consoleRouter.get(
         ),
       ]);
 
+      // Individual (org-less) plan detail, same shape as GET /orgs/:orgId's
+      // override block — only relevant/queried when the user has zero
+      // memberships (an org member's plan is edited on the org's page,
+      // per PATCH /users/:userId/plan's own USER_IS_ORG_MEMBER guard below).
+      let individualPlan: IndividualPlanRow | null = null;
+
+      if (membershipsResult.rowCount === 0) {
+        const individualPlanResult = await db.query<IndividualPlanRow>(
+          `select
+             op.plan_id, bp.name as plan_name,
+             ep.plan_id as effective_plan_id, ep.plan_name as effective_plan_name,
+             ep.workflow_limit, ep.project_limit,
+             ep.copilot_actions_per_month as copilot_limit, ep.rows_per_month as rows_limit, ep.expired as grant_expired,
+             op.workflow_limit_set, op.workflow_limit as workflow_limit_override,
+             op.project_limit_set, op.project_limit as project_limit_override,
+             op.grant_plan_id,
+             op.grant_copilot_actions_per_month_set, op.grant_copilot_actions_per_month,
+             op.grant_rows_per_month_set, op.grant_rows_per_month,
+             op.grant_expires_at, op.grant_reason
+           from public.owner_plan op
+           join public.plans bp on bp.id = op.plan_id
+           cross join lateral private.effective_plan(null, op.user_id) ep
+           where op.user_id = $1`,
+          [userId],
+        );
+        individualPlan = individualPlanResult.rows[0] ?? null;
+      }
+
       await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
         authUser.id,
         "user.read",
@@ -1282,6 +1525,7 @@ consoleRouter.get(
       return {
         user,
         memberships: membershipsResult.rows,
+        individualPlan,
         sessionCount: Number(sessionResult.rows[0]?.count ?? 0),
         lastSignInAt: sessionResult.rows[0]?.last_sign_in_at ?? null,
       };
@@ -1295,12 +1539,38 @@ consoleRouter.get(
       email: result.user.email,
       emailVerified: result.user.email_verified,
       createdAt: result.user.created_at,
+      workspaceType: result.memberships.length > 0 ? "org" : "individual",
       memberships: result.memberships.map((m) => ({
         orgId: m.org_id,
         orgName: m.org_name,
         role: m.role,
         joinedAt: m.created_at,
+        planId: m.plan_id,
       })),
+      individualPlan: result.individualPlan
+        ? {
+            planId: result.individualPlan.plan_id,
+            planName: result.individualPlan.plan_name,
+            effectivePlanId: result.individualPlan.effective_plan_id,
+            effectivePlanName: result.individualPlan.effective_plan_name,
+            workflowLimit: result.individualPlan.workflow_limit,
+            projectLimit: result.individualPlan.project_limit,
+            copilotLimit: result.individualPlan.copilot_limit,
+            rowsLimit: result.individualPlan.rows_limit,
+            workflowLimitOverrideSet: result.individualPlan.workflow_limit_set,
+            workflowLimitOverride: result.individualPlan.workflow_limit_override,
+            projectLimitOverrideSet: result.individualPlan.project_limit_set,
+            projectLimitOverride: result.individualPlan.project_limit_override,
+            grantPlanId: result.individualPlan.grant_plan_id,
+            grantCopilotActionsPerMonthOverrideSet: result.individualPlan.grant_copilot_actions_per_month_set,
+            grantCopilotActionsPerMonthOverride: result.individualPlan.grant_copilot_actions_per_month,
+            grantRowsPerMonthOverrideSet: result.individualPlan.grant_rows_per_month_set,
+            grantRowsPerMonthOverride: result.individualPlan.grant_rows_per_month,
+            grantExpiresAt: result.individualPlan.grant_expires_at,
+            grantReason: result.individualPlan.grant_reason,
+            grantExpired: result.individualPlan.grant_expired,
+          }
+        : null,
       sessionCount: result.sessionCount,
       lastSignInAt: result.lastSignInAt,
     });
@@ -1394,6 +1664,204 @@ consoleRouter.post(
     if (!result) throw new AppError(404, "NOT_FOUND", "User not found.");
 
     res.json({ revokedSessionCount: result.revokedCount });
+  }),
+);
+
+/**
+ * 0078 Console copilot/rows overrides. `PATCH /console/users/:userId/plan`
+ * — individual (non-org) workspace equivalent of
+ * `PATCH /console/orgs/:orgId/plan`, same tri-state override + expiry
+ * shape and body schema, upserted into `owner_plan` instead of `org_plan`.
+ *
+ * Guards with `400 USER_IS_ORG_MEMBER` if the user has any
+ * `organization_members` row — editing an org member's effective plan
+ * happens on the organization's own page instead (GET /users/:userId
+ * already returns a link there via `workspaceType`/`memberships`); this
+ * endpoint only ever targets a genuinely individual (org-less) workspace.
+ *
+ * Audited with exactly one `staff_audit_log` row (action
+ * "user.plan_update", target_user_id set, org_id null) — no
+ * `private.log_org_audit` call, there's no org to attribute it to (same
+ * reasoning as `user.read`/`user.revoke_sessions` above).
+ */
+const patchUserPlanBodySchema = z.object({
+  planId: z.string().trim().min(1).max(40),
+  workflowLimitOverrideSet: z.boolean(),
+  workflowLimitOverride: z.number().int().positive().nullable(),
+  projectLimitOverrideSet: z.boolean(),
+  projectLimitOverride: z.number().int().positive().nullable(),
+  grantPlanId: z.string().trim().min(1).max(40).nullable(),
+  grantCopilotActionsPerMonthOverrideSet: z.boolean(),
+  grantCopilotActionsPerMonthOverride: z.number().int().positive().nullable(),
+  grantRowsPerMonthOverrideSet: z.boolean(),
+  grantRowsPerMonthOverride: z.number().int().positive().nullable(),
+  grantExpiresAt: z.string().datetime({ offset: true }).nullable(),
+  reason: z.string().trim().min(1).max(500),
+});
+
+consoleRouter.patch(
+  "/users/:userId/plan",
+  validate({ params: userIdParamsSchema, body: patchUserPlanBodySchema }),
+  asyncHandler(async (req, res) => {
+    const authUser = req.authUser;
+    if (!authUser) throw new AppError(401, "NOT_AUTHENTICATED", "Not authenticated.");
+
+    const { userId } = req.params as unknown as { userId: string };
+    const {
+      planId,
+      workflowLimitOverrideSet,
+      workflowLimitOverride,
+      projectLimitOverrideSet,
+      projectLimitOverride,
+      grantPlanId,
+      grantCopilotActionsPerMonthOverrideSet,
+      grantCopilotActionsPerMonthOverride,
+      grantRowsPerMonthOverrideSet,
+      grantRowsPerMonthOverride,
+      grantExpiresAt,
+      reason,
+    } = req.body as unknown as {
+      planId: string;
+      workflowLimitOverrideSet: boolean;
+      workflowLimitOverride: number | null;
+      projectLimitOverrideSet: boolean;
+      projectLimitOverride: number | null;
+      grantPlanId: string | null;
+      grantCopilotActionsPerMonthOverrideSet: boolean;
+      grantCopilotActionsPerMonthOverride: number | null;
+      grantRowsPerMonthOverrideSet: boolean;
+      grantRowsPerMonthOverride: number | null;
+      grantExpiresAt: string | null;
+      reason: string;
+    };
+
+    const updated = await withServiceRole(dbPool, async (db) => {
+      const userResult = await db.query<{ id: string }>(`select id from public."user" where id = $1`, [userId]);
+      if (!userResult.rows[0]) return null;
+
+      const membershipResult = await db.query<{ org_id: string }>(
+        `select org_id from public.organization_members where user_id = $1 limit 1`,
+        [userId],
+      );
+      if (membershipResult.rows[0]) {
+        throw new AppError(
+          400,
+          "USER_IS_ORG_MEMBER",
+          "This user belongs to an organization — edit their plan on the organization's page instead.",
+        );
+      }
+
+      const planExistsResult = await db.query<{ id: string }>(`select id from public.plans where id = $1`, [planId]);
+      if (!planExistsResult.rows[0]) throw new AppError(400, "INVALID_PLAN", "Unknown plan id.");
+
+      if (grantPlanId !== null) {
+        const grantPlanExistsResult = await db.query<{ id: string }>(`select id from public.plans where id = $1`, [grantPlanId]);
+        if (!grantPlanExistsResult.rows[0]) throw new AppError(400, "INVALID_PLAN", "Unknown grant plan id.");
+      }
+
+      const beforeResult = await db.query<{
+        plan_id: string;
+        workflow_limit_set: boolean;
+        workflow_limit: number | null;
+        project_limit_set: boolean;
+        project_limit: number | null;
+        grant_plan_id: string | null;
+        grant_copilot_actions_per_month_set: boolean;
+        grant_copilot_actions_per_month: number | null;
+        grant_rows_per_month_set: boolean;
+        grant_rows_per_month: number | null;
+        grant_expires_at: string | null;
+      }>(
+        `select plan_id, workflow_limit_set, workflow_limit, project_limit_set, project_limit, grant_plan_id, grant_copilot_actions_per_month_set, grant_copilot_actions_per_month, grant_rows_per_month_set, grant_rows_per_month, grant_expires_at from public.owner_plan where user_id = $1`,
+        [userId],
+      );
+      const before = beforeResult.rows[0] ?? null;
+
+      const planResult = await db.query<{
+        plan_id: string;
+        workflow_limit_set: boolean;
+        workflow_limit: number | null;
+        project_limit_set: boolean;
+        project_limit: number | null;
+        grant_plan_id: string | null;
+        grant_copilot_actions_per_month_set: boolean;
+        grant_copilot_actions_per_month: number | null;
+        grant_rows_per_month_set: boolean;
+        grant_rows_per_month: number | null;
+        grant_expires_at: string | null;
+      }>(
+        `insert into public.owner_plan (
+           user_id, plan_id, workflow_limit_set, workflow_limit, project_limit_set, project_limit,
+           grant_plan_id, grant_copilot_actions_per_month_set, grant_copilot_actions_per_month,
+           grant_rows_per_month_set, grant_rows_per_month, grant_expires_at, grant_reason,
+           updated_at, updated_by
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), $14)
+         on conflict (user_id) do update set
+           plan_id = excluded.plan_id,
+           workflow_limit_set = excluded.workflow_limit_set,
+           workflow_limit = excluded.workflow_limit,
+           project_limit_set = excluded.project_limit_set,
+           project_limit = excluded.project_limit,
+           grant_plan_id = excluded.grant_plan_id,
+           grant_copilot_actions_per_month_set = excluded.grant_copilot_actions_per_month_set,
+           grant_copilot_actions_per_month = excluded.grant_copilot_actions_per_month,
+           grant_rows_per_month_set = excluded.grant_rows_per_month_set,
+           grant_rows_per_month = excluded.grant_rows_per_month,
+           grant_expires_at = excluded.grant_expires_at,
+           grant_reason = excluded.grant_reason,
+           updated_at = now(),
+           updated_by = excluded.updated_by
+         returning plan_id, workflow_limit_set, workflow_limit, project_limit_set, project_limit,
+           grant_plan_id, grant_copilot_actions_per_month_set, grant_copilot_actions_per_month,
+           grant_rows_per_month_set, grant_rows_per_month, grant_expires_at`,
+        [
+          userId,
+          planId,
+          workflowLimitOverrideSet,
+          workflowLimitOverride,
+          projectLimitOverrideSet,
+          projectLimitOverride,
+          grantPlanId,
+          grantCopilotActionsPerMonthOverrideSet,
+          grantCopilotActionsPerMonthOverride,
+          grantRowsPerMonthOverrideSet,
+          grantRowsPerMonthOverride,
+          grantExpiresAt,
+          reason,
+          authUser.id,
+        ],
+      );
+      const plan = planResult.rows[0]!;
+
+      const detail = JSON.stringify({ reason, before, after: plan });
+
+      await db.query("select private.log_staff_action($1, $2, $3, $4, $5)", [
+        authUser.id,
+        "user.plan_update",
+        userId,
+        null,
+        detail,
+      ]);
+
+      return plan;
+    });
+
+    if (!updated) throw new AppError(404, "NOT_FOUND", "User not found.");
+
+    res.json({
+      planId: updated.plan_id,
+      workflowLimitOverrideSet: updated.workflow_limit_set,
+      workflowLimitOverride: updated.workflow_limit,
+      projectLimitOverrideSet: updated.project_limit_set,
+      projectLimitOverride: updated.project_limit,
+      grantPlanId: updated.grant_plan_id,
+      grantCopilotActionsPerMonthOverrideSet: updated.grant_copilot_actions_per_month_set,
+      grantCopilotActionsPerMonthOverride: updated.grant_copilot_actions_per_month,
+      grantRowsPerMonthOverrideSet: updated.grant_rows_per_month_set,
+      grantRowsPerMonthOverride: updated.grant_rows_per_month,
+      grantExpiresAt: updated.grant_expires_at,
+    });
   }),
 );
 

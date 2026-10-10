@@ -55,36 +55,38 @@ async function assertGraphConnectionsExist(withUser: WithUser, scope: WorkspaceS
  * 4-6): fast, friendly pre-check — same shape as apps/web's own
  * checkWorkflowLimit/checkProjectLimit (lib/dashboard/actions.ts), except
  * the source of truth this phase enforces against isn't a DB trigger, it's
- * apps/worker's own first-chunk gate (runEtl.ts's rowsLimitBlockMessage,
- * whose doc comment has the full reasoning for the Free-only hard-stop
- * rule — not duplicated here). This pre-check exists purely so a request
- * that's already over the limit fails fast with a clear message instead of
- * silently enqueueing a job the worker will immediately fail; a request
- * that races past this check and loses is still caught by the worker.
+ * apps/worker's own first-chunk gate (runEtl.ts's rowsLimitBlockMessage).
+ * This pre-check exists purely so a request that's already over the limit
+ * fails fast with a clear message instead of silently enqueueing a job the
+ * worker will immediately fail; a request that races past this check and
+ * loses is still caught by the worker.
  *
- * Reads via the caller's own withUser: org_plan/owner_plan and usage_events
- * both carry member/owner-scoped SELECT RLS policies (0044/0051 and this
+ * Originally Free-only; Console overrides (0078/private.effective_plan) can
+ * now also cap rows on any plan tier — staff explicitly capped it, so the
+ * override wins regardless of tier (rows_override_active). Both this
+ * function and runEtl.ts's rowsLimitBlockMessage resolve through the same
+ * private.effective_plan so the two can never disagree.
+ *
+ * Reads via the caller's own withUser: private.effective_plan is
+ * SECURITY DEFINER but EXECUTE-granted to `authenticated` (0078), and
+ * usage_events carries member/owner-scoped SELECT RLS policies (this
  * phase's own 0066_usage_events.sql), so an acting-user query already
  * returns only what this actor may see — no service-role escalation needed
  * for a plain read.
  */
 export async function assertRowsLimitNotExceeded(withUser: WithUser, scope: WorkspaceScope): Promise<void> {
   const isPersonal = !("orgId" in scope);
-  const table = isPersonal ? "owner_plan" : "org_plan";
-  const scopeColumn = isPersonal ? "user_id" : "org_id";
   const scopeValue = isPersonal ? scope.ownerId : scope.orgId;
 
   const { rows: planRows } = await withUser((db) =>
-    db.query<{ plan_id: string; rows_limit: number | null }>(
-      `select pl.id as plan_id, pl.rows_per_month as rows_limit
-       from public.${table} op
-       join public.plans pl on pl.id = op.plan_id
-       where op.${scopeColumn} = $1`,
-      [scopeValue],
+    db.query<{ plan_id: string; plan_name: string; rows_per_month: number | null; rows_override_active: boolean }>(
+      `select plan_id, plan_name, rows_per_month, rows_override_active from private.effective_plan($1, $2)`,
+      isPersonal ? [null, scope.ownerId] : [scope.orgId, null],
     ),
   );
   const plan = planRows[0];
-  if (!plan || plan.plan_id !== "free" || plan.rows_limit === null) return;
+  if (!plan || plan.rows_per_month === null) return;
+  if (plan.plan_id !== "free" && !plan.rows_override_active) return;
 
   const { rows: usageRows } = await withUser((db) =>
     db.query<{ used: string | null }>(
@@ -97,12 +99,12 @@ export async function assertRowsLimitNotExceeded(withUser: WithUser, scope: Work
     ),
   );
   const used = Number(usageRows[0]?.used ?? 0);
-  if (used < plan.rows_limit) return;
+  if (used < plan.rows_per_month) return;
 
   throw new AppError(
     403,
     "ROWS_LIMIT_EXCEEDED",
-    `Your Free plan includes ${plan.rows_limit.toLocaleString()} rows a month, and this workspace has already used ${used.toLocaleString()}. Upgrade to Pro to keep running workflows this month.`,
+    `Your ${plan.plan_name} plan includes ${plan.rows_per_month.toLocaleString()} rows a month, and this workspace has already used ${used.toLocaleString()}. Upgrade to Pro to keep running workflows this month.`,
   );
 }
 
