@@ -168,7 +168,7 @@ async function patchVersionInfo(exePath, agentDirPath) {
   if (typeof rcedit !== "function") {
     throw new Error(`[rcedit] could not resolve the rcedit() function from the "rcedit" package (got: ${JSON.stringify(Object.keys(rceditModule))})`);
   }
-  await rcedit(exePath, {
+  const rceditOptions = {
     icon: iconPath,
     "file-version": version,
     "product-version": version,
@@ -177,8 +177,43 @@ async function patchVersionInfo(exePath, agentDirPath) {
       ProductName: "Nia Core Agent",
       CompanyName: "Nia Core",
     },
+  };
+
+  // nia-agent.exe was just freshly written by postject's binary patch a
+  // moment ago, and on the Windows CI runner Defender's on-access scan of
+  // that large new .exe can briefly hold a file lock that makes rcedit's
+  // own child process (which opens the file for writing) hang indefinitely
+  // instead of erroring -- so this both times out (fails fast with a clear
+  // message rather than tying up the runner for hours) and retries a few
+  // times with a short backoff to ride out that transient lock.
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await withTimeout(rcedit(exePath, rceditOptions), 60_000, "rcedit");
+      console.log(`[rcedit] patched icon + version info on ${exePath}`);
+      return;
+    } catch (err) {
+      if (attempt === maxAttempts) throw err;
+      console.warn(`[rcedit] attempt ${attempt}/${maxAttempts} failed (${err.message}); retrying in 5s...`);
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+  }
+}
+
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
   });
-  console.log(`[rcedit] patched icon + version info on ${exePath}`);
 }
 
 async function downloadFile(url, destPath) {
