@@ -377,6 +377,30 @@ function Stop-ProcessTreeById {
     Stop-Process -Id $ParentId -Force -ErrorAction SilentlyContinue
 }
 
+if ($StopOnly) {
+    Write-Log "StopOnly: checking for a running nia-agent service to stop before file extraction"
+    $existingInfo = Get-CimInstance Win32_Service -Filter "Name='nia-agent'" -ErrorAction SilentlyContinue
+    if ($existingInfo -and $existingInfo.State -eq "Running") {
+        Write-Log "StopOnly: stopping nia-agent (pid=$($existingInfo.ProcessId))"
+        $stopOutput = & sc.exe stop nia-agent 2>&1
+        $stopOutput | ForEach-Object { Write-Log "  sc stop: $_" }
+        $deadline = (Get-Date).AddSeconds(30)
+        $stopped = $false
+        while ((Get-Date) -lt $deadline) {
+            $svc = Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue
+            if (-not $svc -or $svc.Status -eq "Stopped") { $stopped = $true; break }
+            Start-Sleep -Seconds 1
+        }
+        if (-not $stopped -and $existingInfo.ProcessId -and $existingInfo.ProcessId -ne 0) {
+            Write-Log "StopOnly: did not stop within 30s - ending process tree by pid instead"
+            Stop-ProcessTreeById -ParentId $existingInfo.ProcessId
+        }
+    } else {
+        Write-Log "StopOnly: no running nia-agent service found - nothing to do"
+    }
+    exit 0
+}
+
 Write-Log "install.ps1 starting (install dir: $InstallDir, data dir: $DataDir, in-place: $InPlace)"
 
 # Replace an existing service robustly, regardless of where its files
@@ -498,11 +522,24 @@ try {
         $acl.AddAccessRule($rule)
     }
     Set-Acl $DataDir $acl
-    # Recreated after the ACL so it inherits the locked-down permissions
-    # instead of whatever %ProgramData%'s default was.
+    # Ensure the logs dir exists and inherits the locked-down permissions
+    # instead of whatever %ProgramData%'s default was -- but never delete
+    # existing log content to get there. This runs on every install.ps1
+    # invocation, including the external updater's post-health-check-
+    # failure rollback restore (nia-agent-updater.ps1's Restore-Snapshot) --
+    # deleting the dir here used to destroy agent.log's record of exactly
+    # the failure the rollback is trying to diagnose. Un-protecting an
+    # existing folder re-applies the parent's (now-updated) inherited
+    # rules without touching its contents; only a brand-new folder needs
+    # to be created outright.
     $LogsDir = Join-Path $DataDir "logs"
-    if (Test-Path $LogsDir) { Remove-Item -Recurse -Force $LogsDir }
-    New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+    if (Test-Path $LogsDir) {
+        $logsAcl = Get-Acl $LogsDir
+        $logsAcl.SetAccessRuleProtection($false, $false)
+        Set-Acl $LogsDir $logsAcl
+    } else {
+        New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
+    }
 } catch {
     Remove-ServiceQuietly
     Fail "set data directory permissions" $_.Exception.Message
