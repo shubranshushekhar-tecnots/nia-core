@@ -21,11 +21,18 @@ function gunzipJson(body: Buffer): unknown {
 }
 
 describe("buildRequestParts: row limit", () => {
-  it("120,001 rows at limit 50,000 give parts of 50,000, 50,000 and 20,001, only the third marked last", async () => {
-    const parts = await collect(buildRequestParts({ mode: "upsert", rows: rows(120_001), schemaRowLimit: 50_000 }));
-    expect(parts.map((p) => p.rowCount)).toEqual([50_000, 50_000, 20_001]);
-    expect(parts.map((p) => p.last)).toEqual([false, false, true]);
-  });
+  it(
+    "120,001 rows at limit 50,000 give parts of 50,000, 50,000 and 20,001, only the third marked last",
+    async () => {
+      const parts = await collect(buildRequestParts({ mode: "upsert", rows: rows(120_001), schemaRowLimit: 50_000 }));
+      expect(parts.map((p) => p.rowCount)).toEqual([50_000, 50_000, 20_001]);
+      expect(parts.map((p) => p.last)).toEqual([false, false, true]);
+    },
+    // Gzip + chunking 120k rows is genuinely slow under load; the vitest
+    // default 5000ms timeout has been observed to flake on this machine
+    // even in isolation. Raised, not the logic.
+    30_000,
+  );
 
   it("exactly the row limit gives one part marked last", async () => {
     const parts = await collect(buildRequestParts({ mode: "upsert", rows: rows(50_000), schemaRowLimit: 50_000 }));
