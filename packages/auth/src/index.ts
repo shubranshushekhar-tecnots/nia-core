@@ -1,2 +1,2 @@
 export { createAuth } from "./config.js";
-export type { Auth, CreateAuthOptions } from "./config.js";
+export type { Auth, AuthEmailType, CreateAuthOptions } from "./config.js";

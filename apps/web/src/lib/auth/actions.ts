@@ -9,6 +9,8 @@ import { withActingUser } from "@nia/db";
 import { getAuth } from "@/lib/auth/auth";
 import { ACTIVE_ORG_COOKIE, getSessionUser } from "@/lib/auth/session";
 import { getPool } from "@/lib/db/pool";
+import { enqueueEmail } from "@/lib/mail/mailQueue";
+import { isAuthActionRateLimited } from "@/lib/auth/rateLimit";
 
 export type ActionState = {
   error?: string;
@@ -43,7 +45,24 @@ export type ActionState = {
   // failed attempt so the code-entry step stays up (rather than bouncing
   // back to the email/password step) until the user gets it right.
   twoFactorRequired?: boolean;
+  // Email Phase 2: info-only text (not an error) shown after
+  // requestLoginCode/requestPasswordReset — always the same generic
+  // wording regardless of whether the email actually exists (see each
+  // action's own comment for the no-enumeration rationale).
+  message?: string;
 } | null;
+
+const GENERIC_CODE_SENT_MESSAGE = "If an account exists for that email, a code is on its way.";
+const INVALID_CODE_MESSAGE = "That code is invalid or has expired.";
+const PASSWORD_CHANGED_MESSAGE = "Password changed. Please sign in.";
+
+// Email Phase 2 review fix: per-email/per-IP ceilings on the OTP
+// request/verify Server Actions (lib/auth/rateLimit.ts). "Request" limits
+// bound how many codes can be sent out; "verify" limits bound how many
+// separate codes/guesses can be tried, on top of better-auth's own
+// per-code `allowedAttempts: 3` (packages/auth/src/config.ts).
+const OTP_REQUEST_LIMIT = 5;
+const OTP_VERIFY_LIMIT = 8;
 
 function safeNext(next: FormDataEntryValue | null): string {
   return typeof next === "string" && next.startsWith("/") && !next.startsWith("//") ? next : "/app";
@@ -179,6 +198,160 @@ export async function signup(_prevState: ActionState, formData: FormData): Promi
   // "Create an account" link (LoginForm.tsx) so a brand-new user lands back
   // where they started (e.g. /invite/<token>) instead of always at /app.
   return { success: true, token, next: safeNext(formData.get("next")) };
+}
+
+const emailOnlySchema = z.object({ email: z.string().email("Enter a valid email address") });
+
+/**
+ * Email Phase 2 — "Email me a code" (login-by-code). Always returns the
+ * same generic message whether or not the account exists: better-auth's
+ * own sendVerificationOTP throws for a genuinely unknown email (unlike
+ * core's requestPasswordReset, which does its own dummy lookup), so the
+ * try/catch below is what actually prevents that from leaking as a
+ * different outcome. A rate-limited caller gets the identical message
+ * too (and the OTP send is skipped entirely) — a different response here
+ * would itself be a side channel for probing which emails exist.
+ */
+export async function requestLoginCode(_prevState: ActionState, formData: FormData): Promise<ActionState> {
+  const parsed = emailOnlySchema.safeParse({ email: formData.get("email") });
+  if (!parsed.success) {
+    return { fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+  if (!(await isAuthActionRateLimited("login-code-request", parsed.data.email, OTP_REQUEST_LIMIT))) {
+    try {
+      await getAuth().api.sendVerificationOTP({ body: { email: parsed.data.email, type: "sign-in" } });
+    } catch {
+      // Swallow — same generic response either way, see header comment.
+    }
+  }
+  return { message: GENERIC_CODE_SENT_MESSAGE };
+}
+
+const loginWithCodeSchema = z.object({
+  email: z.string().email("Enter a valid email address"),
+  otp: z.string().min(1, "Enter your code"),
+});
+
+/**
+ * Completes login-by-code. `/sign-in/email-otp` is not one of the paths
+ * twoFactor()'s own hook matches (only /sign-in/email, /sign-in/username,
+ * /sign-in/phone-number — see node_modules/better-auth's two-factor
+ * plugin), so this never short-circuits into a twoFactorRedirect the way
+ * login()'s /sign-in/email does. That's fine: the session it creates still
+ * has `twoFactorVerifiedAt` unset, so requireStaff (apps/api) still forces
+ * a staff account to /console-enroll before reaching /console — the 2FA
+ * gate lives there, independent of how the session was created.
+ */
+export async function loginWithCode(_prevState: ActionState, formData: FormData): Promise<ActionState> {
+  const parsed = loginWithCodeSchema.safeParse({
+    email: formData.get("email"),
+    otp: formData.get("otp"),
+  });
+  if (!parsed.success) {
+    return { fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+
+  // Same generic "invalid or expired" response a wrong code gets — see
+  // OTP_VERIFY_LIMIT's comment above.
+  if (await isAuthActionRateLimited("login-code-verify", parsed.data.email, OTP_VERIFY_LIMIT)) {
+    return { error: INVALID_CODE_MESSAGE };
+  }
+
+  let token: string;
+  try {
+    const result = await getAuth().api.signInEmailOTP({ body: parsed.data });
+    token = result.token;
+  } catch (err) {
+    if (err instanceof APIError) {
+      return { error: INVALID_CODE_MESSAGE };
+    }
+    throw err;
+  }
+
+  revalidatePath("/", "layout");
+  return { success: true, token, next: safeNext(formData.get("next")) };
+}
+
+/**
+ * Email Phase 2 — forgot password, step 1. Same no-enumeration contract as
+ * requestLoginCode: always the identical generic message.
+ */
+export async function requestPasswordReset(_prevState: ActionState, formData: FormData): Promise<ActionState> {
+  const parsed = emailOnlySchema.safeParse({ email: formData.get("email") });
+  if (!parsed.success) {
+    return { fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+  if (!(await isAuthActionRateLimited("password-reset-request", parsed.data.email, OTP_REQUEST_LIMIT))) {
+    try {
+      await getAuth().api.requestPasswordResetEmailOTP({ body: { email: parsed.data.email } });
+    } catch {
+      // Swallow — same generic response either way, see header comment.
+    }
+  }
+  return { message: GENERIC_CODE_SENT_MESSAGE };
+}
+
+const resetPasswordSchema = z.object({
+  email: z.string().email("Enter a valid email address"),
+  otp: z.string().min(1, "Enter your code"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+});
+
+/**
+ * Email Phase 2 — forgot password, step 2. Sequence: reset the password
+ * via the OTP (resetPasswordEmailOTP doesn't create a session — only
+ * rewrites the password hash) -> delete every existing session for the
+ * account server-side -> notify it by email -> redirect to /login so the
+ * user re-authenticates with the new password.
+ *
+ * Deliberately does NOT sign the user back in (no signInEmail call): a
+ * password reset is treated as "every prior session, including whatever
+ * browser is sitting on this form, is now untrusted" — auto-login would
+ * undermine that for the one session this flow itself would otherwise
+ * create. Deleted via a direct SQL delete, not better-auth's own
+ * `/revoke-sessions` endpoint — that endpoint requires an existing
+ * authenticated session to scope to (sensitiveSessionMiddleware +
+ * requireHeaders), which this flow never has. Same direct-pool precedent
+ * as createOrganization/switchOrg below.
+ */
+export async function resetPasswordWithCode(_prevState: ActionState, formData: FormData): Promise<ActionState> {
+  const parsed = resetPasswordSchema.safeParse({
+    email: formData.get("email"),
+    otp: formData.get("otp"),
+    password: formData.get("password"),
+  });
+  if (!parsed.success) {
+    return { fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+
+  if (await isAuthActionRateLimited("password-reset-verify", parsed.data.email, OTP_VERIFY_LIMIT)) {
+    return { error: INVALID_CODE_MESSAGE };
+  }
+
+  try {
+    await getAuth().api.resetPasswordEmailOTP({
+      body: { email: parsed.data.email, otp: parsed.data.otp, password: parsed.data.password },
+    });
+  } catch (err) {
+    if (err instanceof APIError) {
+      return { error: INVALID_CODE_MESSAGE };
+    }
+    throw err;
+  }
+
+  await getPool().query(
+    'delete from public.session where "userId" = (select id from public."user" where email = $1)',
+    [parsed.data.email],
+  );
+
+  await enqueueEmail({
+    kind: "send_email",
+    to: parsed.data.email,
+    payload: { template: "passwordChanged", data: { whenText: new Date().toUTCString() } },
+  });
+
+  revalidatePath("/", "layout");
+  redirect(`/login?message=${encodeURIComponent(PASSWORD_CHANGED_MESSAGE)}`);
 }
 
 // Console v1 Slice 4 (docs/plans/console-plan.md §4b, build order step 14):

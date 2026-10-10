@@ -1,6 +1,48 @@
-import { createAuth, type Auth } from "@nia/auth";
+import { createAuth, type Auth, type AuthEmailType } from "@nia/auth";
 import { nextCookies } from "better-auth/next-js";
 import { getPool } from "@/lib/db/pool";
+import { enqueueEmail } from "@/lib/mail/mailQueue";
+
+// Shared with @nia/auth's config.ts: the emailOTP plugin is configured with
+// one `expiresIn: 600` for every OTP type (sign-in, email-verification,
+// forget-password) — kept here only to render "expires in N minutes" copy
+// in the email itself; changing one without the other will just make the
+// copy wrong, not the actual expiry.
+const OTP_EXPIRES_IN_MINUTES = 10;
+
+/**
+ * Maps a better-auth emailOTP `type` to one of @nia/mail's branded
+ * templates and enqueues it. "change-email" has no template yet (Phase 2
+ * doesn't wire up email-change) — silently no-ops rather than throwing, so
+ * better-auth's own call site never fails a request over it.
+ */
+async function sendAuthEmail(data: { type: AuthEmailType; email: string; otp: string }): Promise<void> {
+  const { type, email, otp } = data;
+  if (type === "sign-in") {
+    await enqueueEmail({
+      kind: "send_email",
+      to: email,
+      payload: { template: "loginCode", data: { code: otp, expiresInMinutes: OTP_EXPIRES_IN_MINUTES } },
+    });
+  } else if (type === "email-verification") {
+    await enqueueEmail({
+      kind: "send_email",
+      to: email,
+      payload: { template: "verifyEmail", data: { code: otp, expiresInMinutes: OTP_EXPIRES_IN_MINUTES } },
+    });
+  } else if (type === "forget-password") {
+    const resetUrl = `${process.env.SITE_URL}/reset-password?email=${encodeURIComponent(email)}&otp=${encodeURIComponent(otp)}`;
+    await enqueueEmail({
+      kind: "send_email",
+      to: email,
+      payload: {
+        template: "passwordReset",
+        data: { code: otp, expiresInMinutes: OTP_EXPIRES_IN_MINUTES, resetUrl },
+      },
+    });
+  }
+  // "change-email": no-op, not wired up in Phase 2.
+}
 
 /**
  * apps/web's own Better Auth instance. Same pool/DB as apps/api's (see
@@ -36,6 +78,7 @@ export function getAuth(): WebAuth {
       baseURL: process.env.SITE_URL!,
       secret: process.env.BETTER_AUTH_SECRET!,
       plugins: [nextCookies()],
+      sendAuthEmail,
     });
   }
   return authInstance;

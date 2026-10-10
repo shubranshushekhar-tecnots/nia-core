@@ -1,8 +1,11 @@
 import { betterAuth } from "better-auth";
-import { bearer, twoFactor } from "better-auth/plugins";
+import { bearer, emailOTP, twoFactor } from "better-auth/plugins";
 import type { BetterAuthPlugin } from "better-auth";
 import type { Pool } from "pg";
 import { twoFactorSession } from "./twoFactorSession.js";
+
+/** Mirrors the emailOTP plugin's own `type` union (not re-exported by better-auth). */
+export type AuthEmailType = "sign-in" | "email-verification" | "forget-password" | "change-email";
 
 // Rolling session: a session is valid for 30 days from last use, and its
 // expiry is pushed forward once a day it's used. This mirrors the old
@@ -39,6 +42,17 @@ export interface CreateAuthOptions<TExtraPlugins extends readonly BetterAuthPlug
    * keep working either way.
    */
   plugins?: TExtraPlugins;
+  /**
+   * Delivers a one-time code (sign-in, email verification, or password
+   * reset) by email — backs the `emailOTP` plugin below. Optional because
+   * apps/api instantiates its own auth instance purely for session
+   * verification and never triggers an OTP send itself; apps/web, the only
+   * caller that actually invokes these endpoints, always passes this.
+   * Left unset, the plugin's send still "succeeds" (no-op) rather than
+   * throwing, so a misconfigured caller fails silently instead of crashing
+   * a request — acceptable here since apps/api never exercises this path.
+   */
+  sendAuthEmail?: (data: { type: AuthEmailType; email: string; otp: string }) => Promise<void>;
 }
 
 /**
@@ -90,7 +104,43 @@ export function createAuth<const TExtraPlugins extends readonly BetterAuthPlugin
     // regardless of device history. twoFactorSession() is this project's
     // own plugin (see twoFactorSession.ts) that stamps
     // session.twoFactorVerifiedAt on a successful verify.
-    plugins: [bearer(), twoFactor({ trustDeviceMaxAge: 0 }), twoFactorSession(), ...(options.plugins ?? ([] as const))],
+    plugins: [
+      bearer(),
+      twoFactor({ trustDeviceMaxAge: 0 }),
+      twoFactorSession(),
+      // emailOTP (Email Phase 2): backs login-by-code, email verification,
+      // and password reset-by-code. One shared `expiresIn` for all three
+      // types (better-auth has no per-type override) — 10 min, a reasonable
+      // middle ground between the login-code and reset-code use cases.
+      // `overrideDefaultEmailVerification: true` makes better-auth's own
+      // built-in (link-based) verification email send an OTP through this
+      // plugin instead — we only want one verification mechanism active.
+      // `emailAndPassword.requireEmailVerification` stays unset (default
+      // false) deliberately: verification is informational, never blocks
+      // sign-in.
+      //
+      // `disableSignUp: true` — without this, better-auth's own
+      // signInEmailOTP route silently creates a brand-new account for any
+      // email that completes the sign-in OTP flow, even one that never
+      // signed up (see better-auth/dist/plugins/email-otp/routes.mjs's
+      // signInEmailOTP handler: `if (!user) { if (opts.disableSignUp)
+      // throw ...; else createUser(...) }`). "Email me a code" is meant to
+      // be an alternate login method for existing accounts only, never a
+      // backdoor signup flow — set this or anyone can create an account
+      // just by entering an email and the code that gets sent to it.
+      emailOTP({
+        otpLength: 6,
+        expiresIn: 600,
+        allowedAttempts: 3,
+        sendVerificationOnSignUp: true,
+        overrideDefaultEmailVerification: true,
+        disableSignUp: true,
+        async sendVerificationOTP({ email, otp, type }) {
+          await options.sendAuthEmail?.({ type, email, otp });
+        },
+      }),
+      ...(options.plugins ?? ([] as const)),
+    ],
     databaseHooks: {
       user: {
         create: {

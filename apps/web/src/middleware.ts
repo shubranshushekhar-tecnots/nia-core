@@ -5,7 +5,7 @@ import { getSessionCookie } from "better-auth/cookies";
 // agent download/documentation pages — DownloadsPage reads `signedIn`
 // itself to decide what to show, it does not require the middleware to
 // gate the route.
-const PUBLIC_PATHS = new Set(["/", "/login", "/signup"]);
+const PUBLIC_PATHS = new Set(["/", "/login", "/signup", "/reset-password"]);
 const PUBLIC_PREFIXES = ["/downloads", "/docs"];
 
 function isPublicPath(pathname: string): boolean {
@@ -47,7 +47,17 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  return NextResponse.next();
+  const response = NextResponse.next();
+  // Email Phase 2 review fix: the emailed reset link carries the OTP in
+  // its query string (?email=...&otp=...) — a Referer header leaking that
+  // URL to a third-party resource/link on this page would leak the code
+  // itself. ResetPasswordForm.tsx strips those params from the visible URL
+  // client-side once loaded; this header closes the gap for the moment
+  // before that runs.
+  if (pathname === "/reset-password") {
+    response.headers.set("Referrer-Policy", "no-referrer");
+  }
+  return response;
 }
 
 export const config = {
