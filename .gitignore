@@ -55,3 +55,7 @@ apps/web/playwright/.auth/
 apps/web/test-results/
 
 .nia/NIA.local.md
+
+# ad hoc local login/cookie-capture debug scripts (contain dev seed creds
+# for localhost:3100) — never commit new ones of these
+apps/web/login_capture*.mjs
