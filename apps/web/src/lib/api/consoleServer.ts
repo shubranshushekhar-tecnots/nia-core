@@ -55,24 +55,30 @@ export type ConsoleOrgMember = {
 
 /**
  * GET /console/orgs/:orgId's response shape (Slice 2, console-plan.md build
- * order steps 6-7; extended for subscription-model Phase 1). `workflowLimit`/
- * `projectLimit` are the *effective* limit (plan default, or the override
- * value when its `*OverrideSet` flag is true) — `null` means genuinely
- * unlimited. The raw `*Override`/`*OverrideSet` fields are exposed
- * separately so the edit form can show/clear the override itself, distinct
- * from the effective number used for display and for the lower-limit
- * warning. `planTier` is the plan's display name (plans.name); `planId`
- * is the catalog id the edit form's dropdown is bound to. `status`/
- * `runs30d` mirror ConsoleOrg's fields above (same hardcoded-'Active'/
- * real-count semantics) so the detail screen's header meta line can reuse
- * the Directory screen's exact "{plan} · {N} people · {M} runs in 30 days
- * · {status}" format. `rowsLimit`/`copilotLimit`/`rowsUsed`/`copilotUsed`
+ * order steps 6-7; extended for subscription-model Phase 1 and 0078's grant
+ * redesign). `planId`/`planTier` are the org's permanent BASE plan
+ * (org_plan.plan_id, written only by apply_subscription_webhook/signup
+ * defaults — never cleared by a grant's expiry). `effectivePlanId`/
+ * `effectivePlanTier` are what `private.effective_plan()` actually resolves
+ * to right now: the grant's plan while `grantExpiresAt` is null or in the
+ * future, otherwise identical to the base plan above (never a hardcoded
+ * Free). `workflowLimit`/`projectLimit`/`rowsLimit`/`copilotLimit` are
+ * always the *effective* values (private.effective_plan()'s output) —
+ * `null` means genuinely unlimited. `workflowLimitOverrideSet/Override` and
+ * `projectLimitOverrideSet/Override` are the **permanent** overrides
+ * (migration 0050, untouched by any grant/expiry concept). `grantPlanId`
+ * (nullable) plus `grantCopilotActionsPerMonthOverrideSet/Override` and
+ * `grantRowsPerMonthOverrideSet/Override` are the staff "grant" — a
+ * temporary plan-tier + copilot/rows override active only while
+ * `grantExpiresAt` is null or in the future; once past, `grantExpired` is
+ * `true` and the effective fields above have already reverted to the base
+ * plan (never Free) server-side. `grantReason` is the staff note stored
+ * with the grant. `status`/`runs30d` mirror ConsoleOrg's fields above (same
+ * hardcoded-'Active'/real-count semantics) so the detail screen's header
+ * meta line can reuse the Directory screen's exact "{plan} · {N} people ·
+ * {M} runs in 30 days · {status}" format. `rowsUsed`/`copilotUsed`
  * (Subscription Phase 3, Slice 5) are display-only, current-calendar-month
- * usage against `plans.rows_per_month`/`plans.copilot_actions_per_month` —
- * `null` limit means unmetered, same semantics as everywhere else in this
- * file. No override fields for these two (unlike workflow/project limit):
- * org_plan has no override columns for rows/Copilot, so there's nothing to
- * edit yet.
+ * usage.
  */
 export type ConsoleOrgDetail = {
   id: string;
@@ -81,6 +87,8 @@ export type ConsoleOrgDetail = {
   createdAt: string;
   planId: string;
   planTier: string;
+  effectivePlanId: string;
+  effectivePlanTier: string;
   status: string;
   suspendedAt: string | null;
   suspendedReason: string | null;
@@ -97,8 +105,41 @@ export type ConsoleOrgDetail = {
   rowsUsed: number;
   copilotLimit: number | null;
   copilotUsed: number;
+  grantPlanId: string | null;
+  grantRowsPerMonthOverrideSet: boolean;
+  grantRowsPerMonthOverride: number | null;
+  grantCopilotActionsPerMonthOverrideSet: boolean;
+  grantCopilotActionsPerMonthOverride: number | null;
+  grantExpiresAt: string | null;
+  grantReason: string | null;
+  grantExpired: boolean;
   runs30d: number;
   members: ConsoleOrgMember[];
+};
+
+/**
+ * Shared tri-state-override request/response shape for both
+ * `PATCH /console/orgs/:orgId/plan` and `PATCH /console/users/:userId/plan`
+ * (apps/api/src/routes/console.ts, mirrored exactly — the two routes use
+ * byte-identical body/response shapes). `planId` is the BASE plan (never
+ * cleared by grant expiry); `grantPlanId` + the two `grant*OverrideSet/
+ * Override` pairs + `grantExpiresAt` are the staff "grant" — see
+ * `ConsoleOrgDetail`'s doc comment above for the full semantics. `reason`
+ * is only present on the request side (required by both routes, never
+ * echoed back).
+ */
+export type ConsolePlanOverrideFields = {
+  planId: string;
+  workflowLimitOverrideSet: boolean;
+  workflowLimitOverride: number | null;
+  projectLimitOverrideSet: boolean;
+  projectLimitOverride: number | null;
+  grantPlanId: string | null;
+  grantCopilotActionsPerMonthOverrideSet: boolean;
+  grantCopilotActionsPerMonthOverride: number | null;
+  grantRowsPerMonthOverrideSet: boolean;
+  grantRowsPerMonthOverride: number | null;
+  grantExpiresAt: string | null;
 };
 
 export async function getConsoleOrg(orgId: string): Promise<ConsoleOrgDetail> {
@@ -197,17 +238,36 @@ export async function getConsoleOrgConnectors(orgId: string): Promise<{ connecto
 
 /**
  * GET /console/users's response shape (Slice 3e, console-plan.md build
- * order step 12). `orgCount` mirrors `ConsoleOrg.memberCount`'s role: useful
- * list context, not a detail field. Same `total`/`limit`/`offset`/`hasMore`
- * paging shape as `ConsoleOrgsPage` (decision 10's "never silently
- * truncate" rule applies identically here).
+ * order step 12; extended for the plan-visibility work). `orgCount` mirrors
+ * `ConsoleOrg.memberCount`'s role: useful list context, not a detail field.
+ * `orgs` is each membership's `{orgId, orgName, role, planId}`, ordered
+ * oldest-first (same array `GET /users/:userId`'s `memberships` carries,
+ * just without `joinedAt`). `workspaceType` is `'org'` if `orgCount > 0`,
+ * else `'individual'`; `effectiveRole`/`effectivePlanId` mirror the first
+ * (oldest) org membership's role/plan when `workspaceType === 'org'`, or
+ * `'individual'`/the user's own `owner_plan` plan id otherwise — the same
+ * derivation the `role`/`plan`/`workspaceType` filter params below compare
+ * against server-side. Same `total`/`limit`/`offset`/`hasMore` paging shape
+ * as `ConsoleOrgsPage` (decision 10's "never silently truncate" rule
+ * applies identically here).
  */
+export type ConsoleUserOrgMembership = {
+  orgId: string;
+  orgName: string;
+  role: string;
+  planId: string;
+};
+
 export type ConsoleUser = {
   id: string;
   name: string;
   email: string;
   orgCount: number;
   createdAt: string;
+  orgs: ConsoleUserOrgMembership[];
+  workspaceType: 'individual' | 'org';
+  effectivePlanId: string;
+  effectiveRole: string;
 };
 
 export type ConsoleUsersPage = {
@@ -218,25 +278,68 @@ export type ConsoleUsersPage = {
   hasMore: boolean;
 };
 
-export async function getConsoleUsers(params?: { search?: string; offset?: number }): Promise<ConsoleUsersPage> {
+export async function getConsoleUsers(params?: {
+  search?: string;
+  role?: string;
+  plan?: string;
+  workspaceType?: 'individual' | 'org';
+  offset?: number;
+}): Promise<ConsoleUsersPage> {
   const query = new URLSearchParams();
   if (params?.search) query.set('search', params.search);
+  if (params?.role) query.set('role', params.role);
+  if (params?.plan) query.set('plan', params.plan);
+  if (params?.workspaceType) query.set('workspaceType', params.workspaceType);
   if (params?.offset) query.set('offset', String(params.offset));
   const qs = query.toString();
   return apiFetchServer<ConsoleUsersPage>(`/console/users${qs ? `?${qs}` : ''}`);
 }
 
 /**
- * GET /console/users/:userId's response shape (Slice 3e). Profile, org
- * memberships (with role), and session count/last-sign-in metadata only —
- * never a password, token, or 2FA-secret field, per routes/console.ts's own
- * doc comment on this route's explicit SELECT/response allowlist.
+ * GET /console/users/:userId's response shape (Slice 3e, extended for the
+ * plan-visibility work). Profile, org memberships (with role + effective
+ * plan id), and session count/last-sign-in metadata only — never a
+ * password, token, or 2FA-secret field, per routes/console.ts's own doc
+ * comment on this route's explicit SELECT/response allowlist.
+ *
+ * `workspaceType` is `'org'` when `memberships.length > 0`, else
+ * `'individual'`. `individualPlan` is non-null only in the `'individual'`
+ * case — it's the owner_plan-backed equivalent of `ConsoleOrgDetail`'s
+ * plan/override block (same field names, no `planTier`/usage counters since
+ * there's no catalog display name lookup or usage rollup for individual
+ * workspaces yet). An org-member user always has `individualPlan: null`;
+ * edit their plan on `/console/orgs/[orgId]` instead (see `orgs`/
+ * `memberships` for the link target).
  */
 export type ConsoleUserMembership = {
   orgId: string;
   orgName: string;
   role: string;
   joinedAt: string;
+  planId: string;
+};
+
+export type ConsoleIndividualPlan = {
+  planId: string;
+  planName: string;
+  effectivePlanId: string;
+  effectivePlanName: string;
+  workflowLimit: number | null;
+  projectLimit: number | null;
+  copilotLimit: number | null;
+  rowsLimit: number | null;
+  workflowLimitOverrideSet: boolean;
+  workflowLimitOverride: number | null;
+  projectLimitOverrideSet: boolean;
+  projectLimitOverride: number | null;
+  grantPlanId: string | null;
+  grantCopilotActionsPerMonthOverrideSet: boolean;
+  grantCopilotActionsPerMonthOverride: number | null;
+  grantRowsPerMonthOverrideSet: boolean;
+  grantRowsPerMonthOverride: number | null;
+  grantExpiresAt: string | null;
+  grantReason: string | null;
+  grantExpired: boolean;
 };
 
 export type ConsoleUserDetail = {
@@ -245,7 +348,9 @@ export type ConsoleUserDetail = {
   email: string;
   emailVerified: boolean;
   createdAt: string;
+  workspaceType: 'individual' | 'org';
   memberships: ConsoleUserMembership[];
+  individualPlan: ConsoleIndividualPlan | null;
   sessionCount: number;
   lastSignInAt: string | null;
 };

@@ -2,8 +2,10 @@
 
 import { useState, useTransition } from 'react';
 import Link from 'next/link';
-import type { ConsoleUserDetail } from '@/lib/api/consoleServer';
-import { revokeUserSessionsAction } from '@/lib/console/actions';
+import type { ConsolePlan, ConsolePlanOverrideFields, ConsoleUserDetail } from '@/lib/api/consoleServer';
+import { revokeUserSessionsAction, updateUserPlanAction } from '@/lib/console/actions';
+import { formatPlanExpiry } from '@/lib/console/planLimitWarning';
+import PlanOverrideForm from './PlanOverrideForm';
 import {
   consoleBreadcrumbCurrentStyle,
   consoleBreadcrumbLinkStyle,
@@ -11,6 +13,7 @@ import {
   consoleBreadcrumbSepStyle,
   consoleColJoinedStyle,
   consoleColMemberStyle,
+  consoleColPlanStyle,
   consoleColRoleStyle,
   consoleContentStyle,
   consoleDangerBtnStyle,
@@ -28,8 +31,10 @@ import {
   consolePlanFormWarningStyle,
   consoleRowJoinedCellStyle,
   consoleRowLinkStyle,
+  consoleRowPlanStyle,
   consoleRowRoleCellStyle,
   consoleRowStyle,
+  consoleSectionTitleStyle,
   consoleStatCardStyle,
   consoleStatLabelStyle,
   consoleStatsRowStyle,
@@ -66,12 +71,24 @@ import {
  * their *own* sessions — the backend allows this unconditionally (see
  * routes/console.ts's doc comment on POST .../revoke-sessions), so this is
  * pure confirmation copy, not a permission check.
+ *
+ * Plan-visibility work: adds a "Plan & limits" section, right after the
+ * header actions. For an org member (`workspaceType === 'org'`), it's
+ * read-only — the effective plan is always the org's, so editing happens
+ * on `/console/orgs/[orgId]` instead (same `plans` lookup the memberships
+ * table's new Plan column uses). For an individual user, it's the same
+ * editable tri-state form as ConsoleOrgDetailClient's plan editor, reusing
+ * the shared `PlanOverrideForm` component 1:1 (`user.individualPlan` is
+ * guaranteed non-null by the API in this case — see consoleServer.ts's
+ * doc comment on `ConsoleUserDetail`).
  */
 export default function ConsoleUserDetailClient({
   user,
+  plans,
   currentStaffUserId,
 }: {
   user: ConsoleUserDetail;
+  plans: ConsolePlan[];
   currentStaffUserId: string;
 }) {
   const meta = `${user.email} · ${user.memberships.length} orgs · Joined ${formatDate(user.createdAt)}`;
@@ -83,7 +100,16 @@ export default function ConsoleUserDetailClient({
   const [revokeDone, setRevokeDone] = useState<number | null>(null);
   const [isRevokePending, startRevokeTransition] = useTransition();
 
+  const [individualPlan, setIndividualPlan] = useState(user.individualPlan);
+  const [isEditingPlan, setIsEditingPlan] = useState(false);
+  const [planFormError, setPlanFormError] = useState<string | null>(null);
+  const [isPlanPending, startPlanTransition] = useTransition();
+
   const isSelf = user.id === currentStaffUserId;
+
+  function planName(planId: string): string {
+    return plans.find((p) => p.id === planId)?.name ?? planId;
+  }
 
   function startRevoking() {
     setRevokeReason('');
@@ -107,6 +133,63 @@ export default function ConsoleUserDetailClient({
       setSessionCount(0);
       setRevokeDone(result.revokedSessionCount);
       setRevokeMode(false);
+    });
+  }
+
+  function handleSavePlan(values: ConsolePlanOverrideFields & { reason: string }) {
+    setPlanFormError(null);
+    startPlanTransition(async () => {
+      const result = await updateUserPlanAction(
+        user.id,
+        values.planId,
+        values.workflowLimitOverrideSet,
+        values.workflowLimitOverride,
+        values.projectLimitOverrideSet,
+        values.projectLimitOverride,
+        values.grantPlanId,
+        values.grantCopilotActionsPerMonthOverrideSet,
+        values.grantCopilotActionsPerMonthOverride,
+        values.grantRowsPerMonthOverrideSet,
+        values.grantRowsPerMonthOverride,
+        values.grantExpiresAt,
+        values.reason,
+      );
+      if (!result.ok) {
+        setPlanFormError(result.error);
+        return;
+      }
+      const newBasePlan = plans.find((p) => p.id === result.planId);
+      const grantExpired = result.grantExpiresAt !== null && new Date(result.grantExpiresAt).getTime() < Date.now();
+      const effectivePlan = !grantExpired && result.grantPlanId ? plans.find((p) => p.id === result.grantPlanId) : newBasePlan;
+      setIndividualPlan((prev) => ({
+        planId: result.planId,
+        planName: newBasePlan?.name ?? prev?.planName ?? result.planId,
+        effectivePlanId: effectivePlan?.id ?? result.planId,
+        effectivePlanName: effectivePlan?.name ?? newBasePlan?.name ?? prev?.planName ?? result.planId,
+        workflowLimitOverrideSet: result.workflowLimitOverrideSet,
+        workflowLimitOverride: result.workflowLimitOverride,
+        workflowLimit: result.workflowLimitOverrideSet ? result.workflowLimitOverride : newBasePlan?.workflowLimit ?? null,
+        projectLimitOverrideSet: result.projectLimitOverrideSet,
+        projectLimitOverride: result.projectLimitOverride,
+        projectLimit: result.projectLimitOverrideSet ? result.projectLimitOverride : newBasePlan?.projectLimit ?? null,
+        grantPlanId: result.grantPlanId,
+        grantCopilotActionsPerMonthOverrideSet: result.grantCopilotActionsPerMonthOverrideSet,
+        grantCopilotActionsPerMonthOverride: result.grantCopilotActionsPerMonthOverride,
+        copilotLimit:
+          !grantExpired && result.grantCopilotActionsPerMonthOverrideSet
+            ? result.grantCopilotActionsPerMonthOverride
+            : effectivePlan?.copilotActionsPerMonth ?? null,
+        grantRowsPerMonthOverrideSet: result.grantRowsPerMonthOverrideSet,
+        grantRowsPerMonthOverride: result.grantRowsPerMonthOverride,
+        rowsLimit:
+          !grantExpired && result.grantRowsPerMonthOverrideSet
+            ? result.grantRowsPerMonthOverride
+            : effectivePlan?.rowsPerMonth ?? null,
+        grantExpiresAt: result.grantExpiresAt,
+        grantReason: values.reason,
+        grantExpired,
+      }));
+      setIsEditingPlan(false);
     });
   }
 
@@ -189,10 +272,97 @@ export default function ConsoleUserDetailClient({
         </div>
       </div>
 
+      <span style={consoleSectionTitleStyle}>Plan & limits</span>
+
+      {user.workspaceType === 'org' ? (
+        <div style={consoleStatsRowStyle}>
+          <div style={consoleStatCardStyle}>
+            <span style={consoleStatLabelStyle}>Effective plan</span>
+            <span style={consoleStatValueStyle}>{planName(user.memberships[0]?.planId ?? '')}</span>
+          </div>
+          <Link href={`/console/orgs/${user.memberships[0]?.orgId}`} style={consoleGhostBtnStyle}>
+            Edit on organization page
+          </Link>
+        </div>
+      ) : (
+        <div style={consoleStatsRowStyle}>
+          {isEditingPlan && individualPlan ? (
+            <PlanOverrideForm
+              plans={plans}
+              initial={{
+                planId: individualPlan.planId,
+                workflowLimitOverrideSet: individualPlan.workflowLimitOverrideSet,
+                workflowLimitOverride: individualPlan.workflowLimitOverride,
+                projectLimitOverrideSet: individualPlan.projectLimitOverrideSet,
+                projectLimitOverride: individualPlan.projectLimitOverride,
+                grantPlanId: individualPlan.grantPlanId,
+                grantCopilotActionsPerMonthOverrideSet: individualPlan.grantCopilotActionsPerMonthOverrideSet,
+                grantCopilotActionsPerMonthOverride: individualPlan.grantCopilotActionsPerMonthOverride,
+                grantRowsPerMonthOverrideSet: individualPlan.grantRowsPerMonthOverrideSet,
+                grantRowsPerMonthOverride: individualPlan.grantRowsPerMonthOverride,
+                grantExpiresAt: individualPlan.grantExpiresAt,
+              }}
+              isPending={isPlanPending}
+              error={planFormError}
+              onSave={handleSavePlan}
+              onCancel={() => setIsEditingPlan(false)}
+            />
+          ) : (
+            individualPlan && (
+              <>
+                <div style={consoleStatCardStyle}>
+                  <span style={consoleStatLabelStyle}>Plan</span>
+                  <span style={consoleStatValueStyle}>
+                    {individualPlan.effectivePlanName}
+                    {individualPlan.grantPlanId && individualPlan.effectivePlanName !== individualPlan.planName && (
+                      <span style={consoleHeaderSubStyle}> (base: {individualPlan.planName})</span>
+                    )}
+                    {formatPlanExpiry(individualPlan.grantExpiresAt, individualPlan.grantExpired) && (
+                      <span style={consoleHeaderSubStyle}>
+                        {' '}
+                        · {formatPlanExpiry(individualPlan.grantExpiresAt, individualPlan.grantExpired)}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <div style={consoleStatCardStyle}>
+                  <span style={consoleStatLabelStyle}>Workflow limit</span>
+                  <span style={consoleStatValueStyle}>
+                    {individualPlan.workflowLimit === null ? 'Unlimited' : individualPlan.workflowLimit}
+                  </span>
+                </div>
+                <div style={consoleStatCardStyle}>
+                  <span style={consoleStatLabelStyle}>Project limit</span>
+                  <span style={consoleStatValueStyle}>
+                    {individualPlan.projectLimit === null ? 'Unlimited' : individualPlan.projectLimit}
+                  </span>
+                </div>
+                <div style={consoleStatCardStyle}>
+                  <span style={consoleStatLabelStyle}>Copilot actions/mo</span>
+                  <span style={consoleStatValueStyle}>
+                    {individualPlan.copilotLimit === null ? 'Unlimited' : individualPlan.copilotLimit}
+                  </span>
+                </div>
+                <div style={consoleStatCardStyle}>
+                  <span style={consoleStatLabelStyle}>Rows/mo</span>
+                  <span style={consoleStatValueStyle}>
+                    {individualPlan.rowsLimit === null ? 'Unlimited' : individualPlan.rowsLimit}
+                  </span>
+                </div>
+                <button type="button" onClick={() => setIsEditingPlan(true)} style={consoleGhostBtnStyle}>
+                  Edit plan
+                </button>
+              </>
+            )
+          )}
+        </div>
+      )}
+
       <div style={consoleTableStyle}>
         <div style={consoleTableHeadRowStyle}>
           <span style={consoleColMemberStyle}>Organization</span>
           <span style={consoleColRoleStyle}>Role</span>
+          <span style={consoleColPlanStyle}>Plan</span>
           <span style={consoleColJoinedStyle}>Joined</span>
         </div>
 
@@ -203,6 +373,7 @@ export default function ConsoleUserDetailClient({
             <div style={consoleRowStyle}>
               <span style={consoleColMemberStyle}>{m.orgName}</span>
               <span style={consoleRowRoleCellStyle}>{m.role}</span>
+              <span style={consoleRowPlanStyle}>{planName(m.planId)}</span>
               <span style={consoleRowJoinedCellStyle}>{formatDate(m.joinedAt)}</span>
             </div>
           </Link>

@@ -6,13 +6,15 @@ import type {
   ConsoleConnector,
   ConsoleOrgDetail,
   ConsolePlan,
+  ConsolePlanOverrideFields,
   ConsoleRun,
   ConsoleUsageSummary,
   ConsoleUsageTimeseriesPoint,
 } from '@/lib/api/consoleServer';
 import { removeMemberAction, suspendOrgAction, unsuspendOrgAction, updateOrgPlanAction } from '@/lib/console/actions';
-import { formatLowerLimitWarning } from '@/lib/console/planLimitWarning';
+import { formatPlanExpiry } from '@/lib/console/planLimitWarning';
 import ConsoleUsageCharts, { formatUsd } from './ConsoleUsageCharts';
+import PlanOverrideForm from './PlanOverrideForm';
 import StatusPill, { type StatusTone } from './StatusPill';
 import {
   consoleBreadcrumbCurrentStyle,
@@ -47,11 +49,6 @@ import {
   consolePlanFieldStyle,
   consolePlanFormActionsStyle,
   consolePlanFormErrorStyle,
-  consolePlanFormStyle,
-  consolePlanFormWarningStyle,
-  consolePlanInputStyle,
-  consolePlanOverrideLabelStyle,
-  consolePlanOverrideRowStyle,
   consolePrimaryBtnStyle,
   consoleRowConnectorCreatedCellStyle,
   consoleRowConnectorHealthCellStyle,
@@ -177,112 +174,65 @@ export default function ConsoleOrgDetailClient({
   const [org, setOrg] = useState(initialOrg);
   const [activeTab, setActiveTab] = useState<'members' | 'runs' | 'connectors' | 'tokens'>('members');
   const [isEditing, setIsEditing] = useState(false);
-  const [planId, setPlanId] = useState(org.planId);
-  const [workflowLimitOverrideSet, setWorkflowLimitOverrideSet] = useState(org.workflowLimitOverrideSet);
-  const [workflowLimitOverride, setWorkflowLimitOverride] = useState(
-    org.workflowLimitOverride === null ? '' : String(org.workflowLimitOverride),
-  );
-  const [projectLimitOverrideSet, setProjectLimitOverrideSet] = useState(org.projectLimitOverrideSet);
-  const [projectLimitOverride, setProjectLimitOverride] = useState(
-    org.projectLimitOverride === null ? '' : String(org.projectLimitOverride),
-  );
   const [formError, setFormError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  const orgMeta = `${org.planTier} · ${org.members.length} people · ${org.runs30d} runs in 30 days · ${org.status}`;
+  const orgMeta = `${org.effectivePlanTier} · ${org.members.length} people · ${org.runs30d} runs in 30 days · ${org.status}`;
+  const planExpiryNote = formatPlanExpiry(org.grantExpiresAt, org.grantExpired);
 
-  const selectedPlan = plans.find((p) => p.id === planId);
-
-  // Live preview while typing: the triggers only block NEW inserts (they
-  // fire on INSERT, never UPDATE/DELETE), so lowering a limit below its
-  // current usage never touches existing rows — this is purely an
-  // informational heads-up for staff before they click Save, not a
-  // client-side validation error. The preview resolves the *effective*
-  // limit exactly like the enforcement triggers do: the override value
-  // when its checkbox is checked, otherwise the selected plan's own
-  // default from the `plans` prop.
-  const trimmedWorkflowPreview = workflowLimitOverride.trim();
-  const parsedWorkflowPreview =
-    trimmedWorkflowPreview && Number.isInteger(Number(trimmedWorkflowPreview)) && Number(trimmedWorkflowPreview) > 0
-      ? Number(trimmedWorkflowPreview)
-      : null;
-  const effectiveWorkflowLimitPreview = workflowLimitOverrideSet
-    ? parsedWorkflowPreview
-    : selectedPlan?.workflowLimit ?? null;
-  const workflowLowerLimitWarning = formatLowerLimitWarning(org.workflowsUsed, effectiveWorkflowLimitPreview, 'workflows');
-
-  const trimmedProjectPreview = projectLimitOverride.trim();
-  const parsedProjectPreview =
-    trimmedProjectPreview && Number.isInteger(Number(trimmedProjectPreview)) && Number(trimmedProjectPreview) > 0
-      ? Number(trimmedProjectPreview)
-      : null;
-  const effectiveProjectLimitPreview = projectLimitOverrideSet
-    ? parsedProjectPreview
-    : selectedPlan?.projectLimit ?? null;
-  const projectLowerLimitWarning = formatLowerLimitWarning(org.projectsUsed, effectiveProjectLimitPreview, 'projects');
-
-  function startEditing() {
-    setPlanId(org.planId);
-    setWorkflowLimitOverrideSet(org.workflowLimitOverrideSet);
-    setWorkflowLimitOverride(org.workflowLimitOverride === null ? '' : String(org.workflowLimitOverride));
-    setProjectLimitOverrideSet(org.projectLimitOverrideSet);
-    setProjectLimitOverride(org.projectLimitOverride === null ? '' : String(org.projectLimitOverride));
-    setFormError(null);
-    setIsEditing(true);
-  }
-
-  function handleSave() {
-    let parsedWorkflowOverride: number | null = null;
-    if (workflowLimitOverrideSet) {
-      const trimmed = workflowLimitOverride.trim();
-      if (trimmed) {
-        const n = Number(trimmed);
-        if (!Number.isInteger(n) || n <= 0) {
-          setFormError('Workflow limit override must be a positive whole number, or blank for unlimited.');
-          return;
-        }
-        parsedWorkflowOverride = n;
-      }
-    }
-
-    let parsedProjectOverride: number | null = null;
-    if (projectLimitOverrideSet) {
-      const trimmed = projectLimitOverride.trim();
-      if (trimmed) {
-        const n = Number(trimmed);
-        if (!Number.isInteger(n) || n <= 0) {
-          setFormError('Project limit override must be a positive whole number, or blank for unlimited.');
-          return;
-        }
-        parsedProjectOverride = n;
-      }
-    }
-
+  function handleSave(values: ConsolePlanOverrideFields & { reason: string }) {
     setFormError(null);
     startTransition(async () => {
       const result = await updateOrgPlanAction(
         org.id,
-        planId,
-        workflowLimitOverrideSet,
-        parsedWorkflowOverride,
-        projectLimitOverrideSet,
-        parsedProjectOverride,
+        values.planId,
+        values.workflowLimitOverrideSet,
+        values.workflowLimitOverride,
+        values.projectLimitOverrideSet,
+        values.projectLimitOverride,
+        values.grantPlanId,
+        values.grantCopilotActionsPerMonthOverrideSet,
+        values.grantCopilotActionsPerMonthOverride,
+        values.grantRowsPerMonthOverrideSet,
+        values.grantRowsPerMonthOverride,
+        values.grantExpiresAt,
+        values.reason,
       );
       if (!result.ok) {
         setFormError(result.error);
         return;
       }
-      const newPlan = plans.find((p) => p.id === result.planId);
+      const newBasePlan = plans.find((p) => p.id === result.planId);
+      const grantExpired = result.grantExpiresAt !== null && new Date(result.grantExpiresAt).getTime() < Date.now();
+      const effectivePlan = !grantExpired && result.grantPlanId ? plans.find((p) => p.id === result.grantPlanId) : newBasePlan;
       setOrg((prev) => ({
         ...prev,
         planId: result.planId,
-        planTier: newPlan?.name ?? prev.planTier,
+        planTier: newBasePlan?.name ?? prev.planTier,
+        effectivePlanId: effectivePlan?.id ?? result.planId,
+        effectivePlanTier: effectivePlan?.name ?? newBasePlan?.name ?? prev.planTier,
         workflowLimitOverrideSet: result.workflowLimitOverrideSet,
         workflowLimitOverride: result.workflowLimitOverride,
-        workflowLimit: result.workflowLimitOverrideSet ? result.workflowLimitOverride : newPlan?.workflowLimit ?? null,
+        workflowLimit: result.workflowLimitOverrideSet ? result.workflowLimitOverride : newBasePlan?.workflowLimit ?? null,
         projectLimitOverrideSet: result.projectLimitOverrideSet,
         projectLimitOverride: result.projectLimitOverride,
-        projectLimit: result.projectLimitOverrideSet ? result.projectLimitOverride : newPlan?.projectLimit ?? null,
+        projectLimit: result.projectLimitOverrideSet ? result.projectLimitOverride : newBasePlan?.projectLimit ?? null,
+        grantPlanId: result.grantPlanId,
+        grantCopilotActionsPerMonthOverrideSet: result.grantCopilotActionsPerMonthOverrideSet,
+        grantCopilotActionsPerMonthOverride: result.grantCopilotActionsPerMonthOverride,
+        copilotLimit:
+          !grantExpired && result.grantCopilotActionsPerMonthOverrideSet
+            ? result.grantCopilotActionsPerMonthOverride
+            : effectivePlan?.copilotActionsPerMonth ?? null,
+        grantRowsPerMonthOverrideSet: result.grantRowsPerMonthOverrideSet,
+        grantRowsPerMonthOverride: result.grantRowsPerMonthOverride,
+        rowsLimit:
+          !grantExpired && result.grantRowsPerMonthOverrideSet
+            ? result.grantRowsPerMonthOverride
+            : effectivePlan?.rowsPerMonth ?? null,
+        grantExpiresAt: result.grantExpiresAt,
+        grantReason: values.reason,
+        grantExpired,
       }));
       setIsEditing(false);
     });
@@ -488,103 +438,39 @@ export default function ConsoleOrgDetailClient({
 
       <div style={consoleStatsRowStyle}>
         {isEditing ? (
-          <div style={consolePlanFormStyle}>
-            <div style={consolePlanFieldStyle}>
-              <label htmlFor="console-plan-id" style={consolePlanFieldLabelStyle}>
-                Plan
-              </label>
-              <select
-                id="console-plan-id"
-                value={planId}
-                onChange={(e) => setPlanId(e.target.value)}
-                disabled={isPending}
-                style={consolePlanInputStyle}
-              >
-                {plans.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div style={consolePlanFieldStyle}>
-              <label htmlFor="console-workflow-limit" style={consolePlanFieldLabelStyle}>
-                Workflow limit override
-              </label>
-              <input
-                id="console-workflow-limit"
-                value={workflowLimitOverride}
-                onChange={(e) => setWorkflowLimitOverride(e.target.value)}
-                placeholder="Unlimited"
-                inputMode="numeric"
-                disabled={isPending || !workflowLimitOverrideSet}
-                style={consolePlanInputStyle}
-              />
-              <div style={consolePlanOverrideRowStyle}>
-                <input
-                  id="console-workflow-limit-override-set"
-                  type="checkbox"
-                  checked={workflowLimitOverrideSet}
-                  onChange={(e) => setWorkflowLimitOverrideSet(e.target.checked)}
-                  disabled={isPending}
-                />
-                <label htmlFor="console-workflow-limit-override-set" style={consolePlanOverrideLabelStyle}>
-                  {workflowLimitOverrideSet ? 'Clear override' : `Override (plan default: ${selectedPlan?.workflowLimit === null || selectedPlan?.workflowLimit === undefined ? 'Unlimited' : selectedPlan.workflowLimit})`}
-                </label>
-              </div>
-            </div>
-            <div style={consolePlanFieldStyle}>
-              <label htmlFor="console-project-limit" style={consolePlanFieldLabelStyle}>
-                Project limit override
-              </label>
-              <input
-                id="console-project-limit"
-                value={projectLimitOverride}
-                onChange={(e) => setProjectLimitOverride(e.target.value)}
-                placeholder="Unlimited"
-                inputMode="numeric"
-                disabled={isPending || !projectLimitOverrideSet}
-                style={consolePlanInputStyle}
-              />
-              <div style={consolePlanOverrideRowStyle}>
-                <input
-                  id="console-project-limit-override-set"
-                  type="checkbox"
-                  checked={projectLimitOverrideSet}
-                  onChange={(e) => setProjectLimitOverrideSet(e.target.checked)}
-                  disabled={isPending}
-                />
-                <label htmlFor="console-project-limit-override-set" style={consolePlanOverrideLabelStyle}>
-                  {projectLimitOverrideSet ? 'Clear override' : `Override (plan default: ${selectedPlan?.projectLimit === null || selectedPlan?.projectLimit === undefined ? 'Unlimited' : selectedPlan.projectLimit})`}
-                </label>
-              </div>
-            </div>
-            <div style={consolePlanFormActionsStyle}>
-              <button type="button" onClick={handleSave} disabled={isPending} style={consolePrimaryBtnStyle}>
-                {isPending ? 'Saving…' : 'Save'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsEditing(false)}
-                disabled={isPending}
-                style={consoleGhostBtnStyle}
-              >
-                Cancel
-              </button>
-            </div>
-            {!formError && workflowLowerLimitWarning && (
-              <span style={consolePlanFormWarningStyle}>{workflowLowerLimitWarning}</span>
-            )}
-            {!formError && projectLowerLimitWarning && (
-              <span style={consolePlanFormWarningStyle}>{projectLowerLimitWarning}</span>
-            )}
-            {formError && <span style={consolePlanFormErrorStyle}>{formError}</span>}
-          </div>
+          <PlanOverrideForm
+            plans={plans}
+            initial={{
+              planId: org.planId,
+              workflowLimitOverrideSet: org.workflowLimitOverrideSet,
+              workflowLimitOverride: org.workflowLimitOverride,
+              projectLimitOverrideSet: org.projectLimitOverrideSet,
+              projectLimitOverride: org.projectLimitOverride,
+              grantPlanId: org.grantPlanId,
+              grantCopilotActionsPerMonthOverrideSet: org.grantCopilotActionsPerMonthOverrideSet,
+              grantCopilotActionsPerMonthOverride: org.grantCopilotActionsPerMonthOverride,
+              grantRowsPerMonthOverrideSet: org.grantRowsPerMonthOverrideSet,
+              grantRowsPerMonthOverride: org.grantRowsPerMonthOverride,
+              grantExpiresAt: org.grantExpiresAt,
+            }}
+            workflowsUsed={org.workflowsUsed}
+            projectsUsed={org.projectsUsed}
+            isPending={isPending}
+            error={formError}
+            onSave={handleSave}
+            onCancel={() => setIsEditing(false)}
+          />
         ) : (
           <>
             <div style={consoleStatCardStyle}>
               <span style={consoleStatLabelStyle}>Plan</span>
-              <span style={consoleStatValueStyle}>{org.planTier}</span>
+              <span style={consoleStatValueStyle}>
+                {org.effectivePlanTier}
+                {org.grantPlanId && org.effectivePlanTier !== org.planTier && (
+                  <span style={consoleHeaderSubStyle}> (base: {org.planTier})</span>
+                )}
+                {planExpiryNote && <span style={consoleHeaderSubStyle}> · {planExpiryNote}</span>}
+              </span>
             </div>
             <div style={consoleStatCardStyle}>
               <span style={consoleStatLabelStyle}>Workflow limit</span>
@@ -616,7 +502,7 @@ export default function ConsoleOrgDetailClient({
                 {org.copilotLimit !== null && ` / ${org.copilotLimit.toLocaleString()}`}
               </span>
             </div>
-            <button type="button" onClick={startEditing} style={consoleGhostBtnStyle}>
+            <button type="button" onClick={() => setIsEditing(true)} style={consoleGhostBtnStyle}>
               Edit plan
             </button>
           </>

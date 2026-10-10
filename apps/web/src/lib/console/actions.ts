@@ -13,6 +13,7 @@ import {
   type ConsoleModelPrice,
   type ConsoleModelPricesPage,
   type ConsoleOrgsPage,
+  type ConsolePlanOverrideFields,
   type ConsolePlanUpdateResult,
   type ConsoleProjectsPage,
   type ConsoleStaffPage,
@@ -74,17 +75,25 @@ export async function updatePlanAction(
 }
 
 /**
- * Slice 3e (docs/plans/console-plan.md, build order step 12): ConsoleUsers
- * Client.tsx's search box and "Load more" button both call this — unlike
- * ConsoleDirectoryClient's `search` (a client-side-only filter over the
- * already-loaded page, see its own doc comment), GET /console/users does
- * real server-side search by email/name (the user's own explicit spec), so
- * a search-term change has to re-fetch from offset 0, not just filter what's
- * already in the browser.
+ * Slice 3e (docs/plans/console-plan.md, build order step 12), extended for
+ * the plan-visibility work: ConsoleUsersClient.tsx's search box, role/
+ * plan/workspace-type filter controls, and "Load more" button all call
+ * this — unlike ConsoleDirectoryClient's `search` (a client-side-only
+ * filter over the already-loaded page, see its own doc comment), GET
+ * /console/users does real server-side search + filtering (the user's own
+ * explicit spec), so any filter change has to re-fetch from offset 0, not
+ * just filter what's already in the browser.
  */
-export async function searchUsersAction(search: string, offset: number): Promise<ConsoleUsersPage> {
+export async function searchUsersAction(
+  search: string,
+  offset: number,
+  filters?: { role?: string; plan?: string; workspaceType?: 'individual' | 'org' },
+): Promise<ConsoleUsersPage> {
   const query = new URLSearchParams();
   if (search) query.set('search', search);
+  if (filters?.role) query.set('role', filters.role);
+  if (filters?.plan) query.set('plan', filters.plan);
+  if (filters?.workspaceType) query.set('workspaceType', filters.workspaceType);
   if (offset) query.set('offset', String(offset));
   const qs = query.toString();
   return apiFetchServer<ConsoleUsersPage>(`/console/users${qs ? `?${qs}` : ''}`);
@@ -92,17 +101,27 @@ export async function searchUsersAction(search: string, offset: number): Promise
 
 /**
  * Slice 3a (docs/plans/console-plan.md), extended for subscription-model
- * Phase 1: submits ConsoleOrgDetailClient's inline plan-edit form to PATCH
- * /console/orgs/:orgId/plan. Called directly from the client component via
- * useTransition (same shape as loadMoreOrgsAction above, not
- * lib/connections/actions.ts's ActionState/FormData pattern) — there's no
- * <form> here, and the caller needs the fresh planId/override values back
- * to update its own local state, not a generic ActionState.
+ * Phase 1 and for the plan-visibility work (Copilot/rows overrides,
+ * expiry, required reason): submits ConsoleOrgDetailClient's inline
+ * plan-edit form to PATCH /console/orgs/:orgId/plan. Called directly from
+ * the client component via useTransition (same shape as loadMoreOrgsAction
+ * above, not lib/connections/actions.ts's ActionState/FormData pattern) —
+ * there's no <form> here, and the caller needs the fresh planId/override
+ * values back to update its own local state, not a generic ActionState.
  *
- * `planId` picks the catalog plan; the two `*OverrideSet` flags/values
- * carry the edit form's "Clear override" (set = false) vs. an explicit cap
- * or explicit-unlimited (set = true, value positive or null) — same
- * tri-state shape PATCH /console/orgs/:orgId/plan's body schema expects.
+ * `planId` picks the org's permanent BASE plan (never cleared by grant
+ * expiry); `workflowLimitOverrideSet/Override` and
+ * `projectLimitOverrideSet/Override` are the permanent overrides (0050),
+ * each `*OverrideSet` flag/value pair carrying the edit form's "Clear
+ * override" (set = false) vs. an explicit cap or explicit-unlimited (set =
+ * true, value positive or null). `grantPlanId` (nullable) +
+ * `grantCopilotActionsPerMonthOverrideSet/Override` +
+ * `grantRowsPerMonthOverrideSet/Override` + `grantExpiresAt` (nullable ISO
+ * string) are the staff "grant" — a temporary plan-tier + copilot/rows
+ * override, independently expiring back to the base `planId` above (never
+ * Free) once `grantExpiresAt` passes. `reason` (required, shown to staff in
+ * the audit log) is new; the body/response shape is now identical to
+ * `updateUserPlanAction` below (`ConsolePlanOverrideFields`).
  */
 export async function updateOrgPlanAction(
   orgId: string,
@@ -111,25 +130,16 @@ export async function updateOrgPlanAction(
   workflowLimitOverride: number | null,
   projectLimitOverrideSet: boolean,
   projectLimitOverride: number | null,
-): Promise<
-  | {
-      ok: true;
-      planId: string;
-      workflowLimitOverrideSet: boolean;
-      workflowLimitOverride: number | null;
-      projectLimitOverrideSet: boolean;
-      projectLimitOverride: number | null;
-    }
-  | { ok: false; error: string }
-> {
+  grantPlanId: string | null,
+  grantCopilotActionsPerMonthOverrideSet: boolean,
+  grantCopilotActionsPerMonthOverride: number | null,
+  grantRowsPerMonthOverrideSet: boolean,
+  grantRowsPerMonthOverride: number | null,
+  grantExpiresAt: string | null,
+  reason: string,
+): Promise<({ ok: true } & ConsolePlanOverrideFields) | { ok: false; error: string }> {
   try {
-    const result = await apiFetchServer<{
-      planId: string;
-      workflowLimitOverrideSet: boolean;
-      workflowLimitOverride: number | null;
-      projectLimitOverrideSet: boolean;
-      projectLimitOverride: number | null;
-    }>(`/console/orgs/${encodeURIComponent(orgId)}/plan`, {
+    const result = await apiFetchServer<ConsolePlanOverrideFields>(`/console/orgs/${encodeURIComponent(orgId)}/plan`, {
       method: 'PATCH',
       body: JSON.stringify({
         planId,
@@ -137,6 +147,64 @@ export async function updateOrgPlanAction(
         workflowLimitOverride,
         projectLimitOverrideSet,
         projectLimitOverride,
+        grantPlanId,
+        grantCopilotActionsPerMonthOverrideSet,
+        grantCopilotActionsPerMonthOverride,
+        grantRowsPerMonthOverrideSet,
+        grantRowsPerMonthOverride,
+        grantExpiresAt,
+        reason,
+      }),
+    });
+    return { ok: true, ...result };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't update the plan. Try again." };
+  }
+}
+
+/**
+ * Plan-visibility work: the individual-workspace equivalent of
+ * `updateOrgPlanAction` above, submitting ConsoleUserDetailClient's
+ * tri-state plan-edit form to PATCH /console/users/:userId/plan — same
+ * body/response shape (`ConsolePlanOverrideFields` + required `reason`).
+ * The route itself 400s with `USER_IS_ORG_MEMBER` if the target user has
+ * any org membership (surfaced verbatim as `error`, same "the route's own
+ * message IS the customer-facing copy" convention as suspendOrgAction) —
+ * callers should only render this form for `workspaceType === 'individual'`
+ * users in the first place (see ConsoleUserDetail.individualPlan).
+ */
+export async function updateUserPlanAction(
+  userId: string,
+  planId: string,
+  workflowLimitOverrideSet: boolean,
+  workflowLimitOverride: number | null,
+  projectLimitOverrideSet: boolean,
+  projectLimitOverride: number | null,
+  grantPlanId: string | null,
+  grantCopilotActionsPerMonthOverrideSet: boolean,
+  grantCopilotActionsPerMonthOverride: number | null,
+  grantRowsPerMonthOverrideSet: boolean,
+  grantRowsPerMonthOverride: number | null,
+  grantExpiresAt: string | null,
+  reason: string,
+): Promise<({ ok: true } & ConsolePlanOverrideFields) | { ok: false; error: string }> {
+  try {
+    const result = await apiFetchServer<ConsolePlanOverrideFields>(`/console/users/${encodeURIComponent(userId)}/plan`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        planId,
+        workflowLimitOverrideSet,
+        workflowLimitOverride,
+        projectLimitOverrideSet,
+        projectLimitOverride,
+        grantPlanId,
+        grantCopilotActionsPerMonthOverrideSet,
+        grantCopilotActionsPerMonthOverride,
+        grantRowsPerMonthOverrideSet,
+        grantRowsPerMonthOverride,
+        grantExpiresAt,
+        reason,
       }),
     });
     return { ok: true, ...result };
