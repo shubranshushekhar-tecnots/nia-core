@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getStatus, listConnections, ApiClientError, type StatusResponse, type ConnectionEntry } from "../apiClient";
+import { DataPulse } from "../components/DataPulse";
 
 type Pill = "connected" | "notConnected" | "problem";
 
@@ -48,7 +49,15 @@ export function Home() {
   return (
     <div className="agent-screen">
       <h1>Home</h1>
-      <span className={`agent-pill agent-pill--${pill}`}>{label}</span>
+      <div className="agent-pulse-wrap">
+        <span className={`agent-pill agent-pill--${pill}`}>{label}</span>
+        {status.isSyncing && (
+          <>
+            <DataPulse active />
+            <span className="agent-text-muted">Syncing...</span>
+          </>
+        )}
+      </div>
 
       {status.paired && (
         <>

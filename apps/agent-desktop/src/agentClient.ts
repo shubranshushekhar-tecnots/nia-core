@@ -15,6 +15,7 @@ export interface AgentStatusResponse {
   platformUrl?: string;
   online?: boolean;
   revoked?: boolean;
+  isSyncing?: boolean;
   pendingUpdate?: PendingUpdateInfo;
 }
 
@@ -38,6 +39,7 @@ export async function fetchAgentStatus(port: number, token: string, fetchImpl: t
       platformUrl: typeof body.platformUrl === "string" ? body.platformUrl : undefined,
       online: typeof body.online === "boolean" ? body.online : undefined,
       revoked: typeof body.revoked === "boolean" ? body.revoked : undefined,
+      isSyncing: typeof body.isSyncing === "boolean" ? body.isSyncing : undefined,
       pendingUpdate: parsePendingUpdate(body.pendingUpdate),
     };
   } catch {

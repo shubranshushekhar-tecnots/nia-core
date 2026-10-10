@@ -18,7 +18,11 @@ export function buildStatusRoutes(deps: LocalApiDeps): RouteDefinition[] {
         const report = getStatus(deps.dir);
         // undefined whenever unpaired/no live link -- same rule as getWorkflowsClient/getPlatformUrl (see deps.ts).
         const pendingUpdate = deps.getUpdateChecker?.()?.getPendingUpdate();
-        const base = { agentVersion: deps.agentVersion, startedAt: report.startedAt, uptimeSeconds: report.uptimeSeconds, jobs: report.jobs, pendingUpdate };
+        // True while any scheduled/triggered job is actually in flight right now -- same signal
+        // updateChecker.ts already uses to defer an install -- surfaced here so the tray/UI can
+        // show a real "syncing" state instead of inferring it from job timestamps.
+        const isSyncing = deps.scheduler?.isAnyRunning() ?? false;
+        const base = { agentVersion: deps.agentVersion, startedAt: report.startedAt, uptimeSeconds: report.uptimeSeconds, jobs: report.jobs, pendingUpdate, isSyncing };
 
         if (!config.link) return { paired: false, ...base };
 

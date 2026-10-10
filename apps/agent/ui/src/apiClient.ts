@@ -113,6 +113,8 @@ interface StatusResponseBase {
   uptimeSeconds?: number;
   jobs: Record<string, JobState>;
   pendingUpdate?: PendingUpdate;
+  /** True while any scheduled/triggered job is actually in flight right now. */
+  isSyncing?: boolean;
 }
 
 export type StatusResponse =

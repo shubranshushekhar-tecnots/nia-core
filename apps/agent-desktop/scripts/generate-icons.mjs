@@ -32,7 +32,6 @@ const windowsAssetsDir = path.join(repoRoot, "apps", "agent", "packaging", "wind
 const contactSheetDir = path.join(os.homedir(), "Desktop", "nia-agent-branding");
 
 const BRAND_PURPLE = "#6a5bdb";
-const STATUS_COLORS = { green: "#2ecc71", amber: "#f5a623", grey: "#8a8a93" };
 
 mkdirSync(desktopAssetsDir, { recursive: true });
 mkdirSync(windowsAssetsDir, { recursive: true });
@@ -95,37 +94,9 @@ async function main() {
   rmSync(iconsetDir, { recursive: true, force: true });
   contactSheetEntries.push("(app-icon.icns: binary macOS format, not previewable as PNG -- see app-icon.png for the same mark)");
 
-  // ---- 4. Windows/Linux tray dots: clean vector-drawn circles, not the logo glyph ----
-  const trayPxSizes = { 16: null, 20: null, 24: null, 32: null };
-  for (const [color, hex] of Object.entries(STATUS_COLORS)) {
-    for (const size of Object.keys(trayPxSizes).map(Number)) {
-      const buf = await dotPng(size, hex);
-      await emit(path.join(desktopAssetsDir, sizedTrayName(color, size)), buf, { label: `tray-${color}-${size}` });
-      const buf2x = await dotPng(size * 2, hex);
-      await emit(path.join(desktopAssetsDir, sizedTrayName(color, size, true)), buf2x, { label: `tray-${color}-${size}@2x` });
-    }
-    // Keep the plain tray-<color>.png / @2x.png names too (16px base is what
-    // trayManager.ts's trayIconPath() resolves for Tray(); nativeImage auto-
-    // picks up the @2x sibling for HiDPI).
-    await emit(path.join(desktopAssetsDir, `tray-${color}.png`), await dotPng(16, hex), { label: `tray-${color}-base` });
-    await emit(path.join(desktopAssetsDir, `tray-${color}@2x.png`), await dotPng(32, hex), { label: `tray-${color}-base@2x` });
-  }
-
-  // ---- 5. macOS template tray icon: alpha mask of the white glyph region ----
-  const templateSize = 22;
-  const [tpl1x, tpl2x] = await Promise.all([
-    buildTemplateIcon(master1024, templateSize, false),
-    buildTemplateIcon(master1024, templateSize * 2, false),
-  ]);
-  await emit(path.join(desktopAssetsDir, "trayTemplate.png"), tpl1x);
-  await emit(path.join(desktopAssetsDir, "trayTemplate@2x.png"), tpl2x);
-
-  const [tplProblem1x, tplProblem2x] = await Promise.all([
-    buildTemplateIcon(master1024, templateSize, true),
-    buildTemplateIcon(master1024, templateSize * 2, true),
-  ]);
-  await emit(path.join(desktopAssetsDir, "trayTemplateProblem.png"), tplProblem1x);
-  await emit(path.join(desktopAssetsDir, "trayTemplateProblem@2x.png"), tplProblem2x);
+  // ---- Tray icons (idle/syncing/starting/problem/off, animated) are no longer generated here --
+  // they're a design export copied verbatim into apps/agent-desktop/assets/tray/, see
+  // designs/nia-agent-icons/SPEC.md. ----
 
   // ---- 6. apps/agent/ui favicon / logo, 235x235 (matches apps/web/public/logo-mark.png's size) ----
   const logoMark = await sharp(master1024).resize(235, 235).png().toBuffer();
@@ -155,57 +126,6 @@ async function main() {
   await emit(path.join(contactSheetDir, "installer-wizard.png"), wizardPng, { label: "installer-wizard" });
 
   console.log(`[generate-icons] done. Contact sheet: ${contactSheetDir} (${contactSheetEntries.length} previews)`);
-}
-
-function sizedTrayName(color, size, retina = false) {
-  return `tray-${color}-${size}${retina ? "@2x" : ""}.png`;
-}
-
-async function dotPng(size, hex) {
-  const r = Math.max(1, Math.round(size / 2) - 1);
-  const c = size / 2;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><circle cx="${c}" cy="${c}" r="${r}" fill="${hex}"/></svg>`;
-  return sharp(Buffer.from(svg)).png().toBuffer();
-}
-
-/**
- * Builds a macOS "template" tray icon: a black-on-transparent silhouette of
- * the logo's white glyph (the squircle/gradient background is discarded),
- * matching Electron/macOS's convention of auto-recoloring any image whose
- * filename contains "Template" for light/dark menu bars. `problem` adds a
- * small filled circle + exclamation mark badge in the bottom-right corner.
- */
-async function buildTemplateIcon(sourcePath, size, problem) {
-  // The glyph is pure white on the purple squircle -- threshold on
-  // brightness to get a single-channel mask of just the glyph (0 or 255),
-  // then build a black RGBA image using that mask as the alpha channel
-  // directly (template images must be black shapes + alpha).
-  const { data: maskData } = await sharp(sourcePath)
-    .resize(size, size)
-    .greyscale()
-    .threshold(200)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const rgba = Buffer.alloc(size * size * 4); // RGB stays 0 (black); alpha set below
-  for (let i = 0; i < size * size; i++) rgba[i * 4 + 3] = maskData[i];
-  let glyph = await sharp(rgba, { raw: { width: size, height: size, channels: 4 } })
-    .png()
-    .toBuffer();
-
-  if (problem) {
-    const badgeSize = Math.round(size * 0.52);
-    const badgeSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${badgeSize}" height="${badgeSize}">
-      <circle cx="${badgeSize / 2}" cy="${badgeSize / 2}" r="${badgeSize / 2 - 1}" fill="black"/>
-      <rect x="${badgeSize / 2 - 1}" y="${badgeSize * 0.22}" width="2" height="${badgeSize * 0.32}" fill="white"/>
-      <circle cx="${badgeSize / 2}" cy="${badgeSize * 0.68}" r="1.3" fill="white"/>
-    </svg>`;
-    const badge = await sharp(Buffer.from(badgeSvg)).png().toBuffer();
-    glyph = await sharp(glyph)
-      .composite([{ input: badge, left: size - badgeSize, top: size - badgeSize }])
-      .png()
-      .toBuffer();
-  }
-  return glyph;
 }
 
 main().catch((err) => {

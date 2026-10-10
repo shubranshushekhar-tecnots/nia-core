@@ -1,7 +1,7 @@
-export type ConnectionColor = "green" | "amber" | "grey";
+export type TrayStateKind = "idle" | "syncing" | "starting" | "problem" | "off";
 
-export interface ConnectionState {
-  color: ConnectionColor;
+export interface TrayState {
+  kind: TrayStateKind;
   label: string;
 }
 
@@ -17,6 +17,7 @@ export interface AgentStatus {
   platformUrl?: string;
   online?: boolean;
   revoked?: boolean;
+  isSyncing?: boolean;
   pendingUpdate?: AgentPendingUpdate;
 }
 
@@ -25,20 +26,28 @@ function pendingUpdateSuffix(pendingUpdate: AgentPendingUpdate | undefined): str
   return pendingUpdate.readyToInstall ? ` -- update ${pendingUpdate.version} ready to install` : ` -- update ${pendingUpdate.version} available`;
 }
 
-/** `null` means the status fetch itself failed (service not running / unreachable). */
-export function mapStatusToConnectionState(status: AgentStatus | null): ConnectionState {
+/**
+ * `null` means the status fetch itself failed (service not running / unreachable) -> "off".
+ * Otherwise: unpaired -> "starting" (pre-pair build-up); revoked/offline -> "problem";
+ * a job actually in flight right now -> "syncing"; else -> "idle".
+ */
+export function mapStatusToConnectionState(status: AgentStatus | null): TrayState {
   if (status === null) {
-    return { color: "grey", label: "Not connected -- service isn't running" };
+    return { kind: "off", label: "Not connected -- service isn't running" };
   }
   if (!status.paired) {
-    return { color: "grey", label: "Not paired yet" };
-  }
-  if (status.online && !status.revoked) {
-    const base = status.platformUrl ? `Connected to ${status.platformUrl}` : "Connected";
-    return { color: "green", label: base + pendingUpdateSuffix(status.pendingUpdate) };
+    return { kind: "starting", label: "Not paired yet" };
   }
   if (status.revoked) {
-    return { color: "amber", label: "Access revoked -- re-pair this agent" };
+    return { kind: "problem", label: "Access revoked -- re-pair this agent" };
   }
-  return { color: "amber", label: "Connection problem" };
+  if (!status.online) {
+    return { kind: "problem", label: "Connection problem" };
+  }
+  const base = status.platformUrl ? `Connected to ${status.platformUrl}` : "Connected";
+  const label = base + pendingUpdateSuffix(status.pendingUpdate);
+  if (status.isSyncing) {
+    return { kind: "syncing", label };
+  }
+  return { kind: "idle", label };
 }
