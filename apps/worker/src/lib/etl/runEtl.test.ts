@@ -408,7 +408,7 @@ describe("runEtl — suspended org (Console v1 Slice 3b)", () => {
     // rows-usage check (docs/decisions.md has the full reasoning for why
     // this assertion changed from a blanket "not called" here).
     expect(orgSuspensionQueryMock).toHaveBeenCalledTimes(1);
-    expect(orgSuspensionQueryMock).toHaveBeenCalledWith(expect.stringContaining("owner_plan"), ["user-1"]);
+    expect(orgSuspensionQueryMock).toHaveBeenCalledWith(expect.stringContaining("private.effective_plan"), [null, "user-1"]);
   });
 });
 
@@ -447,16 +447,21 @@ describe("runEtl — blocked runner (Subscription Phase 2, Slice 6)", () => {
 });
 
 // Subscription Phase 3, Slice 2 (docs/plans/subscription-model.md, decision
-// 5): rows_moved usage gate — same "first chunk only" shared-mock sequencing
-// as the suspended-org/blocked-runner blocks above (suspension, then
-// blockedRunnerReason, then this check's plan query, then its usage-sum
-// query, in that call order).
-describe("runEtl — rows usage limit (Subscription Phase 3, Slice 2)", () => {
+// 5) + Console copilot/rows overrides (0078): rows_moved usage gate — same
+// "first chunk only" shared-mock sequencing as the suspended-org/blocked-
+// runner blocks above (suspension, then blockedRunnerReason, then this
+// check's private.effective_plan query, then its usage-sum query, in that
+// call order). The plan-query mock rows below are shaped like
+// private.effective_plan's own result columns (plan_id, plan_name,
+// rows_per_month, rows_override_active) since rowsLimitBlockMessage now
+// resolves through that single shared function (0078) instead of its own
+// CASE-WHEN SQL.
+describe("runEtl — rows usage limit (Subscription Phase 3, Slice 2 + Console overrides 0078)", () => {
   it("fails the run on the first chunk when a Free-plan workspace is at 100% of its rows_per_month", async () => {
     orgSuspensionQueryMock
       .mockResolvedValueOnce({ rows: [{ suspended_at: null }] })
       .mockResolvedValueOnce({ rows: [{ role: "admin", is_project_member: true }] })
-      .mockResolvedValueOnce({ rows: [{ plan_id: "free", rows_limit: 100000 }] })
+      .mockResolvedValueOnce({ rows: [{ plan_id: "free", plan_name: "Free", rows_per_month: 100000, rows_override_active: false }] })
       .mockResolvedValueOnce({ rows: [{ used: "100000" }] });
     const queue = queueStub();
     const job = baseJob();
@@ -466,7 +471,7 @@ describe("runEtl — rows usage limit (Subscription Phase 3, Slice 2)", () => {
     expect(result).toEqual({
       status: "failed",
       message:
-        "Your Free plan includes 100,000 rows a month, and this workspace has already used 100,000. Upgrade to Pro to keep running workflows this month.",
+        "Your Free plan includes 100,000 rows a month, and this workspace has already used 100,000. Upgrade to keep running workflows this month.",
     });
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(dispatchWriteMock).not.toHaveBeenCalled();
@@ -474,11 +479,11 @@ describe("runEtl — rows usage limit (Subscription Phase 3, Slice 2)", () => {
     expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed", { message: result.message });
   });
 
-  it("never blocks a Pro-plan workspace even at 100% of its rows_per_month — warn-only per decision 5", async () => {
+  it("never blocks a Pro-plan workspace even at 100% of its rows_per_month when no override is active — warn-only per decision 5", async () => {
     orgSuspensionQueryMock
       .mockResolvedValueOnce({ rows: [{ suspended_at: null }] })
       .mockResolvedValueOnce({ rows: [{ role: "admin", is_project_member: true }] })
-      .mockResolvedValueOnce({ rows: [{ plan_id: "pro", rows_limit: 2000000 }] })
+      .mockResolvedValueOnce({ rows: [{ plan_id: "pro", plan_name: "Pro", rows_per_month: 2000000, rows_override_active: false }] })
       .mockResolvedValueOnce({ rows: [{ used: "2000000" }] });
     const queue = queueStub();
     const job = baseJob({ chunkSize: 10 });
@@ -487,6 +492,65 @@ describe("runEtl — rows usage limit (Subscription Phase 3, Slice 2)", () => {
 
     expect(result).toEqual({ status: "done" });
     expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a Pro-plan workspace at 100% of a staff-set rows_per_month override — overrides win regardless of tier (0078)", async () => {
+    orgSuspensionQueryMock
+      .mockResolvedValueOnce({ rows: [{ suspended_at: null }] })
+      .mockResolvedValueOnce({ rows: [{ role: "admin", is_project_member: true }] })
+      .mockResolvedValueOnce({ rows: [{ plan_id: "pro", plan_name: "Pro", rows_per_month: 1000, rows_override_active: true }] })
+      .mockResolvedValueOnce({ rows: [{ used: "1000" }] });
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({
+      status: "failed",
+      message:
+        "Your Pro plan includes 1,000 rows a month, and this workspace has already used 1,000. Upgrade to keep running workflows this month.",
+    });
+    expect(dispatchWriteMock).not.toHaveBeenCalled();
+    expect(finishRunMock).toHaveBeenCalledWith(job.runId, "failed", { message: result.message });
+  });
+
+  it("still allows a Pro-plan workspace under a staff-set rows_per_month override", async () => {
+    orgSuspensionQueryMock
+      .mockResolvedValueOnce({ rows: [{ suspended_at: null }] })
+      .mockResolvedValueOnce({ rows: [{ role: "admin", is_project_member: true }] })
+      .mockResolvedValueOnce({ rows: [{ plan_id: "pro", plan_name: "Pro", rows_per_month: 1000, rows_override_active: true }] })
+      .mockResolvedValueOnce({ rows: [{ used: "500" }] });
+    const queue = queueStub();
+    const job = baseJob({ chunkSize: 10 });
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({ status: "done" });
+    expect(dispatchWriteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the base Free plan's limit once an override/plan grant has expired (private.effective_plan, 0078)", async () => {
+    // private.effective_plan itself resolves the expiry fallback (plan_id
+    // reverts to 'free', rows_override_active is false even if
+    // rows_per_month_set is still true on the row) — this test only has to
+    // prove rowsLimitBlockMessage trusts whatever the function returns,
+    // same as the plain Free-plan test above, not re-derive the SQL.
+    orgSuspensionQueryMock
+      .mockResolvedValueOnce({ rows: [{ suspended_at: null }] })
+      .mockResolvedValueOnce({ rows: [{ role: "admin", is_project_member: true }] })
+      .mockResolvedValueOnce({ rows: [{ plan_id: "free", plan_name: "Free", rows_per_month: 100000, rows_override_active: false }] })
+      .mockResolvedValueOnce({ rows: [{ used: "100000" }] });
+    const queue = queueStub();
+    const job = baseJob();
+
+    const result = await runEtl(job, queue);
+
+    expect(result).toEqual({
+      status: "failed",
+      message:
+        "Your Free plan includes 100,000 rows a month, and this workspace has already used 100,000. Upgrade to keep running workflows this month.",
+    });
+    expect(dispatchWriteMock).not.toHaveBeenCalled();
   });
 });
 
