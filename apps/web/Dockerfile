@@ -8,6 +8,7 @@ COPY packages/schemas/package.json packages/schemas/
 COPY packages/auth/package.json packages/auth/
 COPY packages/db/package.json packages/db/
 COPY packages/ui/package.json packages/ui/
+COPY packages/canvas-view/package.json packages/canvas-view/
 COPY apps/web/package.json apps/web/
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
@@ -15,11 +16,13 @@ COPY packages/schemas packages/schemas
 COPY packages/auth packages/auth
 COPY packages/db packages/db
 COPY packages/ui packages/ui
+COPY packages/canvas-view packages/canvas-view
 COPY apps/web apps/web
 # @nia/ui has no build step of its own (next.config.mjs's transpilePackages
-# compiles its source directly) — only these three need a dist/ before
-# `next build` can resolve them.
-RUN pnpm -r --filter @nia/schemas --filter @nia/auth --filter @nia/db build
+# compiles its source directly) — only these need a dist/ before
+# `next build` can resolve them (@nia/canvas-view is consumed as a built
+# package via its package.json main/types, not transpiled from source).
+RUN pnpm -r --filter @nia/schemas --filter @nia/auth --filter @nia/db --filter @nia/canvas-view build
 # next.config.mjs's outputFileTracingRoot is set to the repo root
 # specifically so `output: "standalone"`'s file-tracing follows pnpm's
 # workspace symlinks correctly from inside this monorepo build.
