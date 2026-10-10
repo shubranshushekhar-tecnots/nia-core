@@ -1,0 +1,86 @@
+name: agent-windows-smoke
+
+# Lean, fast smoke test for the Windows installer + Electron desktop
+# shell, distinct from windows-installer.yml's much heavier checks A-I
+# (SQL Server-backed functional tests of pairing/sync). This one never
+# touches SQL Server -- it only exercises install/service/Electron-shell
+# plumbing: silent install, service health, the local API, Start Menu
+# shortcut targets, Electron relaunch + single-instance behavior, the
+# upgrade-while-running path, and silent uninstall. Everything (including
+# the Electron app itself) is built on the Windows runner directly, since
+# electron-builder's Windows output isn't reliably cross-built.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/agent-windows-smoke
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # makensis (NSIS) for the installer; unzip for build-sea.mjs's
+      # Node.js download step (not present on windows-latest by default).
+      - name: Install makensis + unzip
+        run: choco install -y nsis unzip --no-progress
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Speeds up electron-builder's first run after a cache miss only --
+      # without this, every run re-downloads the pinned Electron build.
+      - name: Cache Electron / electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: electron-windows-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Build @nia/agent (and its workspace deps)
+        run: pnpm --filter @nia/agent... run build
+
+      # Windows dir build, on the Windows runner -- produces
+      # apps/agent-desktop/dist-electron/win-unpacked/Nia Agent.exe.
+      - name: Build the Electron desktop shell
+        run: pnpm --filter @nia/agent-desktop run package
+
+      - name: Build the Windows SEA executable
+        run: node apps/agent/packaging/windows/build-sea.mjs
+
+      # No --no-desktop: must ship the Electron shell this smoke test
+      # exercises, not the service-only fallback build.
+      - name: Build the NSIS installer
+        run: node apps/agent/packaging/windows/build-installer.mjs
+
+      - name: Run installer + Electron smoke checks
+        run: |
+          $setup = Get-ChildItem -Path apps/agent/packaging/windows/dist -Filter "NiaCoreAgent-Setup-*.exe" | Select-Object -First 1
+          if (-not $setup) { throw "no NiaCoreAgent-Setup-*.exe found under apps/agent/packaging/windows/dist" }
+          Write-Host "setup exe: $($setup.FullName)"
+          & ./apps/agent/packaging/windows/ci/run-smoke-checks.ps1 -SetupExePath $setup.FullName
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-windows-smoke-logs
+          path: ci-artifacts/**
+          if-no-files-found: warn
+          retention-days: 14
