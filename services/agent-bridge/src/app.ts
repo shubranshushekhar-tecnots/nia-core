@@ -12,13 +12,15 @@ import {
   MIN_AGENT_VERSION,
   GraphDoc,
   getConnectorManifest,
+  type GraphDoc as GraphDocType,
+  type GraphNode as GraphNodeType,
+} from "@nia/schemas";
+import {
   getDownloadsBaseUrl,
   loadDownloadManifest,
   findPrimaryManifestFile,
   type AgentOs,
-  type GraphDoc as GraphDocType,
-  type GraphNode as GraphNodeType,
-} from "@nia/schemas";
+} from "@nia/schemas/downloadManifest";
 import { dbPool } from "./db.js";
 import { generateAgentKey, sha256Hex } from "./crypto.js";
 import { DbAgentTransport, type AgentTransport } from "./transport.js";

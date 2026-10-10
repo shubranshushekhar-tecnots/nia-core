@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./downloadManifest": {
+      "types": "./dist/downloadManifest.d.ts",
+      "import": "./dist/downloadManifest.js"
     }
   },
   "scripts": {

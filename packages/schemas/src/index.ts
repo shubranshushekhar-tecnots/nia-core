@@ -29,7 +29,15 @@ export * from "./residualTransform.js";
 export * from "./runEvents.js";
 export * from "./checks.js";
 export * from "./agentVersion.js";
-export * from "./downloadManifest.js";
+// Deliberately NOT re-exported here: downloadManifest.ts uses node:fs/
+// node:path and is server-only (apps/web's lib/downloads/manifest.ts,
+// services/agent-bridge's app.ts). Re-exporting it from this barrel
+// pulls those Node builtins into every consumer of "@nia/schemas",
+// including client components (e.g. Sidebar.tsx) that only need
+// unrelated exports like `can` — breaking the webpack client bundle
+// with "UnhandledSchemeError: Reading from node:fs/promises". Server
+// code imports it directly via the "@nia/schemas/downloadManifest"
+// subpath instead (see package.json's "exports" map).
 export * from "./mappingProposal.js";
 export * from "./entityResolution.js";
 export * from "./previewResult.js";

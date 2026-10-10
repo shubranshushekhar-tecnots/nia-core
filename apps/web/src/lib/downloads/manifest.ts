@@ -5,7 +5,7 @@ import {
   type AgentOs,
   type DownloadManifest,
   type DownloadManifestFile,
-} from "@nia/schemas";
+} from "@nia/schemas/downloadManifest";
 
 /**
  * Agent downloads: one server-side setting (`AGENT_DOWNLOADS_BASE_URL`)

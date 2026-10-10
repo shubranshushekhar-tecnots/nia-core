@@ -14,8 +14,8 @@ vi.mock("@nia/db", () => ({
 // checkout but is stale/unrelated to what these tests assert).
 const mockLoadDownloadManifest = vi.fn();
 const mockGetDownloadsBaseUrl = vi.fn<[], string | undefined>(() => undefined);
-vi.mock("@nia/schemas", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@nia/schemas")>();
+vi.mock("@nia/schemas/downloadManifest", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@nia/schemas/downloadManifest")>();
   return {
     ...actual,
     getDownloadsBaseUrl: () => mockGetDownloadsBaseUrl(),

@@ -38,6 +38,7 @@ export default defineConfig({
       "src/lib/orgPlan.integration.test.ts",
       "src/lib/workflowLimit.integration.test.ts",
       "src/lib/projectLimit.integration.test.ts",
+      "src/lib/effectivePlan.integration.test.ts",
       "src/services/dashboard.integration.test.ts",
       "src/services/announcements.integration.test.ts",
       "src/services/usage.integration.test.ts",
