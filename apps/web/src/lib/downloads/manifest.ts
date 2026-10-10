@@ -1,5 +1,11 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  getDownloadsBaseUrl,
+  loadDownloadManifest,
+  type AgentOs,
+  type DownloadManifest,
+  type DownloadManifestFile,
+} from "@nia/schemas";
 
 /**
  * Agent downloads: one server-side setting (`AGENT_DOWNLOADS_BASE_URL`)
@@ -9,24 +15,16 @@ import path from "node:path";
  * app/api/agent-downloads/[file]/route.ts. Set (production) → both the
  * manifest and the files themselves are fetched from that address, which
  * in production points at the folder deploy/nginx/nginx.conf serves
- * directly (see DEPLOYMENT.md "Agent downloads").
+ * directly (see DEPLOYMENT.md "Agent downloads"). The manifest shape and
+ * base-url/local-fallback load logic itself live in @nia/schemas
+ * (downloadManifest.ts) — shared with services/agent-bridge's
+ * `GET /agent-api/update` route (Phase 6 polish) — this file keeps only
+ * what's specific to apps/web: resolving the local dist dirs and the
+ * dev-route-vs-base-url download URL.
  */
 
-export type AgentOs = "windows" | "macos" | "linux";
-
-export type DownloadManifestFile = {
-  name: string;
-  os: AgentOs;
-  kind: "primary" | "advanced";
-  size: number;
-  sha256: string;
-};
-
-export type DownloadManifest = {
-  version: string;
-  generatedAt: string;
-  files: DownloadManifestFile[];
-};
+export type { AgentOs, DownloadManifest, DownloadManifestFile };
+export { getDownloadsBaseUrl };
 
 // apps/web's own cwd at runtime is apps/web/ (both `next dev` and the
 // standalone server.js), so ../agent/packaging reaches apps/agent/packaging
@@ -45,21 +43,8 @@ export function getAgentDistDir(os: AgentOs): string {
   return OS_DIST_DIR[os];
 }
 
-export function getDownloadsBaseUrl(): string | undefined {
-  return process.env.AGENT_DOWNLOADS_BASE_URL || undefined;
-}
-
 export async function getDownloadManifest(): Promise<DownloadManifest> {
-  const base = getDownloadsBaseUrl();
-  if (base) {
-    const res = await fetch(`${base.replace(/\/$/, "")}/manifest.json`, { cache: "no-store" });
-    if (!res.ok) {
-      throw new Error(`failed to fetch agent download manifest: ${res.status}`);
-    }
-    return (await res.json()) as DownloadManifest;
-  }
-  const raw = await fs.readFile(path.join(PACKAGING_ROOT, "manifest.json"), "utf8");
-  return JSON.parse(raw) as DownloadManifest;
+  return loadDownloadManifest(PACKAGING_ROOT);
 }
 
 export function getDownloadUrl(file: DownloadManifestFile): string {

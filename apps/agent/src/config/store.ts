@@ -1,5 +1,14 @@
 import fs from "node:fs";
-import { type AgentConfig, type ConnectionEntry, type LinkConfig, type MonitoringConfig, type SyncJobEntry, CURRENT_CONFIG_VERSION, emptyConfig } from "./types.js";
+import {
+  type AgentConfig,
+  type AutoUpdateConfig,
+  type ConnectionEntry,
+  type LinkConfig,
+  type MonitoringConfig,
+  type SyncJobEntry,
+  CURRENT_CONFIG_VERSION,
+  emptyConfig,
+} from "./types.js";
 import { configFilePath, defaultHomeDir } from "./paths.js";
 
 export class ConfigValidationError extends Error {}
@@ -49,9 +58,27 @@ export function validateConfig(value: unknown): AgentConfig {
     monitoring: validateMonitoring(v.monitoring),
     maxConcurrentRuns: typeof v.maxConcurrentRuns === "number" ? v.maxConcurrentRuns : undefined,
     link: validateLink(v.link),
+    autoUpdate: validateAutoUpdate(v.autoUpdate),
     connections: v.connections as ConnectionEntry[],
     jobs: (v.jobs as SyncJobEntry[] | undefined) ?? [],
   };
+}
+
+/** Unset unless `enabled` is well-typed — a partially hand-edited `autoUpdate` is treated the same as unset (i.e. enabled, per AutoUpdateConfig's doc comment). */
+function validateAutoUpdate(value: unknown): AutoUpdateConfig | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const v = value as Record<string, unknown>;
+  if (typeof v.enabled !== "boolean") return undefined;
+  return { enabled: v.enabled };
+}
+
+/** `updateChecker.ts`'s own "is auto-update on" read — unset config (or a config whose `autoUpdate` was dropped by `validateAutoUpdate` above) means enabled. */
+export function isAutoUpdateEnabled(config: AgentConfig): boolean {
+  return config.autoUpdate?.enabled ?? true;
+}
+
+export function setAutoUpdateEnabled(config: AgentConfig, enabled: boolean): AgentConfig {
+  return { ...config, autoUpdate: { enabled } };
 }
 
 function validateMonitoring(value: unknown): MonitoringConfig | undefined {

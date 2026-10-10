@@ -4,11 +4,25 @@
  * status check. Returns `null` on ANY failure (network error, non-200, malformed body) so callers
  * can treat "service not running" and "service returned garbage" the same way.
  */
+/** Phase 6 polish -- mirrors UpdateChecker.getPendingUpdate() (apps/agent/src/link/updateChecker.ts). */
+export interface PendingUpdateInfo {
+  version: string;
+  readyToInstall: boolean;
+}
+
 export interface AgentStatusResponse {
   paired: boolean;
   platformUrl?: string;
   online?: boolean;
   revoked?: boolean;
+  pendingUpdate?: PendingUpdateInfo;
+}
+
+function parsePendingUpdate(value: unknown): PendingUpdateInfo | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { version, readyToInstall } = value as Record<string, unknown>;
+  if (typeof version !== "string" || typeof readyToInstall !== "boolean") return undefined;
+  return { version, readyToInstall };
 }
 
 export async function fetchAgentStatus(port: number, token: string, fetchImpl: typeof fetch = fetch): Promise<AgentStatusResponse | null> {
@@ -24,6 +38,7 @@ export async function fetchAgentStatus(port: number, token: string, fetchImpl: t
       platformUrl: typeof body.platformUrl === "string" ? body.platformUrl : undefined,
       online: typeof body.online === "boolean" ? body.online : undefined,
       revoked: typeof body.revoked === "boolean" ? body.revoked : undefined,
+      pendingUpdate: parsePendingUpdate(body.pendingUpdate),
     };
   } catch {
     return null;

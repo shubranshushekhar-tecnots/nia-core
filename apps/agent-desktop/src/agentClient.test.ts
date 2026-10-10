@@ -46,4 +46,28 @@ describe("fetchAgentStatus", () => {
     const fetchImpl = fakeFetch(() => new Response("not json", { status: 200 }));
     await expect(fetchAgentStatus(57415, "token", fetchImpl)).resolves.toBeNull();
   });
+
+  it("parses a well-formed pendingUpdate field", async () => {
+    const fetchImpl = fakeFetch(
+      () => new Response(JSON.stringify({ paired: true, online: true, pendingUpdate: { version: "2.0.0", readyToInstall: true } }), { status: 200 }),
+    );
+    await expect(fetchAgentStatus(57415, "token", fetchImpl)).resolves.toEqual({
+      paired: true,
+      online: true,
+      platformUrl: undefined,
+      revoked: undefined,
+      pendingUpdate: { version: "2.0.0", readyToInstall: true },
+    });
+  });
+
+  it("drops a malformed pendingUpdate field instead of failing the whole response", async () => {
+    const fetchImpl = fakeFetch(() => new Response(JSON.stringify({ paired: true, pendingUpdate: { version: "2.0.0" } }), { status: 200 }));
+    await expect(fetchAgentStatus(57415, "token", fetchImpl)).resolves.toEqual({
+      paired: true,
+      online: undefined,
+      platformUrl: undefined,
+      revoked: undefined,
+      pendingUpdate: undefined,
+    });
+  });
 });

@@ -179,6 +179,17 @@ export interface LinkConfig {
   agentKeyRef: string;
 }
 
+/**
+ * Phase 6 polish — auto-update. Unset is treated exactly like `{ enabled:
+ * true }` (on by default) by updateChecker.ts; only an explicit `false`
+ * turns it off. Kept as its own small object (rather than a bare boolean
+ * field on AgentConfig) so a later knob (e.g. a pinned max version) has
+ * somewhere to live without another top-level AgentConfig field.
+ */
+export interface AutoUpdateConfig {
+  enabled: boolean;
+}
+
 export interface AgentConfig {
   version: 1;
   /** Defaults under the same app-data dir as the config file itself — see paths.ts. */
@@ -189,6 +200,8 @@ export interface AgentConfig {
   maxConcurrentRuns?: number;
   /** Unset until `nia-agent pair` succeeds — see LinkConfig's doc comment. */
   link?: LinkConfig;
+  /** Unset means enabled — see AutoUpdateConfig's doc comment. */
+  autoUpdate?: AutoUpdateConfig;
   connections: ConnectionEntry[];
   jobs: SyncJobEntry[];
 }

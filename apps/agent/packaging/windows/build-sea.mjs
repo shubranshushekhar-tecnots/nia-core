@@ -49,6 +49,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, rmSyn
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildUiAssetsMap } from "../shared/seaAssets.mjs";
+import { signFile } from "./sign.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentDir = path.resolve(here, "../../");
@@ -132,6 +133,8 @@ async function main() {
 
   rmSync(nodeZipPath);
   rmSync(path.join(distDir, `node-v${NODE_VERSION}-win-x64`), { recursive: true, force: true });
+
+  await signFile(outExePath);
 
   const finalSha = sha256File(outExePath);
   console.log(`\nbuilt ${outExePath}`);

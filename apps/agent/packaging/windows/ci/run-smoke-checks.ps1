@@ -3,10 +3,12 @@
 #   run-smoke-checks.ps1 -SetupExePath <path to NiaCoreAgent-Setup-*.exe>
 #
 # Unlike run-checks.ps1 (checks A-I, SQL Server-backed functional tests of
-# pairing/sync), this script never touches SQL Server or the platform/
-# Planometry fakes -- it only exercises the installer/service/Electron
-# shell plumbing itself, kept intentionally small so it runs in minutes,
-# not the better part of an hour.
+# pairing/sync), this script never touches SQL Server or the Planometry
+# fake -- it only exercises the installer/service/Electron shell plumbing
+# itself (plus, in CHECK 8, a real pairing + auto-update round trip
+# against the same fake platform server run-checks.ps1 uses), kept
+# intentionally small so it runs in minutes, not the better part of an
+# hour.
 #
 # Design: every check is independent and continue-on-failure, same as
 # run-checks.ps1 -- one bad check must never hide the results of the
@@ -102,6 +104,58 @@ function Wait-ElectronProcessGone {
         Start-Sleep -Milliseconds 500
     }
     return -not (Get-Process -Name $ElectronProcessName -ErrorAction SilentlyContinue)
+}
+
+# Polls a URL until it responds at all (any status code) -- same
+# -SkipHttpErrorCheck readiness convention as run-checks.ps1's own
+# Wait-HttpReady: a 404 for a deliberately nonexistent id still proves the
+# server is up and routing requests.
+function Wait-HttpReady {
+    param([string]$Url, [int]$TimeoutSec = 30)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 3 -SkipHttpErrorCheck | Out-Null
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    return $false
+}
+
+function New-PairingCode {
+    param([string]$FakePlatformUrl)
+    # POST /control/pairing-codes -> {pairingCodeId, code, composite}
+    return Invoke-RestMethod -Method Post -Uri "$FakePlatformUrl/control/pairing-codes" -Body "{}" -ContentType "application/json"
+}
+
+function New-AnswersFile {
+    param([hashtable]$Answers, [string]$Path)
+    $lines = foreach ($k in $Answers.Keys) { "$k=$($Answers[$k])" }
+    Set-Content -Path $Path -Value $lines -Encoding utf8
+}
+
+# Runs a process to completion with its stdout/stderr captured to temp
+# files (so output is readable even though the process itself isn't
+# interactive) -- a deliberately simpler alternative to run-checks.ps1's
+# event-based Invoke-Proc, sufficient for this script's needs (CHECK 8
+# only: pairing the CLI, and the two package rebuild steps).
+function Invoke-CommandCaptured {
+    param([string]$FilePath, [string[]]$Arguments = @(), [string]$WorkingDirectory = (Get-Location).Path)
+    $outFile = [System.IO.Path]::GetTempFileName()
+    $errFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $proc = Start-Process -FilePath $FilePath -ArgumentList $Arguments -WorkingDirectory $WorkingDirectory `
+            -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        return [pscustomobject]@{
+            ExitCode = $proc.ExitCode
+            StdOut   = (Get-Content -Path $outFile -Raw -ErrorAction SilentlyContinue)
+            StdErr   = (Get-Content -Path $errFile -Raw -ErrorAction SilentlyContinue)
+        }
+    } finally {
+        Remove-Item -Path $outFile, $errFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Copies install.ps1's own log + the agent/WinSW runtime logs out of the
@@ -247,29 +301,256 @@ Invoke-Section "CHECK 7: upgrade while the app is running" {
 }
 
 # ============================================================================
-# CHECK 8: silent uninstall removes the service, app folder, and shortcuts
+# CHECK 8: auto-update -- a genuinely newer build, served by a fake
+# platform, is detected by the real, already-running installed service
+# and installed via the privilege-separated external-updater design: the
+# agent service (low-privilege NT SERVICE\nia-agent) only hands off a
+# verified download and triggers the "NiaAgentUpdater" SYSTEM-principal
+# Scheduled Task (install.ps1's step e; script at
+# packaging/windows/updater/nia-agent-updater.ps1) -- that script, not
+# this agent process, independently re-verifies sha256 + Authenticode
+# publisher, snapshots the install dir, runs the installer as SYSTEM,
+# health-checks via /status, and would roll back on failure. Must run
+# before CHECK 9 (uninstall): it needs the service still installed and
+# running.
+#
+# Unlike CHECK 7 (which drives the *same* version's installer manually,
+# to prove reinstall-while-running works), this drives the real
+# UpdateChecker/HttpUpdateClient/UpdateInstaller code path end to end:
+# pair against a fake platform (apps/agent/src/testing/fakePlatformServer.ts)
+# exposing GET /agent-api/update, trigger POST /update/check on the local
+# API, and confirm (a) the live service comes back reporting the newer
+# version, AND (b) the external updater's own last-result.json
+# independently confirms outcome="installed" for that exact version --
+# not just that UpdateChecker's install() call returned {installed:true},
+# which post-redesign only means "handed off" (see
+# link/updateInstaller.ts's module doc comment), not "fully installed".
+#
+# Known, accepted CI limitation: nia-agent-updater.ps1's last step
+# (relaunching the Electron tray app in the logged-on user's interactive
+# session) cannot be meaningfully verified here -- a GitHub-hosted
+# windows-latest runner has no interactive user session, so that step is
+# expected to log "no interactively logged-on user detected" and no-op,
+# which is itself correct, defensive behavior, not a bug. Not asserted on.
+# ============================================================================
+
+Invoke-Section "CHECK 8: auto-update" {
+    $repoRoot = (Get-Location).Path
+    $pnpmCmd = Get-Command pnpm -ErrorAction SilentlyContinue
+    $pnpmPath = if ($pnpmCmd) { $pnpmCmd.Source } else { "pnpm.cmd" }
+    $fakePlatformPort = 4466
+    $fakePlatformUrl = "http://127.0.0.1:$fakePlatformPort"
+    $portFile = Join-Path $LocalApiDir "port.json"
+    $tokenFile = Join-Path $LocalApiDir "token"
+    $updateDir = Join-Path $DataDir "update"
+
+    # Sanity check first: install.ps1's step e must have registered the
+    # SYSTEM-principal task the entire external-updater handoff depends
+    # on -- if this is missing, nothing below can possibly work, so fail
+    # fast with a clear message rather than a confusing timeout later.
+    $updaterTask = Get-ScheduledTask -TaskName "NiaAgentUpdater" -ErrorAction SilentlyContinue
+    Add-Result -Check "CHECK 8a: NiaAgentUpdater scheduled task is registered" -Pass ([bool]$updaterTask) -Detail "state: $($updaterTask.State)"
+
+    Write-Host "starting fake platform server (port $fakePlatformPort)..."
+    $fakePlatformProc = Start-Process -FilePath "cmd.exe" `
+        -ArgumentList @("/c", $pnpmPath, "--filter", "@nia/agent", "run", "manual:platform") `
+        -WorkingDirectory $repoRoot `
+        -RedirectStandardOutput (Join-Path $ArtifactsDir "fake-platform.out.log") `
+        -RedirectStandardError (Join-Path $ArtifactsDir "fake-platform.err.log") `
+        -NoNewWindow -PassThru
+
+    try {
+        $platformReady = Wait-HttpReady -Url "$fakePlatformUrl/control/agents/nonexistent" -TimeoutSec 30
+        Add-Result -Check "CHECK 8b: fake platform server ready" -Pass $platformReady
+        if (-not $platformReady) { return }
+
+        # Deliberately NOT using a throwaway NIA_AGENT_HOME here (same as
+        # run-checks.ps1's CHECK C5): this must write into the real
+        # %ProgramData%\NiaAgent so the already-running service (installed
+        # in CHECK 1) picks it up live. A minimal answers file (pairing +
+        # platformUrl only) is sufficient to pair, per CHECK B2.
+        $code = New-PairingCode -FakePlatformUrl $fakePlatformUrl
+        $answers = @{ pairing = $code.composite; platformUrl = $fakePlatformUrl }
+        $answersPath = Join-Path $env:TEMP "nia-agent-update-answers-$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
+        New-AnswersFile -Answers $answers -Path $answersPath
+        $setupResult = Invoke-CommandCaptured -FilePath (Join-Path $InstallDir "nia-agent.exe") -Arguments @("setup", "--answers-file", $answersPath) -WorkingDirectory $repoRoot
+        Remove-Item -Path $answersPath -Force -ErrorAction SilentlyContinue
+        $paired = $setupResult.StdOut -match "Paired as agent"
+        Add-Result -Check "CHECK 8c: pairs against the fake platform" -Pass $paired -Detail ($setupResult.StdOut -split "`n" | Where-Object { $_ -match "Paired|error|Error" } | Select-Object -First 1)
+        if (-not $paired) { return }
+
+        if (-not (Test-Path $portFile) -or -not (Test-Path $tokenFile)) {
+            Add-Result -Check "CHECK 8d: local API port/token available" -Pass $false
+            return
+        }
+        $port = (Get-Content $portFile -Raw | ConvertFrom-Json).port
+        $token = (Get-Content $tokenFile -Raw).Trim()
+        # Current agentVersion is read live from /status -- it's whatever
+        # CHECK 1 actually installed, not assumed from the repo's
+        # package.json (which may have moved on since that build ran).
+        $statusBefore = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$port/status" -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 10
+        $currentVersion = $statusBefore.agentVersion
+        Add-Result -Check "CHECK 8e: current agentVersion read from /status" -Pass ([bool]$currentVersion) -Detail "$currentVersion"
+        if (-not $currentVersion) { return }
+
+        $versionParts = $currentVersion -split "\."
+        $newVersion = "{0}.{1}.{2}" -f [int]$versionParts[0], [int]$versionParts[1], ([int]$versionParts[2] + 1)
+
+        # Build a genuinely newer installer: bump a throwaway patch version
+        # in apps/agent/package.json, rebuild just the agent SEA exe + NSIS
+        # installer (the Electron shell, already staged from this job's
+        # earlier build step, and every other workspace package are left
+        # alone), then always restore the original package.json -- this is
+        # a real file in the checked-out repo, not a throwaway copy.
+        #
+        # Deliberately NOT routed through build-release.mjs's --release
+        # gate here -- this CI rebuild has no signing credentials
+        # available, so the resulting installer ships with neither
+        # expected-publisher.json nor UNSIGNED-TEST-BUILD.txt staged.
+        # nia-agent-updater.ps1 treats that combination as "no publisher
+        # pinning configured for this install" and correctly falls back to
+        # sha256-only verification (see its own step 2 comment) -- that is
+        # the expected, safe behavior being exercised here, not a gap.
+        $pkgPath = Join-Path $repoRoot "apps\agent\package.json"
+        $originalPkgJson = Get-Content $pkgPath -Raw
+        $buildOk = $false
+        try {
+            $pkg = $originalPkgJson | ConvertFrom-Json
+            $pkg.version = $newVersion
+            ($pkg | ConvertTo-Json -Depth 100) | Set-Content -Path $pkgPath -Encoding utf8 -NoNewline
+
+            $buildResult = Invoke-CommandCaptured -FilePath "cmd.exe" -Arguments @("/c", $pnpmPath, "--filter", "@nia/agent", "run", "build") -WorkingDirectory $repoRoot
+            Add-Result -Check "CHECK 8f: rebuild @nia/agent at bumped version ($newVersion) exits 0" -Pass ($buildResult.ExitCode -eq 0) -Detail $buildResult.StdErr
+
+            $seaResult = Invoke-CommandCaptured -FilePath "node" -Arguments @("apps/agent/packaging/windows/build-sea.mjs") -WorkingDirectory $repoRoot
+            Add-Result -Check "CHECK 8g: rebuild nia-agent.exe exits 0" -Pass ($seaResult.ExitCode -eq 0) -Detail $seaResult.StdErr
+
+            $installerResult = Invoke-CommandCaptured -FilePath "node" -Arguments @("apps/agent/packaging/windows/build-installer.mjs") -WorkingDirectory $repoRoot
+            Add-Result -Check "CHECK 8h: rebuild NiaCoreAgent-Setup exits 0" -Pass ($installerResult.ExitCode -eq 0) -Detail $installerResult.StdErr
+
+            $buildOk = ($buildResult.ExitCode -eq 0) -and ($seaResult.ExitCode -eq 0) -and ($installerResult.ExitCode -eq 0)
+        } finally {
+            Set-Content -Path $pkgPath -Value $originalPkgJson -NoNewline
+        }
+        if (-not $buildOk) { return }
+
+        $newSetup = Get-ChildItem -Path (Join-Path $repoRoot "apps\agent\packaging\windows\dist") -Filter "NiaCoreAgent-Setup-$newVersion.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $newSetup) {
+            Add-Result -Check "CHECK 8i: new installer artifact exists" -Pass $false -Detail "expected NiaCoreAgent-Setup-$newVersion.exe under apps/agent/packaging/windows/dist"
+            return
+        }
+        Add-Result -Check "CHECK 8i: new installer artifact exists" -Pass $true -Detail $newSetup.FullName
+
+        $newSha256 = (Get-FileHash -Path $newSetup.FullName -Algorithm SHA256).Hash.ToLower()
+        $registerBody = @{ latestVersion = $newVersion; filePath = $newSetup.FullName; sha256 = $newSha256 } | ConvertTo-Json
+        $registerResp = Invoke-RestMethod -Method Post -Uri "$fakePlatformUrl/control/update" -ContentType "application/json" -Body $registerBody
+        Add-Result -Check "CHECK 8j: fake platform accepts the update registration" -Pass ([bool]$registerResp.ok)
+
+        # Trigger an immediate check via the local API's "check now" route
+        # (POST /update/check) instead of waiting out the real 4h+jitter
+        # timer. This only makes the agent service hand off to the
+        # external updater (write the request file + `schtasks /run`) --
+        # it does NOT itself install anything (see link/updateInstaller.ts).
+        try {
+            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/update/check" -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 10 | Out-Null
+            Add-Result -Check "CHECK 8k: POST /update/check triggers" -Pass $true
+        } catch {
+            Add-Result -Check "CHECK 8k: POST /update/check triggers" -Pass $false -Detail $_.Exception.Message
+        }
+
+        # Poll /status until the live service reports the bumped version.
+        # port.json's port is re-chosen (listen(0)) on every local-API
+        # start, so it's re-read on every iteration below -- the real
+        # installer (run by nia-agent-updater.ps1 as SYSTEM, not this
+        # script) restarts the service partway through this loop. The
+        # token file is reused across restarts (authToken.ts), but
+        # re-read anyway for safety, at negligible cost.
+        #
+        # Timeout budget (8 minutes, up from the pre-redesign 120s):
+        # schtasks /run handoff latency + robocopy snapshotting the whole
+        # install dir (incl. NiaAgentDesktop\) + the silent NSIS install +
+        # nia-agent-updater.ps1's own up-to-5-minute health-check poll are
+        # all now interposed between "check now" and the service actually
+        # reporting the new version, none of which existed in the old
+        # in-process design this check originally targeted.
+        $deadline = (Get-Date).AddMinutes(8)
+        $updatedVersion = $null
+        $lastSeenVersion = $null
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            if (-not (Test-Path $portFile) -or -not (Test-Path $tokenFile)) { continue }
+            try {
+                $curPort = (Get-Content $portFile -Raw | ConvertFrom-Json).port
+                $curToken = (Get-Content $tokenFile -Raw).Trim()
+                $status = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$curPort/status" -Headers @{ Authorization = "Bearer $curToken" } -TimeoutSec 10
+                $lastSeenVersion = $status.agentVersion
+                if ($lastSeenVersion -eq $newVersion) { $updatedVersion = $lastSeenVersion; break }
+            } catch {
+                # Local API is briefly unreachable while nia-agent-updater.ps1
+                # snapshots/reinstalls/restarts the service -- keep polling.
+            }
+        }
+        Add-Result -Check "CHECK 8l: service reports the new version after auto-update" -Pass ([bool]$updatedVersion) -Detail "expected $newVersion, last seen $lastSeenVersion"
+
+        # Independent confirmation straight from the external updater's own
+        # diagnostic file (nia-agent-updater.ps1's $ResultFile) -- proves
+        # the *external* SYSTEM process is what made the install/health-
+        # check decision, not just that /status eventually matched by
+        # coincidence. UpdateChecker.reportExternalResult() only consumes
+        # (reads + deletes) this file on its OWN next tick -- which, with
+        # the default 4h+jitter interval and no further "check now"
+        # triggered by this test, will not happen during this run, so
+        # reading it directly off disk here is safe.
+        $resultFile = Join-Path $updateDir "last-result.json"
+        if (Test-Path $resultFile) {
+            $result = Get-Content -Path $resultFile -Raw | ConvertFrom-Json
+            $outcomeOk = ($result.outcome -eq "installed") -and ($result.version -eq $newVersion)
+            Add-Result -Check "CHECK 8m: external updater's last-result.json reports outcome=installed" -Pass $outcomeOk -Detail "outcome: $($result.outcome), version: $($result.version)"
+        } else {
+            Add-Result -Check "CHECK 8m: external updater's last-result.json reports outcome=installed" -Pass $false -Detail "$resultFile not found"
+        }
+    } finally {
+        if ($fakePlatformProc -and -not $fakePlatformProc.HasExited) {
+            Get-CimInstance Win32_Process -Filter "ParentProcessId=$($fakePlatformProc.Id)" -ErrorAction SilentlyContinue | ForEach-Object {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Stop-Process -Id $fakePlatformProc.Id -Force -ErrorAction SilentlyContinue
+        }
+        # Always grab the external updater's own log, regardless of
+        # pass/fail above -- it's the single best diagnostic for anything
+        # that goes wrong in this CHECK (sha256/publisher verification,
+        # robocopy snapshot, installer exit code, health-check polling).
+        $updaterLog = Join-Path $updateDir "updater.log"
+        if (Test-Path $updaterLog) {
+            Copy-Item -Path $updaterLog -Destination (Join-Path $ArtifactsDir "check8.updater.log") -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# ============================================================================
+# CHECK 9: silent uninstall removes the service, app folder, and shortcuts
 # (user data under %ProgramData%\NiaAgent is expected to remain -- the
 # default for a silent uninstall, matching uninstall.ps1 / installer.nsi).
 # ============================================================================
 
-Invoke-Section "CHECK 8: silent uninstall" {
+Invoke-Section "CHECK 9: silent uninstall" {
     $uninstExe = Join-Path $InstallDir "Uninstall.exe"
     $proc = Start-Process -FilePath $uninstExe -ArgumentList "/S" -Wait -PassThru
     Copy-Diagnostics -Tag "uninstall"
-    Add-Result -Check "CHECK 8a: silent uninstall exits 0" -Pass ($proc.ExitCode -eq 0) -Detail "exit code: $($proc.ExitCode)"
+    Add-Result -Check "CHECK 9a: silent uninstall exits 0" -Pass ($proc.ExitCode -eq 0) -Detail "exit code: $($proc.ExitCode)"
 
     Start-Sleep -Seconds 2
     $serviceGone = -not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)
-    Add-Result -Check "CHECK 8b: nia-agent service is gone" -Pass $serviceGone
+    Add-Result -Check "CHECK 9b: nia-agent service is gone" -Pass $serviceGone
 
     $installDirGone = -not (Test-Path $InstallDir)
-    Add-Result -Check "CHECK 8c: install folder is gone" -Pass $installDirGone
+    Add-Result -Check "CHECK 9c: install folder is gone" -Pass $installDirGone
 
     $shortcutsGone = -not (Test-Path $StartMenuDir)
-    Add-Result -Check "CHECK 8d: Start Menu shortcuts are gone" -Pass $shortcutsGone
+    Add-Result -Check "CHECK 9d: Start Menu shortcuts are gone" -Pass $shortcutsGone
 
     $dataKept = Test-Path $DataDir
-    Add-Result -Check "CHECK 8e: user data under ProgramData is kept (default silent behavior)" -Pass $dataKept
+    Add-Result -Check "CHECK 9e: user data under ProgramData is kept (default silent behavior)" -Pass $dataKept
 }
 
 # ============================================================================

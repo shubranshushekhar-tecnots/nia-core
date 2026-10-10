@@ -36,6 +36,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, rmSyn
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildUiAssetsMap } from "../shared/seaAssets.mjs";
+import { codesignBinary, notarizeAndStaple } from "./sign.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentDir = path.resolve(here, "../../");
@@ -118,10 +119,21 @@ async function main() {
     machoSegmentName: "NODE_SEA",
   });
 
-  console.log("[5/5] applying an ad-hoc code signature...");
-  // Ad-hoc (no identity, `-s -`) — lets the binary run on this machine.
-  // This is NOT Developer ID signing; see docs/pilot/install-guide.md.
+  console.log("[5/5] applying a code signature...");
+  // Ad-hoc first (no identity, `-s -`) — always applied so the binary can
+  // run on this machine / in CI even when no real credentials are
+  // configured, exactly as before. If Developer ID credentials ARE
+  // configured, codesignBinary() below re-signs over this with `--force`,
+  // and notarizeAndStaple() submits it to Apple afterwards -- see
+  // packaging/macos/sign.mjs for both.
   execFileSync("codesign", ["--sign", "-", "--force", outExePath]);
+  const reallySigned = codesignBinary(outExePath);
+  if (reallySigned) {
+    // Bare executables can't carry a stapled ticket (only app bundles/dmg/
+    // pkg can) -- notarizeAndStaple() still submits it so Gatekeeper can
+    // find the notarization record online, it just skips the staple step.
+    await notarizeAndStaple(outExePath, { isAppBundle: false });
+  }
 
   rmSync(nodeTarPath);
   rmSync(path.join(distDir, `node-v${NODE_VERSION}-darwin-arm64`), { recursive: true, force: true });

@@ -41,10 +41,17 @@
 # accounts and does not require the generic account-name-to-SID lookup
 # that broke this on a real Windows 11 host. Once that succeeds, the
 # account's SID (not its name — see below) is fetched via `sc.exe
-# showsid` and used to build the data-dir ACL (step c), and only then is
-# the service started and verified (step d). Any failure in b or c
-# removes the just-registered service rather than leaving it configured
-# to run as LocalSystem.
+# showsid` and used to build the data-dir ACL (step c) plus the update
+# handoff dir ACL (step c3), and only then is the service started and
+# verified (step d). Finally (step e) the external updater's own SYSTEM-
+# principal Scheduled Task ("NiaAgentUpdater", see packaging/windows/
+# updater/nia-agent-updater.ps1) is registered, with the service's virtual
+# account granted only run rights on it (via the Task Scheduler COM API,
+# since task permissions live in its own security descriptor, not an NTFS
+# ACL) -- the service can trigger an update but can never reconfigure or
+# delete the task that performs it. Any failure in b, c, c3, or e removes
+# the just-registered service rather than leaving it configured to run as
+# LocalSystem or without its updater task.
 #
 # CONFIRMED ON A REAL WINDOWS 11 HOST: generic Windows account-name
 # resolution (LookupAccountName, which is what WinSW's <serviceaccount>
@@ -126,10 +133,18 @@ $ServiceExe = Join-Path $InstallDir "nia-agent-service.exe"
 # ever changes.
 $ServiceAccount = "NT SERVICE\nia-agent"
 $AdministratorsSidString = "S-1-5-32-544"
-# Resolved once, up front (not per-SID-use) so both the data-dir ACL
-# (step c) and the separate local-api subfolder ACL (step c2) share the
-# exact same SID object, by well-known SID rather than by name.
+# Well-known SYSTEM SID — the external updater (packaging/windows/updater/
+# nia-agent-updater.ps1, step e below) runs as SYSTEM via a Scheduled Task,
+# not as the service's own virtual account, so it needs its own grant on
+# both the data dir (step c) and the update handoff dir (step c3) to read
+# the manifest/port/token files and write its result file.
+$SystemSidString = "S-1-5-18"
+# Resolved once, up front (not per-SID-use) so the data-dir ACL (step c),
+# the local-api subfolder ACL (step c2), and the update handoff dir ACL
+# (step c3) all share the exact same SID objects, by well-known SID
+# rather than by name.
 $administratorsSid = New-Object Security.Principal.SecurityIdentifier($AdministratorsSidString)
+$systemSid = New-Object Security.Principal.SecurityIdentifier($SystemSidString)
 
 # Every step logs to the data folder; if that folder can't be created or
 # written yet, fall back to %TEMP% so a failure is never silent.
@@ -478,7 +493,7 @@ try {
     # the master keyfile, and spool chunk files containing customer data.
     $acl = Get-Acl $DataDir
     $acl.SetAccessRuleProtection($true, $false)
-    foreach ($identity in @($serviceSid, $administratorsSid)) {
+    foreach ($identity in @($serviceSid, $administratorsSid, $systemSid)) {
         $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
         $acl.AddAccessRule($rule)
     }
@@ -492,16 +507,18 @@ try {
     Remove-ServiceQuietly
     Fail "set data directory permissions" $_.Exception.Message
 }
-Write-Log "step c) locked down $DataDir to $ServiceAccount and Administrators"
+Write-Log "step c) locked down $DataDir to $ServiceAccount, Administrators, and SYSTEM"
 
 try {
     # Step c2) The local API's token and port files get their own ACL,
     # separate from the rest of $DataDir: service (full), Administrators
-    # (full), and read-only for the SID of whoever is running this
-    # installer right now. A non-elevated process under an admin account
-    # carries a UAC-filtered token where Administrators is deny-only, so
-    # granting that group alone would force a desktop app to elevate just
-    # to read its own agent's token/port -- granting the specific user SID
+    # (full), SYSTEM (full — so the external updater's health check, step
+    # e below, can read the port/token files to call its own GET /status),
+    # and read-only for the SID of whoever is running this installer right
+    # now. A non-elevated process under an admin account carries a
+    # UAC-filtered token where Administrators is deny-only, so granting
+    # that group alone would force a desktop app to elevate just to read
+    # its own agent's token/port -- granting the specific user SID
     # (present in a token regardless of UAC filtering) avoids that without
     # widening the main data directory's ACL at all. The installing user's
     # resolved name is also recorded in a marker file so `nia-agent doctor`
@@ -513,9 +530,11 @@ try {
     $localApiAcl.SetAccessRuleProtection($true, $false)
     $serviceFullControl = New-Object Security.AccessControl.FileSystemAccessRule($serviceSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
     $adminsFullControl = New-Object Security.AccessControl.FileSystemAccessRule($administratorsSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $systemFullControl = New-Object Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
     $installingUserReadOnly = New-Object Security.AccessControl.FileSystemAccessRule($installingUserSid, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")
     $localApiAcl.AddAccessRule($serviceFullControl)
     $localApiAcl.AddAccessRule($adminsFullControl)
+    $localApiAcl.AddAccessRule($systemFullControl)
     $localApiAcl.AddAccessRule($installingUserReadOnly)
     Set-Acl $LocalApiDir $localApiAcl
 
@@ -526,7 +545,31 @@ try {
     Remove-ServiceQuietly
     Fail "set local-api directory permissions" $_.Exception.Message
 }
-Write-Log "step c2) locked down $LocalApiDir to $ServiceAccount (full), Administrators (full), and $installingUserName (read-only)"
+Write-Log "step c2) locked down $LocalApiDir to $ServiceAccount (full), Administrators (full), SYSTEM (full), and $installingUserName (read-only)"
+
+try {
+    # Step c3) The external-updater handoff directory ($DataDir\update) —
+    # written by the agent process (service account), read + written by
+    # the SYSTEM-run updater task (nia-agent-updater.ps1, step e below).
+    # Same FullControl-to-all-three pattern as the rest of this script:
+    # no need for the finer-grained read-only split used on local-api,
+    # since both identities here are already trusted to read/write the
+    # rest of $DataDir anyway.
+    $UpdateDir = Join-Path $DataDir "update"
+    New-Item -ItemType Directory -Force -Path $UpdateDir | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $UpdateDir "downloads") | Out-Null
+    $updateAcl = Get-Acl $UpdateDir
+    $updateAcl.SetAccessRuleProtection($true, $false)
+    foreach ($identity in @($serviceSid, $administratorsSid, $systemSid)) {
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+        $updateAcl.AddAccessRule($rule)
+    }
+    Set-Acl $UpdateDir $updateAcl
+} catch {
+    Remove-ServiceQuietly
+    Fail "set update handoff directory permissions" $_.Exception.Message
+}
+Write-Log "step c3) locked down $UpdateDir to $ServiceAccount, Administrators, and SYSTEM"
 
 # Step d) Start, then verify it is actually running under the virtual account.
 try {
@@ -554,6 +597,44 @@ if (-not $startNameLine -or $startNameLine -notmatch [regex]::Escape($ServiceAcc
     Fail "verify service account" "sc.exe qc did not report SERVICE_START_NAME as $ServiceAccount (got: $startNameLine)"
 }
 Write-Log "step d) verified nia-agent is Running (stable for 3s) under $ServiceAccount"
+
+# Step e) Register the external updater's own Scheduled Task (SYSTEM
+# principal, run on demand only -- no triggers) and restrict it so this
+# service's own virtual account can only RUN it, never reconfigure or
+# delete it. Scheduled Task permissions live in the task's own security
+# descriptor (SDDL), not in NTFS ACLs, so this uses the Task Scheduler
+# COM API directly rather than Set-Acl. -Force on Register-ScheduledTask
+# makes this idempotent across upgrades (replaces the prior definition
+# in place, same as the rest of this script's upgrade-in-place design).
+try {
+    $updaterScript = Join-Path $InstallDir "updater\nia-agent-updater.ps1"
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$updaterScript`""
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
+    $taskDefinition = New-ScheduledTask -Action $action -Principal $principal -Settings $settings
+    Register-ScheduledTask -TaskName "NiaAgentUpdater" -InputObject $taskDefinition -Force | Out-Null
+
+    # Restrict the service account to "run only": append a single ACE
+    # granting GR (Generic Read) + GX (Generic Execute -- the right that
+    # covers ITaskService::Run) to the service SID, on top of whatever
+    # owner/DACL entries Register-ScheduledTask already set up (SYSTEM +
+    # Administrators, full control). TASK_READ | TASK_EXECUTE is exactly
+    # what `schtasks /run` (called from updateInstaller.ts's handoff) needs
+    # and no more -- it cannot reconfigure, disable, or delete the task.
+    $schedService = New-Object -ComObject "Schedule.Service"
+    $schedService.Connect()
+    $rootFolder = $schedService.GetFolder("\")
+    $task = $rootFolder.GetTask("NiaAgentUpdater")
+    $currentSddl = $task.GetSecurityDescriptor(0x4)  # DACL_SECURITY_INFORMATION
+    $runOnlyAce = "(A;;GRGX;;;$serviceSidString)"
+    if ($currentSddl -notlike "*$runOnlyAce*") {
+        $task.SetSecurityDescriptor("$currentSddl$runOnlyAce", 0)
+    }
+} catch {
+    Remove-ServiceQuietly
+    Fail "register external updater scheduled task" $_.Exception.Message
+}
+Write-Log "step e) registered Scheduled Task 'NiaAgentUpdater' (SYSTEM, run-on-demand) with run-only rights for $ServiceAccount"
 
 if ($serviceWasRunning) {
     Write-Host "upgraded and restarted nia-agent"

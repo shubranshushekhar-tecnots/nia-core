@@ -19,10 +19,31 @@ on:
 jobs:
   smoke:
     runs-on: windows-latest
-    timeout-minutes: 15
+    # 15 min covered checks 1-7/9 alone; CHECK 8 (auto-update) adds a second
+    # @nia/agent build + SEA + NSIS rebuild plus polling for a service
+    # restart -- budgeted ~5 extra minutes per the Phase 6 plan.
+    timeout-minutes: 20
     defaults:
       run:
         shell: pwsh
+    # Signing here is opportunistic, not gated (this is a dev/smoke build,
+    # never `build-release.mjs --release`): if these secrets exist in the
+    # repo, build-sea.mjs/build-installer.mjs sign the exe "for free" as an
+    # extra confidence check (costs seconds); if any are unset (the common
+    # case for forks/local reruns), they resolve to empty strings and
+    # packaging/windows/sign.mjs's existing no-op path kicks in exactly as
+    # it does for any other unsigned dev build -- see that file for what
+    # each variable does and which pair (Azure Trusted Signing vs. .pfx)
+    # takes precedence.
+    env:
+      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+      AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+      AZURE_TRUSTED_SIGNING_CERT_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERT_PROFILE }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 

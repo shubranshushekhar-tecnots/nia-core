@@ -212,6 +212,36 @@ set real Razorpay keys + plan IDs and `PAYMENTS_ENABLED=true` in `.env`,
 then redeploy — `apps/api` validates all five `RAZORPAY_*` vars are
 present at boot whenever the flag is true.
 
+## Mail
+
+Mail defaults to `MAIL_TRANSPORT=log` — every outgoing email (login code,
+email verification, password reset, "password changed") is just
+`console.log`'d as `{to, subject}` and nothing is actually sent, so the
+stack boots with zero mail config. apps/worker is the process that actually
+sends (it consumes the `send_email` BullMQ job apps/web enqueues); apps/api
+only reads the same vars for its `mail:test` CLI command.
+
+To send real email, set `MAIL_TRANSPORT` to one of:
+- `smtp` — fill in `SMTP_HOST`/`SMTP_PORT`/`SMTP_SECURE`/`SMTP_USER`/
+  `SMTP_PASS`/`SMTP_FROM`.
+- `graph` — Microsoft Graph via client-credentials OAuth. Fill in
+  `MS_GRAPH_TENANT_ID`/`MS_GRAPH_CLIENT_ID`/`MS_GRAPH_CLIENT_SECRET`/
+  `MS_GRAPH_SENDER` (an app registration with `Mail.Send` application
+  permission, admin-consented, and `MS_GRAPH_SENDER` a real mailbox that
+  app registration is allowed to send as).
+
+Whichever transport is set, the *other* transport's vars stay optional
+(leave them empty) — `apps/api/src/env.ts` and `apps/worker/src/env.ts`
+only require the group matching the configured `MAIL_TRANSPORT`.
+
+Go-live check, from a machine that can reach apps/api:
+```
+pnpm --filter @nia/api mail:test you@example.com
+```
+This bypasses the queue and sends synchronously, so a misconfigured
+transport fails immediately in the terminal instead of silently retrying
+in the background.
+
 ## Secret storage master key (`NIA_SECRET_MASTER_KEY`)
 
 Every connection credential and write-grant credential (`nia_secrets`
@@ -457,15 +487,25 @@ its name, OS, size, and SHA-256 — written by `pnpm --filter @nia/agent
 generate-manifest` after building all three platform packages). It is
 never committed to the repo (gitignored, like every other build output).
 
-`niacore-web`'s `AGENT_DOWNLOADS_BASE_URL` env var is the one setting that
-decides where both the manifest and the files themselves come from
-(`apps/web/src/lib/downloads/manifest.ts`):
-- **Unset** (local dev) — served by a dev-only route straight out of
-  `apps/agent/packaging/{windows,macos,linux}/dist/`, refusing any
-  request for a file name not listed in `manifest.json`.
+`AGENT_DOWNLOADS_BASE_URL` is the one setting that decides where both the
+manifest and the files themselves come from — read identically by
+**both** `niacore-web` (`apps/web/src/lib/downloads/manifest.ts`, the
+public downloads page) and `niacore-agent-bridge`
+(`services/agent-bridge/src/app.ts`'s `GET /agent-api/update`, a paired
+agent's own auto-update check): both must be set to the exact same
+value, since both resolve the same manifest/files.
+- **Unset** (local dev) — `niacore-web` serves a dev-only route straight
+  out of `apps/agent/packaging/{windows,macos,linux}/dist/`, refusing
+  any request for a file name not listed in `manifest.json`;
+  `niacore-agent-bridge` points agents at that same `niacore-web` dev
+  route instead of serving bytes itself (`AGENT_DOWNLOADS_DEV_WEB_URL`,
+  default `http://localhost:3100`, rarely needs overriding).
 - **Set** (production) — points at the address `niacore-proxy`'s
   `/downloads/agent/` location (`deploy/nginx/nginx.conf`) serves,
-  e.g. `https://<public host>/downloads/agent`.
+  e.g. `https://<public host>/downloads/agent`. Required before the
+  first real agent is ever paired: left unset in production, a paired
+  agent's update check gets a 404 ("no update available") forever,
+  rather than a working auto-update path.
 
 At release time, after running each platform's `build-bundle`/
 `build-installer` script and `pnpm --filter @nia/agent generate-manifest`,
@@ -478,8 +518,10 @@ copy these four files into the directory mounted at nginx's
 - `apps/agent/packaging/macos/dist/nia-agent-macos-arm64-<version>.zip`
 - `apps/agent/packaging/linux/dist/nia-agent-linux-<version>.tar.gz`
 
-Set `AGENT_DOWNLOADS_BASE_URL` on `niacore-web` to that same public
-`/downloads/agent` address and redeploy.
+Set `AGENT_DOWNLOADS_BASE_URL` (the single root `.env` var — both
+`niacore-web` and `niacore-agent-bridge` read it via their shared
+`env_file: .env`, see `.env.production.example`) to that same public
+`/downloads/agent` address and redeploy both services.
 
 ## Network requirement: static outbound IP for connectors
 

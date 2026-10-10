@@ -12,16 +12,24 @@
 //   node apps/agent/packaging/windows/build-sea.mjs
 //   node apps/agent/packaging/windows/build-bundle.mjs
 //
+// --unsigned-test-build (passed by build-release.mjs's --release
+// --allow-unsigned gate, never by a dev directly) stages an
+// UNSIGNED-TEST-BUILD.txt marker that nia-agent-updater.ps1 checks for to
+// skip its own Authenticode publisher-pinning check on this build's
+// self-updates.
+//
 // Produces apps/agent/packaging/windows/dist/nia-agent-windows-<version>.zip
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, rmSync, cpSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getExpectedPublisherSubject } from "./sign.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentDir = path.resolve(here, "../../");
 const distDir = path.join(here, "dist");
+const unsignedTestBuild = process.argv.slice(2).includes("--unsigned-test-build");
 
 // Pinned WinSW release. The x64 binary's SHA-256 below was verified by
 // directly downloading this exact asset from this exact URL and running
@@ -59,6 +67,24 @@ async function main() {
   copyFileSync(path.join(here, "nia-agent-service.xml"), path.join(stageDir, "nia-agent-service.xml"));
   copyFileSync(path.join(here, "install.ps1"), path.join(stageDir, "install.ps1"));
   copyFileSync(path.join(here, "uninstall.ps1"), path.join(stageDir, "uninstall.ps1"));
+  // Same external-updater staging as build-installer.mjs -- install.ps1's
+  // step e) registers the "NiaAgentUpdater" Scheduled Task pointing at
+  // this folder, so a zip-bundle install needs it just as much as an NSIS
+  // install does.
+  cpSync(path.join(here, "updater"), path.join(stageDir, "updater"), { recursive: true });
+  const expectedPublisherSubject = getExpectedPublisherSubject();
+  if (expectedPublisherSubject) {
+    writeFileSync(
+      path.join(stageDir, "expected-publisher.json"),
+      JSON.stringify({ subject: expectedPublisherSubject }, null, 2),
+    );
+  }
+  if (unsignedTestBuild) {
+    writeFileSync(
+      path.join(stageDir, "UNSIGNED-TEST-BUILD.txt"),
+      `This build was produced with --release --allow-unsigned and is NOT signed.\nDo not distribute. Built ${new Date().toISOString()}.\n`,
+    );
+  }
   writeFileSync(
     path.join(stageDir, "VERSION.txt"),
     `Nia Core Agent ${version}\nWinSW ${WINSW_VERSION}\nBuilt ${new Date().toISOString()}\n`,

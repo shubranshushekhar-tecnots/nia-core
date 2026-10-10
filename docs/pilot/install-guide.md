@@ -48,10 +48,13 @@ or check in from the command line. To uninstall, use **Settings → Apps →
 Nia Core Agent → Uninstall** — it asks whether to keep or delete the
 agent's stored configuration.
 
-> **To be confirmed on Windows:** the exact install experience, including
-> any Windows Defender/SmartScreen prompt on first run (the installer is
-> not yet code-signed), has not been verified on a real Windows machine
-> as of this writing.
+> **Code signing.** Release builds are signed (Azure Trusted Signing), so
+> a signed installer should not trigger a Windows SmartScreen warning. If
+> you do see **"Windows protected your PC"** on a download Nia actually
+> gave you, it's almost always SmartScreen's reputation database not
+> having caught up yet (normal for the first few days after a brand-new
+> release) — click **More info → Run anyway**. If you weren't expecting
+> this download, don't run it.
 
 ### macOS (Apple Silicon only)
 
@@ -66,16 +69,17 @@ login or if it ever stops unexpectedly. Open the agent's own screen any
 time with `./nia-agent open` (installed to the folder `install.sh`
 printed at the end).
 
-> **Security warning — unsigned build.** This build is only ad-hoc
-> signed, **not** signed with an Apple Developer ID. On any other Mac,
-> Gatekeeper will refuse to run it (*"nia-agent" cannot be opened because
-> the developer cannot be verified*). To run it anyway for testing: open
-> **System Settings → Privacy & Security** after the first blocked
-> attempt and click **Open Anyway**, or run
+> **Code signing & notarization.** Release builds are signed with a real
+> Apple Developer ID and notarized by Apple, so Gatekeeper should let them
+> run without a warning (the very first launch may pause briefly while
+> macOS checks the notarization ticket online). If you instead see
+> *"nia-agent" cannot be opened because the developer cannot be
+> verified"*, confirm this download actually came from Nia — it means
+> you're on an unsigned test build, not a release one. To run an unsigned
+> test build anyway: open **System Settings → Privacy & Security** after
+> the first blocked attempt and click **Open Anyway**, or run
 > `xattr -d com.apple.quarantine ./nia-agent` before installing.
-> **A build for customers needs real Developer ID signing and Apple
-> notarization — neither has been done yet; do not send this unsigned
-> build to a customer.**
+> **Never send an unsigned build to a customer.**
 
 To uninstall: `./uninstall.sh` (add `--purge` to also remove stored
 configuration and logs).
@@ -221,6 +225,32 @@ nia-agent status
 
 Reports how long the agent has been running, whether it is paired, when
 it last checked in, and the health of each job. Run it any time.
+
+## Updates
+
+The agent checks for a newer version by itself every few hours. When one
+is available it downloads it, verifies its checksum, and installs it
+with no action needed from you in the common case — it never installs
+mid-job, and it keeps the previous installer on hand so it can put it
+back automatically if the new version ever fails its own post-install
+health check.
+
+- **Windows, Linux, and the default macOS install** (no `sudo`): fully
+  automatic — the service restarts itself on the new version.
+- **macOS, system-wide install** (`install.sh --system`): the new
+  version is downloaded and verified automatically, but installing it
+  needs an administrator password, so the agent's own screen instead
+  shows **"Update is ready to install"** — open it and approve the one
+  prompt.
+
+To check right now instead of waiting, or to turn automatic updates off:
+open the agent's own screen → **Settings** → **Updates** (**Check now**
+button, **Automatic updates** toggle). `nia-agent status` also reports a
+pending update if one hasn't installed yet.
+
+If an update ever seems stuck — `nia-agent status` keeps reporting the
+old version for more than a day after you know a new one shipped — see
+`docs/pilot/runbook.md`'s "Updates" section.
 
 ## See also
 - `docs/pilot/runbook.md` — what each job status and error means, and

@@ -22,7 +22,15 @@ mac:
   target: dir
   icon: assets/app-icon.icns
   category: public.app-category.utilities
-  hardenedRuntime: false
+  # Signing itself happens later, explicitly, in packaging/macos/build-bundle.mjs
+  # (via packaging/macos/sign.mjs) -- NOT here, so it stays in one place
+  # alongside the SEA binary's own signing. hardenedRuntime/entitlements
+  # must still be true/set here though: they're baked into the unpacked
+  # app's Info.plist/structure at `electron-builder package` time, not
+  # something a later `codesign` pass can retroactively add.
+  hardenedRuntime: true
+  entitlements: ../agent/packaging/macos/entitlements.plist
+  entitlementsInherit: ../agent/packaging/macos/entitlements.plist
 
 linux:
   target: dir

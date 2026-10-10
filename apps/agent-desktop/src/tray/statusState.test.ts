@@ -43,4 +43,27 @@ describe("mapStatusToConnectionState", () => {
       label: "Connection problem",
     });
   });
+
+  it("appends an 'update available' suffix to a green label when a pending update is detected", () => {
+    expect(
+      mapStatusToConnectionState({ paired: true, online: true, pendingUpdate: { version: "2.0.0", readyToInstall: false } }),
+    ).toEqual({
+      color: "green",
+      label: "Connected -- update 2.0.0 available",
+    });
+  });
+
+  it("appends a 'ready to install' suffix to a green label when the pending update is downloaded", () => {
+    expect(
+      mapStatusToConnectionState({
+        paired: true,
+        online: true,
+        platformUrl: "https://dev.niaconnector.com",
+        pendingUpdate: { version: "2.0.0", readyToInstall: true },
+      }),
+    ).toEqual({
+      color: "green",
+      label: "Connected to https://dev.niaconnector.com -- update 2.0.0 ready to install",
+    });
+  });
 });

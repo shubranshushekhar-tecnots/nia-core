@@ -116,3 +116,49 @@ export function localApiTokenFilePath(dir = defaultHomeDir()): string {
 export function localApiInstallingUserFilePath(dir = defaultHomeDir()): string {
   return path.join(localApiDir(dir), "installing-user.json");
 }
+
+/**
+ * Phase 6 polish — auto-update's rollback cache (macOS/Linux only as of
+ * the Windows external-updater redesign below — Windows now hands off
+ * to `nia-agent-updater.ps1`, which does its own directory-snapshot
+ * rollback and never reads this). `updateInstaller.ts` copies the
+ * installer it just ran here, right after a successful install, so a
+ * later failed health check has a known-good package to re-run
+ * (`UpdateChecker.rollback`) without re-downloading anything. Holds at
+ * most one cached installer at a time — a fresh successful install
+ * overwrites whatever was cached before it.
+ */
+export function previousInstallerCacheDir(dir = defaultHomeDir()): string {
+  return path.join(dir, "update-cache");
+}
+
+/**
+ * Windows only — the handoff directory between the in-process
+ * `UpdateChecker` (running as the low-privilege `NT SERVICE\nia-agent`
+ * account) and the external `NiaAgentUpdater` SYSTEM-principal Scheduled
+ * Task (`packaging/windows/updater/nia-agent-updater.ps1`), which does
+ * the actual privileged install + independent sha256/publisher
+ * verification + directory-snapshot rollback + health check + tray
+ * relaunch, entirely outside the agent's own process tree. Needs its
+ * own SYSTEM + service-SID ACL (`install.ps1`) distinct from the rest
+ * of the data dir, since the SYSTEM-run task must be able to read/write
+ * here too — see install.ps1's step c3.
+ */
+export function updateHandoffDir(dir = defaultHomeDir()): string {
+  return path.join(dir, "update");
+}
+
+/** Where `updateInstaller.ts` copies a freshly-downloaded installer before handing off — the external updater reads from here, never from the temp dir `UpdateChecker.runOnce` originally downloaded into (that temp dir is deleted by `UpdateChecker` right after `install()` returns). */
+export function updateHandoffDownloadsDir(dir = defaultHomeDir()): string {
+  return path.join(updateHandoffDir(dir), "downloads");
+}
+
+/** The JSON request file `updateInstaller.ts` writes and `nia-agent-updater.ps1` consumes (then deletes) — `{ version, filePath, sha256, requestedAt }`. Its mere presence is also how the updater script tells "a real request is pending" apart from "task was triggered with nothing to do". */
+export function pendingUpdateRequestFilePath(dir = defaultHomeDir()): string {
+  return path.join(updateHandoffDir(dir), "pending-update.json");
+}
+
+/** Written by `nia-agent-updater.ps1` after it finishes (installed+healthy, installed+rolled-back, or verification-failed) — `UpdateChecker` reads and clears this on its next tick purely for logging/diagnostics; the install/rollback/health-check decision itself has already been made externally by the time this file appears. */
+export function updateHandoffResultFilePath(dir = defaultHomeDir()): string {
+  return path.join(updateHandoffDir(dir), "last-result.json");
+}

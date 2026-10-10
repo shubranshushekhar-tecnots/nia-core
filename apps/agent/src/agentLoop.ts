@@ -1,6 +1,6 @@
 import { runJob as runJobCommand } from "./cli/runJobCommand.js";
 import { defaultHomeDir, defaultLogDir } from "./config/paths.js";
-import { findConnection, loadConfig } from "./config/store.js";
+import { findConnection, isAutoUpdateEnabled, loadConfig } from "./config/store.js";
 import type { LinkConfig } from "./config/types.js";
 import { buildAgentConnectionReports } from "./link/agentConnectionReports.js";
 import { CheckInLoop } from "./link/checkInLoop.js";
@@ -13,6 +13,9 @@ import { SetupManager } from "./link/setupManager.js";
 import { TaskResultsClient } from "./link/taskResultsClient.js";
 import { TaskRunner } from "./link/taskRunner.js";
 import { HttpAgentTransport } from "./link/transport.js";
+import { UpdateChecker } from "./link/updateChecker.js";
+import { HttpUpdateClient, type AgentOs } from "./link/updateClient.js";
+import { createUpdateInstaller } from "./link/updateInstaller.js";
 import { WorkflowsClient } from "./link/workflowsClient.js";
 import { Logger } from "./ops/logger.js";
 import { buildMonitoringHeartbeatPayload, MonitoringHeartbeatScheduler, type JobHeartbeatSource } from "./ops/monitoringHeartbeat.js";
@@ -33,9 +36,16 @@ import { buildDestinationsRoutes } from "./localApi/routes/destinations.js";
 import { buildLogsRoutes } from "./localApi/routes/logs.js";
 import { buildDiagnosticsRoutes } from "./localApi/routes/diagnostics.js";
 import { buildWorkflowsRoutes } from "./localApi/routes/workflows.js";
+import { buildUpdateRoutes } from "./localApi/routes/update.js";
 import { buildOtcRoutes, buildUiSessionRoutes } from "./localApi/routes/uiAuth.js";
 import { mirrorRoutesForUi } from "./localApi/uiProxyRoutes.js";
 import { buildUiStaticHandler } from "./localApi/uiStaticHandler.js";
+
+function detectAgentOs(): AgentOs {
+  if (process.platform === "win32") return "windows";
+  if (process.platform === "darwin") return "macos";
+  return "linux";
+}
 
 export interface AgentLoopOptions {
   dir?: string;
@@ -96,6 +106,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     getWorkflowsClient: () => linkSession?.workflowsClient,
     getPlatformUrl: () => linkSession?.platformUrl,
     scheduler,
+    getUpdateChecker: () => linkSession?.updateChecker,
   };
   // Built once and reused by both the bearer originals and their
   // `/ui/api/*` mirrors below, so e.g. `/pair`'s rate limiter is one
@@ -114,6 +125,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     ...buildLogsRoutes(localApiDeps),
     ...buildDiagnosticsRoutes(localApiDeps),
     ...buildWorkflowsRoutes(localApiDeps),
+    ...buildUpdateRoutes(localApiDeps),
   ];
   const localApiRoutes: RouteDefinition[] = [
     ...mirrorableRoutes,
@@ -160,6 +172,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
     }
     linkSession = session;
     session.checkInLoop.start();
+    session.updateChecker.start();
   }
 
   await applyLink(loadConfig(dir).link);
@@ -200,6 +213,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<void> {
 interface LinkSession {
   checkInLoop: CheckInLoop;
   workflowsClient: WorkflowsClient;
+  updateChecker: UpdateChecker;
   platformUrl: string;
   stop: () => Promise<void>;
 }
@@ -226,6 +240,19 @@ function buildLinkSession(
   const setupClient = new SetupClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
   const setupManager = new SetupManager({ setupClient, logger, dir });
   const workflowsClient = new WorkflowsClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey });
+  const updateClient = new HttpUpdateClient({ platformUrl: link.platformUrl, agentKey: secret.agentKey, os: detectAgentOs() });
+  const updateInstaller = createUpdateInstaller(dir, logger);
+  const updateChecker = new UpdateChecker({
+    client: updateClient,
+    agentVersion,
+    logger,
+    isJobRunning: () => scheduler.isAnyRunning(),
+    isAutoUpdateEnabled: () => isAutoUpdateEnabled(loadConfig(dir)),
+    install: (filePath, info) => updateInstaller.install(filePath, info),
+    waitForHealthy: (expectedVersion) => updateInstaller.waitForHealthy(expectedVersion),
+    rollback: () => updateInstaller.rollback(),
+    reportExternalResult: () => updateInstaller.reportExternalResult?.() ?? Promise.resolve(),
+  });
   const checkInLoop = new CheckInLoop({
     transport,
     agentVersion,
@@ -250,14 +277,17 @@ function buildLinkSession(
   return {
     checkInLoop,
     workflowsClient,
+    updateChecker,
     platformUrl: link.platformUrl,
     stop: async () => {
+      updateChecker.stop();
       await checkInLoop.stop();
       await transport.close();
       await taskResultsClient.close();
       await setupClient.close();
       await uploadClient.close();
       await workflowsClient.close();
+      await updateClient.close();
     },
   };
 }

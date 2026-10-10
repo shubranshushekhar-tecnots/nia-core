@@ -100,11 +100,19 @@ export interface JobState {
   durationMs?: number;
 }
 
+/** Surfaced whenever `UpdateChecker` has detected a newer build (Phase 6 polish). `undefined` once up to date / never checked. */
+export interface PendingUpdate {
+  version: string;
+  /** True once downloaded + checksum-verified but install was deliberately deferred (e.g. needs elevation) -- show "click to finish installing". */
+  readyToInstall: boolean;
+}
+
 interface StatusResponseBase {
   agentVersion: string;
   startedAt?: string;
   uptimeSeconds?: number;
   jobs: Record<string, JobState>;
+  pendingUpdate?: PendingUpdate;
 }
 
 export type StatusResponse =
@@ -120,6 +128,27 @@ export type StatusResponse =
 
 export function getStatus(): Promise<StatusResponse> {
   return request<StatusResponse>("/status");
+}
+
+// ---- auto-update ----
+
+export interface AutoUpdateSettings {
+  enabled: boolean;
+}
+
+export function getAutoUpdateSettings(): Promise<AutoUpdateSettings> {
+  return request<AutoUpdateSettings>("/update/settings");
+}
+
+export function setAutoUpdateSettings(enabled: boolean): Promise<AutoUpdateSettings> {
+  return postJson<AutoUpdateSettings>("/update/settings", { enabled });
+}
+
+export type CheckForUpdateResult = { triggered: true } | { triggered: false; reason: string };
+
+/** Triggers one `UpdateChecker.tick()` immediately. `triggered:false` whenever unpaired (no live checker). */
+export function checkForUpdateNow(): Promise<CheckForUpdateResult> {
+  return postJson<CheckForUpdateResult>("/update/check", {});
 }
 
 // ---- pairing ----

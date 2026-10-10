@@ -354,6 +354,14 @@ export class JobScheduler {
     return this.runtimes.get(jobId)?.running ?? false;
   }
 
+  /** True while ANY job is in flight — used by updateChecker.ts (Phase 6 polish) to defer an install rather than disrupt a running sync. */
+  isAnyRunning(): boolean {
+    for (const runtime of this.runtimes.values()) {
+      if (runtime.running) return true;
+    }
+    return false;
+  }
+
   runNow(jobId: string, forceReplace: boolean, extra?: RunNowExtra): { ok: true } | { ok: false; error: string } {
     let runtime = this.runtimes.get(jobId);
     // A job just added/updated via SetupManager (e.g. right after a

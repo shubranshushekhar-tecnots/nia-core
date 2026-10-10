@@ -29,6 +29,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { codesignBinary, notarizeAndStaple } from "./sign.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentDir = path.resolve(here, "../../");
@@ -64,7 +65,15 @@ async function main() {
     console.log("[2/3] --no-desktop passed -- skipping the desktop app shell (service-only build)...");
   } else {
     console.log("[2/3] staging the desktop app shell (apps/agent-desktop)...");
-    stageAgentDesktop(stageDir);
+    const notarized = await stageAgentDesktop(stageDir);
+    if (notarized) {
+      // install.sh checks for this sentinel (alongside "Nia Agent.app" in
+      // the zip, not inside the bundle) to decide whether it's safe to
+      // skip its own `xattr -dr com.apple.quarantine` workaround -- a
+      // stapled, notarized bundle should rely on Gatekeeper/the stapled
+      // ticket instead; an unsigned dev build still needs the workaround.
+      writeFileSync(path.join(stageDir, ".notarized"), "");
+    }
   }
 
   console.log("[3/3] zipping bundle...");
@@ -87,7 +96,7 @@ async function main() {
 // service-only bundle (dev builds only); install.sh already only copies
 // "Nia Agent.app" into /Applications when it's present, so a --no-desktop
 // bundle is still a working, service-only install.
-function stageAgentDesktop(stageDir) {
+async function stageAgentDesktop(stageDir) {
   const desktopBuildDir = path.join(agentDir, "..", "agent-desktop", "dist-electron");
   if (!existsSync(desktopBuildDir)) {
     throw new Error(
@@ -104,8 +113,17 @@ function stageAgentDesktop(stageDir) {
   if (!existsSync(src)) {
     throw new Error(`expected ${src} -- check apps/agent-desktop/electron-builder.yml's productName`);
   }
-  cpSync(src, path.join(stageDir, "Nia Agent.app"), { recursive: true });
+  const dest = path.join(stageDir, "Nia Agent.app");
+  cpSync(src, dest, { recursive: true });
   console.log(`  staged desktop app shell from ${src}`);
+
+  // --deep: sign nested frameworks/helper processes first, then the outer
+  // bundle -- the standard order for an Electron hardened-runtime app
+  // bundle (a handful of distinct Mach-O binaries inside Contents/, not
+  // just the one outer executable the SEA builds sign).
+  const signed = codesignBinary(dest, { deep: true });
+  if (!signed) return false;
+  return notarizeAndStaple(dest, { isAppBundle: true });
 }
 
 function sha256File(filePath) {

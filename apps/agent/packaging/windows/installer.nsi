@@ -188,6 +188,31 @@ Section "Install" SEC01
   File "${STAGE_DIR}\uninstall.ps1"
   File "${STAGE_DIR}\VERSION.txt"
 
+  ; The external updater (packaging/windows/updater/nia-agent-updater.ps1,
+  ; registered as its own SYSTEM-principal Scheduled Task by install.ps1's
+  ; step e) always ships -- unlike NiaAgentDesktop below, build-installer.mjs
+  ; stages this unconditionally, so no compile-time guard is needed here.
+  SetOutPath "$INSTDIR\updater"
+  File /r "${STAGE_DIR}\updater\*.*"
+  SetOutPath "$INSTDIR"
+
+  ; Only staged when a publisher subject was actually configured for this
+  ; build (see sign.mjs's getExpectedPublisherSubject()) -- an unsigned dev
+  ; build has no file here at all, same HAS_DESKTOP-style compile-time
+  ; define pattern as below, since STAGE_DIR (and therefore whether this
+  ; file exists) is a build-time-only fact.
+  !ifdef HAS_EXPECTED_PUBLISHER
+  File "${STAGE_DIR}\expected-publisher.json"
+  !endif
+
+  ; Same build-time-only-fact reasoning as HAS_EXPECTED_PUBLISHER above --
+  ; only staged for a deliberate `--release --allow-unsigned` test build
+  ; (see build-release.mjs), so nia-agent-updater.ps1 knows to skip its
+  ; Authenticode publisher check for THIS build's self-updates.
+  !ifdef HAS_UNSIGNED_MARKER
+  File "${STAGE_DIR}\UNSIGNED-TEST-BUILD.txt"
+  !endif
+
   ; The desktop shell (apps/agent-desktop) is staged by build-installer.mjs
   ; as a NiaAgentDesktop\ subfolder -- required by default there (missing
   ; output is a hard build-time error), staged here only when present

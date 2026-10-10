@@ -1,6 +1,8 @@
 import Fastify from "fastify";
 import { z } from "zod";
 import { gunzipSync } from "node:zlib";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { withServiceRole } from "@nia/db";
 import { decryptSecret, parseMasterKey, type EncryptedSecret } from "@nia/secrets";
 import {
@@ -10,6 +12,10 @@ import {
   MIN_AGENT_VERSION,
   GraphDoc,
   getConnectorManifest,
+  getDownloadsBaseUrl,
+  loadDownloadManifest,
+  findPrimaryManifestFile,
+  type AgentOs,
   type GraphDoc as GraphDocType,
   type GraphNode as GraphNodeType,
 } from "@nia/schemas";
@@ -18,6 +24,24 @@ import { generateAgentKey, sha256Hex } from "./crypto.js";
 import { DbAgentTransport, type AgentTransport } from "./transport.js";
 import { taskBus } from "./taskBus.js";
 import { batchKeyFor, putCachedBatch } from "./readAheadCache.js";
+
+// Local fallback (AGENT_DOWNLOADS_BASE_URL unset, dev only) for
+// GET /agent-api/update below — mirrors apps/web/src/lib/downloads/
+// manifest.ts's PACKAGING_ROOT, but computed from this file's own path
+// (not process.cwd()) since agent-bridge may be started from the repo
+// root or from services/agent-bridge depending on how it's invoked.
+// services/agent-bridge/src/app.ts -> ../../../apps/agent/packaging;
+// the compiled dist/app.js is at the same relative depth (dist mirrors
+// src 1:1), so this resolves identically either way.
+const AGENT_BRIDGE_PACKAGING_ROOT = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+  "apps",
+  "agent",
+  "packaging",
+);
 
 /**
  * Thrown by a route handler to force a specific HTTP status. Fastify's
@@ -672,6 +696,60 @@ export function buildApp(transport: AgentTransport = new DbAgentTransport(dbPool
     }));
 
     return { tasks, acknowledgedRunIds, setups };
+  });
+
+  // Phase 6 polish — auto-update. Authenticated the same way as check-in
+  // (Bearer agent key, no acting user); a revoked/unknown key is treated
+  // the same as a missing one (401), not a 404, so this never becomes an
+  // oracle for "is this key valid" vs "is this key known at all".
+  //
+  // Reads the exact same manifest.json shape apps/web/src/lib/downloads/
+  // manifest.ts resolves for browser downloads (shared loader in
+  // @nia/schemas/downloadManifest.ts) — base-url fetch in production,
+  // local apps/agent/packaging/manifest.json fallback in dev. An unknown
+  // `os`, or a manifest with no primary build for it, is a 404 (nothing
+  // to update to), never a 500 — a caller can always tell "no build for
+  // you" apart from "something broke".
+  app.get<{ Querystring: { os?: string; arch?: string; version?: string } }>("/agent-api/update", async (req) => {
+    const authHeader = req.headers.authorization ?? "";
+    const agentKey = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
+    if (!agentKey) throw new HttpError(401, "missing agent key");
+    const agentKeyHash = sha256Hex(agentKey);
+    const { rows: agentRows } = await withServiceRole(dbPool, (db) =>
+      db.query(`select id from public.platform_agents where agent_key_hash = $1 and status <> 'revoked'`, [agentKeyHash]),
+    );
+    if (agentRows.length === 0) throw new HttpError(401, "unknown or revoked agent key");
+
+    const os = req.query.os;
+    if (os !== "windows" && os !== "macos" && os !== "linux") {
+      throw new HttpError(404, `no build available for os=${os ?? "(missing)"}`);
+    }
+
+    let manifest;
+    try {
+      manifest = await loadDownloadManifest(AGENT_BRIDGE_PACKAGING_ROOT);
+    } catch {
+      throw new HttpError(404, "no agent download manifest is currently available");
+    }
+    const file = findPrimaryManifestFile(manifest, os as AgentOs);
+    if (!file) throw new HttpError(404, `no build available for os=${os}`);
+
+    const base = getDownloadsBaseUrl();
+    // No base URL configured (dev) -- point the agent at apps/web's own
+    // dev-only download route (app/api/agent-downloads/[file]/route.ts),
+    // the same allow-listed server a browser would use, rather than
+    // having agent-bridge serve the bytes itself. Must be an absolute URL:
+    // apps/web runs on its own host/port (not agent-bridge's), unlike every
+    // other /agent-api/* route the agent calls directly on this service.
+    const devWebUrl = (process.env.AGENT_DOWNLOADS_DEV_WEB_URL || "http://localhost:3100").replace(/\/$/, "");
+    const url = base ? `${base.replace(/\/$/, "")}/${file.name}` : `${devWebUrl}/api/agent-downloads/${file.name}`;
+
+    return {
+      latestVersion: manifest.version,
+      url,
+      sha256: file.sha256,
+      minVersion: MIN_AGENT_VERSION,
+    };
   });
 
   // Slice C1 (point 1) — the ONLY path a task result ever travels; never

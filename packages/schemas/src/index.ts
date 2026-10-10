@@ -29,6 +29,7 @@ export * from "./residualTransform.js";
 export * from "./runEvents.js";
 export * from "./checks.js";
 export * from "./agentVersion.js";
+export * from "./downloadManifest.js";
 export * from "./mappingProposal.js";
 export * from "./entityResolution.js";
 export * from "./previewResult.js";

@@ -120,10 +120,17 @@ if [[ -d "$APP_BUNDLE_SRC" ]]; then
   fi
   rm -rf "$APP_BUNDLE_DEST"
   cp -R "$APP_BUNDLE_SRC" "$APP_BUNDLE_DEST"
-  # Strip the Gatekeeper quarantine flag -- cp (unlike a signed/notarized
-  # installer flow) leaves it set, which would otherwise show an
-  # "unidentified developer" warning on first launch.
-  xattr -dr com.apple.quarantine "$APP_BUNDLE_DEST" 2>/dev/null || true
+  # Strip the Gatekeeper quarantine flag -- needed for an unsigned/ad-hoc-
+  # signed dev build, since cp otherwise leaves it set and Gatekeeper shows
+  # an "unidentified developer" warning on first launch. A real
+  # Developer-ID-signed + notarized build (build-bundle.mjs writes a
+  # ".notarized" sentinel alongside the app in that case) must NOT have
+  # this done to it -- Gatekeeper is supposed to verify the stapled
+  # notarization ticket itself, and silently clearing quarantine would
+  # just be masking that check rather than relying on it.
+  if [[ ! -f "$SCRIPT_DIR/.notarized" ]]; then
+    xattr -dr com.apple.quarantine "$APP_BUNDLE_DEST" 2>/dev/null || true
+  fi
   if [[ -n "${SUDO_USER:-}" ]]; then
     chown -R "$SUDO_USER" "$APP_BUNDLE_DEST" 2>/dev/null || true
   fi

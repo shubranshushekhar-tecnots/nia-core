@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Standard Electron/hardened-runtime entitlement set (also needed by the
+	     plain Node SEA binary, which embeds the same V8 JIT as Electron's
+	     renderer/main processes) -- without these, a hardened-runtime-signed
+	     binary crashes on launch the moment V8 tries to allocate executable
+	     memory for JIT-compiled code. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

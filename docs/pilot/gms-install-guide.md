@@ -328,18 +328,24 @@ powershell -ExecutionPolicy Bypass -File uninstall.ps1 [-Purge]
 
 **Antivirus / SmartScreen note:** `nia-agent.exe` is built by patching a
 genuine `node.exe` binary with the bundled agent code (Node's own
-"Single Executable Application" mechanism) and is not code-signed by
-Nia. This is expected to trigger Windows SmartScreen and may be flagged
-by endpoint AV on first run, the same way any unsigned internal tool
-would be. Verify the zip's SHA-256 (printed at the end of
-`build-bundle.mjs`'s output) matches what GMS IT received before
-installing, and allow/scan `nia-agent.exe` and `nia-agent-service.exe`
-per GMS's normal unsigned-internal-tool process. If GMS requires
-code-signed executables, sign `nia-agent.exe` with GMS's own
-Authenticode certificate after the build (re-signing after postject
-injection is normal — the build step's injection step prints a
-"signature seems corrupted" warning for Node's own original signature,
-which is expected and is overwritten by a subsequent real signing step).
+"Single Executable Application" mechanism). `build-sea.mjs` now signs it
+automatically (Azure Trusted Signing, or a classic `.pfx` — see
+`apps/agent/packaging/windows/sign.mjs`) whenever Nia's own signing
+credentials are present in the build environment; a release build from
+Nia is signed, and a signed `nia-agent.exe` should not trigger
+SmartScreen. If GMS IT is instead building it themselves from source
+without those credentials configured, the output is unsigned — this is
+expected to trigger Windows SmartScreen and may be flagged by endpoint AV
+on first run, the same way any unsigned internal tool would be. Verify
+the zip's SHA-256 (printed at the end of `build-bundle.mjs`'s output)
+matches what GMS IT received before installing, and allow/scan
+`nia-agent.exe` and `nia-agent-service.exe` per GMS's normal
+unsigned-internal-tool process. If GMS requires its own code-signed
+executables, sign `nia-agent.exe` with GMS's own Authenticode certificate
+after the build (re-signing after postject injection is normal — the
+build step's injection step prints a "signature seems corrupted" warning
+for Node's own original signature, which is expected and is overwritten
+by a subsequent real signing step).
 
 ---
 

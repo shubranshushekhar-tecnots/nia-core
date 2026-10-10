@@ -1,4 +1,5 @@
 import type { Logger } from "../ops/logger.js";
+import type { UpdateChecker } from "../link/updateChecker.js";
 import type { WorkflowsClient } from "../link/workflowsClient.js";
 import type { JobScheduler } from "../scheduler/jobScheduler.js";
 
@@ -20,4 +21,6 @@ export interface LocalApiDeps {
   getPlatformUrl?: () => string | undefined;
   /** The one process-wide scheduler — routes/workflows.ts reads `isRunning(jobId)` off it for the local-only "running" overlay; never rebuilt, unlike the two accessors above. */
   scheduler?: JobScheduler;
+  /** Phase 6 polish — "Check now" (routes/update.ts). Same undefined-when-unpaired rule as getWorkflowsClient: rebuilt on every pair/unpair cycle, so callers must re-read it per request. */
+  getUpdateChecker?: () => UpdateChecker | undefined;
 }

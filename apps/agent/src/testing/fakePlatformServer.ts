@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import type { AgentConnectionReport, AgentTask, CheckInRequest, CheckInResponse, CheckInSetupSummary } from "../link/transport.js";
 import type { PublishedJobSetup } from "../link/setupClient.js";
 
@@ -56,6 +58,21 @@ interface PendingTaskResult {
   errorClass?: string;
 }
 
+/**
+ * Mirrors the bridge's real `GET /agent-api/update` response shape
+ * (services/agent-bridge/src/app.ts) minus the `os`-specific file lookup —
+ * a test driver sets exactly one update directly via `/control/update`
+ * (or `registerUpdate()` in-process), so there's no per-OS manifest to
+ * pick from here.
+ */
+interface FakeUpdateInfo {
+  latestVersion: string;
+  /** Absolute path to the file this fake serves back from `/control/update-file` — never uploaded into the fake server, just read off disk on each download request. */
+  filePath: string;
+  sha256: string;
+  minVersion: string;
+}
+
 interface FakeAgent {
   id: string;
   agentKey: string;
@@ -86,6 +103,8 @@ export class FakePlatformServer {
   private readonly agentsById = new Map<string, FakeAgent>();
   private readonly agentsByKey = new Map<string, FakeAgent>();
   private readonly holdMs: number;
+  /** Set via `/control/update` (or `registerUpdate()`); `undefined` means `/agent-api/update` 404s, same as the real bridge with no manifest built yet. */
+  private updateInfo: FakeUpdateInfo | undefined;
 
   private constructor(server: Server, holdMs: number) {
     this.server = server;
@@ -114,6 +133,11 @@ export class FakePlatformServer {
     const pairingCodeId = randomUUID();
     this.pairingCodes.set(pairingCodeId, { code, consumed: false });
     return { pairingCodeId, code, composite: `${pairingCodeId}.${code}` };
+  }
+
+  /** Configures what `GET /agent-api/update` (and the real agent's HttpUpdateClient) will see. Pass `undefined` to clear it (404 again). */
+  registerUpdate(info: FakeUpdateInfo | undefined): void {
+    this.updateInfo = info;
   }
 
   /** Test introspection: full state for an agent, including what it has reported and every setup's applied/rejected status. */
@@ -193,6 +217,7 @@ export class FakePlatformServer {
       if (req.method === "POST" && path === "/agent-api/pair") return this.handlePair(req, res);
       if (req.method === "POST" && path === "/agent-api/check-in") return this.handleCheckIn(req, res);
       if (req.method === "POST" && path === "/agent-api/task-results") return this.handleTaskResults(req, res);
+      if (req.method === "GET" && path === "/agent-api/update") return this.handleFetchUpdate(req, res);
 
       let m = /^\/agent-api\/setups\/([^/]+)$/.exec(path);
       if (req.method === "GET" && m) return this.handleFetchSetup(req, res, m[1]!);
@@ -249,6 +274,25 @@ export class FakePlatformServer {
         sendJson(res, 200, { ok: true });
         return;
       }
+
+      if (req.method === "POST" && path === "/control/update") {
+        const body = (await readJsonBody(req)) as Partial<FakeUpdateInfo>;
+        if (!body.latestVersion || !body.filePath || !body.sha256) {
+          sendJson(res, 400, { message: "latestVersion, filePath, and sha256 are required" });
+          return;
+        }
+        this.registerUpdate({ latestVersion: body.latestVersion, filePath: body.filePath, sha256: body.sha256, minVersion: body.minVersion ?? "0.0.0" });
+        sendJson(res, 200, { ok: true, downloadUrl: `${this.baseUrl}/control/update-file` });
+        return;
+      }
+
+      // No Bearer check here, on purpose: the real agent-bridge's download
+      // URL (resolved from the manifest, served off S3/a CDN/the dev web
+      // app's own allow-listed route) is never itself behind the agent-key
+      // auth that only /agent-api/* requires -- HttpUpdateClient.download()
+      // (link/updateClient.ts) deliberately sends no Authorization header,
+      // so this fake must accept an unauthenticated GET too to be faithful.
+      if (req.method === "GET" && path === "/control/update-file") return this.handleDownloadUpdateFile(res);
 
       sendJson(res, 404, { message: "not found" });
     } catch (err) {
@@ -349,6 +393,45 @@ export class FakePlatformServer {
     const body = (await readJsonBody(req)) as { taskId: string; status: "done" | "failed"; result?: unknown; errorClass?: string };
     agent.taskResults.set(body.taskId, { status: body.status, result: body.result, errorClass: body.errorClass });
     sendJson(res, 200, { ok: true });
+  }
+
+  private async handleFetchUpdate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const agent = this.resolveAgent(req);
+    if (!agent) {
+      sendJson(res, 401, { message: "agent key is invalid or revoked" });
+      return;
+    }
+    if (!this.updateInfo) {
+      sendJson(res, 404, { message: "no update configured" });
+      return;
+    }
+    sendJson(res, 200, {
+      latestVersion: this.updateInfo.latestVersion,
+      url: `${this.baseUrl}/control/update-file`,
+      sha256: this.updateInfo.sha256,
+      minVersion: this.updateInfo.minVersion,
+    });
+  }
+
+  private async handleDownloadUpdateFile(res: ServerResponse): Promise<void> {
+    if (!this.updateInfo) {
+      sendJson(res, 404, { message: "no update configured" });
+      return;
+    }
+    const { filePath } = this.updateInfo;
+    try {
+      const stats = await stat(filePath);
+      res.writeHead(200, { "content-type": "application/octet-stream", "content-length": stats.size });
+      await new Promise<void>((resolve, reject) => {
+        const stream = createReadStream(filePath);
+        stream.on("error", reject);
+        res.on("error", reject);
+        res.on("finish", resolve);
+        stream.pipe(res);
+      });
+    } catch (err) {
+      if (!res.headersSent) sendJson(res, 404, { message: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   private async handleFetchSetup(req: IncomingMessage, res: ServerResponse, setupId: string): Promise<void> {

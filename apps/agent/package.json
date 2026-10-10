@@ -1,6 +1,6 @@
 {
   "name": "@nia/agent",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "private": true,
   "type": "module",
   "bin": {
@@ -9,6 +9,8 @@
   "scripts": {
     "generate-version": "node scripts/generate-version.mjs",
     "generate-manifest": "node packaging/generate-manifest.mjs",
+    "package:build": "node packaging/build-release.mjs",
+    "package:release": "node packaging/build-release.mjs --release",
     "build": "pnpm run generate-version && pnpm --filter \"@nia/agent-ui...\" build && tsc -p tsconfig.json",
     "dev": "pnpm run generate-version && tsx src/index.ts",
     "start": "node dist/index.js",

@@ -15,6 +15,12 @@
 // --no-desktop to build a service-only installer for dev/testing:
 //   node apps/agent/packaging/windows/build-installer.mjs --no-desktop
 //
+// --unsigned-test-build (passed by build-release.mjs's --release
+// --allow-unsigned gate, never by a dev directly) stages an
+// UNSIGNED-TEST-BUILD.txt marker that nia-agent-updater.ps1 checks for to
+// skip its own Authenticode publisher-pinning check on this build's
+// self-updates.
+//
 // Produces apps/agent/packaging/windows/dist/NiaCoreAgent-Setup-<version>.exe
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -31,6 +37,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { signFile, getExpectedPublisherSubject } from "./sign.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentDir = path.resolve(here, "../../");
@@ -40,6 +47,7 @@ const distDir = path.join(here, "dist");
 // missing Electron build output is a hard failure (see stageAgentDesktop)
 // so a real installer can never silently ship without the desktop shell.
 const noDesktop = process.argv.slice(2).includes("--no-desktop");
+const unsignedTestBuild = process.argv.slice(2).includes("--unsigned-test-build");
 
 // Same pin as build-bundle.mjs, intentionally duplicated here rather than
 // imported so this build script has no dependency on that one — see its
@@ -77,6 +85,28 @@ async function main() {
   copyFileSync(path.join(here, "nia-agent-service.xml"), path.join(stageDir, "nia-agent-service.xml"));
   copyFileSync(path.join(here, "install.ps1"), path.join(stageDir, "install.ps1"));
   copyFileSync(path.join(here, "uninstall.ps1"), path.join(stageDir, "uninstall.ps1"));
+  // The external updater (packaging/windows/updater/nia-agent-updater.ps1)
+  // runs from inside the install dir (see its own "own location" path
+  // resolution) -- its folder must ship with every install, not just be
+  // present in this repo checkout.
+  cpSync(path.join(here, "updater"), path.join(stageDir, "updater"), { recursive: true });
+  // Only written when a publisher subject is actually configured for this
+  // build (see getExpectedPublisherSubject()) -- an unsigned dev build
+  // ships without this file, and nia-agent-updater.ps1 already treats its
+  // absence as "fall back to sha256-only", not a failure.
+  const expectedPublisherSubject = getExpectedPublisherSubject();
+  if (expectedPublisherSubject) {
+    writeFileSync(
+      path.join(stageDir, "expected-publisher.json"),
+      JSON.stringify({ subject: expectedPublisherSubject }, null, 2),
+    );
+  }
+  if (unsignedTestBuild) {
+    writeFileSync(
+      path.join(stageDir, "UNSIGNED-TEST-BUILD.txt"),
+      `This build was produced with --release --allow-unsigned and is NOT signed.\nDo not distribute. Built ${new Date().toISOString()}.\n`,
+    );
+  }
   writeFileSync(
     path.join(stageDir, "VERSION.txt"),
     `Nia Core Agent ${version}\nWinSW ${WINSW_VERSION}\nBuilt ${new Date().toISOString()}\n`,
@@ -86,7 +116,7 @@ async function main() {
     console.log("[3/4] --no-desktop passed -- skipping the desktop app shell (service-only build)...");
   } else {
     console.log("[3/4] staging the desktop app shell (apps/agent-desktop)...");
-    stageAgentDesktop(stageDir);
+    await stageAgentDesktop(stageDir);
   }
 
   console.log("[4/4] running makensis...");
@@ -100,6 +130,8 @@ async function main() {
   // deleted a few lines below, long before the installer itself ever runs.
   const makensisArgs = [`-DSTAGE_DIR=${stageDir}`, `-DVERSION=${version}`];
   if (!noDesktop) makensisArgs.push("-DHAS_DESKTOP=1");
+  if (expectedPublisherSubject) makensisArgs.push("-DHAS_EXPECTED_PUBLISHER=1");
+  if (unsignedTestBuild) makensisArgs.push("-DHAS_UNSIGNED_MARKER=1");
   makensisArgs.push(path.join(here, "installer.nsi"));
   execFileSync("makensis", makensisArgs, {
     cwd: here,
@@ -110,6 +142,9 @@ async function main() {
   if (!existsSync(outExePath)) {
     throw new Error(`makensis reported success but ${outExePath} wasn't produced — check installer.nsi's OutFile path`);
   }
+
+  await signFile(outExePath);
+
   const sizeBytes = statSync(outExePath).size;
   console.log(`\nbuilt ${outExePath}`);
   console.log(`size: ${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`);
@@ -124,7 +159,7 @@ async function main() {
 // to the plain browser-based "nia-agent.exe open" shortcut on pre-Win10 or
 // when NiaAgentDesktop wasn't staged, so a --no-desktop build is still a
 // working installer, just without the Electron shell.
-function stageAgentDesktop(stageDir) {
+async function stageAgentDesktop(stageDir) {
   const desktopBuildDir = path.join(agentDir, "..", "agent-desktop", "dist-electron");
   if (!existsSync(desktopBuildDir)) {
     throw new Error(
@@ -146,6 +181,9 @@ function stageAgentDesktop(stageDir) {
       `staged the desktop app shell from ${src} but did not find Nia Agent.exe at ${exePath} -- check apps/agent-desktop/electron-builder.yml's productName`,
     );
   }
+  // Sign the staged copy, not the original in dist-electron -- it must be
+  // signed before makensis wraps it into the installer below.
+  await signFile(exePath);
   console.log(`  staged desktop app shell from ${src}`);
 }
 
