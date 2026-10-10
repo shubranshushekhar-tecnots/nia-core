@@ -152,7 +152,13 @@ Write-Log "snapshot complete"
 
 # --- 4) Run the installer (already SYSTEM — no elevation needed) -------
 Write-Log "running installer silently: $DownloadedFile /S"
-$proc = Start-Process -FilePath $DownloadedFile -ArgumentList "/S" -Wait -PassThru -WindowStyle Hidden
+# No -WindowStyle here: NSIS's /S flag already makes this fully silent (no
+# window to hide), and Start-Process -WindowStyle throws "This command
+# cannot be run due to the error: The operation attempted is not supported"
+# when the calling process (SYSTEM, via this Scheduled Task) has no window
+# station/desktop attached -- a real, reproducible failure mode for a
+# non-interactive SYSTEM session, confirmed in CI.
+$proc = Start-Process -FilePath $DownloadedFile -ArgumentList "/S" -Wait -PassThru
 Write-Log "installer exited with code $($proc.ExitCode)"
 
 function Restore-Snapshot {
