@@ -6,6 +6,7 @@ import NiaHeroNav from './hero-story/NiaHeroNav';
 import NiaHeroStage from './hero-story/NiaHeroStage';
 import Pricing from './Pricing';
 import Footer from './Footer';
+import ContactTab from './ContactTab';
 import './hero-story/niaHero.css';
 
 const ROOT_FONT = "'Suisse Intl', 'Helvetica Neue', Helvetica, Arial, system-ui, sans-serif";
@@ -24,6 +25,7 @@ export default function LandingPage() {
   return (
     <div id="nx-root" style={{ background: '#000000', color: '#0F172A', fontFamily: ROOT_FONT }}>
       <NiaHeroNav />
+      <ContactTab />
       <NiaHeroStage trackRef={trackRef} stageRef={stageRef} windowRef={windowRef} chapter={chapter} status={status} />
       <Pricing billing={billing} setBilling={setBilling} />
       <Footer tab={tab} setTab={setTab} />

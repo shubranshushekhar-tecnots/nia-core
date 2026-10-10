@@ -223,6 +223,7 @@ export function useNiaHeroEngine(refs: NiaHeroEngineRefs) {
   const [tab, setTab] = useState<ConnectorTab>('s');
   const chapterRef = useRef(chapter);
   chapterRef.current = chapter;
+  const contactShowRef = useRef(false);
   // Root Lenis instance from <ReactLenis root> in app/page.tsx (undefined
   // outside the landing route, or for one tick before it mounts).
   const lenis = useLenis();
@@ -240,6 +241,21 @@ export function useNiaHeroEngine(refs: NiaHeroEngineRefs) {
       const p = Math.min(1, Math.max(0, total > 0 ? -r.top / total : 0));
       const ch = apply(p, stage, refs.windowRef.current);
       if (ch !== chapterRef.current) setChapter(ch);
+
+      // Contact edge tab (designs/contact-tab-snippet.html): shown once the
+      // story track has scrolled past and pricing is in view. Written
+      // straight onto <html>, like apply()'s CSS vars, so this never
+      // triggers a React re-render on scroll. ContactTab owns
+      // data-contact-open/-sent itself (watching this attribute via
+      // MutationObserver to close its drawer if it was open) so this engine
+      // never fights React over those two.
+      const showContact = r.bottom < window.innerHeight * 0.6;
+      if (showContact !== contactShowRef.current) {
+        contactShowRef.current = showContact;
+        const root = document.documentElement;
+        if (showContact) root.setAttribute('data-contact-show', '');
+        else root.removeAttribute('data-contact-show');
+      }
     };
 
     if (reduce) {

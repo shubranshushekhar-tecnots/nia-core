@@ -240,55 +240,78 @@ export default function Footer({ tab, setTab }: { tab: ConnectorTab; setTab: (t:
         </div>
       </div>
 
-      <div className="nf-two" style={{ borderTop: '1px solid #E2E8F0', padding: '40px 0 48px' }}>
-        <figure style={{ margin: 0, border: '1px solid #E2E8F0', background: '#F7F7F5', boxShadow: '0 18px 40px rgba(15,23,42,0.06)' }}>
-          <div
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, height: 40, padding: '0 14px',
-              borderBottom: '1px solid #E2E8F0', background: '#FFFFFF', fontFamily: "'JetBrains Mono', monospace", fontSize: 10,
-              letterSpacing: '0.14em', color: '#64748B',
-            }}
-          >
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ width: 7, height: 7, background: '#4F46E5' }} />
-              CANVAS · TEST WORKFLOW 1
-            </span>
-            <span>3 NODES · 2 EDGES · READY</span>
+      <div className="nf-specs" style={{ borderTop: '1px solid #E2E8F0' }}>
+        <div className="nf-spec" tabIndex={0}>
+          <div className="nf-spec-row">
+            <span className="nf-spec-n">01</span>
+            <span className="nf-spec-w">Security</span>
+            <span className="nf-spec-arr" aria-hidden="true">→</span>
           </div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/landing/canvas.webp"
-            alt="Nia Core canvas: a SQL source, a transform and a Planometry destination connected in one workflow"
-            width={1400}
-            height={473}
-            style={{ display: 'block', width: '100%', height: 'auto' }}
-          />
-          <figcaption style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: 14, borderTop: '1px solid #E2E8F0', background: '#FFFFFF' }}>
-            <span style={{ fontSize: 14, color: '#475569' }}>Source, rules and destination. Drawn once, run on schedule.</span>
-            <a href="#" className="nt nt-cta" style={{ height: 32 }}>Open canvas</a>
-          </figcaption>
-        </figure>
-        <div className="nf-facts">
-          <div className="nf-fact">
-            <span className="nf-label">Security</span>
-            <span className="nf-v">Credentials encrypted</span>
-            <span className="nf-v">Workspaces kept separate</span>
-            <span className="nf-v">20% delete guard on every run</span>
+          <div className="nf-spec-det">
+            <div className="nf-spec-stat">
+              <b>20%</b>
+              <span>most a single run can delete before it stops</span>
+            </div>
+            <ul>
+              <li>Credentials encrypted at rest</li>
+              <li>Every workspace kept separate</li>
+              <li>Delete guard on every run</li>
+            </ul>
           </div>
-          <div className="nf-fact">
-            <span className="nf-label">Sync</span>
-            <span className="nf-v">On demand or on a schedule</span>
-            <span className="nf-v">Incremental after the first run</span>
+        </div>
+        <div className="nf-spec" tabIndex={0}>
+          <div className="nf-spec-row">
+            <span className="nf-spec-n">02</span>
+            <span className="nf-spec-w">Sync</span>
+            <span className="nf-spec-arr" aria-hidden="true">→</span>
           </div>
-          <div className="nf-fact">
-            <span className="nf-label">Plans</span>
-            <span className="nf-v">Free · Pro $19 · Organization $99</span>
-            <a href="#pricing" style={{ fontSize: 14, color: '#4F46E5', textDecoration: 'none' }}>See pricing →</a>
+          <div className="nf-spec-det">
+            <div className="nf-spec-stat">
+              <b>Δ</b>
+              <span>only new or changed rows move after the first run</span>
+            </div>
+            <ul>
+              <li>Run on demand or on a schedule</li>
+              <li>Incremental after the first run</li>
+              <li>Filters applied before rows move</li>
+            </ul>
           </div>
-          <div className="nf-fact">
-            <span className="nf-label">Agent runs on</span>
-            <span className="nf-v">Windows / macOS / Linux</span>
-            <span className="nf-v">Outbound only · one-time pairing code</span>
+        </div>
+        <div className="nf-spec" tabIndex={0}>
+          <div className="nf-spec-row">
+            <span className="nf-spec-n">03</span>
+            <span className="nf-spec-w">Plans</span>
+            <span className="nf-spec-arr" aria-hidden="true">→</span>
+          </div>
+          <div className="nf-spec-det">
+            <div className="nf-spec-stat">
+              <b>$0</b>
+              <span>to start. Upgrade when the pipelines grow</span>
+            </div>
+            <ul>
+              <li>Free</li>
+              <li>Pro · $19 / month</li>
+              <li>Organization · $99 / month</li>
+            </ul>
+            <a href="#pricing" className="nf-spec-link">See pricing →</a>
+          </div>
+        </div>
+        <div className="nf-spec" tabIndex={0}>
+          <div className="nf-spec-row">
+            <span className="nf-spec-n">04</span>
+            <span className="nf-spec-w">Agent</span>
+            <span className="nf-spec-arr" aria-hidden="true">→</span>
+          </div>
+          <div className="nf-spec-det">
+            <div className="nf-spec-stat">
+              <b>0</b>
+              <span>open ports on your network</span>
+            </div>
+            <ul>
+              <li>Windows · macOS · Linux</li>
+              <li>Outbound connections only</li>
+              <li>Pairs with a one-time code</li>
+            </ul>
           </div>
         </div>
       </div>
