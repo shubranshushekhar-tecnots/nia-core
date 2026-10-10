@@ -195,12 +195,23 @@ Section "Install" SEC01
   ; target (Electron doesn't support it anyway), legitimately has none.
   ; Both cases fall back to the plain browser-based "nia-agent.exe open"
   ; shortcut below with no error at install time.
+  ;
+  ; Whether to stage it is a BUILD-time fact (did build-installer.mjs
+  ; actually copy NiaAgentDesktop\ into STAGE_DIR before invoking
+  ; makensis?), decided here via the HAS_DESKTOP compile-time define
+  ; (-DHAS_DESKTOP=1, passed only when staged) rather than a runtime
+  ; ${FileExists} check on STAGE_DIR -- STAGE_DIR is a CI build-machine
+  ; temp path that build-installer.mjs deletes right after makensis
+  ; finishes, so a runtime check of it is always false wherever the
+  ; installer actually runs (CI smoke test or a real end user's machine),
+  ; silently skipping the desktop shell every single time.
+  !ifdef HAS_DESKTOP
   ${If} ${AtLeastWin10}
-  ${AndIf} ${FileExists} "${STAGE_DIR}\NiaAgentDesktop\*.*"
     SetOutPath "$INSTDIR\NiaAgentDesktop"
     File /r "${STAGE_DIR}\NiaAgentDesktop\*.*"
     SetOutPath "$INSTDIR"
   ${EndIf}
+  !endif
 
   DetailPrint "Registering and starting the nia-agent service (stop -> replace -> start if upgrading)..."
   Call GetPowerShellExe
@@ -230,12 +241,19 @@ Section "Install" SEC01
   ; reading the already-ACL'd local-api\ token only requires the read-only
   ; ACE install.ps1 already grants the installing user, not membership in
   ; Administrators.
+  ; Same HAS_DESKTOP compile-time define as the staging block above --
+  ; $INSTDIR\NiaAgentDesktop\Nia Agent.exe was only just extracted a few
+  ; lines up (or not) based on that same build-time fact, so check it the
+  ; same way rather than re-probing the filesystem here.
+  !ifdef HAS_DESKTOP
   ${If} ${AtLeastWin10}
-  ${AndIf} ${FileExists} "$INSTDIR\NiaAgentDesktop\Nia Agent.exe"
     CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk" "$INSTDIR\NiaAgentDesktop\Nia Agent.exe" "" "$INSTDIR\NiaAgentDesktop\Nia Agent.exe" 0
   ${Else}
     CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk" "$INSTDIR\nia-agent.exe" 'open' "$INSTDIR\nia-agent.exe" 0
   ${EndIf}
+  !else
+    CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk" "$INSTDIR\nia-agent.exe" 'open' "$INSTDIR\nia-agent.exe" 0
+  !endif
 
   ; Always the plain System32 cmd.exe path below (never a Sysnative-resolved
   ; one) -- CreateShortCut never launches anything itself, it just writes a

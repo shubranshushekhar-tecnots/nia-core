@@ -93,7 +93,15 @@ async function main() {
   const outExeName = `NiaCoreAgent-Setup-${version}.exe`;
   const outExePath = path.join(distDir, outExeName);
   rmSync(outExePath, { force: true });
-  execFileSync("makensis", [`-DSTAGE_DIR=${stageDir}`, `-DVERSION=${version}`, path.join(here, "installer.nsi")], {
+  // HAS_DESKTOP tells installer.nsi (compile-time, via !ifdef) whether
+  // NiaAgentDesktop\ was actually staged above -- it must NOT re-derive
+  // this from a runtime ${FileExists} check on stageDir inside the
+  // installer, since stageDir is this CI/dev machine's temp path and is
+  // deleted a few lines below, long before the installer itself ever runs.
+  const makensisArgs = [`-DSTAGE_DIR=${stageDir}`, `-DVERSION=${version}`];
+  if (!noDesktop) makensisArgs.push("-DHAS_DESKTOP=1");
+  makensisArgs.push(path.join(here, "installer.nsi"));
+  execFileSync("makensis", makensisArgs, {
     cwd: here,
     stdio: "inherit",
   });
