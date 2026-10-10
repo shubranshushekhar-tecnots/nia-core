@@ -191,6 +191,42 @@ export function nxAuthCodeFieldStyle(hasError: boolean): CSSProperties {
 
 export const nxAuthNoteStyle: CSSProperties = { fontSize: 12, color: 'var(--nx-ink-3)' };
 
+// Email Phase 3 — /request-access's longer form adds a multi-line field
+// (use case) and a checkbox group (data sources) that the shorter
+// login/signup forms never needed. Textarea mirrors nxModalFieldStyle's
+// look (app/styles.ts) but with a fixed height instead of 44px fixed.
+export function nxAuthTextareaStyle(hasError: boolean): CSSProperties {
+  return {
+    width: '100%',
+    boxSizing: 'border-box',
+    minHeight: 88,
+    padding: '10px 12px',
+    fontFamily: 'var(--nx-font-ui)',
+    fontSize: 15,
+    color: 'var(--nx-ink)',
+    background: 'var(--nx-surface)',
+    border: `1px solid ${hasError ? 'var(--nx-danger)' : 'var(--nx-line)'}`,
+    outline: 'none',
+    resize: 'vertical',
+  };
+}
+
+export const nxAuthCheckboxGroupStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '10px 16px',
+};
+
+export const nxAuthCheckboxLabelStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  fontFamily: 'var(--nx-font-ui)',
+  fontSize: 14,
+  color: 'var(--nx-ink-2)',
+  cursor: 'pointer',
+};
+
 export const nxAuthToggleLinkStyle: CSSProperties = {
   alignSelf: 'flex-start',
   padding: 0,

@@ -11,6 +11,7 @@ import { ACTIVE_ORG_COOKIE, getSessionUser } from "@/lib/auth/session";
 import { getPool } from "@/lib/db/pool";
 import { enqueueEmail } from "@/lib/mail/mailQueue";
 import { isAuthActionRateLimited } from "@/lib/auth/rateLimit";
+import { allowSignupOnce, isOrgInviteTokenValid, peekPlatformInviteEmail } from "@/lib/auth/signupGate";
 
 export type ActionState = {
   error?: string;
@@ -50,6 +51,15 @@ export type ActionState = {
   // wording regardless of whether the email actually exists (see each
   // action's own comment for the no-enumeration rationale).
   message?: string;
+  // Email Phase 3 security fix: set by signup() when SIGNUP_MODE=request
+  // (requireEmailVerification, packages/auth/src/config.ts) instead of a
+  // token — the account exists but is unverified, and SignupForm must show
+  // the "enter the code we emailed you" step before a session exists.
+  // `email` carries the submitted address into that step's hidden field
+  // (verifySignupEmail needs it; better-auth's OTP lookup is keyed by it,
+  // not by any session, since none exists yet).
+  emailVerificationRequired?: boolean;
+  email?: string;
 } | null;
 
 const GENERIC_CODE_SENT_MESSAGE = "If an account exists for that email, a code is on its way.";
@@ -162,6 +172,50 @@ const signupSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
+/**
+ * Email Phase 3 bridge: better-auth's validateUserInfo hook (the signup
+ * gate, see packages/auth/src/config.ts) only ever sees `{user}` — not the
+ * `next` form field carried from /login's "Create an account" link — so an
+ * org-invite or platform-invite signup can't be recognized there directly.
+ * This reads `next` (already same-origin-validated by safeNext's caller)
+ * and, if it points at an invite accept URL with a still-valid token,
+ * read-only-validates that token and sets the one-time signup-allow flag
+ * (signupGate.ts) immediately before signUpEmail is called below — closing
+ * enough of a race window that the flag is consumed within the same
+ * request it's set in.
+ *
+ * Returns a field error (rather than silently falling through to the
+ * gate's generic rejection) only for the platform-invite email-mismatch
+ * case, since that's actionable feedback the other paths don't have an
+ * equivalent for.
+ */
+async function bridgeInviteSignup(
+  next: string,
+  email: string,
+): Promise<{ fieldErrors: Record<string, string[]> } | undefined> {
+  const orgInviteMatch = next.match(/^\/invite\/([^/?]+)/);
+  if (orgInviteMatch) {
+    if (await isOrgInviteTokenValid(orgInviteMatch[1]!)) {
+      await allowSignupOnce(email);
+    }
+    return undefined;
+  }
+
+  const platformInviteMatch = next.match(/^\/accept-invite\/([^/?]+)/);
+  if (platformInviteMatch) {
+    const inviteEmail = await peekPlatformInviteEmail(platformInviteMatch[1]!);
+    if (inviteEmail && inviteEmail !== email.toLowerCase()) {
+      return { fieldErrors: { email: ["This invite is for a different email address."] } };
+    }
+    if (inviteEmail) {
+      await allowSignupOnce(email);
+    }
+    return undefined;
+  }
+
+  return undefined;
+}
+
 export async function signup(_prevState: ActionState, formData: FormData): Promise<ActionState> {
   const parsed = signupSchema.safeParse({
     fullName: formData.get("fullName"),
@@ -172,17 +226,22 @@ export async function signup(_prevState: ActionState, formData: FormData): Promi
     return { fieldErrors: parsed.error.flatten().fieldErrors };
   }
 
-  let token: string;
+  const next = safeNext(formData.get("next"));
+  const bridgeError = await bridgeInviteSignup(next, parsed.data.email);
+  if (bridgeError) return bridgeError;
+
+  let token: string | null;
   try {
     const requestHeaders = await headers();
     const result = await getAuth().api.signUpEmail({
       body: { email: parsed.data.email, password: parsed.data.password, name: parsed.data.fullName },
       headers: requestHeaders,
     });
-    // autoSignIn (packages/auth/src/config.ts) means this is only null if
-    // email verification were required (it isn't — see config), so this
-    // should never happen in practice; typed as nullable regardless.
-    if (!result.token) return { error: "Something went wrong. Try again." };
+    // Email Phase 3 security fix: autoSignIn (packages/auth/src/config.ts)
+    // means this is only null when requireEmailVerification is active
+    // (SIGNUP_MODE=request) — the allowlist gate alone can't prove the
+    // submitter owns the email, so better-auth withholds the session until
+    // verifySignupEmail() below confirms the OTP sent to it.
     token = result.token;
   } catch (err) {
     if (err instanceof APIError) {
@@ -191,13 +250,65 @@ export async function signup(_prevState: ActionState, formData: FormData): Promi
     throw err;
   }
 
+  if (!token) {
+    return { emailVerificationRequired: true, email: parsed.data.email, next };
+  }
+
   // autoSignIn (packages/auth/src/config.ts) means this is already a real
   // session, and there's no email-confirmation step — signup behaves like
   // an immediate login straight into the app. safeNext (same helper login()
   // uses) forwards an invite/other `next` target carried from /login's
   // "Create an account" link (LoginForm.tsx) so a brand-new user lands back
   // where they started (e.g. /invite/<token>) instead of always at /app.
-  return { success: true, token, next: safeNext(formData.get("next")) };
+  return { success: true, token, next };
+}
+
+const verifySignupEmailSchema = z.object({
+  email: z.string().email("Enter a valid email address"),
+  otp: z.string().min(1, "Enter your code"),
+});
+
+/**
+ * Email Phase 3 security fix, step 2: completes the gated-signup
+ * verification started by signup() above. Confirms the OTP sent to
+ * `email` (via sendAuthEmail's "email-verification" branch, already wired
+ * for Email Phase 2) and, since `emailVerification.autoSignInAfterVerification`
+ * is set (packages/auth/src/config.ts), better-auth creates a real session
+ * on success — same `{success, token, next}` shape signup() itself returns
+ * on the ungated path, so SignupForm's existing post-signup effect (store
+ * token, navigate to `next`) handles both identically.
+ */
+export async function verifySignupEmail(_prevState: ActionState, formData: FormData): Promise<ActionState> {
+  const parsed = verifySignupEmailSchema.safeParse({
+    email: formData.get("email"),
+    otp: formData.get("otp"),
+  });
+  const next = safeNext(formData.get("next"));
+  if (!parsed.success) {
+    return { emailVerificationRequired: true, email: String(formData.get("email") ?? ""), next, fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+
+  if (await isAuthActionRateLimited("signup-email-verify", parsed.data.email, OTP_VERIFY_LIMIT)) {
+    return { emailVerificationRequired: true, email: parsed.data.email, next, error: INVALID_CODE_MESSAGE };
+  }
+
+  let token: string | null;
+  try {
+    const result = await getAuth().api.verifyEmailOTP({ body: { email: parsed.data.email, otp: parsed.data.otp } });
+    token = result.token;
+  } catch (err) {
+    if (err instanceof APIError) {
+      return { emailVerificationRequired: true, email: parsed.data.email, next, error: INVALID_CODE_MESSAGE };
+    }
+    throw err;
+  }
+
+  if (!token) {
+    return { emailVerificationRequired: true, email: parsed.data.email, next, error: "Something went wrong. Try again." };
+  }
+
+  revalidatePath("/", "layout");
+  return { success: true, token, next };
 }
 
 const emailOnlySchema = z.object({ email: z.string().email("Enter a valid email address") });

@@ -49,19 +49,19 @@ export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
     template: '%s · Nia Core',
-    default: 'Nia Core · Move your business data, safely',
+    default: 'Nia Core · ETL for your business data, safely',
   },
   description,
   openGraph: {
     type: 'website',
     siteName: 'Nia Core',
-    title: 'Nia Core · Move your business data, safely',
+    title: 'Nia Core · ETL for your business data, safely',
     description,
     images: [{ url: '/og-image.png', width: 1200, height: 630, alt: 'Nia Core' }],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Nia Core · Move your business data, safely',
+    title: 'Nia Core · ETL for your business data, safely',
     description,
     images: ['/og-image.png'],
   },

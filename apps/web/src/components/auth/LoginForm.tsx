@@ -24,7 +24,7 @@ import {
 
 const initialState: ActionState = null;
 
-export default function LoginForm() {
+export default function LoginForm({ requestMode = false }: { requestMode?: boolean }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get('next') ?? '';
@@ -118,9 +118,20 @@ export default function LoginForm() {
       // self-signup — so the staff sign-in never shows a "Create an
       // account" footer (omitting the props makes AuthShell's own
       // `hasFooter` check false). Customer sign-in is unaffected.
+      // Email Phase 3: when SIGNUP_MODE=request, point this footer at
+      // /request-access instead of /signup — /signup itself stays reachable
+      // (unlinked, not blocked by middleware) for the approved/invited flows.
       footerQuestion={isStaffLogin ? undefined : 'New to Nia Core?'}
-      footerLinkText={isStaffLogin ? undefined : 'Create an account'}
-      footerHref={isStaffLogin ? undefined : next ? `/signup?next=${encodeURIComponent(next)}` : '/signup'}
+      footerLinkText={isStaffLogin ? undefined : requestMode ? 'Request access' : 'Create an account'}
+      footerHref={
+        isStaffLogin
+          ? undefined
+          : requestMode
+            ? '/request-access'
+            : next
+              ? `/signup?next=${encodeURIComponent(next)}`
+              : '/signup'
+      }
       staffMode={isStaffLogin}
     >
       {!twoFactorRequired ? (

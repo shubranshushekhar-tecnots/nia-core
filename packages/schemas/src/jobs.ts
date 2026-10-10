@@ -277,6 +277,22 @@ const MailTemplatePayload = z.discriminatedUnion("template", [
     template: z.literal("passwordChanged"),
     data: z.object({ whenText: z.string() }),
   }),
+  z.object({
+    template: z.literal("accessRequestReceived"),
+    data: z.object({ requesterEmail: z.string() }),
+  }),
+  z.object({
+    template: z.literal("accessRequestApproved"),
+    data: z.object({ signInUrl: z.string() }),
+  }),
+  z.object({
+    template: z.literal("accessRequestRejected"),
+    data: z.object({ reasonText: z.string().optional() }),
+  }),
+  z.object({
+    template: z.literal("platformInvite"),
+    data: z.object({ name: z.string().nullable(), acceptUrl: z.string() }),
+  }),
 ]);
 
 /**

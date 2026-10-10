@@ -5,7 +5,7 @@ import { getSessionCookie } from "better-auth/cookies";
 // agent download/documentation pages — DownloadsPage reads `signedIn`
 // itself to decide what to show, it does not require the middleware to
 // gate the route.
-const PUBLIC_PATHS = new Set(["/", "/login", "/signup", "/reset-password"]);
+const PUBLIC_PATHS = new Set(["/", "/login", "/signup", "/reset-password", "/request-access"]);
 const PUBLIC_PREFIXES = ["/downloads", "/docs"];
 
 function isPublicPath(pathname: string): boolean {

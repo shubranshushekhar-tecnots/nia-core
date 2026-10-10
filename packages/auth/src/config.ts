@@ -53,6 +53,34 @@ export interface CreateAuthOptions<TExtraPlugins extends readonly BetterAuthPlug
    * a request — acceptable here since apps/api never exercises this path.
    */
   sendAuthEmail?: (data: { type: AuthEmailType; email: string; otp: string }) => Promise<void>;
+  /**
+   * Email Phase 3 signup gate. Backs `user.validateUserInfo` below — only
+   * `apps/web`'s `getAuth()` passes this, and only unless
+   * `SIGNUP_MODE === "open"` (fail-safe default: unset/misconfigured reads
+   * as gated, see apps/web/src/lib/auth/auth.ts); apps/api's own instance
+   * never calls `signUpEmail`, so it never passes this and the gate is a
+   * no-op there regardless.
+   * Returning false rejects the `create-user` call with a 403; existing
+   * users signing back in never hit this (validateUserInfo only fires on
+   * `create-user`/`link-account`/provider `sign-in`, not plain email/
+   * password sign-in — see better-auth's ValidateUserInfoAction).
+   */
+  checkSignupAllowed?: (email: string) => Promise<boolean>;
+  /**
+   * Email Phase 3 security fix: when true, `signUpEmail` no longer
+   * auto-signs-in (see sign-up.mjs's `shouldSkipAutoSignIn`) and instead
+   * sends an email-verification OTP (via the `emailOTP` plugin's
+   * `overrideDefaultEmailVerification` hook below, which routes it through
+   * `sendAuthEmail`'s `"email-verification"` branch — already wired for
+   * Email Phase 2). The caller must then complete `auth.api.verifyEmailOTP`
+   * before a session is created (`emailVerification.autoSignInAfterVerification`
+   * below). Without this, `checkSignupAllowed`'s email-allowlist gate
+   * (above) can be satisfied by anyone who merely *knows* an approved/
+   * invited email address, not just whoever owns its inbox — only
+   * `apps/web`'s `getAuth()` passes this, and only unless
+   * `SIGNUP_MODE === "open"` (same condition as `checkSignupAllowed`).
+   */
+  requireEmailVerification?: boolean;
 }
 
 /**
@@ -76,6 +104,15 @@ export function createAuth<const TExtraPlugins extends readonly BetterAuthPlugin
       enabled: true,
       minPasswordLength: 8,
       autoSignIn: true,
+      requireEmailVerification: options.requireEmailVerification ?? false,
+    },
+    // Only takes effect when requireEmailVerification is true (see its doc
+    // comment above) — autoSignInAfterVerification lets verifyEmailOTP
+    // create a real session once the OTP is confirmed, so the gated signup
+    // flow still ends in "signed in", just after one extra step instead of
+    // zero.
+    emailVerification: {
+      autoSignInAfterVerification: true,
     },
     session: {
       expiresIn: SESSION_EXPIRES_IN_SECONDS,
@@ -115,9 +152,11 @@ export function createAuth<const TExtraPlugins extends readonly BetterAuthPlugin
       // `overrideDefaultEmailVerification: true` makes better-auth's own
       // built-in (link-based) verification email send an OTP through this
       // plugin instead — we only want one verification mechanism active.
-      // `emailAndPassword.requireEmailVerification` stays unset (default
-      // false) deliberately: verification is informational, never blocks
-      // sign-in.
+      // `emailAndPassword.requireEmailVerification` is `false` by default
+      // (verification is informational, never blocks sign-in) — apps/web
+      // flips it to `true` unless SIGNUP_MODE=open (see
+      // requireEmailVerification's doc comment above), so the allowlist
+      // gate can't be satisfied by someone who doesn't own the email.
       //
       // `disableSignUp: true` — without this, better-auth's own
       // signInEmailOTP route silently creates a brand-new account for any
@@ -141,6 +180,30 @@ export function createAuth<const TExtraPlugins extends readonly BetterAuthPlugin
       }),
       ...(options.plugins ?? ([] as const)),
     ],
+    // Email Phase 3 signup gate. `validateUserInfo` fires on every
+    // `create-user` call across every auth method (direct HTTP hit to
+    // better-auth's own /sign-up/email included, not just apps/web's
+    // signup() Server Action), and is NOT re-invoked for a returning
+    // email/password sign-in — so existing users/staff are structurally
+    // unaffected regardless of what checkSignupAllowed returns. Only
+    // gates `action === "create-user"`: `link-account`/`sign-in` cover
+    // OAuth/SSO flows this app doesn't use, and gating them too would
+    // just be dead code.
+    user: {
+      validateUserInfo: async ({ user, source }) => {
+        if (source.action !== "create-user") return;
+        if (!options.checkSignupAllowed) return;
+        const email = typeof user.email === "string" ? user.email : undefined;
+        if (!email) return;
+        const allowed = await options.checkSignupAllowed(email);
+        if (!allowed) {
+          return {
+            error: "signup_not_allowed",
+            errorDescription: "This email hasn't been approved for access yet.",
+          };
+        }
+      },
+    },
     databaseHooks: {
       user: {
         create: {
@@ -154,6 +217,70 @@ export function createAuth<const TExtraPlugins extends readonly BetterAuthPlugin
                on conflict (id) do nothing`,
               [user.id, user.email, user.name ?? null],
             );
+
+            // Email Phase 3: apply the plan/grant staff chose at
+            // approval/invite time, if any. 0051_owner_plan_table.sql's
+            // `set_default_owner_plan_trigger` (AFTER INSERT on
+            // public."user") has already inserted a 'free' owner_plan row
+            // by now — it fires synchronously as part of the very INSERT
+            // that created `user`, which runs (and commits its effects
+            // within the same statement) before better-auth hands control
+            // back to this `after` callback. So this is an UPDATE, not an
+            // insert — same upsert target as apps/api/src/routes/
+            // console.ts's `PATCH /console/users/:userId/plan`, just
+            // reached through a different trigger. Platform invites are
+            // checked first: a staff-initiated direct invite is a
+            // stronger signal than a self-submitted request, and in
+            // practice the two should never both match the same email.
+            const inviteResult = await pool.query<{
+              id: string;
+              plan_id: string | null;
+              grant_plan_id: string | null;
+              grant_expires_at: string | null;
+            }>(
+              `select id, plan_id, grant_plan_id, grant_expires_at
+               from public.platform_invites
+               where lower(email) = lower($1) and status in ('pending', 'accepted')
+               order by created_at desc
+               limit 1`,
+              [user.email],
+            );
+            const match = inviteResult.rows[0];
+            const requestResult = match
+              ? null
+              : await pool.query<{
+                  id: string;
+                  plan_id: string | null;
+                  grant_plan_id: string | null;
+                  grant_expires_at: string | null;
+                }>(
+                  `select id, plan_id, grant_plan_id, grant_expires_at
+                   from public.access_requests
+                   where lower(email) = lower($1) and status = 'approved'
+                   limit 1`,
+                  [user.email],
+                );
+            const applied = match ?? requestResult?.rows[0];
+
+            if (applied) {
+              // coalesce: a null plan_id on the matched row means "leave
+              // the signup default (free) alone", not "clear the plan".
+              await pool.query(
+                `update public.owner_plan
+                   set plan_id = coalesce($2, plan_id),
+                       grant_plan_id = $3,
+                       grant_expires_at = $4,
+                       updated_at = now()
+                 where user_id = $1`,
+                [user.id, applied.plan_id, applied.grant_plan_id, applied.grant_expires_at],
+              );
+            }
+            if (requestResult?.rows[0]) {
+              await pool.query(
+                `update public.access_requests set signed_up_user_id = $2 where id = $1`,
+                [requestResult.rows[0].id, user.id],
+              );
+            }
           },
         },
       },

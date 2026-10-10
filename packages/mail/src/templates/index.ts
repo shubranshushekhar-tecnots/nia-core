@@ -15,6 +15,7 @@ import {
   type AccessRequestRejectedData,
 } from "./accessRequestRejected.js";
 import { renderInvite, type InviteData } from "./invite.js";
+import { renderPlatformInvite, type PlatformInviteData } from "./platformInvite.js";
 
 export type {
   LoginCodeData,
@@ -25,6 +26,7 @@ export type {
   AccessRequestApprovedData,
   AccessRequestRejectedData,
   InviteData,
+  PlatformInviteData,
 };
 
 /**
@@ -40,7 +42,8 @@ export type TemplatePayload =
   | { template: "accessRequestReceived"; data: AccessRequestReceivedData }
   | { template: "accessRequestApproved"; data: AccessRequestApprovedData }
   | { template: "accessRequestRejected"; data: AccessRequestRejectedData }
-  | { template: "invite"; data: InviteData };
+  | { template: "invite"; data: InviteData }
+  | { template: "platformInvite"; data: PlatformInviteData };
 
 export interface RenderedTemplate {
   subject: string;
@@ -66,5 +69,7 @@ export function renderTemplate(payload: TemplatePayload): RenderedTemplate {
       return renderAccessRequestRejected(payload.data);
     case "invite":
       return renderInvite(payload.data);
+    case "platformInvite":
+      return renderPlatformInvite(payload.data);
   }
 }

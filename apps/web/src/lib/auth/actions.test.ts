@@ -7,6 +7,11 @@ import { APIError } from "better-auth/api";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
+// signup() (and login()/verifyTwoFactor(), not exercised by this file's
+// other describe blocks) call headers() to forward the caller's request
+// headers into better-auth — same mock convention as lib/api/server.test.ts.
+vi.mock("next/headers", () => ({ headers: vi.fn().mockResolvedValue(new Headers()), cookies: vi.fn() }));
+
 // resetPasswordWithCode() redirects on success (apps/console/layout.test.ts's
 // convention: mock redirect() to throw the same "NEXT_REDIRECT:<url>" shape
 // Next's real implementation throws to unwind rendering).
@@ -27,6 +32,8 @@ const sendVerificationOTP = vi.fn();
 const signInEmailOTP = vi.fn();
 const requestPasswordResetEmailOTP = vi.fn();
 const resetPasswordEmailOTP = vi.fn();
+const signUpEmail = vi.fn();
+const verifyEmailOTP = vi.fn();
 
 vi.mock("@/lib/auth/auth", () => ({
   getAuth: () => ({
@@ -35,6 +42,8 @@ vi.mock("@/lib/auth/auth", () => ({
       signInEmailOTP: (...args: unknown[]) => signInEmailOTP(...args),
       requestPasswordResetEmailOTP: (...args: unknown[]) => requestPasswordResetEmailOTP(...args),
       resetPasswordEmailOTP: (...args: unknown[]) => resetPasswordEmailOTP(...args),
+      signUpEmail: (...args: unknown[]) => signUpEmail(...args),
+      verifyEmailOTP: (...args: unknown[]) => verifyEmailOTP(...args),
     },
   }),
 }));
@@ -54,11 +63,28 @@ vi.mock("@/lib/auth/rateLimit", () => ({
 const enqueueEmail = vi.fn();
 vi.mock("@/lib/mail/mailQueue", () => ({ enqueueEmail: (...args: unknown[]) => enqueueEmail(...args) }));
 
+// Email Phase 3 — signup()'s invite bridge (lib/auth/signupGate.ts). The
+// actual allow/deny decision happens inside better-auth's validateUserInfo
+// hook (packages/auth/src/config.ts, not exercised here) — these tests
+// cover only what signup() itself is responsible for: reading `next`,
+// read-only-validating an invite token, and setting the one-time bridge
+// flag before signUpEmail is called.
+const allowSignupOnce = vi.fn();
+const isOrgInviteTokenValid = vi.fn();
+const peekPlatformInviteEmail = vi.fn();
+vi.mock("@/lib/auth/signupGate", () => ({
+  allowSignupOnce: (...args: unknown[]) => allowSignupOnce(...args),
+  isOrgInviteTokenValid: (...args: unknown[]) => isOrgInviteTokenValid(...args),
+  peekPlatformInviteEmail: (...args: unknown[]) => peekPlatformInviteEmail(...args),
+}));
+
 const {
   requestLoginCode,
   loginWithCode,
   requestPasswordReset,
   resetPasswordWithCode,
+  signup,
+  verifySignupEmail,
 } = await import("./actions");
 
 function formData(fields: Record<string, string>): FormData {
@@ -72,6 +98,11 @@ beforeEach(() => {
   signInEmailOTP.mockReset();
   requestPasswordResetEmailOTP.mockReset();
   resetPasswordEmailOTP.mockReset();
+  signUpEmail.mockReset();
+  verifyEmailOTP.mockReset();
+  allowSignupOnce.mockReset();
+  isOrgInviteTokenValid.mockReset();
+  peekPlatformInviteEmail.mockReset();
   query.mockReset();
   enqueueEmail.mockReset();
   redirect.mockClear();
@@ -212,5 +243,128 @@ describe("resetPasswordWithCode", () => {
     expect(result?.error).toMatch(/invalid or has expired/i);
     expect(resetPasswordEmailOTP).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe("signup", () => {
+  const signupForm = (extra: Record<string, string> = {}) =>
+    formData({
+      fullName: "New User",
+      email: "new@example.com",
+      password: "password123",
+      ...extra,
+    });
+
+  it("surfaces the signup gate's rejection message for an unknown/not-yet-approved email", async () => {
+    // This is what happens when SIGNUP_MODE=request and the gate's
+    // validateUserInfo hook (packages/auth/src/config.ts) rejects —
+    // better-auth surfaces that rejection to signUpEmail's caller as an
+    // APIError, same as any other better-auth validation failure.
+    signUpEmail.mockRejectedValue(new APIError("BAD_REQUEST", { message: "This email hasn't been approved for access yet." }));
+
+    const result = await signup(null, signupForm());
+
+    expect(result?.error).toMatch(/approved for access/i);
+    expect(allowSignupOnce).not.toHaveBeenCalled();
+  });
+
+  it("signs up normally (no bridge) when next doesn't point at an invite accept URL", async () => {
+    signUpEmail.mockResolvedValue({ token: "tok-1" });
+
+    const result = await signup(null, signupForm({ next: "/app" }));
+
+    expect(result).toMatchObject({ success: true, token: "tok-1", next: "/app" });
+    expect(isOrgInviteTokenValid).not.toHaveBeenCalled();
+    expect(peekPlatformInviteEmail).not.toHaveBeenCalled();
+    expect(allowSignupOnce).not.toHaveBeenCalled();
+  });
+
+  it("bridges a valid org invite (next=/invite/<token>): sets the one-time allow flag before signing up", async () => {
+    isOrgInviteTokenValid.mockResolvedValue(true);
+    signUpEmail.mockResolvedValue({ token: "tok-2" });
+
+    const result = await signup(null, signupForm({ next: "/invite/raw-token" }));
+
+    expect(isOrgInviteTokenValid).toHaveBeenCalledWith("raw-token");
+    expect(allowSignupOnce).toHaveBeenCalledWith("new@example.com");
+    expect(result).toMatchObject({ success: true, next: "/invite/raw-token" });
+  });
+
+  it("does not set the allow flag for an invalid/expired org invite token", async () => {
+    isOrgInviteTokenValid.mockResolvedValue(false);
+    signUpEmail.mockResolvedValue({ token: "tok-3" });
+
+    await signup(null, signupForm({ next: "/invite/bad-token" }));
+
+    expect(allowSignupOnce).not.toHaveBeenCalled();
+  });
+
+  it("bridges a valid platform invite (next=/accept-invite/<token>) when the email matches", async () => {
+    peekPlatformInviteEmail.mockResolvedValue("new@example.com");
+    signUpEmail.mockResolvedValue({ token: "tok-4" });
+
+    const result = await signup(null, signupForm({ next: "/accept-invite/raw-token" }));
+
+    expect(peekPlatformInviteEmail).toHaveBeenCalledWith("raw-token");
+    expect(allowSignupOnce).toHaveBeenCalledWith("new@example.com");
+    expect(result).toMatchObject({ success: true, next: "/accept-invite/raw-token" });
+  });
+
+  it("returns a field error for a platform invite issued to a different email, without signing up", async () => {
+    peekPlatformInviteEmail.mockResolvedValue("someone-else@example.com");
+
+    const result = await signup(null, signupForm({ next: "/accept-invite/raw-token" }));
+
+    expect(result?.fieldErrors?.email).toEqual(["This invite is for a different email address."]);
+    expect(allowSignupOnce).not.toHaveBeenCalled();
+    expect(signUpEmail).not.toHaveBeenCalled();
+  });
+
+  // Email Phase 3 security fix: SIGNUP_MODE=request also sets
+  // requireEmailVerification (packages/auth/src/config.ts), so signUpEmail
+  // withholds the session (token: null) until the OTP is confirmed —
+  // knowing an approved/invited email alone must never be enough to get a
+  // live session.
+  it("reports emailVerificationRequired (no token) instead of erroring when the gate requires email verification", async () => {
+    signUpEmail.mockResolvedValue({ token: null, user: { email: "new@example.com" } });
+
+    const result = await signup(null, signupForm({ next: "/app" }));
+
+    expect(result).toMatchObject({ emailVerificationRequired: true, email: "new@example.com", next: "/app" });
+    expect(result?.success).toBeUndefined();
+    expect(result?.token).toBeUndefined();
+  });
+});
+
+describe("verifySignupEmail", () => {
+  const verifyForm = (extra: Record<string, string> = {}) =>
+    formData({ email: "new@example.com", otp: "123456", next: "/app", ...extra });
+
+  it("returns a token and signs the user in once the OTP is confirmed", async () => {
+    verifyEmailOTP.mockResolvedValue({ status: true, token: "tok-verified", user: { email: "new@example.com" } });
+
+    const result = await verifySignupEmail(null, verifyForm());
+
+    expect(verifyEmailOTP).toHaveBeenCalledWith({ body: { email: "new@example.com", otp: "123456" } });
+    expect(result).toMatchObject({ success: true, token: "tok-verified", next: "/app" });
+  });
+
+  it("stays on the verification step with a friendly error on an invalid/expired code", async () => {
+    verifyEmailOTP.mockRejectedValue(new APIError("BAD_REQUEST", { message: "Invalid OTP" }));
+
+    const result = await verifySignupEmail(null, verifyForm({ otp: "000000" }));
+
+    expect(result).toMatchObject({ emailVerificationRequired: true, email: "new@example.com", next: "/app" });
+    expect(result?.error).toMatch(/invalid or has expired/i);
+    expect(result?.success).toBeUndefined();
+  });
+
+  it("returns the same invalid-code error when rate-limited, without checking the code", async () => {
+    isAuthActionRateLimited.mockResolvedValue(true);
+
+    const result = await verifySignupEmail(null, verifyForm());
+
+    expect(result?.error).toMatch(/invalid or has expired/i);
+    expect(verifyEmailOTP).not.toHaveBeenCalled();
   });
 });

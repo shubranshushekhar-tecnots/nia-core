@@ -93,6 +93,21 @@ export const ModelPricesIcon: IconComponent = ({ size = 16 }) => (
   </svg>
 );
 
+export const AccessRequestsIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+    <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="1.6" />
+    <path d="M3.5 19.5c0-3.3 2.7-5.5 5.5-5.5s5.5 2.2 5.5 5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    <path d="M16 8.5h4.5M18.25 6.25v4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+  </svg>
+);
+
+export const InvitationsIcon: IconComponent = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+    <rect x="4" y="6" width="16" height="12" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    <path d="M4.5 7 12 13l7.5-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
 export const SearchIcon: IconComponent = ({ size = 14 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
     <circle cx="10.5" cy="10.5" r="6" stroke="currentColor" strokeWidth="1.6" />

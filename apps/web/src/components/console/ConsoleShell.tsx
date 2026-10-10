@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { logout } from '@/lib/auth/actions';
+import { getConsolePendingAccessRequestCount } from '@/lib/api/consoleServer';
 import {
   consoleBodyRowStyle,
   consoleBrandMarkStyle,
@@ -13,6 +14,7 @@ import {
   consoleIdentitySubStyle,
   consoleIdentityWrapStyle,
   consoleMainColStyle,
+  consoleNavBadgeStyle,
   consoleNavGroupLabelStyle,
   consoleNavIconStyle,
   consoleNavItemStyle,
@@ -28,8 +30,10 @@ import {
 } from './styles';
 import { buildNavGroups, type NavIconKey } from './navGroups';
 import {
+  AccessRequestsIcon,
   AuditLogsIcon,
   AnnouncementsIcon,
+  InvitationsIcon,
   ModelPricesIcon,
   OrganizationsIcon,
   OverviewIcon,
@@ -49,6 +53,8 @@ const NAV_ICON: Record<NavIconKey, IconComponent> = {
   users: UsersIcon,
   organizations: OrganizationsIcon,
   'platform-staff': PlatformStaffIcon,
+  'access-requests': AccessRequestsIcon,
+  invitations: InvitationsIcon,
   'projects-workflows': ProjectsWorkflowsIcon,
   plans: PlansIcon,
   'audit-logs': AuditLogsIcon,
@@ -56,7 +62,21 @@ const NAV_ICON: Record<NavIconKey, IconComponent> = {
   'model-prices': ModelPricesIcon,
 };
 
-export default function ConsoleShell({
+// Email Phase 3: pending access-requests count surfaces as a nav badge
+// (consoleNavBadgeStyle) rather than requiring every console page to pass
+// it down — ConsoleShell already renders on every /console/* page, so
+// fetching it once here keeps the badge live everywhere without touching
+// the ~14 page.tsx call sites. Swallows errors (defaults to 0) so a
+// transient apps/api hiccup never breaks the whole console shell.
+async function getPendingAccessRequestCount(): Promise<number> {
+  try {
+    return await getConsolePendingAccessRequestCount();
+  } catch {
+    return 0;
+  }
+}
+
+export default async function ConsoleShell({
   activeNavId,
   email,
   paymentsEnabled = false,
@@ -70,6 +90,8 @@ export default function ConsoleShell({
   const groups = buildNavGroups(paymentsEnabled);
   const initials = email.slice(0, 2).toUpperCase();
   const env = process.env.NODE_ENV === 'production' ? 'PROD' : 'LOCAL';
+  const pendingAccessRequests = await getPendingAccessRequestCount();
+  const navBadges: Record<string, number> = { 'access-requests': pendingAccessRequests };
 
   return (
     <div data-theme="console" className="console-theme" style={consoleShellRootStyle}>
@@ -106,12 +128,14 @@ export default function ConsoleShell({
                   const active = n.id === activeNavId;
                   const enabled = Boolean(n.href);
                   const Icon = NAV_ICON[n.icon];
+                  const badgeCount = navBadges[n.id];
                   const content = (
                     <>
                       <span style={consoleNavIconStyle(active)}>
                         <Icon size={16} />
                       </span>
                       <span style={{ flex: 1, textAlign: 'left', fontSize: 13 }}>{n.label}</span>
+                      {Boolean(badgeCount) && <span style={consoleNavBadgeStyle}>{badgeCount}</span>}
                     </>
                   );
                   return enabled ? (

@@ -807,3 +807,109 @@ export type ConsoleCreateModelPriceInput = {
   currency?: string;
   effectiveFrom?: string;
 };
+
+/**
+ * Email Phase 3 — types + wrappers for GET/PATCH /console/access-requests
+ * (apps/api/src/routes/consoleAccessRequests.ts, mirrored exactly). Backs
+ * the "Access requests" console screen's review queue for the public
+ * /request-access form.
+ */
+export type ConsoleAccessRequest = {
+  id: string;
+  email: string;
+  fullName: string;
+  company: string;
+  jobRole: string | null;
+  useCase: string;
+  dataSources: string[];
+  referralSource: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  rejectedReason: string | null;
+  planId: string | null;
+  grantPlanId: string | null;
+  grantExpiresAt: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  signedUpUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConsoleAccessRequestsPage = {
+  items: ConsoleAccessRequest[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+export async function getConsoleAccessRequests(params?: {
+  status?: 'pending' | 'approved' | 'rejected';
+  search?: string;
+  offset?: number;
+}): Promise<ConsoleAccessRequestsPage> {
+  const query = new URLSearchParams();
+  if (params?.status) query.set('status', params.status);
+  if (params?.search) query.set('search', params.search);
+  if (params?.offset) query.set('offset', String(params.offset));
+  const qs = query.toString();
+  return apiFetchServer<ConsoleAccessRequestsPage>(`/console/access-requests${qs ? `?${qs}` : ''}`);
+}
+
+export async function getConsoleAccessRequest(id: string): Promise<ConsoleAccessRequest> {
+  return apiFetchServer<ConsoleAccessRequest>(`/console/access-requests/${encodeURIComponent(id)}`);
+}
+
+// Backs ConsoleShell's nav badge — deliberately a separate endpoint from
+// getConsoleAccessRequests above, which writes an audit-log row per call
+// (see consoleAccessRequests.ts's pending-count route comment).
+export async function getConsolePendingAccessRequestCount(): Promise<number> {
+  const { count } = await apiFetchServer<{ count: number }>('/console/access-requests/pending-count');
+  return count;
+}
+
+/**
+ * Email Phase 3 — types + wrappers for GET/POST /console/platform-invites
+ * (apps/api/src/routes/consolePlatformInvites.ts, mirrored exactly). Backs
+ * the "Invitations" console screen (staff-initiated direct platform
+ * invites, distinct from org-scoped invite_links). `expired` is computed
+ * server-side at read time, not stored.
+ */
+export type ConsolePlatformInvite = {
+  id: string;
+  email: string;
+  name: string | null;
+  status: 'pending' | 'accepted' | 'revoked';
+  expired: boolean;
+  note: string | null;
+  planId: string | null;
+  grantPlanId: string | null;
+  grantExpiresAt: string | null;
+  invitedBy: string;
+  expiresAt: string;
+  acceptedAt: string | null;
+  acceptedUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConsolePlatformInvitesPage = {
+  items: ConsolePlatformInvite[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+export async function getConsolePlatformInvites(params?: {
+  status?: 'pending' | 'accepted' | 'revoked';
+  search?: string;
+  offset?: number;
+}): Promise<ConsolePlatformInvitesPage> {
+  const query = new URLSearchParams();
+  if (params?.status) query.set('status', params.status);
+  if (params?.search) query.set('search', params.search);
+  if (params?.offset) query.set('offset', String(params.offset));
+  const qs = query.toString();
+  return apiFetchServer<ConsolePlatformInvitesPage>(`/console/platform-invites${qs ? `?${qs}` : ''}`);
+}

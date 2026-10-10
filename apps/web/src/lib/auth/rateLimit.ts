@@ -11,7 +11,7 @@ import { headers } from "next/headers";
  */
 let redis: Redis | undefined;
 
-function getRedis(): Redis {
+export function getRedis(): Redis {
   if (!redis) {
     const redisUrl = process.env.REDIS_URL;
     if (!redisUrl) {

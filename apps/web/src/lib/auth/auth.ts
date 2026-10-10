@@ -2,6 +2,7 @@ import { createAuth, type Auth, type AuthEmailType } from "@nia/auth";
 import { nextCookies } from "better-auth/next-js";
 import { getPool } from "@/lib/db/pool";
 import { enqueueEmail } from "@/lib/mail/mailQueue";
+import { checkSignupAllowed } from "@/lib/auth/signupGate";
 
 // Shared with @nia/auth's config.ts: the emailOTP plugin is configured with
 // one `expiresIn: 600` for every OTP type (sign-in, email-verification,
@@ -79,6 +80,20 @@ export function getAuth(): WebAuth {
       secret: process.env.BETTER_AUTH_SECRET!,
       plugins: [nextCookies()],
       sendAuthEmail,
+      // Email Phase 3: gate signups unless SIGNUP_MODE is explicitly "open" —
+      // fail-safe default. An unset/misconfigured env var must never silently
+      // fall open in production; "open" is an opt-in escape hatch, not the
+      // absence of a value. Left undefined (not a function returning true)
+      // only in that explicit "open" case so createAuth's validateUserInfo
+      // hook is a no-op — see @nia/auth's config.ts for why that's safe for
+      // existing-user sign-in.
+      checkSignupAllowed: process.env.SIGNUP_MODE === "open" ? undefined : checkSignupAllowed,
+      // Email Phase 3 security fix: same fail-safe condition as
+      // checkSignupAllowed — without this, the email-allowlist gate above
+      // could be satisfied by anyone who merely knows an approved/invited
+      // email address, not just whoever owns its inbox. See @nia/auth's
+      // config.ts for the mechanism.
+      requireEmailVerification: process.env.SIGNUP_MODE !== "open",
     });
   }
   return authInstance;

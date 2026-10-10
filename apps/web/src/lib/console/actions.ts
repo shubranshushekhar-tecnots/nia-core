@@ -2,9 +2,13 @@
 
 import { apiFetchServer, ApiError } from '@/lib/api/server';
 import {
+  getConsoleAccessRequests,
   getConsoleAuditLogs,
   getConsoleModelPrices,
+  getConsolePlatformInvites,
   getConsoleUsageData,
+  type ConsoleAccessRequest,
+  type ConsoleAccessRequestsPage,
   type ConsoleAnnouncement,
   type ConsoleAnnouncementsPage,
   type ConsoleAuditLogFilters,
@@ -15,6 +19,8 @@ import {
   type ConsoleOrgsPage,
   type ConsolePlanOverrideFields,
   type ConsolePlanUpdateResult,
+  type ConsolePlatformInvite,
+  type ConsolePlatformInvitesPage,
   type ConsoleProjectsPage,
   type ConsoleStaffPage,
   type ConsoleUsageData,
@@ -460,5 +466,152 @@ export async function createModelPriceAction(
   } catch (err) {
     if (err instanceof ApiError) return { ok: false, error: err.message };
     return { ok: false, error: "Couldn't add the price. Try again." };
+  }
+}
+
+/**
+ * Email Phase 3: ConsoleAccessRequestsClient's status-tab switch and search
+ * box both call this — plain data-fetching Server Action, same non-mutation
+ * shape as searchUsersAction above, delegating to consoleServer.ts's
+ * getConsoleAccessRequests so the initial server-rendered page and every
+ * reload/pagination call share one request-building path.
+ */
+export async function loadAccessRequestsAction(
+  status: 'pending' | 'approved' | 'rejected' | undefined,
+  search: string,
+  offset: number,
+): Promise<ConsoleAccessRequestsPage> {
+  return getConsoleAccessRequests({ status, search: search || undefined, offset: offset || undefined });
+}
+
+/**
+ * Email Phase 3: AccessRequestApproveForm's approve submit, calling
+ * PATCH /console/access-requests/:id/approve — same useTransition-driven,
+ * ok/error mutation shape as updatePlanAction above. `planId` picks the
+ * base plan immediately; `grantPlanId`/`grantExpiresAt` are an optional
+ * temporary grant, same semantics as updateOrgPlanAction's grant fields.
+ */
+export async function approveAccessRequestAction(
+  id: string,
+  planId: string | undefined,
+  grantPlanId: string | null,
+  grantExpiresAt: string | null,
+): Promise<{ ok: true; request: ConsoleAccessRequest } | { ok: false; error: string }> {
+  try {
+    const request = await apiFetchServer<ConsoleAccessRequest>(`/console/access-requests/${encodeURIComponent(id)}/approve`, {
+      method: 'PATCH',
+      body: JSON.stringify({ planId, grantPlanId, grantExpiresAt }),
+    });
+    return { ok: true, request };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't approve this request. Try again." };
+  }
+}
+
+/**
+ * Email Phase 3: AccessRequestApproveForm's reject submit, calling
+ * PATCH /console/access-requests/:id/reject — same shape as
+ * approveAccessRequestAction above. Also used to re-reject (no status
+ * guard on the route) and the route allows re-approving a previously
+ * rejected row via approveAccessRequestAction, matching the spec's
+ * explicit "re-approve a rejected row" test case.
+ */
+export async function rejectAccessRequestAction(
+  id: string,
+  reason: string,
+): Promise<{ ok: true; request: ConsoleAccessRequest } | { ok: false; error: string }> {
+  try {
+    const request = await apiFetchServer<ConsoleAccessRequest>(`/console/access-requests/${encodeURIComponent(id)}/reject`, {
+      method: 'PATCH',
+      body: JSON.stringify({ reason: reason || undefined }),
+    });
+    return { ok: true, request };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't reject this request. Try again." };
+  }
+}
+
+/**
+ * Email Phase 3: ConsoleInvitationsClient's status-tab switch and search
+ * box both call this — same non-mutation shape as loadAccessRequestsAction
+ * above, delegating to consoleServer.ts's getConsolePlatformInvites.
+ */
+export async function loadPlatformInvitesAction(
+  status: 'pending' | 'accepted' | 'revoked' | undefined,
+  search: string,
+  offset: number,
+): Promise<ConsolePlatformInvitesPage> {
+  return getConsolePlatformInvites({ status, search: search || undefined, offset: offset || undefined });
+}
+
+/**
+ * Email Phase 3: ConsoleInvitationsClient's "Invite" create form, calling
+ * POST /console/platform-invites — same ok/error mutation shape as
+ * createAnnouncementAction above. The route 409s with
+ * `INVITE_ALREADY_PENDING` (surfaced verbatim as `error`, same "the
+ * route's own message IS the customer-facing copy" convention used
+ * elsewhere) if the email already has an active pending invite.
+ */
+export async function createPlatformInviteAction(input: {
+  email: string;
+  name?: string;
+  planId?: string;
+  grantPlanId?: string;
+  grantExpiresAt?: string;
+  note?: string;
+}): Promise<{ ok: true; invite: ConsolePlatformInvite } | { ok: false; error: string }> {
+  try {
+    const invite = await apiFetchServer<ConsolePlatformInvite>('/console/platform-invites', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    return { ok: true, invite };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't create the invite. Try again." };
+  }
+}
+
+/**
+ * Email Phase 3: ConsoleInvitationsClient's per-row "Resend" button, calling
+ * POST /console/platform-invites/:id/resend — same shape as
+ * createPlatformInviteAction above. Mints a fresh token/link on the same
+ * row (see consolePlatformInvites.ts's header comment) and bumps the
+ * 7-day expiry.
+ */
+export async function resendPlatformInviteAction(
+  id: string,
+): Promise<{ ok: true; invite: ConsolePlatformInvite } | { ok: false; error: string }> {
+  try {
+    const invite = await apiFetchServer<ConsolePlatformInvite>(
+      `/console/platform-invites/${encodeURIComponent(id)}/resend`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    return { ok: true, invite };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't resend this invite. Try again." };
+  }
+}
+
+/**
+ * Email Phase 3: ConsoleInvitationsClient's per-row "Revoke" button, calling
+ * POST /console/platform-invites/:id/revoke — same shape as
+ * resendPlatformInviteAction above.
+ */
+export async function revokePlatformInviteAction(
+  id: string,
+): Promise<{ ok: true; invite: ConsolePlatformInvite } | { ok: false; error: string }> {
+  try {
+    const invite = await apiFetchServer<ConsolePlatformInvite>(
+      `/console/platform-invites/${encodeURIComponent(id)}/revoke`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    return { ok: true, invite };
+  } catch (err) {
+    if (err instanceof ApiError) return { ok: false, error: err.message };
+    return { ok: false, error: "Couldn't revoke this invite. Try again." };
   }
 }

@@ -3,11 +3,12 @@
 import { useActionState, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import AuthShell from './AuthShell';
-import { signup, type ActionState } from '@/lib/auth/actions';
+import { signup, verifySignupEmail, type ActionState } from '@/lib/auth/actions';
 import { setStoredBearerToken } from '@/lib/auth/browserSession';
 import { nxModalErrorStyle, nxModalFieldStyle } from '@/components/app/styles';
 import { nxOnboardingAlertStyle } from './onboardingStyles';
 import {
+  nxAuthCodeFieldStyle,
   nxAuthEyeBtnStyle,
   nxAuthFieldGroupStyle,
   nxAuthFormStyle,
@@ -26,28 +27,85 @@ export default function SignupForm() {
   const searchParams = useSearchParams();
   const next = searchParams.get('next') ?? '';
   const [state, formAction, pending] = useActionState(signup, initialState);
+  // Email Phase 3 security fix: a second action/form for the "enter the
+  // code we emailed you" step, shown instead of a redirect whenever
+  // signup() reports emailVerificationRequired (SIGNUP_MODE=request) —
+  // mirrors LoginForm's requestCodeAction/codeLoginAction split.
+  const [verifyState, verifyAction, verifyPending] = useActionState(verifySignupEmail, initialState);
   const [pwShown, setPwShown] = useState(false);
   const hasError = Boolean(state?.error);
 
+  const verificationRequired = Boolean(state?.emailVerificationRequired || verifyState?.emailVerificationRequired);
+  const activeState = verificationRequired ? (verifyState ?? state) : state;
+  const verifyEmail = verifyState?.email ?? state?.email ?? '';
+  const verifyNext = verifyState?.next ?? state?.next ?? next;
+
   // Same reasoning as LoginForm: httpOnly session cookie means the token
   // for Client Component API calls has to be handed back explicitly and
-  // stored here, before navigating.
+  // stored here, before navigating. Covers both the direct-signup success
+  // path and the post-verification success path (both return the same
+  // {success, token, next} shape).
   useEffect(() => {
-    if (state?.success && state.token) {
-      setStoredBearerToken(state.token);
-      router.push(state.next ?? '/app');
+    if (activeState?.success && activeState.token) {
+      setStoredBearerToken(activeState.token);
+      router.push(activeState.next ?? '/app');
     }
-  }, [state, router]);
+  }, [activeState, router]);
 
   return (
     <AuthShell
-      kicker="ACCOUNT / SIGN UP"
-      heading="Create your account"
-      subtitle="One account, any number of organizations."
+      kicker={verificationRequired ? 'ACCOUNT / VERIFY EMAIL' : 'ACCOUNT / SIGN UP'}
+      heading={verificationRequired ? 'Check your email' : 'Create your account'}
+      subtitle={
+        verificationRequired
+          ? `Enter the code we sent to ${verifyEmail}.`
+          : 'One account, any number of organizations.'
+      }
       footerQuestion="Already have an account?"
       footerLinkText="Sign in"
       footerHref={next ? `/login?next=${encodeURIComponent(next)}` : '/login'}
     >
+      {verificationRequired ? (
+        <form action={verifyAction} className="nx-auth-form-pad" style={nxAuthFormStyle}>
+          {verifyNext && <input type="hidden" name="next" value={verifyNext} />}
+          <input type="hidden" name="email" value={verifyEmail} />
+
+          <div style={nxAuthFieldGroupStyle}>
+            <label htmlFor="signup-otp" style={nxAuthLabelStyle(Boolean(verifyState?.fieldErrors?.otp))}>
+              Verification code
+            </label>
+            <input
+              id="signup-otp"
+              name="otp"
+              type="text"
+              placeholder="000000"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              spellCheck={false}
+              className="nx-modal-field"
+              style={nxAuthCodeFieldStyle(Boolean(verifyState?.error) || Boolean(verifyState?.fieldErrors?.otp))}
+            />
+            {verifyState?.fieldErrors?.otp && <span style={nxModalErrorStyle}>{verifyState.fieldErrors.otp[0]}</span>}
+          </div>
+
+          {verifyState?.error && (
+            <div role="alert" style={nxOnboardingAlertStyle}>
+              {verifyState.error}
+            </div>
+          )}
+
+          <button type="submit" disabled={verifyPending} style={nxAuthSubmitBtnStyle(verifyPending)}>
+            <span style={nxAuthSubmitLabelRowStyle}>
+              {verifyPending && <span className="nx-spinner" aria-hidden />}
+              {verifyPending ? 'Verifying\u2026' : 'Verify and continue'}
+            </span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" aria-hidden>
+              <path d="M2.5 8h11M9 3.5 13.5 8 9 12.5" />
+            </svg>
+          </button>
+        </form>
+      ) : (
       <form action={formAction} className="nx-auth-form-pad" style={nxAuthFormStyle}>
         {next && <input type="hidden" name="next" value={next} />}
         <div style={nxAuthFieldGroupStyle}>
@@ -120,6 +178,7 @@ export default function SignupForm() {
           </svg>
         </button>
       </form>
+      )}
     </AuthShell>
   );
 }

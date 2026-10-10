@@ -207,6 +207,27 @@ export function consoleNavItemStyle(active: boolean, enabled: boolean): CSSPrope
   };
 }
 
+// Email Phase 3: pending-count pill next to a nav item's label (e.g.
+// "Access Requests"). Only rendered when the count is > 0. Same soft-accent
+// palette as consoleStaffBadgeStyle above, just pill-shaped for a number.
+export const consoleNavBadgeStyle: CSSProperties = {
+  boxSizing: 'border-box',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minWidth: 18,
+  height: 18,
+  padding: '0 5px',
+  borderRadius: 9,
+  fontFamily: 'var(--c-font-sans)',
+  fontSize: 11,
+  fontWeight: 700,
+  lineHeight: '16px',
+  color: 'var(--c-accent-text)',
+  background: 'var(--c-accent-soft)',
+  border: '1px solid var(--c-accent-line)',
+};
+
 // Icon slot now hosts an inline SVG component (icons.tsx) instead of a
 // Unicode glyph string — this only needs to color it, sizing lives on the
 // SVG itself.

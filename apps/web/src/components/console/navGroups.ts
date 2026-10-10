@@ -11,6 +11,8 @@ export type NavIconKey =
   | 'users'
   | 'organizations'
   | 'platform-staff'
+  | 'access-requests'
+  | 'invitations'
   | 'projects-workflows'
   | 'plans'
   | 'audit-logs'
@@ -50,6 +52,8 @@ const NAV_GROUPS: NavGroup[] = [
       { id: 'users', label: 'Users', icon: 'users', href: '/console/users' },
       { id: 'directory', label: 'Organizations', icon: 'organizations', href: '/console' },
       { id: 'staff', label: 'Platform Staff', icon: 'platform-staff', href: '/console/staff' },
+      { id: 'access-requests', label: 'Access Requests', icon: 'access-requests', href: '/console/access-requests' },
+      { id: 'invitations', label: 'Invitations', icon: 'invitations', href: '/console/invitations' },
     ],
   },
   {
