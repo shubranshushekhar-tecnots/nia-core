@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Uninstalls the Nia Agent launchd service on macOS. Leaves the data dir
+# Uninstalls the Nia Core Agent launchd service on macOS. Leaves the data dir
 # (config, encrypted secrets, spool, logs, status) in place by default —
 # pass --purge to remove it too.
 #
@@ -52,11 +52,11 @@ rm -rf "$HOME_DIR/bin"
 # The desktop app shell is just a binary (like $HOME_DIR/bin above), not user
 # data -- always remove it, regardless of --purge. Quietly a no-op on
 # service-only installs that never had it.
-APP_BUNDLE_DEST="/Applications/Nia Agent.app"
+APP_BUNDLE_DEST="/Applications/Nia Core Agent.app"
 if [[ -d "$APP_BUNDLE_DEST" ]]; then
   # Quit a running instance first -- same reasoning as install.sh: graceful
   # quit, then a forced kill if it ignored the request or isn't responding.
-  osascript -e 'tell application "Nia Agent" to quit' >/dev/null 2>&1 || true
+  osascript -e 'tell application "Nia Core Agent" to quit' >/dev/null 2>&1 || true
   sleep 1.5
   pkill -f "$APP_BUNDLE_DEST/Contents/MacOS/" >/dev/null 2>&1 || true
 fi

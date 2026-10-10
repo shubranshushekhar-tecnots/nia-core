@@ -115,7 +115,7 @@ describe("packaging/windows/install.ps1", () => {
   });
 
   // Regression test: RequestExecutionLevel admin means the installer
-  // process is elevated, so a plain Exec of "Nia Agent.exe" (or
+  // process is elevated, so a plain Exec of "Nia Core Agent.exe" (or
   // `nia-agent.exe open`) from the finish page would launch it running as
   // admin too -- wrong on its own, and it breaks the Electron app's
   // per-integrity-level single-instance lock. The fix launches through
@@ -132,7 +132,7 @@ describe("packaging/windows/install.ps1", () => {
     });
 
     it("never Execs the Electron shell or nia-agent.exe directly (that would run it elevated)", () => {
-      expect(fnBody).not.toContain('"$INSTDIR\\NiaAgentDesktop\\Nia Agent.exe"');
+      expect(fnBody).not.toContain('"$INSTDIR\\NiaAgentDesktop\\Nia Core Agent.exe"');
       expect(fnBody).not.toContain('"$INSTDIR\\nia-agent.exe" open');
     });
   });

@@ -94,7 +94,7 @@ jobs:
         run: pnpm --filter @nia/agent... run build
 
       # Windows dir build, on the Windows runner -- produces
-      # apps/agent-desktop/dist-electron/win-unpacked/Nia Agent.exe.
+      # apps/agent-desktop/dist-electron/win-unpacked/Nia Core Agent.exe.
       - name: Build the Electron desktop shell
         run: pnpm --filter @nia/agent-desktop run package
 

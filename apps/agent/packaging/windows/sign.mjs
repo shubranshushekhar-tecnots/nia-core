@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Authenticode-signs a Windows PE file (nia-agent.exe, the staged Electron
-// shell's Nia Agent.exe, or the final NiaCoreAgent-Setup-<version>.exe
+// shell's Nia Core Agent.exe, or the final NiaCoreAgent-Setup-<version>.exe
 // installer) using whichever signing credentials are configured in the
 // environment. Called from build-sea.mjs, build-installer.mjs (and, for the
 // Electron shell, build-release.mjs), never a standalone script.

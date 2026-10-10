@@ -59,10 +59,10 @@ $ProgramFiles64 = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:Progr
 $InstallDir = Join-Path $ProgramFiles64 "NiaAgent"
 $DataDir = Join-Path $env:ProgramData "NiaAgent"
 $LocalApiDir = Join-Path $DataDir "local-api"
-$ElectronExe = Join-Path $InstallDir "NiaAgentDesktop\Nia Agent.exe"
+$ElectronExe = Join-Path $InstallDir "NiaAgentDesktop\Nia Core Agent.exe"
 $StartMenuDir = Join-Path ([Environment]::GetFolderPath("CommonStartMenu")) "Programs\Nia Core Agent"
 $ServiceName = "nia-agent"
-$ElectronProcessName = "Nia Agent"
+$ElectronProcessName = "Nia Core Agent"
 
 # ============================================================================
 # Helpers
@@ -86,7 +86,7 @@ function Wait-ServiceRunning {
     return $false
 }
 
-# Waits for at least one "Nia Agent.exe" process to appear, polling
+# Waits for at least one "Nia Core Agent.exe" process to appear, polling
 # instead of a single immediate check -- Electron's own startup
 # (window creation, GPU process spawn) is not instant.
 function Wait-ElectronProcess {
@@ -101,7 +101,7 @@ function Wait-ElectronProcess {
 }
 
 function Stop-ElectronProcessTree {
-    taskkill /F /IM "Nia Agent.exe" /T 2>$null | Out-Null
+    taskkill /F /IM "Nia Core Agent.exe" /T 2>$null | Out-Null
 }
 
 function Wait-ElectronProcessGone {
@@ -265,10 +265,10 @@ Invoke-Section "CHECK 5: Electron relaunch (start/kill x3)" {
     for ($i = 1; $i -le 3; $i++) {
         Start-Process -FilePath $ElectronExe
         $procs = Wait-ElectronProcess -TimeoutSec 20
-        Add-Result -Check "CHECK 5.${i}: Nia Agent.exe starts" -Pass ([bool]$procs)
+        Add-Result -Check "CHECK 5.${i}: Nia Core Agent.exe starts" -Pass ([bool]$procs)
         Stop-ElectronProcessTree
         $gone = Wait-ElectronProcessGone -TimeoutSec 15
-        Add-Result -Check "CHECK 5.${i}: Nia Agent.exe stops" -Pass $gone
+        Add-Result -Check "CHECK 5.${i}: Nia Core Agent.exe stops" -Pass $gone
     }
 }
 
@@ -284,9 +284,9 @@ Invoke-Section "CHECK 6: single instance" {
     Start-Process -FilePath $ElectronExe
     Start-Sleep -Seconds 3
 
-    $procs = Get-CimInstance Win32_Process -Filter "Name='Nia Agent.exe'" -ErrorAction SilentlyContinue
+    $procs = Get-CimInstance Win32_Process -Filter "Name='Nia Core Agent.exe'" -ErrorAction SilentlyContinue
     if (-not $procs) {
-        Add-Result -Check "CHECK 6: exactly one process tree is running" -Pass $false -Detail "no Nia Agent.exe processes found"
+        Add-Result -Check "CHECK 6: exactly one process tree is running" -Pass $false -Detail "no Nia Core Agent.exe processes found"
     } else {
         $pids = @($procs | ForEach-Object { $_.ProcessId })
         $roots = @($procs | Where-Object { $pids -notcontains $_.ParentProcessId })

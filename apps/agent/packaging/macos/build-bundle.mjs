@@ -67,7 +67,7 @@ async function main() {
     console.log("[2/3] staging the desktop app shell (apps/agent-desktop)...");
     const notarized = await stageAgentDesktop(stageDir);
     if (notarized) {
-      // install.sh checks for this sentinel (alongside "Nia Agent.app" in
+      // install.sh checks for this sentinel (alongside "Nia Core Agent.app" in
       // the zip, not inside the bundle) to decide whether it's safe to
       // skip its own `xattr -dr com.apple.quarantine` workaround -- a
       // stapled, notarized bundle should rely on Gatekeeper/the stapled
@@ -94,7 +94,7 @@ async function main() {
 // helper of the same name -- a real bundle must never silently ship
 // without the desktop shell. Pass --no-desktop to intentionally build a
 // service-only bundle (dev builds only); install.sh already only copies
-// "Nia Agent.app" into /Applications when it's present, so a --no-desktop
+// "Nia Core Agent.app" into /Applications when it's present, so a --no-desktop
 // bundle is still a working, service-only install.
 async function stageAgentDesktop(stageDir) {
   const desktopBuildDir = path.join(agentDir, "..", "agent-desktop", "dist-electron");
@@ -109,11 +109,11 @@ async function stageAgentDesktop(stageDir) {
       `no mac-unpacked output under apps/agent-desktop/dist-electron -- run \`pnpm --filter @nia/agent-desktop package\` first, or pass --no-desktop to build a service-only bundle.`,
     );
   }
-  const src = path.join(desktopBuildDir, macDirName, "Nia Agent.app");
+  const src = path.join(desktopBuildDir, macDirName, "Nia Core Agent.app");
   if (!existsSync(src)) {
     throw new Error(`expected ${src} -- check apps/agent-desktop/electron-builder.yml's productName`);
   }
-  const dest = path.join(stageDir, "Nia Agent.app");
+  const dest = path.join(stageDir, "Nia Core Agent.app");
   cpSync(src, dest, { recursive: true });
   console.log(`  staged desktop app shell from ${src}`);
 

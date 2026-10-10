@@ -1,5 +1,5 @@
 <!--
-  WinSW v2 service descriptor for the Nia Agent. Lives alongside
+  WinSW v2 service descriptor for the Nia Core Agent. Lives alongside
   nia-agent-service.exe (the renamed, pinned+checksum-verified WinSW
   binary — see build-bundle.mjs) in the install directory.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Developer-ID-signs and notarizes a macOS binary (nia-agent, the SEA
-// executable built by build-sea.mjs) or app bundle (Nia Agent.app, the
+// executable built by build-sea.mjs) or app bundle (Nia Core Agent.app, the
 // Electron shell staged by build-bundle.mjs) using whichever Apple
 // credentials are configured in the environment. Called from those two
 // build scripts, never a standalone script.

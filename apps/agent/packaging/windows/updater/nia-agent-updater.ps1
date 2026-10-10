@@ -297,16 +297,16 @@ Write-Result @{ outcome = "installed"; version = $NewVersion }
 # launches the process in that user's session — no WTSQueryUserToken/
 # CreateProcessAsUser P/Invoke needed.
 try {
-    $TrayExe = Join-Path $InstallDir "NiaAgentDesktop\Nia Agent.exe"
+    $TrayExe = Join-Path $InstallDir "NiaAgentDesktop\Nia Core Agent.exe"
     if (-not (Test-Path $TrayExe)) {
-        Write-Log "no NiaAgentDesktop\Nia Agent.exe staged (service-only build) - skipping tray relaunch"
+        Write-Log "no NiaAgentDesktop\Nia Core Agent.exe staged (service-only build) - skipping tray relaunch"
     } else {
         $loggedOnUser = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).UserName
         if (-not $loggedOnUser) {
             Write-Log "no interactively logged-on user detected - skipping tray relaunch (it will start normally at next login via its own auto-launch setting)"
         } else {
             Write-Log "relaunching tray app for logged-on user $loggedOnUser"
-            & taskkill.exe /F /IM "Nia Agent.exe" /T 2>&1 | ForEach-Object { Write-Log "  taskkill: $_" }
+            & taskkill.exe /F /IM "Nia Core Agent.exe" /T 2>&1 | ForEach-Object { Write-Log "  taskkill: $_" }
             Start-Sleep -Seconds 2
 
             $relaunchTaskName = "NiaAgentTrayRelaunch"

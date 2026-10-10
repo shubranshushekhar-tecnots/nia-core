@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  launchd service descriptor template for the Nia Agent. install.sh fills
+  launchd service descriptor template for the Nia Core Agent. install.sh fills
   in the four placeholders below and writes the result to
   ~/Library/LaunchAgents/<label>.plist (per-user, default) or
   /Library/LaunchDaemons/<label>.plist (--system).

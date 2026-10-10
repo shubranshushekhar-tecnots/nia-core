@@ -175,10 +175,10 @@ async function stageAgentDesktop(stageDir) {
   const src = path.join(desktopBuildDir, winDirName);
   const dest = path.join(stageDir, "NiaAgentDesktop");
   cpSync(src, dest, { recursive: true });
-  const exePath = path.join(dest, "Nia Agent.exe");
+  const exePath = path.join(dest, "Nia Core Agent.exe");
   if (!existsSync(exePath)) {
     throw new Error(
-      `staged the desktop app shell from ${src} but did not find Nia Agent.exe at ${exePath} -- check apps/agent-desktop/electron-builder.yml's productName`,
+      `staged the desktop app shell from ${src} but did not find Nia Core Agent.exe at ${exePath} -- check apps/agent-desktop/electron-builder.yml's productName`,
     );
   }
   // Sign the staged copy, not the original in dist-electron -- it must be

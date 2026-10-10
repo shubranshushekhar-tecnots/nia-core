@@ -1,11 +1,11 @@
 # Code-only packaging config -- NOT run as part of this change (no installer/dmg build without
 # explicit approval, per instructions). `dir` target on every platform deliberately: this produces
-# only an unpacked app folder (win-unpacked/, mac/Nia Agent.app) for the *existing* NSIS installer
+# only an unpacked app folder (win-unpacked/, mac/Nia Core Agent.app) for the *existing* NSIS installer
 # (apps/agent/packaging/windows) and macOS install.sh (apps/agent/packaging/macos) to stage directly
 # -- electron-builder's own installer/dmg/auto-update machinery is out of scope; those two scripts
 # remain the one and only installer per OS.
 appId: com.nia.agent.desktop
-productName: Nia Agent
+productName: Nia Core Agent
 directories:
   output: dist-electron
 files:

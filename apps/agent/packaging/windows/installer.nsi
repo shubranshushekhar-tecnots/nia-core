@@ -44,6 +44,16 @@ Var DataDir
 Var PowerShellExe
 Var UninstPurge
 
+; Branding images (generated alongside the app icon assets) -- header.bmp is
+; the small strip shown on the Directory/InstFiles inner pages, wizard.bmp is
+; the tall side image shown on the Welcome/Finish pages. Must be !define'd
+; before the corresponding MUI_PAGE_* macros below, which read them at
+; expansion time.
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP "assets\header.bmp"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "assets\wizard.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "assets\wizard.bmp"
+
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -93,7 +103,7 @@ Function un.onInit
 FunctionEnd
 
 ; On Windows 10+ with the desktop app staged, the Electron shell
-; (NiaAgentDesktop\Nia Agent.exe) IS the setup experience -- it opens
+; (NiaAgentDesktop\Nia Core Agent.exe) IS the setup experience -- it opens
 ; straight to the agent's own UI (pairing included). On pre-Win10 (or if
 ; the desktop build wasn't staged for any reason), the Section "Install"
 ; above already created a Start Menu shortcut that falls back to the same
@@ -153,10 +163,10 @@ FunctionEnd
 ; Functions or macros can be used in both.
 !macro CloseAgentDesktopApp
   DetailPrint "Closing Nia Core Agent if it's running..."
-  nsExec::ExecToLog 'taskkill /IM "Nia Agent.exe" /T'
+  nsExec::ExecToLog 'taskkill /IM "Nia Core Agent.exe" /T'
   Pop $0
   Sleep 1500
-  nsExec::ExecToLog 'taskkill /F /IM "Nia Agent.exe" /T'
+  nsExec::ExecToLog 'taskkill /F /IM "Nia Core Agent.exe" /T'
   Pop $0
 !macroend
 
@@ -290,12 +300,12 @@ Section "Install" SEC01
   ; ACE install.ps1 already grants the installing user, not membership in
   ; Administrators.
   ; Same HAS_DESKTOP compile-time define as the staging block above --
-  ; $INSTDIR\NiaAgentDesktop\Nia Agent.exe was only just extracted a few
+  ; $INSTDIR\NiaAgentDesktop\Nia Core Agent.exe was only just extracted a few
   ; lines up (or not) based on that same build-time fact, so check it the
   ; same way rather than re-probing the filesystem here.
   !ifdef HAS_DESKTOP
   ${If} ${AtLeastWin10}
-    CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk" "$INSTDIR\NiaAgentDesktop\Nia Agent.exe" "" "$INSTDIR\NiaAgentDesktop\Nia Agent.exe" 0
+    CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk" "$INSTDIR\NiaAgentDesktop\Nia Core Agent.exe" "" "$INSTDIR\NiaAgentDesktop\Nia Core Agent.exe" 0
   ${Else}
     CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk" "$INSTDIR\nia-agent.exe" 'open' "$INSTDIR\nia-agent.exe" 0
   ${EndIf}

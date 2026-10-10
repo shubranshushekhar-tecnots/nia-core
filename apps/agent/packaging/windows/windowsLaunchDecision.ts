@@ -1,6 +1,6 @@
 // Mirrors installer.nsi's `${AtLeastWin10}` gate (WinVer.nsh), which
 // decides whether the finish page / Start Menu shortcut launches the
-// Electron shell (NiaAgentDesktop\Nia Agent.exe) or falls back to the
+// Electron shell (NiaAgentDesktop\Nia Core Agent.exe) or falls back to the
 // plain browser-based `nia-agent.exe open` flow -- see installer.nsi's
 // Section "Install" and RunSetupNow for the actual (NSIS) decision this
 // documents and tests. Windows 10 and Windows Server 2016 share
