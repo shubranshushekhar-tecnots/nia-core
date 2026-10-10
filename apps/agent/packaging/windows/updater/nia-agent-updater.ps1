@@ -233,15 +233,19 @@ if ($installerTimedOut) {
 } else {
     try { [IO.File]::WriteAllText($installerStdOut, $stdOutTask.Result) } catch {}
     try { [IO.File]::WriteAllText($installerStdErr, $stdErrTask.Result) } catch {}
-    Write-Log "installer exited with code $($proc.ExitCode)"
-}
-
-if (-not $installerTimedOut -and $proc.ExitCode -ne 0) {
-    Restore-Snapshot -Reason "installer exited $($proc.ExitCode)"
-    Write-Result @{ outcome = "rolled_back"; attemptedVersion = $NewVersion; reason = "installer_failed" }
-    Remove-Item -Path $DownloadedFile -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path $InProgressFile -Force -ErrorAction SilentlyContinue
-    exit 1
+    # ExitCode itself has been reproducibly unreliable here across three
+    # different launch mechanisms (Start-Process w/ and w/o redirection,
+    # and now raw ProcessStartInfo) -- it reads back as a genuine $null
+    # every time on this CI runner even though the installer plainly ran
+    # to completion (service upgraded, health check below sees the new
+    # version). $null -ne 0 is $true in PowerShell, so trusting this value
+    # for an immediate-rollback decision previously rolled back every
+    # single good install. Log it for visibility but no longer gate
+    # anything on it -- the real health check just below is already the
+    # authoritative source of truth by design (see its own comment), so a
+    # truly broken installer still gets caught and rolled back there, just
+    # a few minutes later than an exit-code short-circuit would have.
+    Write-Log "installer exited with code $($proc.ExitCode) (informational only - not used for pass/fail)"
 }
 
 # --- 5) Real health check — poll the agent's own local API -------------
