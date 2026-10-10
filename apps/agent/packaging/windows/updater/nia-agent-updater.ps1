@@ -1,4 +1,4 @@
-# Phase 6 external updater — runs as SYSTEM via the "NiaAgentUpdater"
+﻿# Phase 6 external updater — runs as SYSTEM via the "NiaAgentUpdater"
 # Scheduled Task (registered by install.ps1), triggered on-demand by the
 # agent service (which only has rights to START this task — see
 # install.ps1's task-registration step for the SID-scoped ACE that
@@ -71,7 +71,7 @@ Write-Log "nia-agent-updater starting (install dir: $InstallDir)"
 # can never race this one on the same request — Move-Item is atomic on
 # the same volume.
 if (-not (Test-Path $RequestFile)) {
-    Write-Log "no pending update request ($RequestFile not found) — nothing to do"
+    Write-Log "no pending update request ($RequestFile not found) - nothing to do"
     exit 0
 }
 Move-Item -Path $RequestFile -Destination $InProgressFile -Force
@@ -92,7 +92,7 @@ if (-not (Test-Path $DownloadedFile)) {
 # --- 1) Independent sha256 re-verification ---------------------------
 $actualSha256 = (Get-FileHash -Path $DownloadedFile -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualSha256 -ne $ExpectedSha256.ToLowerInvariant()) {
-    Write-Log "FAILED: sha256 mismatch (expected $ExpectedSha256, got $actualSha256) — refusing to install"
+    Write-Log "FAILED: sha256 mismatch (expected $ExpectedSha256, got $actualSha256) - refusing to install"
     Write-Result @{ outcome = "rejected"; reason = "checksum_mismatch"; version = $NewVersion }
     Remove-Item -Path $DownloadedFile -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $InProgressFile -Force -ErrorAction SilentlyContinue
@@ -116,13 +116,13 @@ $unsignedMarker = Join-Path $InstallDir "UNSIGNED-TEST-BUILD.txt"
 $expectedPublisherFile = Join-Path $InstallDir "expected-publisher.json"
 
 if (Test-Path $unsignedMarker) {
-    Write-Log "WARN  $unsignedMarker present — this is an unsigned test build; skipping publisher verification"
+    Write-Log "WARN  $unsignedMarker present - this is an unsigned test build; skipping publisher verification"
 } elseif (Test-Path $expectedPublisherFile) {
     $expectedPublisher = (Get-Content -Path $expectedPublisherFile -Raw | ConvertFrom-Json).subject
     $signature = Get-AuthenticodeSignature -FilePath $DownloadedFile
     $subjectOk = $signature.SignerCertificate -and ($signature.SignerCertificate.Subject -like "*$expectedPublisher*")
     if ($signature.Status -ne "Valid" -or -not $subjectOk) {
-        Write-Log "FAILED: Authenticode verification failed (status=$($signature.Status), subject='$($signature.SignerCertificate.Subject)', expected to contain '$expectedPublisher') — refusing to install"
+        Write-Log "FAILED: Authenticode verification failed (status=$($signature.Status), subject='$($signature.SignerCertificate.Subject)', expected to contain '$expectedPublisher') - refusing to install"
         Write-Result @{ outcome = "rejected"; reason = "publisher_mismatch"; version = $NewVersion }
         Remove-Item -Path $DownloadedFile -Force -ErrorAction SilentlyContinue
         Remove-Item -Path $InProgressFile -Force -ErrorAction SilentlyContinue
@@ -130,7 +130,7 @@ if (Test-Path $unsignedMarker) {
     }
     Write-Log "Authenticode publisher verified: $($signature.SignerCertificate.Subject)"
 } else {
-    Write-Log "WARN  no expected-publisher.json staged in this install — proceeding on sha256 verification only"
+    Write-Log "WARN  no expected-publisher.json staged in this install - proceeding on sha256 verification only"
 }
 
 # --- 3) Snapshot the current install for rollback ----------------------
@@ -143,7 +143,7 @@ Write-Log "snapshotting $InstallDir -> $BackupDir"
 # Exit codes 0-7 are all "success" for robocopy; 8+ is a real failure.
 & robocopy.exe $InstallDir $BackupDir /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS | Out-Null
 if ($LASTEXITCODE -ge 8) {
-    Write-Log "FAILED: robocopy snapshot exited $LASTEXITCODE — refusing to install without a rollback snapshot"
+    Write-Log "FAILED: robocopy snapshot exited $LASTEXITCODE - refusing to install without a rollback snapshot"
     Write-Result @{ outcome = "rejected"; reason = "snapshot_failed"; version = $NewVersion }
     Remove-Item -Path $InProgressFile -Force -ErrorAction SilentlyContinue
     exit 1
@@ -161,7 +161,7 @@ function Restore-Snapshot {
     & "$InstallDir\nia-agent-service.exe" stop 2>&1 | ForEach-Object { Write-Log "  $_" }
     & robocopy.exe $BackupDir $InstallDir /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS | Out-Null
     if ($LASTEXITCODE -ge 8) {
-        Write-Log "CRITICAL: restore robocopy exited $LASTEXITCODE — install dir may be inconsistent, manual intervention required"
+        Write-Log "CRITICAL: restore robocopy exited $LASTEXITCODE - install dir may be inconsistent, manual intervention required"
     }
     try {
         & "$InstallDir\install.ps1" -InPlace 2>&1 | ForEach-Object { Write-Log "  restore install.ps1: $_" }
@@ -211,7 +211,7 @@ if (-not $healthy) {
     exit 1
 }
 
-Write-Log "healthy at version $NewVersion — update succeeded"
+Write-Log "healthy at version $NewVersion - update succeeded"
 Remove-Item -Recurse -Force -Path $BackupDir -ErrorAction SilentlyContinue
 Remove-Item -Path $DownloadedFile -Force -ErrorAction SilentlyContinue
 Remove-Item -Path $InProgressFile -Force -ErrorAction SilentlyContinue
@@ -229,11 +229,11 @@ Write-Result @{ outcome = "installed"; version = $NewVersion }
 try {
     $TrayExe = Join-Path $InstallDir "NiaAgentDesktop\Nia Agent.exe"
     if (-not (Test-Path $TrayExe)) {
-        Write-Log "no NiaAgentDesktop\Nia Agent.exe staged (service-only build) — skipping tray relaunch"
+        Write-Log "no NiaAgentDesktop\Nia Agent.exe staged (service-only build) - skipping tray relaunch"
     } else {
         $loggedOnUser = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).UserName
         if (-not $loggedOnUser) {
-            Write-Log "no interactively logged-on user detected — skipping tray relaunch (it will start normally at next login via its own auto-launch setting)"
+            Write-Log "no interactively logged-on user detected - skipping tray relaunch (it will start normally at next login via its own auto-launch setting)"
         } else {
             Write-Log "relaunching tray app for logged-on user $loggedOnUser"
             & taskkill.exe /F /IM "Nia Agent.exe" /T 2>&1 | ForEach-Object { Write-Log "  taskkill: $_" }
