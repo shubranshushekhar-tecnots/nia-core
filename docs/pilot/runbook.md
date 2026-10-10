@@ -45,22 +45,21 @@ few classes also get fast automatic retries, noted below).
 
 ## Updates
 
-The agent checks for a newer version every few hours on its own,
-downloads it, verifies its checksum, and installs it — no action needed
-in the common case. It never installs while a job is running, and keeps
-the previous installer on hand to roll back to automatically if the new
-version ever fails its own post-install health check.
+**Automatic updates ship OFF by default** (0.0.7+ — see
+`docs/handoff/auto-update-0.0.8.md`). Use **Check now** (Settings →
+Updates) to check for and install a newer version manually at any time;
+it downloads it, verifies its checksum, and installs it — never while a
+job is running, and it keeps the previous installer on hand to roll
+back to automatically if the new version ever fails its own post-install
+health check. Turning on the **Automatic updates** toggle makes this
+happen by itself every few hours instead of only on demand.
 
 | Symptom | What it means | What to do |
 |---|---|---|
 | Agent's screen (Settings → Updates) shows "Update is available" but never moves to "ready to install" / installed | The download or checksum verification hasn't succeeded yet, or a job has been running continuously, blocking install. | Click **Check now** to retry immediately. If it's still stuck after that, check `nia-agent status` for job activity, and confirm the machine has outbound HTTPS access (same requirement as pairing/check-ins). |
 | Agent's screen shows "Update is ready to install" and doesn't go away | macOS system-wide install only (`install.sh --system`) — installing needs an administrator password the agent can't enter on its own. | Click it and approve the one prompt. |
-| `nia-agent status` keeps reporting the old version for more than a day after you know a newer one shipped | Automatic updates may be turned off, or the agent hasn't been able to reach the platform at all (a bigger problem than updates alone — check-ins would also be failing). | Open Settings → Updates and confirm the **Automatic updates** toggle is on; check `nia-agent status` for recent check-in activity. |
+| `nia-agent status` keeps reporting the old version for more than a day after you know a newer one shipped | Automatic updates are off by default — use **Check now** instead — or, if you expected them on, the agent hasn't been able to reach the platform at all (a bigger problem than updates alone — check-ins would also be failing). | Open Settings → Updates and either click **Check now** or confirm the **Automatic updates** toggle is on; check `nia-agent status` for recent check-in activity. |
 | An update installed but the agent now won't pair/check in, or a job that worked before now fails | The agent already detected this itself during the update's own post-install health check and should have rolled back automatically — this symptom means that didn't happen (health check itself still looked "up" despite a deeper problem). | Reinstall the previous or latest known-good version by hand from `docs/pilot/install-guide.md`'s normal install steps (safe to re-run over an existing install — pairing and configuration are untouched), then contact Nia support with the version numbers involved. |
-
-Automatic updates can be turned off entirely from the same Settings
-screen — not recommended outside of a deliberate freeze window, since it
-also means missing any future security fix.
 
 ## See also
 - `docs/pilot/install-guide.md` — setup.

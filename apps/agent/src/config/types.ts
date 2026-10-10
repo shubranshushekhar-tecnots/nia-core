@@ -181,10 +181,14 @@ export interface LinkConfig {
 
 /**
  * Phase 6 polish — auto-update. Unset is treated exactly like `{ enabled:
- * true }` (on by default) by updateChecker.ts; only an explicit `false`
- * turns it off. Kept as its own small object (rather than a bare boolean
- * field on AgentConfig) so a later knob (e.g. a pinned max version) has
- * somewhere to live without another top-level AgentConfig field.
+ * false }` (OFF by default — see docs/handoff/auto-update-0.0.8.md for why:
+ * the external updater's health-check/rollback handoff isn't fully proven
+ * on Windows yet). Only an explicit `true` (toggled via Settings' "Automatic
+ * updates" switch, or `agent config`) turns it on; "Check now" (manual,
+ * user-initiated) always works regardless of this flag. Kept as its own
+ * small object (rather than a bare boolean field on AgentConfig) so a later
+ * knob (e.g. a pinned max version) has somewhere to live without another
+ * top-level AgentConfig field.
  */
 export interface AutoUpdateConfig {
   enabled: boolean;
@@ -200,7 +204,7 @@ export interface AgentConfig {
   maxConcurrentRuns?: number;
   /** Unset until `nia-agent pair` succeeds — see LinkConfig's doc comment. */
   link?: LinkConfig;
-  /** Unset means enabled — see AutoUpdateConfig's doc comment. */
+  /** Unset means disabled — see AutoUpdateConfig's doc comment. */
   autoUpdate?: AutoUpdateConfig;
   connections: ConnectionEntry[];
   jobs: SyncJobEntry[];

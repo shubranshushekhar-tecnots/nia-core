@@ -64,7 +64,7 @@ export function validateConfig(value: unknown): AgentConfig {
   };
 }
 
-/** Unset unless `enabled` is well-typed — a partially hand-edited `autoUpdate` is treated the same as unset (i.e. enabled, per AutoUpdateConfig's doc comment). */
+/** Unset unless `enabled` is well-typed — a partially hand-edited `autoUpdate` is treated the same as unset (i.e. disabled, per AutoUpdateConfig's doc comment). */
 function validateAutoUpdate(value: unknown): AutoUpdateConfig | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const v = value as Record<string, unknown>;
@@ -72,9 +72,9 @@ function validateAutoUpdate(value: unknown): AutoUpdateConfig | undefined {
   return { enabled: v.enabled };
 }
 
-/** `updateChecker.ts`'s own "is auto-update on" read — unset config (or a config whose `autoUpdate` was dropped by `validateAutoUpdate` above) means enabled. */
+/** `updateChecker.ts`'s own "is auto-update on" read — unset config (or a config whose `autoUpdate` was dropped by `validateAutoUpdate` above) means disabled. See docs/handoff/auto-update-0.0.8.md. */
 export function isAutoUpdateEnabled(config: AgentConfig): boolean {
-  return config.autoUpdate?.enabled ?? true;
+  return config.autoUpdate?.enabled ?? false;
 }
 
 export function setAutoUpdateEnabled(config: AgentConfig, enabled: boolean): AgentConfig {

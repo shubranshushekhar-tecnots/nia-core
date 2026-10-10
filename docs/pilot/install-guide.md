@@ -228,7 +228,14 @@ it last checked in, and the health of each job. Run it any time.
 
 ## Updates
 
-The agent checks for a newer version by itself every few hours. When one
+**Automatic updates ship OFF by default** (see
+`docs/handoff/auto-update-0.0.8.md` for why). Open the agent's own
+screen → **Settings** → **Updates** → **Check now** to check for and
+install a newer version manually at any time; `nia-agent status` also
+reports a pending update if one is available but hasn't installed yet.
+
+Turning on the **Automatic updates** toggle in that same screen makes
+the agent check for a newer version by itself every few hours. When one
 is available it downloads it, verifies its checksum, and installs it
 with no action needed from you in the common case — it never installs
 mid-job, and it keeps the previous installer on hand so it can put it
@@ -242,11 +249,6 @@ health check.
   needs an administrator password, so the agent's own screen instead
   shows **"Update is ready to install"** — open it and approve the one
   prompt.
-
-To check right now instead of waiting, or to turn automatic updates off:
-open the agent's own screen → **Settings** → **Updates** (**Check now**
-button, **Automatic updates** toggle). `nia-agent status` also reports a
-pending update if one hasn't installed yet.
 
 If an update ever seems stuck — `nia-agent status` keeps reporting the
 old version for more than a day after you know a new one shipped — see

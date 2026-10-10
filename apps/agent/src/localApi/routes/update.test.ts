@@ -42,9 +42,9 @@ describe("update routes", () => {
     expect(tick).toHaveBeenCalledTimes(1);
   });
 
-  it("GET /update/settings defaults to enabled:true when nothing is configured yet", async () => {
+  it("GET /update/settings defaults to enabled:false when nothing is configured yet", async () => {
     const route = buildUpdateRoutes(deps).find((r) => r.method === "GET" && r.path === "/update/settings")!;
-    expect(await route.handler!(ctx())).toEqual({ enabled: true });
+    expect(await route.handler!(ctx())).toEqual({ enabled: false });
   });
 
   it("POST /update/settings persists the toggle, GET reflects it afterward", async () => {

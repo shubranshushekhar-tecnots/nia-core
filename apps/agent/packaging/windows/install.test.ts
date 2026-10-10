@@ -167,11 +167,16 @@ describe("packaging/windows/install.ps1", () => {
   // actually disappear before continuing — never just fire-and-forget the
   // stop/delete calls like 0.0.2 did.
   it("replaces an existing service by stopping (with timeout), ending its process tree, deleting, then waiting — in that order", () => {
-    const stopIndex = script.indexOf("sc.exe stop nia-agent");
-    const stopTimeoutIndex = script.indexOf('if (-not $stopped) {');
-    const endProcessIndex = script.indexOf("Stop-ProcessTreeById -ParentId");
-    const deleteIndex = script.indexOf("sc.exe delete nia-agent");
-    const waitGoneIndex = script.indexOf("Wait-ServiceGone -TimeoutSec 30");
+    // Anchored past the -StopOnly early-exit block (used by installer.nsi's
+    // pre-File-extraction hook), which has its own, separate copy of the
+    // same stop/kill calls — searching from offset 0 would match those
+    // instead of the main upgrade block this test actually describes.
+    const mainBlockStart = script.indexOf("Write-Log \"install.ps1 starting");
+    const stopIndex = script.indexOf("sc.exe stop nia-agent", mainBlockStart);
+    const stopTimeoutIndex = script.indexOf('if (-not $stopped) {', mainBlockStart);
+    const endProcessIndex = script.indexOf("Stop-ProcessTreeById -ParentId", mainBlockStart);
+    const deleteIndex = script.indexOf("sc.exe delete nia-agent", mainBlockStart);
+    const waitGoneIndex = script.indexOf("Wait-ServiceGone -TimeoutSec 30", mainBlockStart);
 
     for (const index of [stopIndex, stopTimeoutIndex, endProcessIndex, deleteIndex, waitGoneIndex]) {
       expect(index).toBeGreaterThan(-1);
