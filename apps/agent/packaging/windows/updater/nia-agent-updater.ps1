@@ -177,19 +177,36 @@ Write-Log "running installer silently: $DownloadedFile /S"
 # the hang), so let the same "poll /status for the new version" check that
 # already covers "exit code 0 but didn't actually come up" decide the truth.
 #
-# Explicitly redirect stdout/stderr to real files rather than leaving them
-# un-redirected. This SYSTEM Scheduled Task session has no allocated
-# console, and -NoNewWindow without redirection means .NET's Process class
-# tries to inherit nonexistent console handles -- observed on CI to result
-# in a process that exits normally (well within the 180s bound above, in
-# practice ~25-35s) but whose ExitCode then reads back as $null instead of
-# the real value, which previously looked like "exit code 0" failing the
-# `-ne 0` check and rolling back a good install every time. Redirecting
-# forces .NET to manage real pipe handles instead, which is the documented
-# fix for Start-Process/ExitCode reliability in non-interactive sessions.
+# Bypass the Start-Process cmdlet entirely for launching this -- two prior
+# fixes here (calling the parameterless WaitForExit() a second time to
+# "sync bookkeeping", then redirecting std*  to real files) were both
+# attempts to explain away the same CI-reproducible symptom and neither
+# one fixed it: ExitCode kept reading back as a genuine $null (no
+# exception -- the trap above would have caught and logged one) even
+# though the installer plainly ran to completion every time (service
+# upgraded, the health check further below saw the new version). That
+# rules out output-handle inheritance and exit-bookkeeping timing as the
+# cause and points at Start-Process -PassThru's returned Process object
+# itself being unreliable in this exact context (no console, SYSTEM
+# Scheduled Task session, -NoNewWindow, no -Wait). Driving
+# System.Diagnostics.Process directly -- the raw .NET type, with no
+# cmdlet-level wrapping in between -- is the documented workaround for
+# ExitCode reads going missing under Start-Process in a non-interactive
+# session.
 $installerStdOut = Join-Path $UpdateDir "installer-stdout.log"
 $installerStdErr = Join-Path $UpdateDir "installer-stderr.log"
-$proc = Start-Process -FilePath $DownloadedFile -ArgumentList "/S" -PassThru -NoNewWindow -RedirectStandardOutput $installerStdOut -RedirectStandardError $installerStdErr
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = $DownloadedFile
+$psi.Arguments = "/S"
+$psi.UseShellExecute = $false
+$psi.CreateNoWindow = $true
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$proc = New-Object System.Diagnostics.Process
+$proc.StartInfo = $psi
+[void]$proc.Start()
+$stdOutTask = $proc.StandardOutput.ReadToEndAsync()
+$stdErrTask = $proc.StandardError.ReadToEndAsync()
 $installerTimedOut = -not $proc.WaitForExit(180000)
 
 function Restore-Snapshot {
@@ -214,14 +231,8 @@ if ($installerTimedOut) {
     }
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 } else {
-    # MSDN's own remarks on WaitForExit(Int32): after the timeout-overload
-    # returns true, call the parameterless WaitForExit() once more so the
-    # process's exit bookkeeping (including ExitCode) is guaranteed to be
-    # fully synchronized before reading it -- without this, ExitCode can
-    # read back as $null here even though the process has genuinely exited,
-    # and `$null -ne 0` is $true in PowerShell, which previously caused a
-    # false "installer failed" rollback of a perfectly good install.
-    $proc.WaitForExit()
+    try { [IO.File]::WriteAllText($installerStdOut, $stdOutTask.Result) } catch {}
+    try { [IO.File]::WriteAllText($installerStdErr, $stdErrTask.Result) } catch {}
     Write-Log "installer exited with code $($proc.ExitCode)"
 }
 
