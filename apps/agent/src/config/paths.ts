@@ -158,6 +158,23 @@ export function pendingUpdateRequestFilePath(dir = defaultHomeDir()): string {
   return path.join(updateHandoffDir(dir), "pending-update.json");
 }
 
+/**
+ * Manual-update flow (Settings' "Update now" / App.tsx's banner) — where
+ * `updateInstaller.ts`'s `installManually()` copies a freshly-downloaded,
+ * checksum-verified installer right before launching it directly (no
+ * silent flags, no SYSTEM-task hand-off). Needs its own persistent
+ * directory, separate from `updateHandoffDownloadsDir()`'s automatic-path
+ * one: `UpdateChecker.installManually()` deletes its own ephemeral
+ * `mkdtemp` download dir in a `finally` right after the install call
+ * returns, but the launched installer (a GUI the user is actively
+ * clicking through, or a Windows UAC-elevated process) keeps reading its
+ * own executable from disk long after that — so the copy here must
+ * outlive that cleanup.
+ */
+export function manualInstallDownloadsDir(dir = defaultHomeDir()): string {
+  return path.join(updateHandoffDir(dir), "manual-downloads");
+}
+
 /** Written by `nia-agent-updater.ps1` after it finishes (installed+healthy, installed+rolled-back, or verification-failed) — `UpdateChecker` reads and clears this on its next tick purely for logging/diagnostics; the install/rollback/health-check decision itself has already been made externally by the time this file appears. */
 export function updateHandoffResultFilePath(dir = defaultHomeDir()): string {
   return path.join(updateHandoffDir(dir), "last-result.json");

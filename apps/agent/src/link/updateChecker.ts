@@ -64,6 +64,19 @@ export interface UpdateCheckerOptions {
    * rollback cycle for a no-op instead of treating it as a failure.
    */
   install: (filePath: string, info: UpdateInfo) => Promise<{ installed: boolean }>;
+  /**
+   * Manual-update flow only (never called by `tick()`/`runOnce()`'s
+   * periodic path) — launches the already-downloaded, checksum-verified
+   * installer directly and non-silently, so the OS shows its own native
+   * elevation prompt (Windows UAC / macOS admin password) instead of
+   * going through the automatic path's SYSTEM-task hand-off. Optional so
+   * every existing `tick()`-focused test construction (none of which
+   * exercise the manual flow) keeps working unchanged. Resolving means
+   * "launched" — not "finished installing"; there is deliberately no
+   * health-check/rollback cycle for this path (see `installManually()`'s
+   * own doc comment below for why).
+   */
+  installManually?: (filePath: string, info: UpdateInfo) => Promise<void>;
   /** Only called when `install` returned `{ installed: true }`. Returns false to trigger rollback. */
   waitForHealthy: (expectedVersion: string) => Promise<boolean>;
   /** Only called after a failed health check. Best-effort — UpdateChecker logs but does not rethrow if this itself fails. */
@@ -93,6 +106,8 @@ export class UpdateChecker {
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = true;
   private pendingUpdate: PendingUpdate | undefined;
+  /** Set by `checkManually()`, consumed by `installManually()` — avoids a second network round-trip just to re-fetch the same `UpdateInfo` the user already saw in the "Update now" banner/button. */
+  private lastManualInfo: UpdateInfo | undefined;
 
   constructor(private readonly options: UpdateCheckerOptions) {}
 
@@ -109,6 +124,71 @@ export class UpdateChecker {
   /** The most recent known "there's a newer build" state — `undefined` once up to date (or never checked yet). Read by localApi/routes/status.ts on every `/status` request; never cached by the caller. */
   getPendingUpdate(): PendingUpdate | undefined {
     return this.pendingUpdate;
+  }
+
+  /**
+   * Manual-update flow — the app-open check and Settings' "Check for
+   * updates" button both call this directly (via `POST /update/check`),
+   * deliberately NOT through `tick()`/`runOnce()`, so it works
+   * regardless of `isAutoUpdateEnabled()` (which gates only the
+   * *periodic, automatic* path). Never downloads or installs — just
+   * asks the bridge and applies the same no-downgrade guard `runOnce()`
+   * uses, so a manual check never offers to go backwards either.
+   */
+  async checkManually(): Promise<{ available: boolean; version?: string }> {
+    const info = await this.options.client.fetchUpdate(this.options.agentVersion);
+    if (!info || !isNewerVersion(info.latestVersion, this.options.agentVersion)) {
+      this.lastManualInfo = undefined;
+      this.pendingUpdate = undefined;
+      return { available: false };
+    }
+    this.lastManualInfo = info;
+    this.pendingUpdate = { version: info.latestVersion, readyToInstall: false };
+    return { available: true, version: info.latestVersion };
+  }
+
+  /**
+   * Manual-update flow — the "Update now" button/banner action. Downloads
+   * over HTTPS via the same `UpdateClient` the automatic path uses,
+   * re-verifies sha256, then hands off to `options.installManually()` to
+   * launch the installer directly and non-silently (native UAC / admin
+   * password prompt) instead of the automatic path's silent SYSTEM-task
+   * install. Deliberately has no health-check/rollback step afterward —
+   * unlike `runOnce()`'s automatic install, this one is a GUI/elevation
+   * flow the user is actively driving (and on Windows, is a short-lived
+   * `nia-agent` service process that may not even be alive to observe a
+   * later health check once the elevated installer restarts the app).
+   * Requires a prior `checkManually()` call in the same "available"
+   * state; re-applies the no-downgrade guard in case the remote build
+   * changed between the two calls.
+   */
+  async installManually(): Promise<{ started: boolean; reason?: string }> {
+    const info = this.lastManualInfo;
+    if (!info) return { started: false, reason: "no update found — call checkManually() first" };
+    if (!isNewerVersion(info.latestVersion, this.options.agentVersion)) {
+      this.lastManualInfo = undefined;
+      return { started: false, reason: "already up to date" };
+    }
+    if (!this.options.installManually) return { started: false, reason: "not supported on this platform/build" };
+
+    const dir = await mkdtemp(path.join(tmpdir(), "nia-agent-update-"));
+    try {
+      const filePath = path.join(dir, safeFileNameFromUrl(info.url));
+      await this.options.client.download(info.url, filePath);
+
+      const matches = await verifySha256(filePath, info.sha256);
+      if (!matches) {
+        this.options.logger.warn("update_checksum_mismatch", { latestVersion: info.latestVersion });
+        return { started: false, reason: "checksum mismatch" };
+      }
+
+      await this.options.installManually(filePath, info);
+      this.options.logger.info("update_manual_install_started", { latestVersion: info.latestVersion });
+      this.pendingUpdate = { version: info.latestVersion, readyToInstall: true };
+      return { started: true };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 
   private nextDelay(): number {

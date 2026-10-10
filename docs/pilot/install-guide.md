@@ -228,27 +228,32 @@ it last checked in, and the health of each job. Run it any time.
 
 ## Updates
 
-**Automatic updates ship OFF by default** (see
-`docs/handoff/auto-update-0.0.8.md` for why). Open the agent's own
-screen → **Settings** → **Updates** → **Check now** to check for and
-install a newer version manually at any time; `nia-agent status` also
-reports a pending update if one is available but hasn't installed yet.
+**Updates are manual** (see `docs/handoff/auto-update-0.0.8.md` for
+why automatic installs stay off). The agent checks for a newer version
+every time you open it, and shows a banner — **"Version X is
+available — Update now"** — if one is found. You can also check any
+time from **Settings → Updates → Check for updates**.
 
-Turning on the **Automatic updates** toggle in that same screen makes
-the agent check for a newer version by itself every few hours. When one
-is available it downloads it, verifies its checksum, and installs it
-with no action needed from you in the common case — it never installs
-mid-job, and it keeps the previous installer on hand so it can put it
-back automatically if the new version ever fails its own post-install
-health check.
+Clicking **Update now**:
 
-- **Windows, Linux, and the default macOS install** (no `sudo`): fully
-  automatic — the service restarts itself on the new version.
-- **macOS, system-wide install** (`install.sh --system`): the new
-  version is downloaded and verified automatically, but installing it
-  needs an administrator password, so the agent's own screen instead
-  shows **"Update is ready to install"** — open it and approve the one
-  prompt.
+1. Downloads the new installer over HTTPS and verifies its checksum.
+2. Launches it directly — **Windows** shows the normal User Account
+   Control prompt, **macOS** shows the normal administrator password
+   prompt. Nothing installs silently or without your approval.
+3. Your pairing and database connections are preserved; the agent
+   reopens automatically once the install finishes.
+4. It will never offer to install an older version than what's
+   already running.
+
+If you'd rather update by reinstalling from scratch, download the
+latest installer from the same place you got the original one and run
+it over the existing install — that works too, and is equivalent to
+clicking **Update now**.
+
+The **Automatic updates** toggle in Settings exists but has no effect
+in this release — background/unattended updates are not enabled yet.
+`nia-agent status` always reports the currently running version either
+way.
 
 If an update ever seems stuck — `nia-agent status` keeps reporting the
 old version for more than a day after you know a new one shipped — see

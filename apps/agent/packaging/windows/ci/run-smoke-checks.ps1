@@ -466,16 +466,22 @@ Invoke-Section "CHECK 8: auto-update" {
         $registerResp = Invoke-RestMethod -Method Post -Uri "$fakePlatformUrl/control/update" -ContentType "application/json" -Body $registerBody
         Add-Result -Check "CHECK 8j: fake platform accepts the update registration" -Pass ([bool]$registerResp.ok)
 
-        # Trigger an immediate check via the local API's "check now" route
-        # (POST /update/check) instead of waiting out the real 4h+jitter
-        # timer. This only makes the agent service hand off to the
-        # external updater (write the request file + `schtasks /run`) --
-        # it does NOT itself install anything (see link/updateInstaller.ts).
+        # TODO(auto-update-0.0.8): POST /update/check is now the MANUAL
+        # flow's availability check (UpdateChecker.checkManually()) --
+        # it reports {available, version} and never installs, so it no
+        # longer drives the automatic/background tick()/install pipeline
+        # this section is trying to exercise (that pipeline is now only
+        # reachable via the internal 4h+jitter timer, which this
+        # already-skipped-by-default section has no way to fast-forward).
+        # Left as-is (updated only for the new response shape) since this
+        # whole section is a pre-existing, documented CI limitation --
+        # see the "Known, accepted CI limitation" comment above and
+        # docs/handoff/auto-update-0.0.8.md.
         try {
             $checkResp = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/update/check" -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 10
-            Add-Result -Check "CHECK 8k: POST /update/check triggers" -Pass ([bool]$checkResp.triggered) -Detail ($checkResp | ConvertTo-Json -Compress)
+            Add-Result -Check "CHECK 8k: POST /update/check reports availability" -Pass ([bool]$checkResp.available) -Detail ($checkResp | ConvertTo-Json -Compress)
         } catch {
-            Add-Result -Check "CHECK 8k: POST /update/check triggers" -Pass $false -Detail $_.Exception.Message
+            Add-Result -Check "CHECK 8k: POST /update/check reports availability" -Pass $false -Detail $_.Exception.Message
         }
 
         # Diagnostic-only, not a pass/fail gate: snapshot the scheduled

@@ -249,6 +249,7 @@ function buildLinkSession(
     isJobRunning: () => scheduler.isAnyRunning(),
     isAutoUpdateEnabled: () => isAutoUpdateEnabled(loadConfig(dir)),
     install: (filePath, info) => updateInstaller.install(filePath, info),
+    installManually: (filePath, info) => updateInstaller.installManually(filePath, info),
     waitForHealthy: (expectedVersion) => updateInstaller.waitForHealthy(expectedVersion),
     rollback: () => updateInstaller.rollback(),
     reportExternalResult: () => updateInstaller.reportExternalResult?.() ?? Promise.resolve(),

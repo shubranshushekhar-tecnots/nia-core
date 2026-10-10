@@ -11,12 +11,21 @@ function parseEnabledInput(body: unknown): boolean {
 }
 
 /**
- * `POST /update/check`: lets the desktop app's "Check now" button trigger
- * one `UpdateChecker.tick()` immediately instead of waiting for its own
- * jittered timer. `updateChecker` is `undefined` whenever unpaired/no live
- * link (same "not paired" signal the other route builders use) — the
- * agent can't check for updates without a platform URL + agent key to
- * call `/agent-api/update` on.
+ * `POST /update/check`: the manual-update flow's entry point — the app's
+ * on-open check and Settings' "Check for updates" button both call this.
+ * Calls `UpdateChecker.checkManually()` directly, NOT `tick()`: unlike
+ * the periodic timer, this must always work regardless of the
+ * "Automatic updates" toggle (`isAutoUpdateEnabled()` only gates the
+ * background path). Never downloads/installs — just reports whether a
+ * newer build exists. `updateChecker` is `undefined` whenever unpaired/no
+ * live link (same "not paired" signal the other route builders use) —
+ * the agent can't check for updates without a platform URL + agent key
+ * to call `/agent-api/update` on.
+ *
+ * `POST /update/install`: the "Update now" button/banner action —
+ * downloads the build `checkManually()` found, verifies sha256, and
+ * launches the installer directly (native UAC/admin-password prompt)
+ * via `UpdateChecker.installManually()`.
  *
  * `GET`/`POST /update/settings`: the Settings screen's "Automatic
  * updates" toggle — reads/writes `agent.config.json`'s `autoUpdate.enabled`
@@ -30,9 +39,17 @@ export function buildUpdateRoutes(deps: LocalApiDeps): RouteDefinition[] {
       path: "/update/check",
       handler: async () => {
         const checker = deps.getUpdateChecker?.();
-        if (!checker) return { triggered: false, reason: "not paired" };
-        await checker.tick();
-        return { triggered: true };
+        if (!checker) return { available: false, reason: "not paired" };
+        return checker.checkManually();
+      },
+    },
+    {
+      method: "POST",
+      path: "/update/install",
+      handler: async () => {
+        const checker = deps.getUpdateChecker?.();
+        if (!checker) return { started: false, reason: "not paired" };
+        return checker.installManually();
       },
     },
     {

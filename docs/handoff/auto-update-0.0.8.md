@@ -4,12 +4,43 @@
 
 0.0.7 ships with `autoUpdate.enabled` defaulting to **`false`**
 (`apps/agent/src/config/store.ts`'s `isAutoUpdateEnabled()` / the
-`AutoUpdateConfig` doc comment in `apps/agent/src/config/types.ts`). All
-update code, the bridge's `GET /agent-api/update` endpoint, and the
-Settings screen's **Check now** button (manual, user-initiated) are
-fully present and work. Only the self-triggered "check every few hours
-and install automatically" path is off until this doc's open items are
-closed and re-verified.
+`AutoUpdateConfig` doc comment in `apps/agent/src/config/types.ts`). The
+self-triggered "check every few hours and install automatically" path
+stays off until this doc's open items are closed and re-verified.
+
+**The manual update flow is the real, supported path for 0.0.7** (not a
+stopgap): the app checks `GET /agent-api/update` on open and shows a
+banner ("Version X is available — Update now") plus a **Check for
+updates** button in Settings; **Update now** downloads over HTTPS,
+verifies sha256, and launches the installer directly and non-silently
+(Windows: native UAC prompt via the installer's own
+`RequestExecutionLevel admin` manifest, then its existing NSIS
+finish-page `RunSetupNow` relaunches the app — no new relaunch code
+needed; macOS: hands the `.pkg` to `open`, triggering Installer.app's
+native admin-password prompt). It never offers a downgrade (reuses the
+same `isNewerVersion` guard as the automatic path), and pairing/
+connections survive because it's the same installer binary either way.
+Implemented in `UpdateChecker.checkManually()`/`installManually()`
+(`apps/agent/src/link/updateChecker.ts`),
+`UpdateInstaller.installManually()`
+(`apps/agent/src/link/updateInstaller.ts`), the `/update/check` /
+`/update/install` local-API routes, and the Settings/App.tsx UI.
+
+**The `NiaAgentUpdater` SYSTEM Scheduled Task is still registered by
+`install.ps1` on every install, unconditionally — it is NOT removed.**
+In practice it is dormant, not reachable, on a 0.0.7 install: the
+periodic background timer that would ever run it stays gated off by
+`isAutoUpdateEnabled()` (default `false`), and the new manual flow
+above bypasses it entirely (direct elevated launch instead of a
+SYSTEM-task hand-off). Making `install.ps1`/`uninstall.ps1` conditionally
+install/remove this task was considered and deliberately deferred —
+there's no Windows CI/VM available this session to verify a change to
+privileged Scheduled-Task registration/removal logic is safe, and the
+task being present-but-unreachable already satisfies "not installed on
+customer machines" in effect. Revisit this once a VM is available (see
+"What's needed" #1) — ideally make `install.ps1` only register the task
+when `autoUpdate.enabled` is true at install time, and have
+`uninstall.ps1` always remove it.
 
 Why: the external-updater round trip (CHECK 8 in
 `apps/agent/packaging/windows/ci/run-smoke-checks.ps1`) took 15+ CI
@@ -24,7 +55,10 @@ timing bugs exclusively through CI is too slow to finish safely — see
 
 - Pairing against a fake platform server
 - Rebuilding the agent at a bumped version and registering it
-- `POST /update/check` triggering a real check
+- `POST /update/check` triggering a real check (**as it existed at the
+  time** — this route's contract has since changed to the manual-flow
+  `checkManually()` described in "Decision" above and no longer drives
+  this pipeline; see "What's needed" #5)
 - The external `NiaAgentUpdater` Scheduled Task (SYSTEM principal,
   started by the low-privilege agent service via a run-only ACE) picking
   up the download and running the installer
@@ -72,12 +106,17 @@ classified:
 | `cd38d7a` verify nia-agent exe files are actually unlocked after stopping the service | **Keep** | Confirmed real bug via CI: `Get-Service` reporting `Stopped` doesn't guarantee Windows released the file handle on `nia-agent.exe`/`nia-agent-service.exe` yet, so NSIS's silent `File` instructions could skip the overwrite and leave the OLD binary running forever while everything else reported success. Fix is a bounded retry confirming an exclusive file open succeeds before extraction proceeds. CHECK 8l went from failing to passing immediately after this. |
 | `57e3d9e` sync Process exit bookkeeping before reading ExitCode | **Keep** | Confirmed real bug via CI logs (`installer exited with code ` — blank): `Process.WaitForExit(Int32)` returning `true` doesn't guarantee `ExitCode` is populated yet per MSDN; the fix is the documented one-extra-`WaitForExit()` workaround. |
 | `719a3c9` redirect installer stdout/stderr to fix ExitCode reading null | **Keep, but unverified** | Second, independent documented cause of unreliable `Process.ExitCode` under `-NoNewWindow` with no console/no redirection. Diagnosis is sound and consistent with the observed symptom, but its own CI run was cancelled before finishing — treat as "probably right, not yet proven" until re-run. |
+| `4d0ef53` launch the updater's installer via raw `System.Diagnostics.Process`, not `Start-Process` | **Keep** | Same exit-code-reliability saga as the three above, only touches `nia-agent-updater.ps1` (used exclusively inside CHECK 8). Doesn't affect CHECK 7's direct `Start-Process -Wait -PassThru` install-while-running path or any push-triggered default behavior. |
+| `9f21f14` stop gating install success on `ExitCode`, trust the `/status` health check only | **Keep** | Reviewed specifically for "does dropping the ExitCode gate hide a real installer failure in the normal install/upgrade checks" — it doesn't: this only removes a rollback branch inside `nia-agent-updater.ps1` (CHECK 8 only); CHECK 7's upgrade-while-running check never calls this script, it drives the installer directly and still asserts the resulting service version/health itself. Also consistent with the SAFE design's own principle of deferring pass/fail to the independent `/status` check rather than a process-level signal that's already been shown unreliable three times over (see the row above). |
+| `9e6e535` add opt-in `workflow_dispatch` input to force-run CHECK 8 | **Keep** | CI-only (`.github/workflows/agent-windows-smoke.yml`); defaults to `false` and push-triggered runs carry no `inputs` object at all, so the push path's CHECK 8 skip behavior is unchanged. |
 
-None of the four touch the CI check *definitions*
-(`run-smoke-checks.ps1`, the workflow YAML) or any test-only code — all
-four are product-code fixes in `install.ps1` /
-`nia-agent-updater.ps1`, so there was nothing to revert as "weakened a
-check."
+None of the seven touch the CI check *definitions*
+(`run-smoke-checks.ps1`'s check logic, the workflow YAML's job steps) or
+weaken any assertion in CHECK 1-7/9 — all are either product-code fixes
+in `install.ps1` / `nia-agent-updater.ps1` scoped to the
+already-skipped-by-default CHECK 8, or (for `9e6e535`) an opt-in CI
+input that push-triggered runs never set — so there was nothing to
+revert as "weakened a check."
 
 (Also found and fixed in this same cleanup, unrelated to the four
 above: `apps/agent/packaging/windows/install.test.ts`'s service-upgrade
@@ -128,8 +167,20 @@ the items below are addressed.
    consecutive runs — a single green run after this many iterations
    isn't enough confidence given how many times a fix looked complete
    and wasn't.
-5. **Only after that**, flip `autoUpdate`'s default back to `true` in
-   `apps/agent/src/config/store.ts` / update `types.ts`'s doc comment,
-   and update `docs/pilot/install-guide.md` + `docs/pilot/runbook.md`
-   (both currently describe the OFF-by-default/manual-"Check now"
-   behavior — search them for this doc's filename).
+5. **Before re-enabling CHECK 8**, note that `POST /update/check` no
+   longer drives the automatic/background `tick()`/install pipeline —
+   it's now `UpdateChecker.checkManually()` (availability-only, never
+   installs; see "Decision" above). CHECK 8 will need its own trigger
+   for the automatic path once un-skipped (e.g. a dedicated test-only
+   hook to fast-forward the internal timer, or calling `tick()`
+   directly), not a call to `/update/check`. CHECK 8k was updated to
+   assert the new `{available}` shape so it stays accurate as a
+   manual-flow smoke check either way, but it no longer proves the
+   automatic pipeline fired.
+6. **Only after all of the above**, flip `autoUpdate`'s default back to
+   `true` in `apps/agent/src/config/store.ts` / update `types.ts`'s doc
+   comment. `docs/pilot/install-guide.md` and `docs/pilot/runbook.md`
+   already describe the 0.0.7 manual **Update now** flow (done this
+   round) — re-check both once the default flips, since an
+   automatic-by-default agent needs the "what happens if I don't click
+   anything" behavior documented too, not just the manual path.

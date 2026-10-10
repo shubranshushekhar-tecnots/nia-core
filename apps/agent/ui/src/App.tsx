@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOsTheme } from "./theme";
-import { getStatus, listConnections, onSessionExpired } from "./apiClient";
+import { getStatus, listConnections, onSessionExpired, checkForUpdateNow, installUpdateNow, type PendingUpdate } from "./apiClient";
 import { Pairing } from "./screens/Pairing";
 import { ConnectDatabase } from "./screens/ConnectDatabase";
 import { DatabaseBrowser } from "./screens/DatabaseBrowser";
@@ -34,8 +34,20 @@ export function App({ bootError }: AppProps) {
   const [sessionExpired, setSessionExpired] = useState(false);
   const [browseConnectionId, setBrowseConnectionId] = useState<string | undefined>(undefined);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | undefined>(undefined);
+  const [pendingUpdate, setPendingUpdate] = useState<PendingUpdate | undefined>(undefined);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
 
   useEffect(() => onSessionExpired(() => setSessionExpired(true)), []);
+
+  async function handleUpdateNow() {
+    setInstallingUpdate(true);
+    try {
+      const result = await installUpdateNow();
+      if (result.started && pendingUpdate) setPendingUpdate({ ...pendingUpdate, readyToInstall: true });
+    } finally {
+      setInstallingUpdate(false);
+    }
+  }
 
   // First run: paired:false -> Pairing; paired but no saved connections -> Connect DB; otherwise Home.
   useEffect(() => {
@@ -50,6 +62,10 @@ export function App({ bootError }: AppProps) {
           setScreen("pairing");
           return;
         }
+        // On-open update check (manual flow) -- fire-and-forget, never blocks navigation below.
+        checkForUpdateNow()
+          .then((result) => setPendingUpdate(result.available ? { version: result.version, readyToInstall: false } : undefined))
+          .catch(() => undefined);
         const { connections } = await listConnections();
         if (connections.length === 0) {
           setScreen("connect");
@@ -77,6 +93,19 @@ export function App({ bootError }: AppProps) {
   return (
     <div className="agent-shell">
       {sessionExpired && <div className="agent-session-banner">Open Nia Agent again from the Start menu / Applications.</div>}
+      {pendingUpdate && !pendingUpdate.readyToInstall && (
+        <div className="agent-session-banner">
+          Version {pendingUpdate.version} is available.{" "}
+          <button className="agent-button agent-button--small" onClick={handleUpdateNow} disabled={installingUpdate}>
+            {installingUpdate ? "Starting..." : "Update now"}
+          </button>
+        </div>
+      )}
+      {pendingUpdate?.readyToInstall && (
+        <div className="agent-session-banner">
+          Installer launched for version {pendingUpdate.version} — finish it in the window that opened.
+        </div>
+      )}
       <nav className="agent-sidebar">
         {NAV_ITEMS.map((item) => (
           <button

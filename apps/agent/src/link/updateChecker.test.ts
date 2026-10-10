@@ -376,4 +376,125 @@ describe("UpdateChecker", () => {
       expect(checker.getPendingUpdate()).toBeUndefined();
     });
   });
+
+  describe("manual update flow (checkManually/installManually)", () => {
+    it("checkManually: reports availability without downloading or installing, regardless of isAutoUpdateEnabled", async () => {
+      const download = vi.fn(async (_url: string, destPath: string) => writeFile(destPath, GOOD_CONTENT));
+      const installManually = vi.fn(async () => undefined);
+      const checker = new UpdateChecker({
+        client: client({ download }),
+        agentVersion: "1.0.0",
+        logger,
+        isJobRunning: () => false,
+        isAutoUpdateEnabled: () => false, // automatic path disabled -- must not matter here
+        install: vi.fn(async () => ({ installed: true })),
+        installManually,
+        waitForHealthy: vi.fn(async () => true),
+        rollback: vi.fn(async () => {}),
+      });
+
+      await expect(checker.checkManually()).resolves.toEqual({ available: true, version: "2.0.0" });
+      expect(download).not.toHaveBeenCalled();
+      expect(installManually).not.toHaveBeenCalled();
+      expect(checker.getPendingUpdate()).toEqual({ version: "2.0.0", readyToInstall: false });
+    });
+
+    it("checkManually: no-downgrade guard -- equal or older latestVersion reports unavailable", async () => {
+      const fetchUpdate = vi.fn(async () => info({ latestVersion: "1.0.0" }));
+      const checker = new UpdateChecker({
+        client: client({ fetchUpdate }),
+        agentVersion: "1.0.0",
+        logger,
+        isJobRunning: () => false,
+        isAutoUpdateEnabled: () => false,
+        install: vi.fn(async () => ({ installed: true })),
+        waitForHealthy: vi.fn(async () => true),
+        rollback: vi.fn(async () => {}),
+      });
+
+      await expect(checker.checkManually()).resolves.toEqual({ available: false });
+      expect(checker.getPendingUpdate()).toBeUndefined();
+    });
+
+    it("installManually: fails cleanly without a prior checkManually() call", async () => {
+      const checker = new UpdateChecker({
+        client: client(),
+        agentVersion: "1.0.0",
+        logger,
+        isJobRunning: () => false,
+        isAutoUpdateEnabled: () => false,
+        install: vi.fn(async () => ({ installed: true })),
+        installManually: vi.fn(async () => undefined),
+        waitForHealthy: vi.fn(async () => true),
+        rollback: vi.fn(async () => {}),
+      });
+
+      await expect(checker.installManually()).resolves.toEqual({
+        started: false,
+        reason: "no update found — call checkManually() first",
+      });
+    });
+
+    it("installManually: downloads, verifies sha256, launches via options.installManually, and marks readyToInstall", async () => {
+      const download = vi.fn(async (_url: string, destPath: string) => writeFile(destPath, GOOD_CONTENT));
+      const installManually = vi.fn(async () => undefined);
+      const checker = new UpdateChecker({
+        client: client({ download }),
+        agentVersion: "1.0.0",
+        logger,
+        isJobRunning: () => false,
+        isAutoUpdateEnabled: () => false,
+        install: vi.fn(async () => ({ installed: true })),
+        installManually,
+        waitForHealthy: vi.fn(async () => true),
+        rollback: vi.fn(async () => {}),
+      });
+
+      await checker.checkManually();
+      await expect(checker.installManually()).resolves.toEqual({ started: true });
+
+      expect(download).toHaveBeenCalledTimes(1);
+      expect(installManually).toHaveBeenCalledTimes(1);
+      expect(checker.getPendingUpdate()).toEqual({ version: "2.0.0", readyToInstall: true });
+    });
+
+    it("installManually: checksum mismatch does not launch the installer", async () => {
+      const download = vi.fn(async (_url: string, destPath: string) => writeFile(destPath, "tampered-bytes"));
+      const installManually = vi.fn(async () => undefined);
+      const checker = new UpdateChecker({
+        client: client({ download }),
+        agentVersion: "1.0.0",
+        logger,
+        isJobRunning: () => false,
+        isAutoUpdateEnabled: () => false,
+        install: vi.fn(async () => ({ installed: true })),
+        installManually,
+        waitForHealthy: vi.fn(async () => true),
+        rollback: vi.fn(async () => {}),
+      });
+
+      await checker.checkManually();
+      await expect(checker.installManually()).resolves.toEqual({ started: false, reason: "checksum mismatch" });
+      expect(installManually).not.toHaveBeenCalled();
+    });
+
+    it("installManually: reports unsupported when options.installManually is not provided", async () => {
+      const checker = new UpdateChecker({
+        client: client(),
+        agentVersion: "1.0.0",
+        logger,
+        isJobRunning: () => false,
+        isAutoUpdateEnabled: () => false,
+        install: vi.fn(async () => ({ installed: true })),
+        waitForHealthy: vi.fn(async () => true),
+        rollback: vi.fn(async () => {}),
+      });
+
+      await checker.checkManually();
+      await expect(checker.installManually()).resolves.toEqual({
+        started: false,
+        reason: "not supported on this platform/build",
+      });
+    });
+  });
 });

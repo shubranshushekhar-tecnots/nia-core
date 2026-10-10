@@ -8,6 +8,7 @@ import {
   getAutoUpdateSettings,
   setAutoUpdateSettings,
   checkForUpdateNow,
+  installUpdateNow,
   ApiClientError,
   type PendingUpdate,
 } from "../apiClient";
@@ -21,6 +22,8 @@ export function Settings() {
   const [pendingUpdate, setPendingUpdate] = useState<PendingUpdate | undefined>(undefined);
   const [checkingNow, setCheckingNow] = useState(false);
   const [checkNowMessage, setCheckNowMessage] = useState<string | undefined>(undefined);
+  const [installing, setInstalling] = useState(false);
+  const [installMessage, setInstallMessage] = useState<string | undefined>(undefined);
 
   function reload() {
     listDestinations()
@@ -61,14 +64,33 @@ export function Settings() {
   async function handleCheckNow() {
     setCheckingNow(true);
     setCheckNowMessage(undefined);
+    setInstallMessage(undefined);
     try {
       const result = await checkForUpdateNow();
-      setCheckNowMessage(result.triggered ? "Checked for updates." : "Can't check for updates right now (not paired).");
+      if (result.available) {
+        setCheckNowMessage(`Version ${result.version} is available.`);
+      } else {
+        setCheckNowMessage(result.reason === "not paired" ? "Can't check for updates right now (not paired)." : "You're up to date.");
+      }
       reloadPendingUpdate();
     } catch (err) {
       setCheckNowMessage(err instanceof ApiClientError ? err.message : "Couldn't check for updates.");
     } finally {
       setCheckingNow(false);
+    }
+  }
+
+  async function handleInstallNow() {
+    setInstalling(true);
+    setInstallMessage(undefined);
+    try {
+      const result = await installUpdateNow();
+      setInstallMessage(result.started ? "Installer launched — finish it in the window that opened." : result.reason ?? "Couldn't start the update.");
+      reloadPendingUpdate();
+    } catch (err) {
+      setInstallMessage(err instanceof ApiClientError ? err.message : "Couldn't start the update.");
+    } finally {
+      setInstalling(false);
     }
   }
 
@@ -126,13 +148,18 @@ export function Settings() {
         </button>
       </div>
       {checkNowMessage && <p className="agent-text-muted">{checkNowMessage}</p>}
-      {pendingUpdate && (
-        <p className="agent-text-muted">
-          {pendingUpdate.readyToInstall
-            ? `Update ${pendingUpdate.version} is ready to install.`
-            : `Update ${pendingUpdate.version} is available.`}
-        </p>
+      {pendingUpdate && !pendingUpdate.readyToInstall && (
+        <div className="agent-button-row">
+          <p className="agent-text-muted">Version {pendingUpdate.version} is available.</p>
+          <button className="agent-button agent-button--small" onClick={handleInstallNow} disabled={installing}>
+            {installing ? "Starting..." : "Update now"}
+          </button>
+        </div>
       )}
+      {pendingUpdate?.readyToInstall && (
+        <p className="agent-text-muted">Installer launched for {pendingUpdate.version} — finish it in the window that opened.</p>
+      )}
+      {installMessage && <p className="agent-text-muted">{installMessage}</p>}
     </div>
   );
 }

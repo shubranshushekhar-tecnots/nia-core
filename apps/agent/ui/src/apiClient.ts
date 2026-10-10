@@ -144,11 +144,18 @@ export function setAutoUpdateSettings(enabled: boolean): Promise<AutoUpdateSetti
   return postJson<AutoUpdateSettings>("/update/settings", { enabled });
 }
 
-export type CheckForUpdateResult = { triggered: true } | { triggered: false; reason: string };
+export type CheckForUpdateResult = { available: true; version: string } | { available: false; reason?: string };
 
-/** Triggers one `UpdateChecker.tick()` immediately. `triggered:false` whenever unpaired (no live checker). */
+/** Manual-update flow: asks the bridge directly, independent of the "Automatic updates" toggle. `available:false` whenever unpaired or already up to date. Never downloads/installs. */
 export function checkForUpdateNow(): Promise<CheckForUpdateResult> {
   return postJson<CheckForUpdateResult>("/update/check", {});
+}
+
+export type InstallUpdateResult = { started: true } | { started: false; reason?: string };
+
+/** Manual-update flow's "Update now" action: downloads + verifies the build `checkForUpdateNow()` found, then launches the installer directly (native UAC / admin-password prompt). Requires a prior `checkForUpdateNow()` call that returned `available:true`. */
+export function installUpdateNow(): Promise<InstallUpdateResult> {
+  return postJson<InstallUpdateResult>("/update/install", {});
 }
 
 // ---- pairing ----

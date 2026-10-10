@@ -26,20 +26,36 @@ describe("update routes", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("POST /update/check returns triggered:false when unpaired (no checker)", async () => {
+  it("POST /update/check returns available:false when unpaired (no checker)", async () => {
     deps.getUpdateChecker = () => undefined;
     const route = buildUpdateRoutes(deps).find((r) => r.method === "POST" && r.path === "/update/check")!;
 
-    await expect(route.handler!(ctx())).resolves.toEqual({ triggered: false, reason: "not paired" });
+    await expect(route.handler!(ctx())).resolves.toEqual({ available: false, reason: "not paired" });
   });
 
-  it("POST /update/check calls tick() on the live checker and returns triggered:true", async () => {
-    const tick = vi.fn(async () => undefined);
-    deps.getUpdateChecker = () => ({ tick } as unknown as UpdateChecker);
+  it("POST /update/check calls checkManually() on the live checker and returns its result", async () => {
+    const checkManually = vi.fn(async () => ({ available: true, version: "1.1.0" }));
+    deps.getUpdateChecker = () => ({ checkManually } as unknown as UpdateChecker);
     const route = buildUpdateRoutes(deps).find((r) => r.method === "POST" && r.path === "/update/check")!;
 
-    await expect(route.handler!(ctx())).resolves.toEqual({ triggered: true });
-    expect(tick).toHaveBeenCalledTimes(1);
+    await expect(route.handler!(ctx())).resolves.toEqual({ available: true, version: "1.1.0" });
+    expect(checkManually).toHaveBeenCalledTimes(1);
+  });
+
+  it("POST /update/install returns started:false when unpaired (no checker)", async () => {
+    deps.getUpdateChecker = () => undefined;
+    const route = buildUpdateRoutes(deps).find((r) => r.method === "POST" && r.path === "/update/install")!;
+
+    await expect(route.handler!(ctx())).resolves.toEqual({ started: false, reason: "not paired" });
+  });
+
+  it("POST /update/install calls installManually() on the live checker and returns its result", async () => {
+    const installManually = vi.fn(async () => ({ started: true }));
+    deps.getUpdateChecker = () => ({ installManually } as unknown as UpdateChecker);
+    const route = buildUpdateRoutes(deps).find((r) => r.method === "POST" && r.path === "/update/install")!;
+
+    await expect(route.handler!(ctx())).resolves.toEqual({ started: true });
+    expect(installManually).toHaveBeenCalledTimes(1);
   });
 
   it("GET /update/settings defaults to enabled:false when nothing is configured yet", async () => {

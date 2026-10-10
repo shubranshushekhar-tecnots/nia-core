@@ -2,6 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  manualInstallDownloadsDir,
   pendingUpdateRequestFilePath,
   previousInstallerCacheDir,
   updateHandoffDownloadsDir,
@@ -16,6 +17,18 @@ export interface UpdateInstaller {
   rollback(): Promise<void>;
   /** Best-effort: logs (and clears) whatever `nia-agent-updater.ps1` reported about its last run, if anything. No-op on non-Windows. */
   reportExternalResult?(): Promise<void>;
+  /**
+   * Manual-update flow only — launches the installer directly and
+   * non-silently instead of `install()`'s silent/privilege-separated
+   * path. Resolving means "launched", not "finished": Windows's own
+   * `RequestExecutionLevel admin` manifest shows the native UAC prompt
+   * once this spawns the `.exe` without `/S`, and the installer's
+   * existing finish-page `RunSetupNow` already relaunches the app
+   * afterward (see installer.nsi) — no separate relaunch/health-check
+   * step is needed here. macOS hands the `.pkg` to `open`, which runs it
+   * through the native Installer.app (its own admin password prompt).
+   */
+  installManually(filePath: string, info: UpdateInfo): Promise<void>;
 }
 
 /**
@@ -96,7 +109,40 @@ export function createUpdateInstaller(dir: string, logger: Logger): UpdateInstal
     }
   }
 
+  /**
+   * Manual-update flow — copies the already-verified installer to a
+   * persistent location (surviving `UpdateChecker.installManually()`'s
+   * own temp-dir cleanup) then launches it directly, no silent flags, no
+   * SYSTEM-task hand-off. win32: a bare `spawn` of the `.exe` triggers
+   * its own `RequestExecutionLevel admin` UAC prompt; `installer.nsi`'s
+   * finish page already relaunches the app afterward, so nothing here
+   * waits for it to exit. darwin: handing the `.pkg` to `open` runs it
+   * through the native Installer.app, which shows its own admin
+   * password prompt — unlike `install()`'s unprivileged CLI call, which
+   * fails silently with no prompt at all.
+   */
+  async function launchManually(filePath: string, info: UpdateInfo): Promise<void> {
+    const downloadsDir = manualInstallDownloadsDir(dir);
+    await mkdir(downloadsDir, { recursive: true });
+    const stablePath = path.join(downloadsDir, path.basename(filePath));
+    await copyFile(filePath, stablePath);
+
+    if (process.platform === "win32") {
+      spawn(stablePath, [], { detached: true, stdio: "ignore" }).unref();
+      logger.info("update_launched_manually", { platform: "win32", version: info.latestVersion });
+      return;
+    }
+    if (process.platform === "darwin") {
+      spawn("open", [stablePath], { detached: true, stdio: "ignore" }).unref();
+      logger.info("update_launched_manually", { platform: "darwin", version: info.latestVersion });
+      return;
+    }
+    logger.warn("update_manual_launch_unsupported_platform", { platform: process.platform });
+  }
+
   return {
+    installManually: launchManually,
+
     async install(filePath, info) {
       if (process.platform === "win32") {
         return handOffToExternalUpdater(filePath, info);
