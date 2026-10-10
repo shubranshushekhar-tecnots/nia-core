@@ -201,6 +201,14 @@ if ($installerTimedOut) {
     }
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 } else {
+    # MSDN's own remarks on WaitForExit(Int32): after the timeout-overload
+    # returns true, call the parameterless WaitForExit() once more so the
+    # process's exit bookkeeping (including ExitCode) is guaranteed to be
+    # fully synchronized before reading it -- without this, ExitCode can
+    # read back as $null here even though the process has genuinely exited,
+    # and `$null -ne 0` is $true in PowerShell, which previously caused a
+    # false "installer failed" rollback of a perfectly good install.
+    $proc.WaitForExit()
     Write-Log "installer exited with code $($proc.ExitCode)"
 }
 
