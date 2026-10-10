@@ -134,86 +134,11 @@ async function main() {
   rmSync(nodeZipPath);
   rmSync(path.join(distDir, `node-v${NODE_VERSION}-win-x64`), { recursive: true, force: true });
 
-  await patchVersionInfo(outExePath, agentDir);
-
   await signFile(outExePath);
 
   const finalSha = sha256File(outExePath);
   console.log(`\nbuilt ${outExePath}`);
   console.log(`nia-agent.exe sha256: ${finalSha}`);
-}
-
-// Sets the icon + FileDescription/ProductName/CompanyName/FileVersion on
-// nia-agent.exe's PE resources so Task Manager/Explorer/Apps&Features show
-// "Nia Core Agent" with the real icon instead of a bare copy of node.exe's
-// own metadata. rcedit itself only runs on Windows (it links against the
-// Windows resource-compiler APIs) -- cross-building the rest of this SEA
-// from macOS/Linux is unaffected, this one step is just skipped there with
-// a clear log line; it still runs for real on the Windows CI runner that
-// actually produces the shipped binary. Must run BEFORE signFile() above --
-// editing PE resources after signing invalidates the Authenticode signature.
-async function patchVersionInfo(exePath, agentDirPath) {
-  if (process.platform !== "win32") {
-    console.log("[rcedit] skipped (not running on Windows) -- nia-agent.exe's icon/version metadata will only be set when this script runs on the Windows CI runner.");
-    return;
-  }
-  const version = JSON.parse(readFileSync(path.join(agentDirPath, "package.json"), "utf8")).version;
-  const iconPath = path.resolve(agentDirPath, "..", "agent-desktop", "assets", "app-icon.ico");
-  // rcedit's export shape has moved between named/default across major
-  // versions (and dual-package/platform module resolution can surface
-  // either), so resolve whichever is actually a function rather than
-  // assuming one specific shape.
-  const rceditModule = await import("rcedit");
-  const rcedit = typeof rceditModule.rcedit === "function" ? rceditModule.rcedit : rceditModule.default;
-  if (typeof rcedit !== "function") {
-    throw new Error(`[rcedit] could not resolve the rcedit() function from the "rcedit" package (got: ${JSON.stringify(Object.keys(rceditModule))})`);
-  }
-  const rceditOptions = {
-    icon: iconPath,
-    "file-version": version,
-    "product-version": version,
-    "version-string": {
-      FileDescription: "Nia Core Agent",
-      ProductName: "Nia Core Agent",
-      CompanyName: "Nia Core",
-    },
-  };
-
-  // nia-agent.exe was just freshly written by postject's binary patch a
-  // moment ago, and on the Windows CI runner Defender's on-access scan of
-  // that large new .exe can briefly hold a file lock that makes rcedit's
-  // own child process (which opens the file for writing) hang indefinitely
-  // instead of erroring -- so this both times out (fails fast with a clear
-  // message rather than tying up the runner for hours) and retries a few
-  // times with a short backoff to ride out that transient lock.
-  const maxAttempts = 3;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      await withTimeout(rcedit(exePath, rceditOptions), 60_000, "rcedit");
-      console.log(`[rcedit] patched icon + version info on ${exePath}`);
-      return;
-    } catch (err) {
-      if (attempt === maxAttempts) throw err;
-      console.warn(`[rcedit] attempt ${attempt}/${maxAttempts} failed (${err.message}); retrying in 5s...`);
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
-    }
-  }
-}
-
-function withTimeout(promise, ms, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-    );
-  });
 }
 
 async function downloadFile(url, destPath) {
