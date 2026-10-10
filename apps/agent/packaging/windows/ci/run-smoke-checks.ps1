@@ -193,6 +193,14 @@ Invoke-Section "CHECK 1: silent install" {
     $proc = Start-Process -FilePath $SetupExePath -ArgumentList "/S" -Wait -PassThru
     Copy-Diagnostics -Tag "install"
     Add-Result -Check "CHECK 1: silent install exits 0" -Pass ($proc.ExitCode -eq 0) -Detail "exit code: $($proc.ExitCode)"
+
+    # install.ps1's step e) does not register the external updater's
+    # "NiaAgentUpdater" Scheduled Task in 0.0.7 (autoUpdate ships off by
+    # default; the updater script stays in the repo, dormant, for
+    # 0.0.8 -- see docs/handoff/auto-update-0.0.8.md). Confirm that stays
+    # true for every push, independent of -RunAutoUpdateChecks.
+    $updaterTaskAfterInstall = Get-ScheduledTask -TaskName "NiaAgentUpdater" -ErrorAction SilentlyContinue
+    Add-Result -Check "CHECK 1b: NiaAgentUpdater scheduled task is NOT registered after install" -Pass (-not [bool]$updaterTaskAfterInstall) -Detail "state: $($updaterTaskAfterInstall.State)"
 }
 
 # ============================================================================
@@ -364,6 +372,10 @@ Invoke-Section "CHECK 8: auto-update" {
     $tokenFile = Join-Path $LocalApiDir "token"
     $updateDir = Join-Path $DataDir "update"
 
+    # NOTE(auto-update-0.0.8): install.ps1's step e) no longer registers
+    # this task in 0.0.7 (see CHECK 1b above) -- CHECK 8a below will need
+    # the registration restored (or this check rewritten) before this
+    # whole section can be re-enabled by default.
     # Sanity check first: install.ps1's step e must have registered the
     # SYSTEM-principal task the entire external-updater handoff depends
     # on -- if this is missing, nothing below can possibly work, so fail

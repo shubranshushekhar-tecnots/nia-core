@@ -33,6 +33,17 @@ if ($existing) {
     & $ServiceExe uninstall
 }
 
+# The external updater's Scheduled Task is not registered by install.ps1
+# in 0.0.7 (dormant until 0.0.8 -- see its step e comment), but remove it
+# here too if present, e.g. left behind by an older test build. Best-effort.
+try {
+    if (Get-ScheduledTask -TaskName "NiaAgentUpdater" -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName "NiaAgentUpdater" -Confirm:$false -ErrorAction Stop
+    }
+} catch {
+    Write-Host "WARN  could not remove 'NiaAgentUpdater' scheduled task (non-fatal): $($_.Exception.Message)"
+}
+
 if (Test-Path $InstallDir) {
     Remove-Item -Recurse -Force $InstallDir
 }

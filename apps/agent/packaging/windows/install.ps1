@@ -702,62 +702,26 @@ if (-not $startNameLine -or $startNameLine -notmatch [regex]::Escape($ServiceAcc
 }
 Write-Log "step d) verified nia-agent is Running (stable for 3s) under $ServiceAccount"
 
-# Step e) Register the external updater's own Scheduled Task (SYSTEM
-# principal, run on demand only -- no triggers) and restrict it so this
-# service's own virtual account can only RUN it, never reconfigure or
-# delete it. Scheduled Task permissions live in the task's own security
-# descriptor (SDDL), not in NTFS ACLs, so this uses the Task Scheduler
-# COM API directly rather than Set-Acl. -Force on Register-ScheduledTask
-# makes this idempotent across upgrades (replaces the prior definition
-# in place, same as the rest of this script's upgrade-in-place design).
+# Step e) 0.0.7: the external updater's Scheduled Task is NOT
+# registered -- autoUpdate ships off by default (see docs/handoff/
+# auto-update-0.0.8.md); "Check now" (manual update) does not need it.
+# The updater script itself (packaging/windows/updater/
+# nia-agent-updater.ps1) stays in the repo, dormant, for 0.0.8 to
+# re-enable. Best-effort cleanup only: if an older test build already
+# registered "NiaAgentUpdater" on this machine, remove it now so an
+# upgrade never leaves a stale, SYSTEM-principal task behind -- this
+# never fails the install, since the service itself does not depend on
+# this task existing either way.
 try {
-    # Invoked through run-updater.cmd (not powershell.exe directly) so any
-    # failure before nia-agent-updater.ps1's own logging/trap can even run
-    # (parse error, ExecutionPolicy/Group-Policy block, etc.) is still
-    # captured in update\launcher.log -- Task Scheduler attaches no console
-    # to a non-interactive task, so powershell.exe's own stdout/stderr would
-    # otherwise be silently discarded in exactly that failure mode.
-    $updaterLauncher = Join-Path $InstallDir "updater\run-updater.cmd"
-    $action = New-ScheduledTaskAction -Execute $updaterLauncher
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
-    $taskDefinition = New-ScheduledTask -Action $action -Principal $principal -Settings $settings
-    Register-ScheduledTask -TaskName "NiaAgentUpdater" -InputObject $taskDefinition -Force | Out-Null
-
-    # Restrict the service account to "run only": ensure exactly one ACE
-    # granting GR (Generic Read) + GX (Generic Execute -- the right that
-    # covers ITaskService::Run) to the service SID, on top of whatever
-    # owner/DACL entries Register-ScheduledTask already set up (SYSTEM +
-    # Administrators, full control). TASK_READ | TASK_EXECUTE is exactly
-    # what `schtasks /run` (called from updateInstaller.ts's handoff) needs
-    # and no more -- it cannot reconfigure, disable, or delete the task.
-    #
-    # This strips any existing ACE for this SID before re-adding one,
-    # rather than a "skip if already present" substring check: Windows
-    # normalizes the "GRGX" generic rights we set here into a resolved
-    # numeric access mask (e.g. 0x1200a9) when GetSecurityDescriptor reads
-    # them back, so a literal match against the text "(A;;GRGX;;;<sid>)"
-    # can never succeed on a second run -- and Register-ScheduledTask
-    # -Force does not reset a previously-set custom security descriptor,
-    # so the old "skip if already present" guard silently duplicated this
-    # ACE on every upgrade-in-place (confirmed in CI: two identical ACEs
-    # for the same SID after install -> upgrade). Matching by SID and
-    # stripping first is correct regardless of how Windows renders the
-    # generic rights back.
-    $schedService = New-Object -ComObject "Schedule.Service"
-    $schedService.Connect()
-    $rootFolder = $schedService.GetFolder("\")
-    $task = $rootFolder.GetTask("NiaAgentUpdater")
-    $currentSddl = $task.GetSecurityDescriptor(0x4)  # DACL_SECURITY_INFORMATION
-    $sidPattern = [regex]::Escape($serviceSidString)
-    $sddlWithoutOurAce = [regex]::Replace($currentSddl, "\(A;[^)]*;;;$sidPattern\)", "")
-    $runOnlyAce = "(A;;GRGX;;;$serviceSidString)"
-    $task.SetSecurityDescriptor("$sddlWithoutOurAce$runOnlyAce", 0)
+    if (Get-ScheduledTask -TaskName "NiaAgentUpdater" -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName "NiaAgentUpdater" -Confirm:$false -ErrorAction Stop
+        Write-Log "step e) removed pre-existing 'NiaAgentUpdater' scheduled task (not registered in 0.0.7)"
+    } else {
+        Write-Log "step e) 'NiaAgentUpdater' scheduled task is not registered in 0.0.7 (updater stays dormant until 0.0.8)"
+    }
 } catch {
-    Remove-ServiceQuietly
-    Fail "register external updater scheduled task" $_.Exception.Message
+    Write-Log "WARN  could not remove pre-existing 'NiaAgentUpdater' scheduled task (non-fatal): $($_.Exception.Message)"
 }
-Write-Log "step e) registered Scheduled Task 'NiaAgentUpdater' (SYSTEM, run-on-demand) with run-only rights for $ServiceAccount"
 
 if ($serviceWasRunning) {
     Write-Host "upgraded and restarted nia-agent"
