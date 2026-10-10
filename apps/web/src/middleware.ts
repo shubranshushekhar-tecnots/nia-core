@@ -66,6 +66,6 @@ export const config = {
      * Match all request paths except static assets and image optimization
      * files, so the session cookie is checked on every page/action.
      */
-    "/((?!_next/static|_next/image|favicon.ico|fonts/|video/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|woff|woff2|ttf|mp4|webm)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|robots.txt|site.webmanifest|fonts/|video/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|woff|woff2|ttf|mp4|webm)$).*)",
   ],
 };
