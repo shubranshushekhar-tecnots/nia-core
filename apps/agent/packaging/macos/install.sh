@@ -101,6 +101,34 @@ chmod 644 "$PLIST_PATH"
 launchctl bootstrap "$DOMAIN" "$PLIST_PATH"
 launchctl enable "$DOMAIN/$LABEL"
 
+# build-bundle.mjs includes "Nia Agent.app" by default (only a deliberate
+# --no-desktop, service-only build omits it) -- install it alongside the
+# service either way; skip quietly here if this happens to be such a build.
+APP_BUNDLE_SRC="$SCRIPT_DIR/Nia Agent.app"
+APP_BUNDLE_DEST="/Applications/Nia Agent.app"
+if [[ -d "$APP_BUNDLE_SRC" ]]; then
+  # Quit a running instance before replacing it -- overwriting a running
+  # .app bundle's contents in place leaves the live process pointed at
+  # deleted/mismatched files. Graceful quit first (its own before-quit
+  # handler saves window position/state), then a forced kill in case it
+  # ignored the request or isn't responding. Both are allowed to be no-ops
+  # when it simply isn't running -- the common case, not an error.
+  if [[ -d "$APP_BUNDLE_DEST" ]]; then
+    osascript -e 'tell application "Nia Agent" to quit' >/dev/null 2>&1 || true
+    sleep 1.5
+    pkill -f "$APP_BUNDLE_DEST/Contents/MacOS/" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$APP_BUNDLE_DEST"
+  cp -R "$APP_BUNDLE_SRC" "$APP_BUNDLE_DEST"
+  # Strip the Gatekeeper quarantine flag -- cp (unlike a signed/notarized
+  # installer flow) leaves it set, which would otherwise show an
+  # "unidentified developer" warning on first launch.
+  xattr -dr com.apple.quarantine "$APP_BUNDLE_DEST" 2>/dev/null || true
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    chown -R "$SUDO_USER" "$APP_BUNDLE_DEST" 2>/dev/null || true
+  fi
+fi
+
 if [[ "$SERVICE_WAS_LOADED" == true ]]; then
   echo "upgraded and restarted $LABEL"
 else
@@ -130,4 +158,12 @@ EOF
 Day-to-day, open the agent's own UI any time with:
   NIA_AGENT_HOME="$HOME_DIR" "$EXE_PATH" open
 EOF
+fi
+
+# Open the desktop app on first install only (not on upgrade, so a running
+# instance isn't force-closed/reopened under the user). GUI apps can't be
+# opened as root, so a --system install run via sudo just leaves it in
+# /Applications for the logged-in user to launch themselves.
+if [[ -d "$APP_BUNDLE_DEST" && "$SERVICE_WAS_LOADED" == false && "${EUID}" -ne 0 ]]; then
+  open -a "$APP_BUNDLE_DEST"
 fi

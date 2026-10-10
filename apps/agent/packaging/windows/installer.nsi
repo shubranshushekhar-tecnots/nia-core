@@ -29,6 +29,7 @@
 !include "x64.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
+!include "WinVer.nsh"
 
 Name "${PRODUCT_NAME}"
 OutFile "dist\NiaCoreAgent-Setup-${VERSION}.exe"
@@ -41,7 +42,6 @@ ShowUninstDetails show
 
 Var DataDir
 Var PowerShellExe
-Var CmdExe
 Var UninstPurge
 
 !insertmacro MUI_PAGE_WELCOME
@@ -92,9 +92,24 @@ Function un.onInit
   ClearErrors
 FunctionEnd
 
+; On Windows 10+ with the desktop app staged, the Electron shell
+; (NiaAgentDesktop\Nia Agent.exe) IS the setup experience -- it opens
+; straight to the agent's own UI (pairing included). On pre-Win10 (or if
+; the desktop build wasn't staged for any reason -- the FileExists guard
+; below), fall back to the same plain browser-based flow as the main
+; Start Menu shortcut: `nia-agent.exe open`. Neither branch may ever show
+; a visible console window -- nsExec::ExecToLog (not plain Exec) is what
+; suppresses it for this console-subsystem exe. The interactive CLI setup
+; wizard (`nia-agent.exe setup`, in a visible cmd window) only remains
+; reachable via the "(advanced)" shortcut.
 Function RunSetupNow
-  Call GetCmdExe
-  Exec '"$CmdExe" /k ""$INSTDIR\nia-agent.exe" setup"'
+  ${If} ${AtLeastWin10}
+  ${AndIf} ${FileExists} "$INSTDIR\NiaAgentDesktop\Nia Agent.exe"
+    Exec '"$INSTDIR\NiaAgentDesktop\Nia Agent.exe"'
+  ${Else}
+    nsExec::ExecToLog '"$INSTDIR\nia-agent.exe" open'
+    Pop $0
+  ${EndIf}
 FunctionEnd
 
 ; makensis builds a plain 32-bit installer executable, so on 64-bit
@@ -115,27 +130,26 @@ Function GetPowerShellExe
   ${EndIf}
 FunctionEnd
 
-; Same WOW64 problem as GetPowerShellExe above, for cmd.exe: a plain
-; "$SYSDIR\cmd.exe" resolves to SysWOW64 under this 32-bit installer
-; process, launching the 32-bit cmd.exe instead of the native 64-bit one.
-; Harmless for running nia-agent.exe itself (CreateProcess works across
-; bitness for a separate child exe), but inconsistent with this installer's
-; "64-bit only, always" rule, so resolve it the same way.
+; The running Electron shell holds its own exe/DLLs open on Windows --
+; overwriting them in place (upgrade) or deleting them (uninstall) fails
+; silently-to-partially while it's running. Graceful quit first (lets it
+; save window position/state via its own before-quit handler), then a
+; forced kill in case it ignored the graceful request or isn't responding.
+; Both calls are allowed to "fail" (exit non-zero) when the process simply
+; isn't running at all -- that's the common case, not an error.
 ;
-; Only correct for an Exec/nsExec call made by THIS (32-bit) installer
-; process itself -- RunSetupNow, below, is its one remaining caller. Never
-; use $CmdExe for a CreateShortCut target: a persisted .lnk's target string
-; is read later by whatever process the user double-clicks it from (a
-; native 64-bit Explorer on this installer's 64-bit-only target, where
-; "Sysnative" isn't a valid path at all) -- see the Section "Install"
-; shortcut-creation comment for the bug this distinction fixes.
-Function GetCmdExe
-  ${If} ${FileExists} "$WINDIR\Sysnative\cmd.exe"
-    StrCpy $CmdExe "$WINDIR\Sysnative\cmd.exe"
-  ${Else}
-    StrCpy $CmdExe "$WINDIR\System32\cmd.exe"
-  ${EndIf}
-FunctionEnd
+; A macro, not a Function: Section "Install" and Section "Uninstall" compile
+; into two separate binaries (the installer and Uninstall.exe), and a plain
+; Function is only reachable from the former -- only "un."-prefixed
+; Functions or macros can be used in both.
+!macro CloseAgentDesktopApp
+  DetailPrint "Closing Nia Agent if it's running..."
+  nsExec::ExecToLog 'taskkill /IM "Nia Agent.exe" /T'
+  Pop $0
+  Sleep 1500
+  nsExec::ExecToLog 'taskkill /F /IM "Nia Agent.exe" /T'
+  Pop $0
+!macroend
 
 ; Patches the "Run as administrator" compatibility bit into a .lnk file
 ; (byte offset 0x15, bit 0x20 — the documented shortcut link-flags byte).
@@ -155,6 +169,7 @@ Function MarkShortcutElevated
 FunctionEnd
 
 Section "Install" SEC01
+  !insertmacro CloseAgentDesktopApp
   SetOutPath "$INSTDIR"
   File "${STAGE_DIR}\nia-agent.exe"
   File "${STAGE_DIR}\nia-agent-service.exe"
@@ -163,6 +178,20 @@ Section "Install" SEC01
   File "${STAGE_DIR}\install.ps1"
   File "${STAGE_DIR}\uninstall.ps1"
   File "${STAGE_DIR}\VERSION.txt"
+
+  ; The desktop shell (apps/agent-desktop) is staged by build-installer.mjs
+  ; as a NiaAgentDesktop\ subfolder -- required by default there (missing
+  ; output is a hard build-time error), staged here only when present
+  ; because a deliberate --no-desktop (service-only) build, or a pre-Win10
+  ; target (Electron doesn't support it anyway), legitimately has none.
+  ; Both cases fall back to the plain browser-based "nia-agent.exe open"
+  ; shortcut below with no error at install time.
+  ${If} ${AtLeastWin10}
+  ${AndIf} ${FileExists} "${STAGE_DIR}\NiaAgentDesktop\*.*"
+    SetOutPath "$INSTDIR\NiaAgentDesktop"
+    File /r "${STAGE_DIR}\NiaAgentDesktop\*.*"
+    SetOutPath "$INSTDIR"
+  ${EndIf}
 
   DetailPrint "Registering and starting the nia-agent service (stop -> replace -> start if upgrading)..."
   Call GetPowerShellExe
@@ -182,29 +211,30 @@ Section "Install" SEC01
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\${START_MENU_DIR}"
-  ; Plain-open shortcut (Phase 2 M2): the one most users ever need. It
-  ; just runs `nia-agent.exe open`, which trades the on-disk bearer token
-  ; for a 60s single-use OTC and opens the agent's own UI in the default
-  ; browser -- no admin elevation needed (unlike Setup/Status below),
-  ; since reading the already-ACL'd local-api\ token only requires the
-  ; read-only ACE install.ps1 already grants the installing user, not
-  ; membership in Administrators.
-  CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk" "$INSTDIR\nia-agent.exe" 'open' "$INSTDIR\nia-agent.exe" 0
+  ; Main shortcut: on Win10+ with the desktop app staged, point straight at
+  ; the Electron shell (apps/agent-desktop) -- it owns the same OTC->session
+  ; flow itself, just in a native window instead of the default browser.
+  ; Pre-Win10 (or if the desktop build wasn't staged for any reason) falls
+  ; back to the original Phase 2 M2 behavior: `nia-agent.exe open` trades the
+  ; on-disk bearer token for a 60s single-use OTC and opens the agent's UI in
+  ; the default browser -- no admin elevation needed either way, since
+  ; reading the already-ACL'd local-api\ token only requires the read-only
+  ; ACE install.ps1 already grants the installing user, not membership in
+  ; Administrators.
+  ${If} ${AtLeastWin10}
+  ${AndIf} ${FileExists} "$INSTDIR\NiaAgentDesktop\Nia Agent.exe"
+    CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk" "$INSTDIR\NiaAgentDesktop\Nia Agent.exe" "" "$INSTDIR\NiaAgentDesktop\Nia Agent.exe" 0
+  ${Else}
+    CreateShortCut "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk" "$INSTDIR\nia-agent.exe" 'open' "$INSTDIR\nia-agent.exe" 0
+  ${EndIf}
 
-  ; Deliberately NOT using $CmdExe/GetCmdExe here. GetCmdExe's Sysnative
-  ; resolution exists to work around THIS installer process's own WOW64
-  ; redirection when IT launches cmd.exe directly (RunSetupNow, below) --
-  ; but CreateShortCut never launches anything, it just writes a target
-  ; path string into a .lnk file, so no redirection applies to it either
-  ; way. Baking in the Sysnative-resolved path was the actual bug behind
-  ; "the Setup/Status shortcut does nothing the second time": `Sysnative`
-  ; is an alias that only exists for WOW64 (32-bit) processes -- Explorer
-  ; itself is a native 64-bit process on this installer's 64-bit-only
-  ; target, so when IT later resolves a shortcut whose target is literally
-  ; "C:\Windows\Sysnative\cmd.exe", that path doesn't exist for it at all;
-  ; the shortcut just silently fails to launch. The plain System32 path
-  ; below is valid from any process, any bitness, and is what both
-  ; shortcuts must use.
+  ; Always the plain System32 cmd.exe path below (never a Sysnative-resolved
+  ; one) -- CreateShortCut never launches anything itself, it just writes a
+  ; target path string into a .lnk file, read later by whatever process the
+  ; user double-clicks it from (a native 64-bit Explorer on this installer's
+  ; 64-bit-only target, where "Sysnative" isn't a valid path at all). Baking
+  ; in a Sysnative-resolved path here was the actual bug behind "the
+  ; Setup/Status shortcut does nothing the second time".
   ;
   ; Renamed to "(advanced)" (Phase 2 M2) now that the plain "Nia Core
   ; Agent.lnk" above covers normal day-to-day use -- these two remain for
@@ -247,6 +277,8 @@ Section "Uninstall"
     StrCpy $0 "keep"
     StopService:
   ${EndIf}
+
+  !insertmacro CloseAgentDesktopApp
 
   DetailPrint "Stopping and unregistering the nia-agent service..."
   nsExec::ExecToLog '"$INSTDIR\nia-agent-service.exe" stop'

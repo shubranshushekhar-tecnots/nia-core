@@ -5,20 +5,39 @@
 // build-sea.mjs already fetched and verified everything it needed.
 //
 // Usage (from repo root, after `pnpm -r --filter @nia/extract --filter
-// @nia/agent build`):
+// @nia/agent build` and `pnpm --filter @nia/agent-desktop package`):
 //   node apps/agent/packaging/macos/build-sea.mjs
 //   node apps/agent/packaging/macos/build-bundle.mjs
+//
+// The desktop app shell (apps/agent-desktop) is required by default -- pass
+// --no-desktop to build a service-only bundle for dev/testing:
+//   node apps/agent/packaging/macos/build-bundle.mjs --no-desktop
 //
 // Produces apps/agent/packaging/macos/dist/nia-agent-macos-arm64-<version>.zip
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, rmSync, chmodSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  copyFileSync,
+  cpSync,
+  readdirSync,
+  rmSync,
+  chmodSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentDir = path.resolve(here, "../../");
 const distDir = path.join(here, "dist");
+
+// Opt-in escape hatch for dev-only, service-only builds. Without it, a
+// missing Electron build output is a hard failure (see stageAgentDesktop)
+// so a real bundle can never silently ship without the desktop shell.
+const noDesktop = process.argv.slice(2).includes("--no-desktop");
 
 async function main() {
   const version = JSON.parse(readFileSync(path.join(agentDir, "package.json"), "utf8")).version;
@@ -31,7 +50,7 @@ async function main() {
   rmSync(stageDir, { recursive: true, force: true });
   mkdirSync(stageDir, { recursive: true });
 
-  console.log("[1/2] staging agent executable, plist template, and scripts...");
+  console.log("[1/3] staging agent executable, plist template, and scripts...");
   copyFileSync(seaExePath, path.join(stageDir, "nia-agent"));
   chmodSync(path.join(stageDir, "nia-agent"), 0o755);
   copyFileSync(path.join(here, "nia-agent.plist.template"), path.join(stageDir, "nia-agent.plist.template"));
@@ -41,7 +60,14 @@ async function main() {
   chmodSync(path.join(stageDir, "uninstall.sh"), 0o755);
   writeFileSync(path.join(stageDir, "VERSION.txt"), `Nia Core Agent ${version} (darwin-arm64)\nBuilt ${new Date().toISOString()}\n`);
 
-  console.log("[2/2] zipping bundle...");
+  if (noDesktop) {
+    console.log("[2/3] --no-desktop passed -- skipping the desktop app shell (service-only build)...");
+  } else {
+    console.log("[2/3] staging the desktop app shell (apps/agent-desktop)...");
+    stageAgentDesktop(stageDir);
+  }
+
+  console.log("[3/3] zipping bundle...");
   const zipName = `nia-agent-macos-arm64-${version}.zip`;
   const zipPath = path.join(distDir, zipName);
   rmSync(zipPath, { force: true });
@@ -53,6 +79,33 @@ async function main() {
 
   console.log(`\nbuilt ${zipPath}`);
   console.log(`sha256: ${sha256File(zipPath)}`);
+}
+
+// Required by default, same reasoning as windows/build-installer.mjs's
+// helper of the same name -- a real bundle must never silently ship
+// without the desktop shell. Pass --no-desktop to intentionally build a
+// service-only bundle (dev builds only); install.sh already only copies
+// "Nia Agent.app" into /Applications when it's present, so a --no-desktop
+// bundle is still a working, service-only install.
+function stageAgentDesktop(stageDir) {
+  const desktopBuildDir = path.join(agentDir, "..", "agent-desktop", "dist-electron");
+  if (!existsSync(desktopBuildDir)) {
+    throw new Error(
+      `apps/agent-desktop/dist-electron not found -- run \`pnpm --filter @nia/agent-desktop package\` first to include the desktop app shell, or pass --no-desktop to build a service-only bundle.`,
+    );
+  }
+  const macDirName = readdirSync(desktopBuildDir).find((name) => /^mac/i.test(name));
+  if (!macDirName) {
+    throw new Error(
+      `no mac-unpacked output under apps/agent-desktop/dist-electron -- run \`pnpm --filter @nia/agent-desktop package\` first, or pass --no-desktop to build a service-only bundle.`,
+    );
+  }
+  const src = path.join(desktopBuildDir, macDirName, "Nia Agent.app");
+  if (!existsSync(src)) {
+    throw new Error(`expected ${src} -- check apps/agent-desktop/electron-builder.yml's productName`);
+  }
+  cpSync(src, path.join(stageDir, "Nia Agent.app"), { recursive: true });
+  console.log(`  staged desktop app shell from ${src}`);
 }
 
 function sha256File(filePath) {
