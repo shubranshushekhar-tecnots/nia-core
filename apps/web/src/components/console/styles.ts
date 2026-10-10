@@ -359,6 +359,22 @@ export const consoleSearchStyle: CSSProperties = {
   outline: 'none',
 };
 
+// Compact filter dropdown, same 32px height as consoleSearchStyle so it
+// sits inline in consoleToolbarRowStyle (Users list's role/plan/workspace
+// filters, 0078's plan-visibility work).
+export const consoleFilterSelectStyle: CSSProperties = {
+  boxSizing: 'border-box',
+  height: 32,
+  padding: '0 10px',
+  fontFamily: 'inherit',
+  fontSize: 13,
+  color: 'var(--c-text)',
+  background: 'var(--c-surface)',
+  border: '1px solid var(--c-line-strong)',
+  borderRadius: 0,
+  outline: 'none',
+};
+
 export const consoleTableStyle: CSSProperties = { display: 'flex', flexDirection: 'column' };
 
 // Table header: 11/16/600 uppercase .08em, sticky, bg-subtle, 36px.
@@ -383,6 +399,15 @@ export const consoleTableHeadRowStyle: CSSProperties = {
 };
 
 export const consoleColAccountStyle: CSSProperties = { flex: '2 1 200px', minWidth: 150 };
+// Users list's "Workspace" column (0078's plan-visibility work): role +
+// org name(s), or "Individual" when there's no org membership.
+export const consoleColWorkspaceStyle: CSSProperties = { flex: '2 1 180px', minWidth: 140 };
+export const consoleRowWorkspaceStyle: CSSProperties = {
+  flex: '2 1 180px',
+  minWidth: 140,
+  fontSize: 13,
+  color: 'var(--c-text-2)',
+};
 export const consoleColPlanStyle: CSSProperties = { flex: '0 1 110px', minWidth: 88 };
 export const consoleColMembersStyle: CSSProperties = { flex: '0 1 84px', minWidth: 66, textAlign: 'right' };
 export const consoleColRunsStyle: CSSProperties = { flex: '0 1 86px', minWidth: 70, textAlign: 'right' };
