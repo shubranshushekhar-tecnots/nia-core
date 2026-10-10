@@ -524,6 +524,22 @@ Invoke-Section "CHECK 8: auto-update" {
         if (Test-Path $updaterLog) {
             Copy-Item -Path $updaterLog -Destination (Join-Path $ArtifactsDir "check8.updater.log") -Force -ErrorAction SilentlyContinue
         }
+        # Also grab the agent service's own log (handOffToExternalUpdater's
+        # "update_handed_off_to_external_updater"/"update_handoff_failed"
+        # events, and UpdateChecker's "update_check_failed"/
+        # "update_checksum_mismatch" events, all land here, not in
+        # updater.log) plus whatever handoff state files still exist, so a
+        # failure here is diagnosable without re-running CI blind.
+        $agentLog = Join-Path $DataDir "logs\agent.log"
+        if (Test-Path $agentLog) {
+            Copy-Item -Path $agentLog -Destination (Join-Path $ArtifactsDir "check8.agent.log") -Force -ErrorAction SilentlyContinue
+        }
+        foreach ($f in @("pending-update.json", "in-progress.json", "last-result.json")) {
+            $p = Join-Path $updateDir $f
+            if (Test-Path $p) {
+                Copy-Item -Path $p -Destination (Join-Path $ArtifactsDir "check8.$f") -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }
 
