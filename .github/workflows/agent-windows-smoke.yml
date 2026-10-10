@@ -12,6 +12,11 @@ name: agent-windows-smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      run_auto_update_checks:
+        description: "Actually exercise CHECK 8 (auto-update + pairing) instead of skipping it. Push-triggered runs always skip it (autoUpdate ships off by default) -- use this only for a one-off manual verification run."
+        type: boolean
+        default: false
   push:
     branches:
       - ci/agent-windows-smoke
@@ -106,10 +111,15 @@ jobs:
           $setup = Get-ChildItem -Path apps/agent/packaging/windows/dist -Filter "NiaCoreAgent-Setup-*.exe" | Select-Object -First 1
           if (-not $setup) { throw "no NiaCoreAgent-Setup-*.exe found under apps/agent/packaging/windows/dist" }
           Write-Host "setup exe: $($setup.FullName)"
-          & ./apps/agent/packaging/windows/ci/run-smoke-checks.ps1 -SetupExePath $setup.FullName
+          $runAutoUpdateChecks = "${{ github.event.inputs.run_auto_update_checks }}" -eq "true"
+          if ($runAutoUpdateChecks) {
+            & ./apps/agent/packaging/windows/ci/run-smoke-checks.ps1 -SetupExePath $setup.FullName -RunAutoUpdateChecks
+          } else {
+            & ./apps/agent/packaging/windows/ci/run-smoke-checks.ps1 -SetupExePath $setup.FullName
+          }
 
       - name: Upload logs on failure
-        if: failure()
+        if: failure() || github.event.inputs.run_auto_update_checks == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: agent-windows-smoke-logs
