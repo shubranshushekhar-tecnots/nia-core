@@ -159,8 +159,25 @@ Write-Log "running installer silently: $DownloadedFile /S"
 # command cannot be run due to the error: The operation attempted is not
 # supported." -NoNewWindow forces the CreateProcess path instead (no shell,
 # no window station needed), confirmed fixed against CI's actual failure.
-$proc = Start-Process -FilePath $DownloadedFile -ArgumentList "/S" -Wait -PassThru -NoNewWindow
-Write-Log "installer exited with code $($proc.ExitCode)"
+#
+# No -Wait here -- bound the wait manually instead. Observed on CI: the
+# installer's actual effects (service stopped, binaries replaced, new
+# service started and healthy) reliably complete within ~20-25s, same as an
+# interactive /S run -- but the launched process handle itself has been seen
+# to never signal exit under this SYSTEM/non-interactive Scheduled Task
+# session (suspected NSIS self-relaunch or pipe/handle inheritance quirk
+# specific to a CreateProcess-with-no-window launch; not fully isolated).
+# An unbounded -Wait would hang this task forever on that quirk, which also
+# blocks every subsequent update attempt (Task Scheduler won't start a second
+# instance of a task it still considers running). Give it a generous ceiling
+# (10x+ the normal runtime); if exceeded, kill it and fall through to the
+# real health check below rather than assuming failure -- the timeout means
+# the launching process's own signal can't be trusted, not that the install
+# itself didn't work (observed CI runs where it silently succeeded despite
+# the hang), so let the same "poll /status for the new version" check that
+# already covers "exit code 0 but didn't actually come up" decide the truth.
+$proc = Start-Process -FilePath $DownloadedFile -ArgumentList "/S" -PassThru -NoNewWindow
+$installerTimedOut = -not $proc.WaitForExit(180000)
 
 function Restore-Snapshot {
     param([string]$Reason)
@@ -177,7 +194,17 @@ function Restore-Snapshot {
     }
 }
 
-if ($proc.ExitCode -ne 0) {
+if ($installerTimedOut) {
+    Write-Log "WARN  installer process (pid $($proc.Id)) did not exit within 180s - killing it and its children, then checking real agent health below to determine whether the install actually took effect"
+    Get-CimInstance Win32_Process -Filter "ParentProcessId=$($proc.Id)" -ErrorAction SilentlyContinue | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+} else {
+    Write-Log "installer exited with code $($proc.ExitCode)"
+}
+
+if (-not $installerTimedOut -and $proc.ExitCode -ne 0) {
     Restore-Snapshot -Reason "installer exited $($proc.ExitCode)"
     Write-Result @{ outcome = "rolled_back"; attemptedVersion = $NewVersion; reason = "installer_failed" }
     Remove-Item -Path $DownloadedFile -Force -ErrorAction SilentlyContinue
