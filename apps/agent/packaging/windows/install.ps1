@@ -377,6 +377,66 @@ function Stop-ProcessTreeById {
     Stop-Process -Id $ParentId -Force -ErrorAction SilentlyContinue
 }
 
+function Stop-ProcessesByExePath {
+    # Catches anything still executing from a given exe path that the PID-
+    # rooted Stop-ProcessTreeById above could miss — e.g. a process that
+    # got reparented away from the service's pid, or a second, independently
+    # -launched copy. Matched by path (never by image name alone, since
+    # "nia-agent.exe"/"nia-agent-service.exe" are only unique within this
+    # install dir).
+    param([string]$Path)
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath -ieq $Path } | ForEach-Object {
+        Write-Log "  ending stray process pid $($_.ProcessId) still running from $Path"
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Wait-ExeUnlocked {
+    # CONFIRMED, REPRODUCIBLE BUG this guards against: installer.nsi's
+    # File instructions silently skip (not abort) overwriting a locked
+    # exe in silent mode, so a stop that LOOKS complete (Get-Service
+    # reports "Stopped", or the fallback kill above has run) is not
+    # proof the file is actually writable yet -- Windows can keep an
+    # EXE's backing image section open for a short grace period after
+    # the very last process referencing it exits, and this is what let
+    # a real version upgrade leave the OLD binary running forever
+    # (service reached RUNNING, installer exited 0, but /status kept
+    # answering with the old version — see installer.nsi's Section
+    # "Install" comment for the first time this was diagnosed). Retries
+    # an exclusive open instead of trusting service/process state alone.
+    param([string]$Path, [int]$TimeoutSec = 15)
+    if (-not (Test-Path $Path)) { return $true }
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+            $stream.Close()
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    return $false
+}
+
+function Confirm-ExesUnlocked {
+    # Belt-and-suspenders pass run right after the stop logic below,
+    # before any File/Copy-Item instruction touches these paths: catch
+    # any stray process still holding one of them open, then wait out
+    # the OS's release grace period. Only warns (never fails the
+    # install) since this is a best-effort narrowing of the race window,
+    # not a guarantee — there is no reliable way from here to abort an
+    # NSIS File instruction that already decided to skip.
+    param([string]$Dir)
+    foreach ($exeName in @("nia-agent.exe", "nia-agent-service.exe")) {
+        $exePath = Join-Path $Dir $exeName
+        Stop-ProcessesByExePath -Path $exePath
+        if (-not (Wait-ExeUnlocked -Path $exePath -TimeoutSec 15)) {
+            Write-Log "WARN  $exePath still locked 15s after stopping the service - file replacement may silently fail"
+        }
+    }
+}
+
 if ($StopOnly) {
     Write-Log "StopOnly: checking for a running nia-agent service to stop before file extraction"
     $existingInfo = Get-CimInstance Win32_Service -Filter "Name='nia-agent'" -ErrorAction SilentlyContinue
@@ -395,6 +455,7 @@ if ($StopOnly) {
             Write-Log "StopOnly: did not stop within 30s - ending process tree by pid instead"
             Stop-ProcessTreeById -ParentId $existingInfo.ProcessId
         }
+        Confirm-ExesUnlocked -Dir $InstallDir
     } else {
         Write-Log "StopOnly: no running nia-agent service found - nothing to do"
     }
@@ -429,6 +490,12 @@ if ($existingInfo) {
                 Stop-ProcessTreeById -ParentId $existingInfo.ProcessId
             }
         }
+        # Only meaningful for the manual-zip path below, whose Copy-Item
+        # calls happen later in this same script — for -InPlace, NSIS's
+        # own File instructions already ran before this script was ever
+        # invoked (see installer.nsi's -StopOnly call), so this is a
+        # harmless no-op there (paths already settled on disk by now).
+        Confirm-ExesUnlocked -Dir $InstallDir
     }
 
     Write-Log "uninstalling existing nia-agent service for upgrade"
