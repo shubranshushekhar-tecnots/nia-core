@@ -548,7 +548,21 @@ Invoke-Section "CHECK 8: auto-update" {
         # the default 4h+jitter interval and no further "check now"
         # triggered by this test, will not happen during this run, so
         # reading it directly off disk here is safe.
+        #
+        # CHECK 8l above and nia-agent-updater.ps1's own internal
+        # Test-AgentHealthy loop poll the exact same /status endpoint on two
+        # separate, unsynchronized cadences -- the live service can start
+        # answering with the new version slightly before the updater
+        # script's own poll notices it, runs its post-health-check cleanup
+        # (removing the backup/in-progress/downloaded-file markers), and
+        # finally calls Write-Result. A single immediate Test-Path here
+        # raced that gap and reported a false "not found". Give it a short
+        # grace period instead of reading it once.
         $resultFile = Join-Path $updateDir "last-result.json"
+        $resultDeadline = (Get-Date).AddSeconds(60)
+        while (-not (Test-Path $resultFile) -and (Get-Date) -lt $resultDeadline) {
+            Start-Sleep -Seconds 2
+        }
         if (Test-Path $resultFile) {
             $result = Get-Content -Path $resultFile -Raw | ConvertFrom-Json
             $outcomeOk = ($result.outcome -eq "installed") -and ($result.version -eq $newVersion)
