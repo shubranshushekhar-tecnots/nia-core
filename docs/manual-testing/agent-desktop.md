@@ -1,4 +1,4 @@
-# Manual end-to-end testing: Nia Agent Desktop (Electron shell)
+# Manual end-to-end testing: Nia Core Agent Desktop (Electron shell)
 
 Hand-drive the Electron shell (`apps/agent-desktop`) against a throwaway,
 foreground agent service — no packaging, no admin/root, nothing that
@@ -28,7 +28,7 @@ pnpm --filter @nia/agent run dev start
 Leave this running. (You don't need a real SQL Server connection paired
 for most of the checks below — an unpaired agent is enough to exercise
 the window/tray/relaunch/offline-screen behavior; pair one only if you
-want to see the colored tray states beyond grey/amber.)
+want to see the tray animation states beyond idle/starting.)
 
 ## 2. Build and launch the desktop shell (terminal B)
 
@@ -39,12 +39,13 @@ pnpm --filter @nia/agent-desktop run dev
 
 **What you should see:** a window opens loading the agent's own UI (same
 OTC→session flow as the browser-based `nia-agent open`), and a tray icon
-appears (menu bar on macOS, system tray on Windows) colored grey/amber
-depending on pairing state.
+appears (menu bar on macOS, system tray on Windows) showing the
+idle/syncing/starting/problem/off animation state that matches pairing
+status.
 
 ## 3. Tray menu + status polling
 
-Click the tray icon's "Open Nia Agent" item with the window closed/hidden
+Click the tray icon's "Open Nia Core Agent" item with the window closed/hidden
 — it should reopen. Check the status line in the tray menu updates within
 ~15s of pairing/unpairing a connection (or stopping terminal A).
 
@@ -52,7 +53,7 @@ Click the tray icon's "Open Nia Agent" item with the window closed/hidden
 
 Click the window's **X**. **What you should see:** the window disappears
 but the tray icon remains and terminal A (the agent service) keeps
-running untouched. Click "Open Nia Agent" in the tray — the window
+running untouched. Click "Open Nia Core Agent" in the tray — the window
 reopens without re-pairing.
 
 ## 5. Quit actually quits
@@ -75,8 +76,8 @@ reopen a window — never silently do nothing:
 
 ## 7. Service-not-running screen + retry
 
-Stop terminal A (`Ctrl+C`), then click "Open Nia Agent" in the tray (or
-relaunch). **What you should see:** a plain-language "Nia Agent service
+Stop terminal A (`Ctrl+C`), then click "Open Nia Core Agent" in the tray (or
+relaunch). **What you should see:** a plain-language "Nia Core Agent service
 isn't running" screen — no stack traces, no `ECONNREFUSED`, no raw
 technical wording — with a **Retry** link. Restart terminal A, then
 either click Retry or just wait a few seconds (it auto-retries): the
