@@ -37,8 +37,19 @@ jobs:
 
       # makensis (NSIS) for the installer; unzip for build-sea.mjs's
       # Node.js download step (not present on windows-latest by default).
+      # Chocolatey's nsis package installs makensis.exe to "C:\Program
+      # Files (x86)\NSIS" and adds it to the *machine* PATH registry value
+      # -- it does NOT generate a ShimGen shim the way unzip does (compare
+      # this step's log: no "ShimGen ... makensis.exe" line). The GitHub
+      # Actions Windows runner snapshots PATH once at job start and never
+      # re-reads the registry, so later steps' child processes never see
+      # that machine-PATH update on their own. Append the install dir to
+      # $GITHUB_PATH explicitly so subsequent steps (build-installer.mjs)
+      # can actually find makensis on PATH.
       - name: Install makensis + unzip
-        run: choco install -y nsis unzip --no-progress
+        run: |
+          choco install -y nsis unzip --no-progress
+          echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
