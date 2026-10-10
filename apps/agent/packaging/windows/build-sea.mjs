@@ -159,7 +159,7 @@ async function patchVersionInfo(exePath, agentDirPath) {
   }
   const version = JSON.parse(readFileSync(path.join(agentDirPath, "package.json"), "utf8")).version;
   const iconPath = path.resolve(agentDirPath, "..", "agent-desktop", "assets", "app-icon.ico");
-  const rcedit = (await import("rcedit")).default;
+  const { rcedit } = await import("rcedit");
   await rcedit(exePath, {
     icon: iconPath,
     "file-version": version,
