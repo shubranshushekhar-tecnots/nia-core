@@ -34,6 +34,7 @@ export function Pairing({ onPaired }: PairingProps) {
 
   return (
     <div className="agent-screen agent-screen--narrow">
+      <img src="/logo-mark.png" className="agent-pairing-logo" alt="" />
       <h1>Pair this agent</h1>
       <p className="agent-text-muted">Paste the code from Nia Core &rarr; Agents &rarr; Add agent.</p>
       <textarea

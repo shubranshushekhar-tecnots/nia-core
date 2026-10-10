@@ -107,6 +107,10 @@ export function App({ bootError }: AppProps) {
         </div>
       )}
       <nav className="agent-sidebar">
+        <div className="agent-sidebar-brand">
+          <img src="/logo-mark.png" alt="" />
+          <span>Nia Core Agent</span>
+        </div>
         {NAV_ITEMS.map((item) => (
           <button
             key={item.screen}

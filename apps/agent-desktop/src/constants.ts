@@ -1,6 +1,6 @@
 /** Shared constants for the Electron shell -- kept in one place so main.ts, window.ts, and tray/trayManager.ts agree. */
 
-export const APP_DISPLAY_NAME = "Nia Agent";
+export const APP_DISPLAY_NAME = "Nia Core Agent";
 
 /** How often the tray polls GET /status. */
 export const STATUS_POLL_INTERVAL_MS = 15_000;

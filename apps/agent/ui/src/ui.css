@@ -101,6 +101,20 @@ body {
   background: var(--agent-surface);
 }
 
+.agent-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 16px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.agent-sidebar-brand img {
+  width: 24px;
+  height: 24px;
+}
+
 .agent-nav-item {
   text-align: left;
   padding: 8px 12px;
@@ -136,6 +150,12 @@ body {
 
 .agent-screen--narrow {
   max-width: 420px;
+}
+
+.agent-pairing-logo {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 4px;
 }
 
 .agent-text-muted {

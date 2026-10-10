@@ -13,6 +13,7 @@ files:
   - assets/**/*
   - package.json
 asar: true
+afterPack: scripts/afterPack.mjs
 
 win:
   target: dir

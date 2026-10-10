@@ -134,11 +134,43 @@ async function main() {
   rmSync(nodeZipPath);
   rmSync(path.join(distDir, `node-v${NODE_VERSION}-win-x64`), { recursive: true, force: true });
 
+  await patchVersionInfo(outExePath, agentDir);
+
   await signFile(outExePath);
 
   const finalSha = sha256File(outExePath);
   console.log(`\nbuilt ${outExePath}`);
   console.log(`nia-agent.exe sha256: ${finalSha}`);
+}
+
+// Sets the icon + FileDescription/ProductName/CompanyName/FileVersion on
+// nia-agent.exe's PE resources so Task Manager/Explorer/Apps&Features show
+// "Nia Core Agent" with the real icon instead of a bare copy of node.exe's
+// own metadata. rcedit itself only runs on Windows (it links against the
+// Windows resource-compiler APIs) -- cross-building the rest of this SEA
+// from macOS/Linux is unaffected, this one step is just skipped there with
+// a clear log line; it still runs for real on the Windows CI runner that
+// actually produces the shipped binary. Must run BEFORE signFile() above --
+// editing PE resources after signing invalidates the Authenticode signature.
+async function patchVersionInfo(exePath, agentDirPath) {
+  if (process.platform !== "win32") {
+    console.log("[rcedit] skipped (not running on Windows) -- nia-agent.exe's icon/version metadata will only be set when this script runs on the Windows CI runner.");
+    return;
+  }
+  const version = JSON.parse(readFileSync(path.join(agentDirPath, "package.json"), "utf8")).version;
+  const iconPath = path.resolve(agentDirPath, "..", "agent-desktop", "assets", "app-icon.ico");
+  const rcedit = (await import("rcedit")).default;
+  await rcedit(exePath, {
+    icon: iconPath,
+    "file-version": version,
+    "product-version": version,
+    "version-string": {
+      FileDescription: "Nia Core Agent",
+      ProductName: "Nia Core Agent",
+      CompanyName: "Nia Core",
+    },
+  });
+  console.log(`[rcedit] patched icon + version info on ${exePath}`);
 }
 
 async function downloadFile(url, destPath) {
