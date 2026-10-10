@@ -73,11 +73,17 @@ export default function LoginForm() {
           ? useBackupCode
             ? 'Enter one of your backup codes.'
             : 'Enter the 6-digit code from your authenticator app.'
-          : "Use your work account to reach your organization's data."
+          : isStaffLogin
+            ? 'Restricted to Nia Core staff. Sign in with your staff account; 2FA is required.'
+            : "Use your work account to reach your organization's data."
       }
-      footerQuestion="New to Nia Core?"
-      footerLinkText="Create an account"
-      footerHref={next ? `/signup?next=${encodeURIComponent(next)}` : '/signup'}
+      // Staff accounts are only ever created via the manageStaff CLI, never
+      // self-signup — so the staff sign-in never shows a "Create an
+      // account" footer (omitting the props makes AuthShell's own
+      // `hasFooter` check false). Customer sign-in is unaffected.
+      footerQuestion={isStaffLogin ? undefined : 'New to Nia Core?'}
+      footerLinkText={isStaffLogin ? undefined : 'Create an account'}
+      footerHref={isStaffLogin ? undefined : next ? `/signup?next=${encodeURIComponent(next)}` : '/signup'}
       staffMode={isStaffLogin}
     >
       {!twoFactorRequired ? (
