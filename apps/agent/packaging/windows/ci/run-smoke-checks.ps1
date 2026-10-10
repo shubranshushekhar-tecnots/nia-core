@@ -452,10 +452,36 @@ Invoke-Section "CHECK 8: auto-update" {
         # external updater (write the request file + `schtasks /run`) --
         # it does NOT itself install anything (see link/updateInstaller.ts).
         try {
-            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/update/check" -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 10 | Out-Null
-            Add-Result -Check "CHECK 8k: POST /update/check triggers" -Pass $true
+            $checkResp = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/update/check" -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 10
+            Add-Result -Check "CHECK 8k: POST /update/check triggers" -Pass ([bool]$checkResp.triggered) -Detail ($checkResp | ConvertTo-Json -Compress)
         } catch {
             Add-Result -Check "CHECK 8k: POST /update/check triggers" -Pass $false -Detail $_.Exception.Message
+        }
+
+        # Diagnostic-only, not a pass/fail gate: snapshot the scheduled
+        # task's own run history + security descriptor immediately after
+        # triggering the check above, before the poll loop even starts --
+        # this is the single cheapest signal for "did schtasks /run from
+        # the agent's own (low-privilege) service account actually reach
+        # and start NiaAgentUpdater, and what did it exit with", entirely
+        # independent of whether updater.log/last-result.json ever get
+        # written (which is exactly what CHECK 8l/8m were unable to prove
+        # on a prior run where neither file existed at all).
+        try {
+            $taskInfo = Get-ScheduledTaskInfo -TaskName "NiaAgentUpdater" -ErrorAction Stop
+            $schedService = New-Object -ComObject "Schedule.Service"
+            $schedService.Connect()
+            $taskSddl = $schedService.GetFolder("\").GetTask("NiaAgentUpdater").GetSecurityDescriptor(0x4)
+            $taskDiag = [pscustomobject]@{
+                lastRunTime   = $taskInfo.LastRunTime
+                lastTaskResult = $taskInfo.LastTaskResult
+                nextRunTime   = $taskInfo.NextRunTime
+                sddl          = $taskSddl
+            }
+            ($taskDiag | ConvertTo-Json) | Out-File -FilePath (Join-Path $ArtifactsDir "check8.task-info.json") -Encoding utf8
+            Write-Host "NiaAgentUpdater task info right after trigger: LastRunTime=$($taskInfo.LastRunTime) LastTaskResult=$($taskInfo.LastTaskResult) (0 = success, still 0x41303 if never run since boot)"
+        } catch {
+            Write-Host "WARN  could not read NiaAgentUpdater task info/SDDL: $($_.Exception.Message)"
         }
 
         # Poll /status until the live service reports the bumped version.
@@ -491,6 +517,27 @@ Invoke-Section "CHECK 8: auto-update" {
             }
         }
         Add-Result -Check "CHECK 8l: service reports the new version after auto-update" -Pass ([bool]$updatedVersion) -Detail "expected $newVersion, last seen $lastSeenVersion"
+
+        # Diagnostic-only, second snapshot: did NiaAgentUpdater's LastRunTime
+        # actually advance past the pre-trigger snapshot above, and what did
+        # it exit with. If LastRunTime never changes, `schtasks /run` never
+        # actually started the task (permissions/ACE problem, upstream of
+        # anything nia-agent-updater.ps1 itself could log) -- if it DID
+        # change but LastTaskResult is non-zero, the task started and
+        # PowerShell itself failed before the script's own trap/logging
+        # could run (e.g. a parse error, or ExecutionPolicy blocking it
+        # despite -ExecutionPolicy Bypass).
+        try {
+            $taskInfoAfter = Get-ScheduledTaskInfo -TaskName "NiaAgentUpdater" -ErrorAction Stop
+            $taskDiagAfter = [pscustomobject]@{
+                lastRunTime    = $taskInfoAfter.LastRunTime
+                lastTaskResult = $taskInfoAfter.LastTaskResult
+            }
+            ($taskDiagAfter | ConvertTo-Json) | Out-File -FilePath (Join-Path $ArtifactsDir "check8.task-info-after.json") -Encoding utf8
+            Write-Host "NiaAgentUpdater task info after poll: LastRunTime=$($taskInfoAfter.LastRunTime) LastTaskResult=$($taskInfoAfter.LastTaskResult)"
+        } catch {
+            Write-Host "WARN  could not read NiaAgentUpdater task info (after poll): $($_.Exception.Message)"
+        }
 
         # Independent confirmation straight from the external updater's own
         # diagnostic file (nia-agent-updater.ps1's $ResultFile) -- proves
