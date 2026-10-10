@@ -95,21 +95,30 @@ FunctionEnd
 ; On Windows 10+ with the desktop app staged, the Electron shell
 ; (NiaAgentDesktop\Nia Agent.exe) IS the setup experience -- it opens
 ; straight to the agent's own UI (pairing included). On pre-Win10 (or if
-; the desktop build wasn't staged for any reason -- the FileExists guard
-; below), fall back to the same plain browser-based flow as the main
-; Start Menu shortcut: `nia-agent.exe open`. Neither branch may ever show
-; a visible console window -- nsExec::ExecToLog (not plain Exec) is what
-; suppresses it for this console-subsystem exe. The interactive CLI setup
-; wizard (`nia-agent.exe setup`, in a visible cmd window) only remains
-; reachable via the "(advanced)" shortcut.
+; the desktop build wasn't staged for any reason), the Section "Install"
+; above already created a Start Menu shortcut that falls back to the same
+; plain browser-based flow: `nia-agent.exe open`.
+;
+; RequestExecutionLevel admin means this installer process itself is
+; elevated -- a plain Exec of either target here would inherit that
+; elevated token, launching the Electron shell (or minting/consuming the
+; open-in-browser OTC) as admin. Nothing in this flow needs admin, and
+; for the Electron case it's actively harmful:
+; app.requestSingleInstanceLock() is scoped per integrity level, so an
+; elevated instance launched here could never signal/focus (or be
+; replaced by) a later normal, non-elevated launch of the same shortcut.
+;
+; Fix: launch via "explorer.exe <path>" instead of Exec'ing the target
+; directly. explorer.exe is always already running as the desktop shell
+; for the interactive user at their normal (non-elevated) integrity level
+; -- "explorer.exe <path>" just messages that existing process to open
+; it, rather than spawning a new elevated Explorer, so the resulting
+; child process always runs at the normal user's integrity level
+; regardless of this installer's own elevation. This also means we can
+; just point it at the Start Menu shortcut created above instead of
+; duplicating its Win10+-vs-fallback branching here.
 Function RunSetupNow
-  ${If} ${AtLeastWin10}
-  ${AndIf} ${FileExists} "$INSTDIR\NiaAgentDesktop\Nia Agent.exe"
-    Exec '"$INSTDIR\NiaAgentDesktop\Nia Agent.exe"'
-  ${Else}
-    nsExec::ExecToLog '"$INSTDIR\nia-agent.exe" open'
-    Pop $0
-  ${EndIf}
+  Exec 'explorer.exe "$SMPROGRAMS\${START_MENU_DIR}\Nia Core Agent.lnk"'
 FunctionEnd
 
 ; makensis builds a plain 32-bit installer executable, so on 64-bit

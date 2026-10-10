@@ -114,6 +114,29 @@ describe("packaging/windows/install.ps1", () => {
     });
   });
 
+  // Regression test: RequestExecutionLevel admin means the installer
+  // process is elevated, so a plain Exec of "Nia Agent.exe" (or
+  // `nia-agent.exe open`) from the finish page would launch it running as
+  // admin too -- wrong on its own, and it breaks the Electron app's
+  // per-integrity-level single-instance lock. The fix launches through
+  // "explorer.exe", which hands the launch off to the already-running,
+  // non-elevated shell process for the interactive user instead.
+  describe("RunSetupNow (finish-page launch)", () => {
+    const fnBody = nsis.slice(
+      nsis.indexOf("Function RunSetupNow"),
+      nsis.indexOf("FunctionEnd", nsis.indexOf("Function RunSetupNow")),
+    );
+
+    it("launches via explorer.exe against the Start Menu shortcut instead of Exec'ing the app directly", () => {
+      expect(fnBody).toContain('Exec \'explorer.exe "$SMPROGRAMS\\${START_MENU_DIR}\\Nia Core Agent.lnk"\'');
+    });
+
+    it("never Execs the Electron shell or nia-agent.exe directly (that would run it elevated)", () => {
+      expect(fnBody).not.toContain('"$INSTDIR\\NiaAgentDesktop\\Nia Agent.exe"');
+      expect(fnBody).not.toContain('"$INSTDIR\\nia-agent.exe" open');
+    });
+  });
+
   // Regression test for the real-Windows-11 failure: the installer
   // extracted files to the true 64-bit Program Files, but a 32-bit
   // install.ps1 process (launched via a WOW64-redirected $SYSDIR) computed
