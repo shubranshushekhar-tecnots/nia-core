@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import type { ConsoleDashboardData, ConsoleNeedsAttentionItem } from '@/lib/api/consoleServer';
+import { formatUsd } from '@/lib/console/format';
 import ConsoleDashboardCharts from './ConsoleDashboardCharts';
-import ConsoleUsageCharts, { formatUsd } from './ConsoleUsageCharts';
+import ConsoleUsageCharts from './ConsoleUsageCharts';
 import StatusPill, { type StatusTone } from './StatusPill';
 import {
   consoleContentStyle,

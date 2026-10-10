@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { ConsoleUsageTimeseriesPoint } from '@/lib/api/consoleServer';
 import { areaSegments, buildPoints, formatCompactNumber, lastLoadedPoint, lineSegments } from '@/components/app/home/chartMath';
+import { formatUsd } from '@/lib/console/format';
 import {
   consoleUsageChartCardStyle,
   consoleUsageChartEmptyStyle,
@@ -36,7 +37,6 @@ const PLOT_W = 354;
 const Y0 = 10;
 const PLOT_H = 130;
 
-const usdFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const usdFormatterCompact = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
@@ -45,14 +45,13 @@ const usdFormatterCompact = new Intl.NumberFormat('en-US', {
 });
 
 /**
- * USD currency formatter for cost values across the usage page. No shared
- * currency formatter exists elsewhere in the codebase (checked lib/time.ts
- * and the broader lib/ tree) — defined here, next to the chart that needs
- * it most, and reused by ConsoleUsageClient.tsx's stat cards/tables.
+ * formatUsd lives in @/lib/console/format (a plain, non-"use client"
+ * module) so server components can call it directly — re-exported here
+ * so existing `import ConsoleUsageCharts, { formatUsd } from
+ * './ConsoleUsageCharts'` call sites (ConsoleUsageClient.tsx,
+ * ConsoleOrgDetailClient.tsx) don't need to change.
  */
-export function formatUsd(n: number): string {
-  return usdFormatter.format(n);
-}
+export { formatUsd };
 
 function dayLabel(dateKey: string): string {
   const d = new Date(`${dateKey}T00:00:00`);
