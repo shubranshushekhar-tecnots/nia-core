@@ -176,7 +176,20 @@ Write-Log "running installer silently: $DownloadedFile /S"
 # itself didn't work (observed CI runs where it silently succeeded despite
 # the hang), so let the same "poll /status for the new version" check that
 # already covers "exit code 0 but didn't actually come up" decide the truth.
-$proc = Start-Process -FilePath $DownloadedFile -ArgumentList "/S" -PassThru -NoNewWindow
+#
+# Explicitly redirect stdout/stderr to real files rather than leaving them
+# un-redirected. This SYSTEM Scheduled Task session has no allocated
+# console, and -NoNewWindow without redirection means .NET's Process class
+# tries to inherit nonexistent console handles -- observed on CI to result
+# in a process that exits normally (well within the 180s bound above, in
+# practice ~25-35s) but whose ExitCode then reads back as $null instead of
+# the real value, which previously looked like "exit code 0" failing the
+# `-ne 0` check and rolling back a good install every time. Redirecting
+# forces .NET to manage real pipe handles instead, which is the documented
+# fix for Start-Process/ExitCode reliability in non-interactive sessions.
+$installerStdOut = Join-Path $UpdateDir "installer-stdout.log"
+$installerStdErr = Join-Path $UpdateDir "installer-stderr.log"
+$proc = Start-Process -FilePath $DownloadedFile -ArgumentList "/S" -PassThru -NoNewWindow -RedirectStandardOutput $installerStdOut -RedirectStandardError $installerStdErr
 $installerTimedOut = -not $proc.WaitForExit(180000)
 
 function Restore-Snapshot {
