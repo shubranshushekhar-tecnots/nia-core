@@ -179,6 +179,29 @@ FunctionEnd
 
 Section "Install" SEC01
   !insertmacro CloseAgentDesktopApp
+
+  ; Stop any existing service BEFORE overwriting its binaries below. A
+  ; running nia-agent-service.exe (WinSW) holds its own image file --
+  ; and its child nia-agent.exe's -- open, so the plain `File` instructions
+  ; just below can silently fail to replace a locked file while upgrading
+  ; over a running install. install.ps1 -InPlace (invoked further down via
+  ; nsExec) also stops/deletes the service itself, but by then it's too
+  ; late: this confirmed, reproducible bug let a genuine version upgrade
+  ; (verified via CI's auto-update smoke check) leave the OLD binary
+  ; running -- install.ps1 exits 0 and reports success, but the service
+  ; keeps answering /status with the OLD version forever, since its file
+  ; was never actually replaced. Calling the OLD (not yet overwritten)
+  ; install.ps1's own -StopOnly mode here reuses its already-robust
+  ; stop-with-fallback-kill logic (same one install.ps1 -InPlace runs
+  ; later, just early enough to matter) instead of duplicating it; a
+  ; brand-new install has no $INSTDIR\install.ps1 yet, so this is skipped.
+  ${If} ${FileExists} "$INSTDIR\install.ps1"
+    DetailPrint "Stopping existing nia-agent service before upgrade..."
+    Call GetPowerShellExe
+    nsExec::ExecToLog '"$PowerShellExe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\install.ps1" -StopOnly'
+    Pop $0
+  ${EndIf}
+
   SetOutPath "$INSTDIR"
   File "${STAGE_DIR}\nia-agent.exe"
   File "${STAGE_DIR}\nia-agent-service.exe"
