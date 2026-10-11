@@ -34,9 +34,9 @@ $script:Results = New-Object System.Collections.Generic.List[object]
 $script:LogCounter = 0
 
 $SetupExe = Get-ChildItem -Path $PackagesDir -Filter "NiaCoreAgent-Setup-*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-$ZipBundle = Get-ChildItem -Path $PackagesDir -Filter "nia-agent-windows-*.zip" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+$ZipBundle = Get-ChildItem -Path $PackagesDir -Filter "nia-core-agent-windows-*.zip" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $SetupExe) { throw "no NiaCoreAgent-Setup-*.exe found under $PackagesDir" }
-if (-not $ZipBundle) { throw "no nia-agent-windows-*.zip found under $PackagesDir" }
+if (-not $ZipBundle) { throw "no nia-core-agent-windows-*.zip found under $PackagesDir" }
 Write-Host "setup exe:  $($SetupExe.FullName)"
 Write-Host "zip bundle: $($ZipBundle.FullName)"
 
