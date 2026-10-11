@@ -14,7 +14,7 @@ import { env } from "../../env.js";
  */
 export async function sendEmail(job: SendEmailJob): Promise<void> {
   try {
-    await sendTemplatedMail(job.to, job.payload, env);
+    await sendTemplatedMail(job.to, job.payload, env, job.replyTo);
   } catch (err) {
     // Never log the rendered body/OTP/credentials — only enough to debug
     // transport connectivity.

@@ -293,6 +293,15 @@ const MailTemplatePayload = z.discriminatedUnion("template", [
     template: z.literal("platformInvite"),
     data: z.object({ name: z.string().nullable(), acceptUrl: z.string() }),
   }),
+  z.object({
+    template: z.literal("contactForm"),
+    data: z.object({
+      topic: z.string(),
+      name: z.string().optional(),
+      email: z.string(),
+      message: z.string(),
+    }),
+  }),
 ]);
 
 /**
@@ -306,6 +315,8 @@ export const SendEmailJob = z.object({
   kind: z.literal("send_email"),
   to: z.string().email(),
   payload: MailTemplatePayload,
+  /** Optional Reply-To, e.g. the submitter's address on a contact-form notification. */
+  replyTo: z.string().email().optional(),
 });
 export type SendEmailJob = z.infer<typeof SendEmailJob>;
 

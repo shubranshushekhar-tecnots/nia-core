@@ -86,11 +86,13 @@ export async function sendTemplatedMail(
   to: string,
   payload: TemplatePayload,
   env?: MailEnv,
+  replyTo?: string,
 ): Promise<void> {
   const { subject, html, text } = renderTemplate(payload);
   const transport = env ? getMailTransport(env) : getMailTransport();
   await transport.send({
     to,
+    replyTo,
     subject,
     html,
     text,

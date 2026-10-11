@@ -26,6 +26,12 @@ export default defineConfig({
     // see there and CONVENTIONS.md.
     alias: {
       "@": path.resolve(__dirname, "src"),
+      // More specific subpath entries must come before the bare "@nia/schemas"
+      // entry below — Vite's alias matching is a prefix match (same mechanism
+      // that makes "@" above match "@/foo"), so "@nia/schemas" alone would
+      // also swallow "@nia/schemas/downloadManifest" and mangle it into an
+      // invalid path if it were listed first.
+      "@nia/schemas/downloadManifest": path.resolve(__dirname, "../../packages/schemas/src/downloadManifest.ts"),
       "@nia/schemas": path.resolve(__dirname, "../../packages/schemas/src/index.ts"),
       "@nia/db": path.resolve(__dirname, "../../packages/db/src/index.ts"),
       "@nia/auth": path.resolve(__dirname, "../../packages/auth/src/index.ts"),
@@ -35,6 +41,7 @@ export default defineConfig({
     include: [
       "src/lib/**/*.test.ts",
       "src/app/console/**/*.test.ts",
+      "src/app/api/**/*.test.ts",
       "src/components/console/**/*.test.ts",
       "src/components/canvas/**/*.test.tsx",
     ],

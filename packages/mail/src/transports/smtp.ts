@@ -32,6 +32,7 @@ export class SmtpMailTransport implements MailTransport {
     await this.transporter.sendMail({
       from: this.from,
       to: message.to,
+      replyTo: message.replyTo,
       subject: message.subject,
       html: message.html,
       text: message.text,

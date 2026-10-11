@@ -55,6 +55,7 @@ export class GraphMailTransport implements MailTransport {
             subject: message.subject,
             body: { contentType: "HTML", content: message.html },
             toRecipients: [{ emailAddress: { address: message.to } }],
+            replyTo: message.replyTo ? [{ emailAddress: { address: message.replyTo } }] : undefined,
             attachments: message.attachments?.map((a) => ({
               "@odata.type": "#microsoft.graph.fileAttachment",
               name: a.filename,

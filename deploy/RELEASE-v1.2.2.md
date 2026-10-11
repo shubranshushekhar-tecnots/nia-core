@@ -1,5 +1,13 @@
 # Release v1.2.2
 
+## Known issues
+
+- `apps/web`'s `lint` script (`next lint`) has no ESLint config anywhere in
+  this repo's history — `next lint` just prompts interactively to create
+  one. This is pre-existing, not a regression introduced by this release.
+  Lint is skipped for this release; adding a config is a separate,
+  deliberate follow-up, not done ad hoc here.
+
 ## Env changes
 
 - `REDIS_URL` — now required on the production **web** container (not just
@@ -7,6 +15,25 @@
   (`apps/web/src/lib/auth/auth.ts`, `apps/api/src/lib/mailQueue.ts`) runs
   BullMQ/ioredis from the web process too, so it must point at the same
   Redis instance as `api`/`worker`. Set it in the deploy env, no value here.
+- `CONSOLE_ENABLED=true` — enables the superadmin Console app
+  (`apps/web`/`apps/api`). Required for staff login, members/plan grants,
+  and the platform dashboard to be reachable.
+- `SIGNUP_MODE=request` — gates new-account creation behind an approved
+  access request or platform invite (Email Phase 3). Omit or set to `open`
+  to restore the pre-Phase-3 behavior (anyone can sign up directly).
+- `MAIL_TRANSPORT=smtp` — selects the SMTP transport in `@nia/mail`
+  (`log` is the no-op dev default; `graph` is the Microsoft Graph
+  alternative). Required for OTP/access-request/contact-form emails to
+  actually send in production.
+- `SMTP_HOST=smtp.example.com`
+- `SMTP_PORT=587`
+- `SMTP_SECURE=false`
+- `SMTP_USER=postmaster@example.com`
+- `SMTP_PASS=`                          — SECRET, no value here
+- `SMTP_FROM=notifications@example.com`
+- `CONTACT_TO_EMAIL=support@tecnots.com` — where the landing page's "Talk
+  to us" form sends its notification email (defaults to this value if
+  unset). Reply-To on that email is always the submitter's own address.
 
 ## Super admin
 

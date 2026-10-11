@@ -10,6 +10,8 @@ export interface MailMessage {
   text: string;
   /** Inline attachments, e.g. the brand logo referenced as `cid:logo` in `html`. */
   attachments?: MailAttachment[];
+  /** Optional Reply-To, e.g. the submitter's address on a contact-form notification. */
+  replyTo?: string;
 }
 
 export interface MailAttachment {

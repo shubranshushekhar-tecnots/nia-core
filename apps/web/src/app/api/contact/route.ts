@@ -1,15 +1,22 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { enqueueEmail } from "@/lib/mail/mailQueue";
+import { isAuthActionRateLimited } from "@/lib/auth/rateLimit";
 
 type ContactTopic = "question" | "feedback" | "sales";
 const TOPICS: ContactTopic[] = ["question", "feedback", "sales"];
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Same per-email + per-IP (4x) windowed limit used by the auth OTP actions
+// (src/lib/auth/rateLimit.ts) — 5 submissions per 15-minute window is
+// generous for a legitimate visitor but caps abuse of the mail queue.
+const RATE_LIMIT = 5;
+
 /**
- * Minimal landing-page "Talk to us" endpoint (components/landing/ContactTab.tsx).
- * No contact-messages table exists yet, so this just validates and logs the
- * submission server-side — swap the console.log below for a real sink (DB
- * insert, email, Slack webhook, etc.) once one exists.
+ * Landing-page "Talk to us" endpoint (components/landing/ContactTab.tsx).
+ * Enqueues a notification email to CONTACT_TO_EMAIL via the same mail
+ * queue the rest of the app uses, with Reply-To set to the submitter so a
+ * reply from the inbox goes straight back to them.
  */
 export async function POST(req: NextRequest) {
   let body: unknown;
@@ -37,11 +44,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid name" }, { status: 400 });
   }
 
-  console.log("[contact] submission received", {
-    topic,
-    name: (name as string | undefined)?.trim() || undefined,
-    email: email.trim(),
-    message: message.trim(),
+  const trimmedEmail = email.trim();
+  const trimmedName = (name as string | undefined)?.trim() || undefined;
+  const trimmedMessage = message.trim();
+
+  if (await isAuthActionRateLimited("contact", trimmedEmail, RATE_LIMIT)) {
+    // Generic success, same no-enumeration contract as the other public
+    // forms (src/lib/accessRequests/actions.ts) — a rate-limited response
+    // must never be distinguishable from a normal one.
+    return NextResponse.json({ ok: true });
+  }
+
+  await enqueueEmail({
+    kind: "send_email",
+    to: process.env.CONTACT_TO_EMAIL || "support@tecnots.com",
+    replyTo: trimmedEmail,
+    payload: {
+      template: "contactForm",
+      data: { topic, name: trimmedName, email: trimmedEmail, message: trimmedMessage },
+    },
   });
 
   return NextResponse.json({ ok: true });
