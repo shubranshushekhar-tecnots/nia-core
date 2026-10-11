@@ -20,21 +20,19 @@ const packageJson = JSON.parse(
 );
 const version = packageJson.version;
 
-// One entry per shipped artifact. `kind: "advanced"` marks downloads kept
-// off the primary three-button choice (the Windows portable zip) per the
-// download page's spec — "advanced" downloads still appear in the manifest
-// and are servable, just not in the headline Windows/macOS/Linux row.
+// One entry per shipped artifact. The Windows portable zip is intentionally
+// NOT listed here (and so never appears in manifest.json, the downloads
+// page, or the dev-only download route's allow-list) — it tends to go stale
+// between releases (built at a different point in the branch than the NSIS
+// installer) and only confuses customers who should just use the one signed
+// installer. The build script still produces it on disk for anyone who
+// explicitly needs it; it's just not advertised or servable through the
+// manifest-driven paths.
 const candidates = [
   {
     name: `NiaCoreAgent-Setup-${version}.exe`,
     os: "windows",
     kind: "primary",
-    dir: path.join(__dirname, "windows", "dist"),
-  },
-  {
-    name: `nia-core-agent-windows-${version}.zip`,
-    os: "windows",
-    kind: "advanced",
     dir: path.join(__dirname, "windows", "dist"),
   },
   {

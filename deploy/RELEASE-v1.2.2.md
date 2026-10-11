@@ -35,6 +35,108 @@
   to us" form sends its notification email (defaults to this value if
   unset). Reply-To on that email is always the submitter's own address.
 
+## Agent downloads (0.0.7)
+
+Production's `AGENT_DOWNLOADS_BASE_URL` already points at Azure Blob
+Storage, not the `niacore-proxy`/nginx-mounted directory described in
+`RELEASE.md`'s "Publish" step and `DEPLOYMENT.md`'s "Agent downloads"
+section — that nginx path is the **old** method and is no longer what's
+actually live. Both `apps/web` (`packages/schemas/src/downloadManifest.ts`,
+via `apps/web/src/lib/downloads/manifest.ts`) and `services/agent-bridge`
+resolve every download URL as `${AGENT_DOWNLOADS_BASE_URL}/<file>` and the
+manifest itself as `${AGENT_DOWNLOADS_BASE_URL}/manifest.json` — there is
+no other server-side logic involved, so "upload the right files to the
+right blob prefix, then point the env var at that prefix" is the entire
+mechanism.
+
+### 1. Build artifacts + regenerate the manifest
+
+From repo root, after the usual per-platform build steps (see `RELEASE.md`
+§3):
+
+```
+node apps/agent/packaging/generate-manifest.mjs
+cd ~/Desktop/nia-core-agent-0.0.7   # wherever SHA256SUMS.txt/INSTALL-NOTES.md live for this release
+```
+
+Confirm `apps/agent/packaging/manifest.json`'s `version` is `0.0.7` before
+continuing.
+
+### 2. Upload to Azure (account `albizmedia`, container `nia-core`)
+
+Upload every artifact for this release — the four built packages, plus
+`manifest.json` and `SHA256SUMS.txt` — to **both** a version-pinned prefix
+(permanent archive, lets you roll back by just repointing the env var) and
+`latest/` (what `AGENT_DOWNLOADS_BASE_URL` will actually point at):
+
+```
+set -a; source ~/.nia-core-secrets/azure-albizmedia.env; set +a   # AZURE_STORAGE_KEY — never print it
+
+az storage blob upload-batch \
+  --account-name albizmedia \
+  --destination nia-core/agent-downloads/0.0.7 \
+  --source ~/Desktop/nia-core-agent-0.0.7 \
+  --pattern "*" \
+  --content-type "application/octet-stream" \
+  --overwrite
+
+az storage blob upload-batch \
+  --account-name albizmedia \
+  --destination nia-core/agent-downloads/latest \
+  --source ~/Desktop/nia-core-agent-0.0.7 \
+  --pattern "*" \
+  --content-type "application/octet-stream" \
+  --overwrite
+```
+
+Then fix the content-type on the two JSON/text files in **both** prefixes
+(uploaded above as `application/octet-stream`, which works but isn't
+correct — `manifest.json` is fetched directly by `downloadManifest.ts`'s
+`fetch()`, and a wrong content-type on it is the one file where that could
+matter to a stricter client down the line):
+
+```
+for prefix in 0.0.7 latest; do
+  az storage blob update --account-name albizmedia \
+    --container-name nia-core --name "agent-downloads/$prefix/manifest.json" \
+    --content-type "application/json"
+  az storage blob update --account-name albizmedia \
+    --container-name nia-core --name "agent-downloads/$prefix/SHA256SUMS.txt" \
+    --content-type "text/plain"
+done
+```
+
+### 3. Point production at `latest/` (one-time; skip if already done)
+
+If `AGENT_DOWNLOADS_BASE_URL` is still pinned to a specific old version
+(e.g. `.../agent-downloads/0.0.5`), change it once to the rolling alias so
+future releases only need step 2 re-run, no env change or redeploy:
+
+```
+AGENT_DOWNLOADS_BASE_URL=https://albizmedia.blob.core.windows.net/nia-core/agent-downloads/latest
+```
+
+Set in the root `.env` that `niacore-web` and `niacore-agent-bridge` both
+read via `env_file:` (`docker-compose.prod.yml`) — byte-identical for both,
+same as every other release. Redeploy both services after changing it (not
+needed again for 0.0.8+ as long as it stays pointed at `latest/`).
+
+### 4. Verify
+
+- `curl -sI https://albizmedia.blob.core.windows.net/nia-core/agent-downloads/latest/manifest.json`
+  → `200`, and the body's `"version"` is `0.0.7`.
+- For each of the 4 artifact files: `curl -sI .../latest/<file>` → `200`
+  with a `Content-Length` matching `SHA256SUMS.txt`.
+- Load the production downloads page — it should show version `0.0.7` and
+  every "Download for ..." link should resolve (no 404).
+- An already-paired agent's **Settings → Check now** should report the new
+  version available.
+
+(Nginx's `/usr/share/nginx/agent-downloads/` + the `alias` in
+`deploy/nginx/nginx.conf`, as described in `RELEASE.md`/`DEPLOYMENT.md`, is
+legacy and not what production actually serves from — don't bother copying
+files there for this release.)
+
 ## Super admin
 
 Goal: `shubranshu.shekhar@tecnots.com` becomes the **only** active
