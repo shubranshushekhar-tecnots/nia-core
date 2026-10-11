@@ -350,17 +350,27 @@ Section "Uninstall"
   ; to "keep" (matching uninstall.ps1's own -Purge-opt-in default); pass
   ; /PURGE on the uninstaller's command line to force deleting $DataDir too
   ; without a prompt.
-  ${If} $UninstPurge == "1"
-    StrCpy $0 "purge"
-  ${ElseIf} ${Silent}
-    StrCpy $0 "keep"
-  ${Else}
-    MessageBox MB_YESNO|MB_ICONQUESTION "Keep this agent's configuration, secrets, and logs?$\n$\nYes = keep them in $DataDir (useful if you plan to reinstall)$\nNo = delete them too" IDYES KeepData
-    StrCpy $0 "purge"
-    Goto StopService
-    KeepData:
-    StrCpy $0 "keep"
-    StopService:
+  ; The purge/keep decision is kept in $UninstPurge (a dedicated Var, set
+  ; in un.onInit and never touched anywhere else) rather than a scratch
+  ; register like $0/$1 -- CloseAgentDesktopApp and every nsExec::ExecToLog
+  ; call just below does its own `Pop $0`/`Pop $1` to collect an exit code,
+  ; which would silently clobber a plain-register decision before the
+  ; ${If} below ever got to read it back. That's exactly what was
+  ; happening here: $0 was set to "purge"/"keep", then immediately
+  ; overwritten by CloseAgentDesktopApp's two `Pop $0` calls, so
+  ; `${If} $0 == "purge"` was comparing a taskkill exit code against the
+  ; literal string "purge" -- never equal, so RMDir /r "$DataDir" never
+  ; ran on ANY purge uninstall, silent or interactive. Confirmed live:
+  ; $DataDir (including install.log at its root, not just some locked
+  ; subfolder) was still fully intact after a "successful" (exit 0)
+  ; /S /PURGE uninstall, and no amount of waiting ever changed that --
+  ; because the delete was never attempted in the first place.
+  ${If} $UninstPurge != "1"
+    ${IfNot} ${Silent}
+      MessageBox MB_YESNO|MB_ICONQUESTION "Keep this agent's configuration, secrets, and logs?$\n$\nYes = keep them in $DataDir (useful if you plan to reinstall)$\nNo = delete them too" IDYES KeepData
+      StrCpy $UninstPurge "1"
+      KeepData:
+    ${EndIf}
   ${EndIf}
 
   !insertmacro CloseAgentDesktopApp
@@ -374,13 +384,11 @@ Section "Uninstall"
   ; WinSW's `stop` returns once SCM reports the service itself as STOPPED,
   ; which can land a beat before the wrapped Node process has actually
   ; exited and released its open handles on its own log files under
-  ; $DataDir\logs and $DataDir\local-api -- an immediate RMDir /r below
-  ; would then silently skip just those locked files (RMDir /r doesn't
-  ; abort the section on a partial failure), leaving stragglers behind.
-  ; Give it a moment to actually let go before we try to delete them.
+  ; $DataDir\logs and $DataDir\local-api. Give it a moment before touching
+  ; the tree.
   Sleep 2000
 
-  ${If} $0 == "purge"
+  ${If} $UninstPurge == "1"
     RMDir /r "$DataDir"
   ${EndIf}
 
