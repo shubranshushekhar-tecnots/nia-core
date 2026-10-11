@@ -36,6 +36,9 @@ jobs:
       - name: Build Windows zip bundle
         run: node apps/agent/packaging/windows/build-bundle.mjs
 
+      - name: Build Windows desktop app shell (Electron, cross-built from Linux)
+        run: pnpm --filter @nia/agent-desktop run package -- --win dir
+
       - name: Build Windows NSIS installer
         run: node apps/agent/packaging/windows/build-installer.mjs
 
