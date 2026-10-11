@@ -37,7 +37,9 @@ jobs:
         run: node apps/agent/packaging/windows/build-bundle.mjs
 
       - name: Build Windows desktop app shell (Electron, cross-built from Linux)
-        run: pnpm --filter @nia/agent-desktop run package -- --win dir
+        run: |
+          pnpm --filter @nia/agent-desktop run build
+          pnpm --filter @nia/agent-desktop exec electron-builder --win dir --config electron-builder.yml
 
       - name: Build Windows NSIS installer
         run: node apps/agent/packaging/windows/build-installer.mjs
