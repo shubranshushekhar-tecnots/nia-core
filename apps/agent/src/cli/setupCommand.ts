@@ -296,45 +296,67 @@ const HOST_QUESTION = 'Database server (hostname, "HOST\\INSTANCE" for a named i
 
 /**
  * Win32-only: presents every locally-installed SQL Server instance (read
- * from the registry) as a numbered list with "localhost" fixed as option
- * 1, so a user can just press Enter/type a number instead of typing a
- * hostname at all — the guiding rule for this step is "minimum hassle,
- * automatic by default". Picking a running instance also resolves its
- * port directly, skipping the separate port question entirely. Typing
+ * from the registry) as a numbered list, with a generic "localhost
+ * (default instance, port 1433)" guess added LAST — so a user can just
+ * press Enter/type a number instead of typing a hostname at all.
+ * Detected instances are listed FIRST (so pressing Enter, which defaults
+ * to "1", picks a real detected instance whenever one was found) and the
+ * "localhost" guess is listed last, since it's only correct for the
+ * rarer case of an unnamed/default SQL Server instance -- putting it
+ * first (as this used to) was a real customer footgun: someone whose
+ * actual instance is named (the common case for SQL Server Express)
+ * would see it listed as option 2, but pressing Enter for the default
+ * "1" silently tried the generic localhost:1433 guess instead, which
+ * nothing answers, producing an opaque "server not reachable" failure
+ * right after the wizard had just found their real instance a line
+ * above. See the "unreachable" hint in databaseStep below for the other
+ * half of this fix. Picking a detected instance also resolves its port
+ * directly, skipping the separate port question entirely. Typing
  * anything that isn't one of the listed numbers is treated as a literal
  * server address, same as the plain host question this replaces.
  */
 async function pickWindowsHost(
   io: SetupIO,
   deps: SetupDeps,
-): Promise<{ hostInput: string; detectedPort?: number; pickedInstanceLoginMode?: number }> {
+): Promise<{
+  hostInput: string;
+  detectedPort?: number;
+  pickedInstanceLoginMode?: number;
+  detectedInstances: WindowsSqlInstance[];
+}> {
   const instances = await deps.detectWindowsSqlInstances();
   if (instances.length === 0) {
-    return { hostInput: await io.ask(HOST_QUESTION, "localhost", "host") };
+    return { hostInput: await io.ask(HOST_QUESTION, "localhost", "host"), detectedInstances: [] };
   }
 
   io.print("SQL Server instance(s) found on this machine:");
-  io.print("  1. localhost");
   instances.forEach((inst, i) => {
     const portLabel = inst.tcpEnabled ? `port ${inst.port}` : "TCP/IP disabled";
-    io.print(`  ${i + 2}. ${inst.name} (${inst.instanceId}) — ${portLabel}`);
+    io.print(`  ${i + 1}. ${inst.name} (${inst.instanceId}) — ${portLabel}`);
   });
+  const localhostChoiceNum = instances.length + 1;
+  io.print(`  ${localhostChoiceNum}. localhost (default instance, port 1433)`);
   const choice = await io.ask(`Pick a number, or type a server address (same formats as before)`, "1", "host");
   const trimmed = choice.trim();
   const num = Number(trimmed);
-  const isListChoice = trimmed !== "" && Number.isInteger(num) && num >= 1 && num <= instances.length + 1;
+  const isListChoice = trimmed !== "" && Number.isInteger(num) && num >= 1 && num <= localhostChoiceNum;
 
-  if (!isListChoice) return { hostInput: trimmed || "localhost" };
-  if (num === 1) return { hostInput: "localhost" };
+  if (!isListChoice) return { hostInput: trimmed || "localhost", detectedInstances: instances };
+  if (num === localhostChoiceNum) return { hostInput: "localhost", detectedInstances: instances };
 
-  const picked = instances[num - 2]!;
+  const picked = instances[num - 1]!;
   if (!picked.tcpEnabled) {
     io.print(
       `TCP/IP is disabled for ${picked.name}. To enable it: open SQL Server Configuration Manager -> SQL Server Network Configuration -> Protocols for ${picked.instanceId} -> enable TCP/IP -> restart the SQL Server service.`,
     );
-    return { hostInput: "localhost", pickedInstanceLoginMode: picked.loginMode };
+    return { hostInput: "localhost", pickedInstanceLoginMode: picked.loginMode, detectedInstances: instances };
   }
-  return { hostInput: "localhost", detectedPort: picked.port, pickedInstanceLoginMode: picked.loginMode };
+  return {
+    hostInput: "localhost",
+    detectedPort: picked.port,
+    pickedInstanceLoginMode: picked.loginMode,
+    detectedInstances: instances,
+  };
 }
 
 /** The databases every SQL Server install ships with — never what a customer actually wants synced, so Change 2b hides them from the pick-a-database list entirely. */
@@ -348,12 +370,15 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
   // On win32, try to save the user from typing a hostname at all; every
   // other platform keeps the plain free-text question unchanged.
   const picked =
-    deps.platform === "win32" ? await pickWindowsHost(io, deps) : { hostInput: await io.ask(HOST_QUESTION, "localhost", "host") };
+    deps.platform === "win32"
+      ? await pickWindowsHost(io, deps)
+      : { hostInput: await io.ask(HOST_QUESTION, "localhost", "host"), detectedInstances: [] as WindowsSqlInstance[] };
 
   const address = parseServerAddress(picked.hostInput);
   const host = address.host;
   let instanceName = address.instanceName;
   let port: number | undefined = picked.detectedPort ?? address.port;
+  const detectedInstances = picked.detectedInstances;
 
   // Set only when a local Windows SQL Server instance was auto-detected and
   // picked above -- used after a failed login attempt to tell "this server
@@ -423,6 +448,13 @@ export async function databaseStep(io: SetupIO, deps: SetupDeps): Promise<void> 
 
     if (!result.ok) {
       io.print(`Couldn't log in: ${result.reason}`);
+      // Picked the "localhost" fallback entry but nothing answered there,
+      // even though a real (named) instance was detected above -- almost
+      // always means the user should have picked that instance instead.
+      if (result.kind === "unreachable" && isLocalHost(host) && !instanceName && detectedInstances.length > 0) {
+        const first = detectedInstances[0]!;
+        io.print(`Nothing answered on localhost:${port}. We found ${first.name} on this PC — choose option 1 instead.`);
+      }
       io.print("Let's try again.");
       continue;
     }

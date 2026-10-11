@@ -157,7 +157,7 @@ describe("setup wizard: database step", () => {
 
   it("on win32, when the picked local instance's registry LoginMode is Windows-only, explains that instead of the driver's generic error", async () => {
     const { io, printed } = createFakeIO([
-      "2", // pick the detected instance (1 is reserved for localhost)
+      "1", // pick the (sole) detected instance — it's listed first, localhost is the fallback entry at the end
       "nia_ro", // username
       "whatever-the-real-password-is", // password — must never appear in `printed`
     ]);
@@ -180,6 +180,30 @@ describe("setup wizard: database step", () => {
     expect(printed).toContain("Couldn't log in: password logins are switched off on this server (it only accepts Windows sign-in)");
     expect(printed.some((line) => line.includes("wrong username or password"))).toBe(false);
     expect(printed.some((line) => line.includes("whatever-the-real-password-is"))).toBe(false);
+  });
+
+  it("on win32, when the user picks the localhost fallback but a real instance was detected and is unreachable, hints at the real instance", async () => {
+    const { io, printed } = createFakeIO([
+      "2", // pick "localhost" fallback (last entry, after the one detected instance)
+      "1433", // port question (the localhost fallback has no detected port)
+      "nia_agent", // username
+      "whatever-password", // password
+    ]);
+
+    const deps = fakeDeps({
+      platform: "win32",
+      detectWindowsSqlInstances: async () => [
+        { name: "SQLEXPRESS", instanceId: "MSSQL15.SQLEXPRESS", port: 1433, tcpEnabled: true, loginMode: 2 },
+      ],
+      testSqlLogin: async () => ({ ok: false, reason: "server not reachable on that host/port", kind: "unreachable" }),
+    });
+
+    await expect(databaseStep(io, deps)).rejects.toThrow(/fake SetupIO ran out of scripted answers/);
+
+    expect(printed).toContain("Couldn't log in: server not reachable on that host/port");
+    expect(printed.some((line) => line.includes("We found SQLEXPRESS on this PC") && line.includes("choose option 1 instead"))).toBe(
+      true,
+    );
   });
 
   it("on an untrusted-certificate error, automatically trusts it and retries with the SAME credentials — no yes/no question, no re-ask for a login", async () => {

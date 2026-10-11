@@ -261,6 +261,50 @@ function Invoke-NiaAgent {
     return Invoke-Proc -FilePath (Join-Path $InstallDir "nia-agent.exe") -Arguments $Arguments -EnvOverrides $envOverrides -StdIn $StdIn -TimeoutSec $TimeoutSec -LogName $LogName
 }
 
+$script:ResolvedSqlInstanceHostAnswer = $null
+
+function Get-SqlInstanceHostAnswer {
+    # The pick-list setupCommand.ts's pickWindowsHost() prints (and the
+    # "host" answer key it reads) is driven entirely by live local
+    # registry state plus its own internal ordering logic, neither of
+    # which this script controls -- hardcoding a fixed list position
+    # (checks C1/C3/C4/C5 used to send "2") breaks the instant that
+    # ordering changes, exactly what happened when fe07ebc added
+    # "localhost" as a fixed first list entry. Resolve the right answer
+    # the same way a real customer reading their own screen would: run
+    # setup once, read the actual printed list, and match it by the SQL
+    # instance's real name -- which install-sql-express.ps1 already told
+    # us via $SqlInstanceName -- instead of ever trusting a fixed index
+    # again. Cached after the first call since the list never changes
+    # within a single run of this script.
+    if ($script:ResolvedSqlInstanceHostAnswer) { return $script:ResolvedSqlInstanceHostAnswer }
+
+    $homeDir = New-ThrowawayHome -Suffix "instance-probe"
+    $code = New-PairingCode
+    # Deliberately omit "host": pickWindowsHost() prints the list and
+    # asks for it immediately after pairing succeeds, so the process
+    # throws MissingAnswerError (and exits non-zero) right after printing
+    # exactly the text this needs -- only stdout up to that point matters,
+    # the non-zero exit is expected and ignored.
+    $answers = @{
+        pairing     = $code.composite
+        platformUrl = $FakePlatformUrl
+    }
+    $answersPath = Join-Path $homeDir "answers.txt"
+    New-AnswersFile -Answers $answers -Path $answersPath
+    $result = Invoke-NiaAgent -Arguments @("setup", "--answers-file", $answersPath) -HomeDir $homeDir -TimeoutSec 30 -LogName "probe-sql-instance-list"
+    Remove-Item -Recurse -Force $homeDir -ErrorAction SilentlyContinue
+
+    $pattern = "^\s*(\d+)\.\s+" + [regex]::Escape($SqlInstanceName) + "\s*\("
+    $matchLine = ($result.StdOut -split "`n") | Where-Object { $_ -match $pattern } | Select-Object -First 1
+    if (-not $matchLine) {
+        throw "could not find SQL instance '$SqlInstanceName' in setup's printed pick-list:`n$($result.StdOut)"
+    }
+    $num = [regex]::Match($matchLine, $pattern).Groups[1].Value
+    $script:ResolvedSqlInstanceHostAnswer = $num
+    return $num
+}
+
 function Wait-HttpReady {
     param([string]$Url, [int]$TimeoutSec = 30)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -670,14 +714,21 @@ function Invoke-CheckC1-TcpDisabled {
     Invoke-Section "CHECK C1: TCP/IP disabled is explained with remediation steps" {
         $homeDir = New-ThrowawayHome -Suffix "c1"
         $code = New-PairingCode
-        # sqlInstanceChoice=1 actually selects the (sole) detected instance, so
-        # the code path at setupCommand.ts's `if (!picked.tcpEnabled)` fires the
-        # remediation message — leaving it blank would skip straight past it.
+        # Picking the real detected instance (by name, not a hardcoded list
+        # position -- see Get-SqlInstanceHostAnswer's comment for why) is
+        # what makes setupCommand.ts's `if (!picked.tcpEnabled)` branch fire
+        # the remediation message below. Picking the generic "localhost"
+        # fallback entry instead resolves to a bare "localhost" with no
+        # detected port, which nothing is listening on in this CI
+        # environment (SQL Server Express here only has the named instance,
+        # no default instance) -- that would fail generically with "server
+        # not reachable on that host/port" before ever reaching the
+        # instance-specific behavior under test.
         $answers = @{
-            pairing           = $code.composite
-            platformUrl       = $FakePlatformUrl
-            sqlInstanceChoice = "1"
-            dbaDatabases      = "master"
+            pairing      = $code.composite
+            platformUrl  = $FakePlatformUrl
+            host         = (Get-SqlInstanceHostAnswer)
+            dbaDatabases = "master"
         }
         $answersPath = Join-Path $homeDir "answers.txt"
         New-AnswersFile -Answers $answers -Path $answersPath
@@ -748,12 +799,14 @@ function Invoke-CheckC3-WindowsOnlyAuth {
 
         $homeDir = New-ThrowawayHome -Suffix "c3"
         $code = New-PairingCode
+        # See Get-SqlInstanceHostAnswer's comment for why this must be the
+        # real detected instance, resolved by name, not a hardcoded number.
         $answers = @{
-            pairing           = $code.composite
-            platformUrl       = $FakePlatformUrl
-            sqlInstanceChoice = "1"
-            username          = $ReadonlyLogin
-            password          = $ReadonlyLoginPassword
+            pairing     = $code.composite
+            platformUrl = $FakePlatformUrl
+            host        = (Get-SqlInstanceHostAnswer)
+            username    = $ReadonlyLogin
+            password    = $ReadonlyLoginPassword
         }
         $answersPath = Join-Path $homeDir "answers.txt"
         New-AnswersFile -Answers $answers -Path $answersPath
@@ -771,12 +824,14 @@ function Invoke-CheckC4-WrongPassword {
     Invoke-Section "CHECK C4: wrong password gives a plain message, never echoed" {
         $homeDir = New-ThrowawayHome -Suffix "c4"
         $code = New-PairingCode
+        # See Get-SqlInstanceHostAnswer's comment for why this must be the
+        # real detected instance, resolved by name, not a hardcoded number.
         $answers = @{
-            pairing           = $code.composite
-            platformUrl       = $FakePlatformUrl
-            sqlInstanceChoice = "1"
-            username          = $ReadonlyLogin
-            password          = $WrongPassword
+            pairing     = $code.composite
+            platformUrl = $FakePlatformUrl
+            host        = (Get-SqlInstanceHostAnswer)
+            username    = $ReadonlyLogin
+            password    = $WrongPassword
         }
         $answersPath = Join-Path $homeDir "answers.txt"
         New-AnswersFile -Answers $answers -Path $answersPath
@@ -796,13 +851,15 @@ function Invoke-CheckC5-CorrectDetails {
         # write into the real %ProgramData%\NiaAgent so the already-running
         # service (installed in check A) picks it up live for check D.
         $code = New-PairingCode
+        # See Get-SqlInstanceHostAnswer's comment for why this must be the
+        # real detected instance, resolved by name, not a hardcoded number.
         $answers = @{
-            pairing          = $code.composite
-            platformUrl      = $FakePlatformUrl
-            sqlInstanceChoice = "1"
-            username         = $ReadonlyLogin
-            password         = $ReadonlyLoginPassword
-            dbChoice         = "1"
+            pairing     = $code.composite
+            platformUrl = $FakePlatformUrl
+            host        = (Get-SqlInstanceHostAnswer)
+            username    = $ReadonlyLogin
+            password    = $ReadonlyLoginPassword
+            dbChoice    = "1"
         }
         # Written to $env:TEMP, not $LogsDir — this answers file contains the
         # real readonly login password, and $LogsDir is wholesale-uploaded as
