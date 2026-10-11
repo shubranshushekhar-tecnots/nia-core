@@ -63,9 +63,10 @@ export default function InstallWindowsPage() {
         <h2 style={nxDocsH2Style}>Guided setup questions</h2>
         <ol style={nxDocsListStyle}>
           <li>Pairing command or code — paste the full command from the Agents page, or just the code.</li>
-          <li>Database server (default <span style={nxDocsCodeChipStyle}>localhost</span>) and port
-            (default <span style={nxDocsCodeChipStyle}>1433</span>). If the server is local, it
-            can detect SQL Server instances on the machine and let you pick one by number.</li>
+          <li>Database server and port (default <span style={nxDocsCodeChipStyle}>1433</span>). If
+            it detects SQL Server instances on this machine, it lists them first and picking one
+            (pressing Enter takes the first) is the default — <span style={nxDocsCodeChipStyle}>localhost</span>{' '}
+            is offered last, as a fallback if none are detected or none match.</li>
           <li>Database username — leave blank if you don&apos;t have one yet, and it offers to
             write a read-only setup script for your DBA instead.</li>
           <li>Database password (hidden as you type).</li>

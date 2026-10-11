@@ -26,6 +26,7 @@ export default function InstallLinuxPage() {
         <h2 style={nxDocsH2Style}>Before you start</h2>
         <ul style={nxDocsListStyle}>
           <li>A pairing code or pairing command from the Agents page (ask an admin for it).</li>
+          <li>Node.js 22 or newer already installed — the installer does not install Node for you.</li>
           <li>Network access from this machine to your database server.</li>
           <li>A read-only database login, if you already have one — otherwise the setup can
             generate a script for your DBA to create one.</li>

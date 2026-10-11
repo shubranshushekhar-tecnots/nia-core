@@ -66,12 +66,12 @@ export default function InstallMacosPage() {
       <section>
         <h2 style={nxDocsH2Style}>Running an unsigned build</h2>
         <p style={nxDocsPStyle}>
-          Gatekeeper will say &quot;nia-agent&quot; cannot be opened because the developer cannot
-          be verified. To run it anyway: open{' '}
+          Gatekeeper will say &quot;Nia Core Agent&quot; cannot be opened because the developer
+          cannot be verified. To run it anyway: open{' '}
           <strong>System Settings &rarr; Privacy &amp; Security</strong> after the first blocked
           attempt and click <strong>Open Anyway</strong>, or run this once before installing:
         </p>
-        <CodeBlock code="xattr -d com.apple.quarantine ./nia-agent" />
+        <CodeBlock code='xattr -dr com.apple.quarantine "/Applications/Nia Core Agent.app"' />
       </section>
 
       <section>
