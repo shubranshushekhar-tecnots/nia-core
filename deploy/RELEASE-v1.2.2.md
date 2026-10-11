@@ -62,6 +62,16 @@ cd ~/Desktop/nia-core-agent-0.0.7   # wherever SHA256SUMS.txt/INSTALL-NOTES.md l
 Confirm `apps/agent/packaging/manifest.json`'s `version` is `0.0.7` before
 continuing.
 
+Regenerate `manifest.json` and verify it matches the folder before
+uploading — copy the freshly-generated `apps/agent/packaging/manifest.json`
+into `~/Desktop/nia-core-agent-0.0.7/`, then confirm every listed file's
+`size` and `sha256` match the real file (`shasum -a 256 <file>`) and
+`SHA256SUMS.txt`. A stale manifest (e.g. still listing a dropped artifact,
+or checksums from a previous build) is the single most likely cause of a
+broken download/auto-update, so never skip this check and never upload a
+manifest you haven't just regenerated against the exact files in this
+folder.
+
 ### 2. Upload to Azure (account `albizmedia`, container `nia-core`)
 
 Upload every artifact for this release — the four built packages, plus
