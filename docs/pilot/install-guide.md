@@ -35,16 +35,20 @@ needed for a normal install.
 2. Approve the single admin prompt, choose an install folder (or accept
    the default), and click through to **Finish**. Leave **"Set up now"**
    checked.
-3. The guided setup opens automatically in a console window — answer its
-   questions (see [below](#guided-setup-questions)).
+3. On Windows 10 and later, the Nia Core Agent app opens automatically —
+   a 3-step guided setup (pick your server, enter credentials, pick a
+   database; see [below](#guided-setup-questions)). On older Windows
+   versions, the guided setup instead runs in a console window.
 
 That's it — the agent is installed as a Windows service (running under
 its own restricted account, not an administrator) and starts
 automatically from then on. Find **"Nia Core Agent"** in the Start Menu
 any time you want to open the agent's own screen (status, connections,
-logs). **"Nia Core Agent (advanced) - Setup"** and **"Nia Core Agent
-(advanced) - Status"** are also there if you need to re-run the wizard
-or check in from the command line. To uninstall, use **Settings → Apps →
+logs). **"Nia Core Agent (advanced) - Setup"** runs the same setup as a
+console-window wizard instead of the app — useful for scripted/unattended
+installs or if you'd rather not use the app. **"Nia Core Agent
+(advanced) - Status"** is also there if you need to check in from the
+command line. To uninstall, use **Settings → Apps →
 Nia Core Agent → Uninstall** — it asks whether to keep or delete the
 agent's stored configuration.
 
@@ -107,8 +111,8 @@ things, roughly in this order:
    Agents page, or just the code; it only asks for the platform address
    separately if you pasted a bare code. Skipped if already paired.
 2. **Database server** (default `localhost`) and **Port** (default
-   `1433`). On Windows, if the server is local, it detects SQL Server
-   instances on the machine and lets you pick one by number.
+   `1433`). On Windows, it detects SQL Server instances installed on the
+   machine (read from the Windows registry) and lets you pick one.
 3. **Database username** — leave blank if you don't have one yet, and it
    offers to write a readonly-setup SQL script for your DBA instead
    (asking for a login name, the database name(s), and where to save it),

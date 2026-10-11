@@ -107,7 +107,8 @@ over one embedded in a pasted command. Rate-limited.
 ```
 
 ### `GET /servers`
-Windows SQL Browser instance discovery (empty off-Windows).
+Windows SQL Server instance discovery, read from the Windows registry
+(empty off-Windows).
 ```json
 { "instances": [{ "name": "SQLEXPRESS", "port": 1433 }] }
 ```
