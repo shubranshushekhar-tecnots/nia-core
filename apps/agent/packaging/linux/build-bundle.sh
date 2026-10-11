@@ -20,6 +20,15 @@ trap 'rm -rf "$STAGE_DIR"' EXIT
 pnpm -r --filter @nia/extract --filter @nia/agent build
 pnpm --filter=@nia/agent --prod deploy "$STAGE_DIR"
 
+# Ship install.sh/uninstall.sh/nia-agent.service inside the tarball too, so
+# it's a single self-contained download (matching the macOS zip and Windows
+# installer, which both bundle their install scripts with the payload)
+# instead of silently depending on files that only exist in this repo
+# checkout. install.sh's own calling convention (`./install.sh <tarball>`)
+# is unchanged -- after extracting, point it back at this same tarball.
+PACKAGING_DIR="$(dirname "${BASH_SOURCE[0]}")"
+cp "$PACKAGING_DIR/install.sh" "$PACKAGING_DIR/uninstall.sh" "$PACKAGING_DIR/nia-agent.service" "$STAGE_DIR/"
+
 mkdir -p "$OUT_DIR"
 TARBALL="$OUT_DIR/nia-core-agent-linux-$VERSION.tar.gz"
 tar -czf "$TARBALL" -C "$STAGE_DIR" .
