@@ -157,7 +157,9 @@ export default function DownloadsPage({
           run this once in Terminal, then open it normally:
         </p>
         <p style={nxDownloadsBodyTextStyle}>
-          <span style={nxDownloadsCodeChipStyle}>xattr -d com.apple.quarantine nia-agent</span>
+          <span style={nxDownloadsCodeChipStyle}>
+            xattr -dr com.apple.quarantine &quot;/Applications/Nia Core Agent.app&quot;
+          </span>
         </p>
       </section>
 
