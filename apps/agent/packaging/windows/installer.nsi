@@ -371,6 +371,15 @@ Section "Uninstall"
   nsExec::ExecToLog '"$INSTDIR\nia-agent-service.exe" uninstall'
   Pop $1
 
+  ; WinSW's `stop` returns once SCM reports the service itself as STOPPED,
+  ; which can land a beat before the wrapped Node process has actually
+  ; exited and released its open handles on its own log files under
+  ; $DataDir\logs and $DataDir\local-api -- an immediate RMDir /r below
+  ; would then silently skip just those locked files (RMDir /r doesn't
+  ; abort the section on a partial failure), leaving stragglers behind.
+  ; Give it a moment to actually let go before we try to delete them.
+  Sleep 2000
+
   ${If} $0 == "purge"
     RMDir /r "$DataDir"
   ${EndIf}
