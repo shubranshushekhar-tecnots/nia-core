@@ -18,6 +18,15 @@ afterPack: scripts/afterPack.mjs
 win:
   target: dir
   icon: assets/app-icon.ico
+  # Cross-built from Linux CI with no Windows signing cert configured here --
+  # electron-builder's default post-pack step (rcedit resource edit + a
+  # signtool invocation) shells out to the winCodeSign package, which in turn
+  # requires wine on a Linux host even when there's nothing to actually sign.
+  # The real .exe gets signed later, explicitly, by
+  # apps/agent/packaging/windows/build-installer.mjs (same one-signing-place
+  # pattern as the mac bundle). Skip it here so Linux cross-builds don't need
+  # wine installed at all.
+  signAndEditExecutable: false
 
 mac:
   target: dir
