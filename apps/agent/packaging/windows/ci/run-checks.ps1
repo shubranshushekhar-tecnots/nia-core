@@ -280,6 +280,23 @@ function Wait-HttpReady {
     return $false
 }
 
+function Wait-Until {
+    # NSIS's silent uninstaller self-copies to %TEMP% and relaunches detached
+    # so it can delete its own running .exe -- the Invoke-Proc call that waits
+    # on the original process returns as soon as it hands off, well before
+    # the detached copy actually finishes stopping the service and recursively
+    # deleting $INSTDIR (now a much bigger tree since the Electron shell got
+    # bundled in). Poll for the real end state instead of trusting a fixed
+    # sleep to outlast that async cleanup.
+    param([scriptblock]$Condition, [int]$TimeoutSec = 30, [int]$PollMs = 500)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        if (& $Condition) { return $true }
+        Start-Sleep -Milliseconds $PollMs
+    } while ((Get-Date) -lt $deadline)
+    return (& $Condition)
+}
+
 function Start-FakeServers {
     Write-Host "starting fake platform server (port $FakePlatformPort)..."
     $script:FakePlatformProc = Start-Process -FilePath "cmd.exe" `
@@ -536,9 +553,13 @@ function Test-FreshInstallInvariants {
         $uninstKey = Get-ItemProperty -Path $UninstKeyPath -ErrorAction SilentlyContinue
         Add-Result -Check "$Prefix.uninstall-registry-entry" -Pass ([bool]$uninstKey) -Detail $(if ($uninstKey) { $uninstKey.DisplayName } else { "missing" })
 
+        # Renamed to "(advanced)" when the plain "Nia Core Agent.lnk" (the
+        # Electron app, or the browser-OTC fallback pre-Win10) became the
+        # default day-to-day shortcut -- see installer.nsi's Install section.
         Add-Result -Check "$Prefix.start-menu-shortcuts" -Pass (
-            (Test-Path (Join-Path $StartMenuDir "Nia Core Agent Setup.lnk")) -and
-            (Test-Path (Join-Path $StartMenuDir "Nia Core Agent Status.lnk"))
+            (Test-Path (Join-Path $StartMenuDir "Nia Core Agent.lnk")) -and
+            (Test-Path (Join-Path $StartMenuDir "Nia Core Agent (advanced) - Setup.lnk")) -and
+            (Test-Path (Join-Path $StartMenuDir "Nia Core Agent (advanced) - Status.lnk"))
         )
     }
 
@@ -966,10 +987,13 @@ function Invoke-CheckG {
         $r1 = Invoke-Proc -FilePath $uninstallExe -Arguments @("/S") -TimeoutSec 300 -LogName "G-uninstall-keep"
         Copy-InstallDiagnostics -Tag "G-uninstall-keep"
         Add-Result -Check "G.uninstall-exit-code" -Pass ($r1.ExitCode -eq 0) -Detail "exit=$($r1.ExitCode)"
-        Start-Sleep -Seconds 3
+        Wait-Until -TimeoutSec 30 -Condition { -not (Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue) } | Out-Null
         Add-Result -Check "G.service-removed" -Pass (-not (Get-Service -Name "nia-agent" -ErrorAction SilentlyContinue))
+        Wait-Until -TimeoutSec 30 -Condition { -not (Test-Path $InstallDir) } | Out-Null
         Add-Result -Check "G.program-files-removed" -Pass (-not (Test-Path $InstallDir))
+        Wait-Until -TimeoutSec 15 -Condition { -not (Test-Path $StartMenuDir) } | Out-Null
         Add-Result -Check "G.start-menu-removed" -Pass (-not (Test-Path $StartMenuDir))
+        Wait-Until -TimeoutSec 15 -Condition { -not (Get-ItemProperty -Path $UninstKeyPath -ErrorAction SilentlyContinue) } | Out-Null
         Add-Result -Check "G.registry-entry-removed" -Pass (-not (Get-ItemProperty -Path $UninstKeyPath -ErrorAction SilentlyContinue))
         Add-Result -Check "G.data-dir-kept" -Pass (Test-Path $RealDataDir)
 
@@ -983,7 +1007,7 @@ function Invoke-CheckG {
         $r2 = Invoke-Proc -FilePath $uninstallExe2 -Arguments @("/S", "/PURGE") -TimeoutSec 300 -LogName "G-uninstall-purge"
         Copy-InstallDiagnostics -Tag "G-uninstall-purge"
         Add-Result -Check "G.purge-uninstall-exit-code" -Pass ($r2.ExitCode -eq 0) -Detail "exit=$($r2.ExitCode)"
-        Start-Sleep -Seconds 3
+        Wait-Until -TimeoutSec 30 -Condition { -not (Test-Path $RealDataDir) } | Out-Null
         Add-Result -Check "G.data-dir-removed-after-purge" -Pass (-not (Test-Path $RealDataDir))
     }
 }
