@@ -60,6 +60,13 @@ fi
 
 mkdir -p "$BIN_DIR"
 chmod 700 "$HOME_DIR"
+# Remove any existing binary first, same as the app-bundle replace below --
+# overwriting an existing signed executable's bytes in place (cp over the
+# same inode) leaves the kernel's per-vnode code-signing page cache keyed to
+# the OLD binary's content; the next exec then fails validation against the
+# NEW bytes at the same cached page offsets (cs_invalid_page, SIGKILL) even
+# though the file on disk is correct. Deleting first forces a fresh inode.
+rm -f "$EXE_PATH"
 cp "$SCRIPT_DIR/nia-agent" "$EXE_PATH"
 chmod 755 "$EXE_PATH"
 

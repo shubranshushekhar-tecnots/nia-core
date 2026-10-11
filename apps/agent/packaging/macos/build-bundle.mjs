@@ -114,7 +114,21 @@ async function stageAgentDesktop(stageDir) {
     throw new Error(`expected ${src} -- check apps/agent-desktop/electron-builder.yml's productName`);
   }
   const dest = path.join(stageDir, "Nia Core Agent.app");
-  cpSync(src, dest, { recursive: true });
+  // dereference: true -- electron-builder's mac-arm64 output contains
+  // ABSOLUTE symlinks inside Electron Framework.framework (Resources,
+  // Helpers, Libraries, the framework binary itself) that point back to
+  // this exact build path, not a relative/self-referential target. A
+  // plain symlink-preserving copy (cpSync's default) carries those same
+  // absolute paths into the staged bundle, which still resolve today
+  // (the original dist-electron dir happens to still exist on this
+  // machine) but are structurally broken for real distribution: on any
+  // other machine the targets don't exist at all, and even here,
+  // macOS's bundle resource APIs refuse to resolve a symlink that
+  // escapes the app's own .app container (treated as "not found in
+  // bundle"), which crashes Electron at startup (ICU/GPU init failure).
+  // Dereferencing copies the real file content instead, making the
+  // staged (and later zipped) bundle fully self-contained.
+  cpSync(src, dest, { recursive: true, dereference: true });
   console.log(`  staged desktop app shell from ${src}`);
 
   // --deep: sign nested frameworks/helper processes first, then the outer
